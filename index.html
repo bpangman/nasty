@@ -1,0 +1,1216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Nasty — The Family Board Game</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Nasty">
+<meta name="theme-color" content="#0e3421">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="manifest" href="manifest.json">
+<!--
+  NASTY — the Pangman family board game, digitized. v0.2.
+  Single self-contained page, deployed on GitHub Pages (no login needed).
+  Board geometry: X/plus formation — the track wraps around each arm's safe row.
+  Per arm segment (12 loop holes): start (tip, exit side) -> 5 down the exit flank ->
+  1 corner hole -> 5 up the next arm's entry flank -> hop across the tip to the next start.
+  Start holes are exactly 12 steps apart (a Queen from your start hits the next start).
+  Home approach: entry flank -> unpainted "porch" hole at the tip center -> 5 safe holes inward.
+
+  CODE MAP (for future sessions — see HANDOFF.md in this folder):
+    STYLE ......... all CSS (felt table, wood board, tees, cards, animations)
+    § UTIL ........ helpers, RNG, sound synth (WebAudio)
+    § LAYOUT ...... board geometry builder (52-hole loop for 4p, 78 for 6p)
+    § STATE ....... game state G, deck, deal schedules
+    § ENGINE ...... legal-move generation + move application (THE RULES LIVE HERE)
+    § AI .......... CPU players (easy / tricky / nasty)
+    § RENDER ...... SVG board, tees, plaques, HUD
+    § ANIM ........ card flights, tee hops, NASTY blast, dealing, confetti
+    § TURNS ....... async turn loop (humans + CPUs)
+    § UI .......... hand, card/piece selection, modals, menu
+    Autotest: open with #autotest (4p FFA all-CPU) or #autotest6 (6p teams) — fast-forwards a full game.
+-->
+</head>
+<body>
+<style>
+:root{
+  --felt1:#256b46; --felt2:#0e3421;
+  --wood1:#eed6a7; --wood2:#dcbb82; --wood3:#b3894e;
+  --ink:#2b2118; --cream:#fbf7ee; --gold:#f4c542;
+  --sign1:#1f7d40; --sign2:#135c2e; --red:#b3352c;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{font-family:-apple-system,"Segoe UI",system-ui,sans-serif;color:var(--cream);
+  background:radial-gradient(120% 95% at 50% 28%,var(--felt1),var(--felt2) 78%);
+  overflow:hidden;user-select:none;-webkit-user-select:none}
+button{font:inherit;cursor:pointer}
+.hidden{display:none!important}
+
+/* ---------- NASTY road sign ---------- */
+.sign{display:inline-block;background:linear-gradient(180deg,var(--sign1),var(--sign2));
+  border:5px solid #fff;outline:3px solid #0c2c17;border-radius:14px;
+  padding:14px 30px 12px;transform:rotate(-2deg);
+  box-shadow:0 10px 28px rgba(0,0,0,.45), inset 0 2px 0 rgba(255,255,255,.25);text-align:center}
+.sign b{display:block;font-family:"Arial Black","Avenir-Black","Helvetica Neue",sans-serif;
+  font-weight:900;font-size:56px;letter-spacing:.14em;color:#fff;line-height:1;
+  text-shadow:0 3px 0 rgba(0,0,0,.35)}
+.sign small{display:block;margin-top:6px;font-size:13px;letter-spacing:.28em;text-transform:uppercase;color:#dff2e2}
+
+/* ---------- Menu ---------- */
+#menu{position:fixed;inset:0;overflow-y:auto;padding:26px 16px 60px;text-align:center}
+#menu .tag{margin:14px auto 22px;max-width:420px;color:#cfe8d6;font-size:15px;line-height:1.5}
+.panel{max-width:520px;margin:0 auto;background:rgba(9,32,20,.55);border:1px solid rgba(255,255,255,.14);
+  border-radius:18px;padding:18px 16px 22px;backdrop-filter:blur(6px);text-align:left}
+.optRow{display:flex;gap:10px;align-items:center;justify-content:space-between;margin:10px 2px}
+.optRow label{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#a9d2b5}
+.segs{display:flex;gap:6px}
+.seg{border:1px solid rgba(255,255,255,.25);background:transparent;color:var(--cream);
+  padding:8px 16px;border-radius:10px;font-weight:700;font-size:15px}
+.seg.on{background:var(--gold);border-color:var(--gold);color:#3a2c05}
+#teamNote{font-size:13px;color:#ffe9a8;margin:2px 2px 8px;min-height:18px}
+.seatRow{display:flex;gap:8px;align-items:center;background:rgba(255,255,255,.06);
+  border-radius:12px;padding:8px 10px;margin:8px 0}
+.seatRow .dot{width:22px;height:22px;border-radius:50%;flex:none;border:2px solid rgba(255,255,255,.6)}
+.seatRow input{flex:1;min-width:60px;width:60px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.18);
+  border-radius:8px;color:var(--cream);padding:8px 10px;font-size:15px}
+.seatRow select{background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.18);border-radius:8px;
+  color:var(--cream);padding:8px 6px;font-size:14px}
+.bigBtns{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:18px}
+.btn{border:none;border-radius:12px;padding:13px 22px;font-weight:800;font-size:16px;letter-spacing:.03em}
+.btn.primary{background:var(--gold);color:#3a2c05;box-shadow:0 6px 18px rgba(0,0,0,.35)}
+.btn.ghost{background:rgba(255,255,255,.1);color:var(--cream);border:1px solid rgba(255,255,255,.22)}
+.est{margin-top:26px;font-size:12px;letter-spacing:.2em;color:#7fae8d;text-transform:uppercase}
+
+/* ---------- Game chrome ---------- */
+#game{position:fixed;inset:0;display:flex;flex-direction:column}
+#topbar{display:flex;align-items:center;gap:8px;padding:8px 12px;flex:none}
+#topbar .chip{font-size:12.5px;color:#d7ecdc;background:rgba(0,0,0,.28);border-radius:99px;padding:6px 12px}
+#topbar .spacer{flex:1}
+.iconBtn{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.15);color:var(--cream);
+  border-radius:10px;padding:6px 11px;font-size:14px;font-weight:700}
+#boardWrap{flex:1;position:relative;overflow:hidden}
+#boardScale{position:absolute;width:1000px;height:1000px;transform-origin:top left}
+#boardSvg{position:absolute;inset:0}
+#tableLayer,#fxLayer,#plaqueLayer{position:absolute;inset:0;pointer-events:none}
+#tableLayer .tee{pointer-events:auto}
+
+/* ---------- Plaques ---------- */
+.plaque{position:absolute;transform:translate(-50%,-50%);background:rgba(20,14,8,.82);
+  border:1px solid rgba(255,255,255,.16);border-left-width:5px;border-radius:12px;
+  padding:7px 12px;min-width:118px;text-align:left;transition:box-shadow .3s}
+.plaque .nm{font-weight:800;font-size:16px;white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis}
+.plaque .sub{font-size:11.5px;color:#b9d6c1;margin-top:1px;display:flex;gap:7px;align-items:center}
+.plaque .pips{display:flex;gap:3px;margin-top:5px}
+.plaque .pip{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.15)}
+.plaque .pip.on{box-shadow:0 0 6px currentColor}
+.plaque.turn{box-shadow:0 0 0 3px var(--gold),0 0 26px rgba(244,197,66,.55);animation:turnPulse 1.6s infinite}
+@keyframes turnPulse{50%{box-shadow:0 0 0 3px var(--gold),0 0 40px rgba(244,197,66,.85)}}
+.plaque .cardsMini{display:inline-flex;align-items:center;gap:4px}
+.plaque .backMini{width:12px;height:17px;border-radius:2.5px;background:linear-gradient(160deg,#1f7d40,#0e4423);border:1px solid #d8e9dc}
+
+/* ---------- Golf tees ---------- */
+.tee{position:absolute;left:0;top:0;width:34px;height:44px;margin-left:-17px;margin-top:-37px;
+  pointer-events:auto;filter:drop-shadow(0 5px 3px rgba(0,0,0,.38))}
+.tee svg{display:block;overflow:visible}
+.tee.sel6{width:28px;height:38px;margin-left:-14px;margin-top:-31px}
+.tee.selectable{cursor:pointer;animation:teeGlow 1s infinite}
+.tee.targetable{cursor:pointer;animation:teeTarget .8s infinite}
+@keyframes teeGlow{50%{filter:drop-shadow(0 0 10px #ffe57a) drop-shadow(0 5px 3px rgba(0,0,0,.38))}}
+@keyframes teeTarget{50%{filter:drop-shadow(0 0 12px #ff5c5c) drop-shadow(0 5px 3px rgba(0,0,0,.38))}}
+
+/* ---------- Cards ---------- */
+.card{width:64px;height:90px;border-radius:8px;background:var(--cream);color:#232323;
+  border:1px solid #c9bfa8;box-shadow:0 4px 10px rgba(0,0,0,.35);position:relative;flex:none}
+.card .rk{position:absolute;top:4px;left:6px;font-family:Georgia,serif;font-weight:700;font-size:17px;line-height:1}
+.card .rk small{display:block;font-size:13px;text-align:center}
+.card .rk2{position:absolute;bottom:4px;right:6px;transform:rotate(180deg)}
+.card .pip{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:34px}
+.card.red{color:var(--red)}
+.card.back{background:linear-gradient(160deg,#1f7d40,#0d3d20);border:2px solid #e7efe4}
+.card.back::after{content:"NASTY";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:rgba(255,255,255,.75);font-family:"Arial Black",sans-serif;font-size:11px;letter-spacing:.12em;
+  border:2px solid rgba(255,255,255,.35);border-radius:6px;margin:5px}
+.cardFloat{position:fixed;z-index:60;pointer-events:none;left:0;top:0}
+
+/* board-center deck & discard */
+.tableCard{position:absolute;width:76px;height:106px;transform:translate(-50%,-50%)}
+.tableCard .card{width:76px;height:106px}
+.tableCard .card .pip{font-size:42px}
+#deckCount{position:absolute;left:50%;top:100%;transform:translate(-50%,4px);font-size:12.5px;color:#eadfbe;
+  background:rgba(0,0,0,.35);padding:2px 9px;border-radius:99px;white-space:nowrap}
+#discardLabel{position:absolute;left:50%;top:100%;transform:translate(-50%,4px);font-size:12.5px;color:#ffe9a8;
+  background:rgba(0,0,0,.35);padding:2px 9px;border-radius:99px;white-space:nowrap}
+
+/* ---------- Hand bar ---------- */
+#handBar{flex:none;min-height:128px;padding:4px 10px calc(10px + env(safe-area-inset-bottom));
+  display:flex;flex-direction:column;align-items:center;gap:6px}
+#handInfo{font-size:14.5px;font-weight:700;color:#ffe9a8;min-height:18px;text-align:center}
+#handRow{display:flex;align-items:flex-end;justify-content:center;gap:7px;flex-wrap:nowrap}
+#handRow .card{transition:transform .15s;cursor:pointer}
+#handRow .card.playable:hover{transform:translateY(-8px)}
+#handRow .card.selCard{transform:translateY(-14px);box-shadow:0 0 0 3px var(--gold),0 10px 20px rgba(0,0,0,.4);z-index:5}
+#handRow .card.dead{opacity:.45}
+#btnEndTurn{background:var(--red);color:#fff;border:none;border-radius:12px;padding:11px 26px;font-weight:800;font-size:16px;
+  box-shadow:0 6px 16px rgba(0,0,0,.4)}
+
+/* ---------- FX ---------- */
+.spark{position:absolute;width:9px;height:9px;border-radius:50%;pointer-events:none}
+.nastyStamp{position:absolute;transform:translate(-50%,-50%) rotate(-8deg) scale(3);opacity:0;pointer-events:none;z-index:40}
+.nastyStamp .sign{padding:8px 18px 7px}
+.nastyStamp .sign b{font-size:34px}
+.ring{position:absolute;border:3px solid #fff;border-radius:50%;pointer-events:none;transform:translate(-50%,-50%)}
+.confetti{position:fixed;width:10px;height:16px;top:-20px;z-index:70;pointer-events:none}
+
+/* ---------- Toasts / overlays ---------- */
+#toasts{position:fixed;top:52px;left:50%;transform:translateX(-50%);z-index:65;display:flex;flex-direction:column;
+  gap:6px;align-items:center;pointer-events:none;width:100%;padding:0 12px}
+.toast{background:rgba(15,10,6,.88);border:1px solid rgba(255,255,255,.2);border-radius:99px;
+  padding:8px 18px;font-size:14.5px;font-weight:700;box-shadow:0 6px 18px rgba(0,0,0,.4);
+  animation:toastIn .25s ease-out;max-width:92vw;text-align:center}
+@keyframes toastIn{from{opacity:0;transform:translateY(-12px)}}
+.overlay{position:fixed;inset:0;background:rgba(5,15,9,.9);z-index:80;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:22px;text-align:center}
+.overlay h2{margin:16px 0 6px;font-size:26px}
+.overlay p{color:#cfe8d6;max-width:420px;line-height:1.55;font-size:15.5px}
+.modalCard{background:#10281a;border:1px solid rgba(255,255,255,.18);border-radius:18px;max-width:520px;
+  width:100%;max-height:82vh;overflow-y:auto;padding:22px;text-align:left}
+.modalCard h3{margin:2px 0 12px;font-size:21px}
+.modalCard h4{margin:16px 0 4px;color:var(--gold);font-size:15px}
+.modalCard p,.modalCard li{font-size:14.5px;line-height:1.55;color:#dcefe1}
+.modalCard ul{padding-left:20px;margin:6px 0}
+.lbTable{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;margin:6px 0 10px}
+.lbTable th,.lbTable td{padding:7px 6px;font-size:13.5px;border-bottom:1px solid rgba(255,255,255,.12)}
+.lbTable th{color:#a9d2b5;font-size:11px;letter-spacing:.08em;text-transform:uppercase;text-align:right}
+.lbTable td{text-align:right;color:#e9f4ec}
+.lbTable th:first-child,.lbTable td:first-child{text-align:left}
+.lbTable td:last-child{font-weight:800;color:var(--gold)}
+@media (prefers-reduced-motion: reduce){ .plaque.turn,.tee.selectable,.tee.targetable{animation:none} }
+</style>
+
+<!-- ================= MENU ================= -->
+<div id="menu">
+  <div class="sign"><b>NASTY</b><small>please drive carefully</small></div>
+  <p class="tag">The Pangman family board game — est. 12/15/93, digitized 2026.<br>
+  Race your five golf tees around the board and home. Land on somebody… and send them packing.</p>
+  <div class="panel">
+    <div class="optRow"><label>Players</label>
+      <div class="segs"><button class="seg" id="p4">4 players</button><button class="seg" id="p6">6 players</button></div>
+    </div>
+    <div class="optRow"><label>Game type</label>
+      <div class="segs"><button class="seg" id="mFFA">Everyone for themselves</button><button class="seg" id="mTeams">Teams</button></div>
+    </div>
+    <div id="teamNote"></div>
+    <div id="seatList"></div>
+    <div class="bigBtns">
+      <button class="btn primary" id="btnStart">Start game</button>
+      <button class="btn ghost" id="btnInviteMenu">📱 Text an invite</button>
+    </div>
+    <div class="bigBtns">
+      <button class="btn ghost" id="btnRules">How to play</button>
+      <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
+      <button class="btn ghost" id="btnOnline">Online play</button>
+    </div>
+  </div>
+  <div class="est">v0.2 demo &nbsp;·&nbsp; est. 12/15/93</div>
+</div>
+
+<!-- ================= GAME ================= -->
+<div id="game" class="hidden">
+  <div id="topbar">
+    <button class="iconBtn" id="btnMenu">‹ Menu</button>
+    <div class="chip" id="dealChip">—</div>
+    <div class="spacer"></div>
+    <button class="iconBtn" id="btnRules2">Rules</button>
+    <button class="iconBtn" id="btnMute">🔊</button>
+  </div>
+  <div id="boardWrap">
+    <div id="boardScale">
+      <svg id="boardSvg" width="1000" height="1000" viewBox="0 0 1000 1000"></svg>
+      <div class="tableCard" id="deckSpot" style="left:415px;top:500px">
+        <div class="card back"></div><div id="deckCount">52</div>
+      </div>
+      <div class="tableCard" id="discardSpot" style="left:585px;top:500px">
+        <div id="discardFace"></div><div id="discardLabel" class="hidden"></div>
+      </div>
+      <div id="tableLayer"></div>
+      <div id="plaqueLayer"></div>
+      <div id="fxLayer"></div>
+    </div>
+  </div>
+  <div id="handBar">
+    <div id="handInfo"></div>
+    <div id="handRow"></div>
+    <button id="btnEndTurn" class="hidden">You're out of playable cards — end turn</button>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<!-- ================= OVERLAYS ================= -->
+<div id="passOverlay" class="overlay hidden">
+  <div class="sign"><b id="passName">—</b><small>your cards are ready</small></div>
+  <p>Pass the device — then tap anywhere to see your hand. No peeking, everyone else!</p>
+</div>
+
+<div id="winOverlay" class="overlay hidden">
+  <div class="sign"><b id="winTitle">—</b><small id="winSub">wins the game</small></div>
+  <p id="winText"></p>
+  <div class="bigBtns">
+    <button class="btn primary" id="btnAgain">Play again</button>
+    <button class="btn ghost" id="btnWinMenu">Back to menu</button>
+  </div>
+</div>
+
+<div id="rulesOverlay" class="overlay hidden">
+  <div class="modalCard">
+    <h3>How to play Nasty</h3>
+    <p>Get all <b>5 of your tees</b> from your base, once around the board clockwise, and into your <b>home row</b> before anyone else. Teams: you and the player straight across win together.</p>
+    <h4>Getting out</h4>
+    <ul><li><b>King or Ace</b> brings a tee out of your base onto your colored corner.</li></ul>
+    <h4>Cards</h4>
+    <ul>
+      <li><b>Ace</b> — come out, or move 1.</li>
+      <li><b>King</b> — come out only.</li>
+      <li><b>Queen</b> — move 12.</li>
+      <li><b>Jack</b> — trade places with any other tee on the board.</li>
+      <li><b>3</b> — move one of your tees 3 holes <i>backwards</i> (never behind your own corner).</li>
+      <li><b>Everything else</b> — move that many holes forward.</li>
+    </ul>
+    <h4>The nasty part</h4>
+    <ul>
+      <li>Land exactly on anyone — even your partner — and their tee is <b>blasted back to base</b>.</li>
+      <li>Teams: you may <b>never pass</b> your partner on the board. Landing right on them is allowed (and required if it's your only play) — kick!</li>
+    </ul>
+    <h4>Home row</h4>
+    <ul>
+      <li>Exact count only — if your card is too big, that tee can't use it.</li>
+      <li>A tee that's <b>snug</b> (pushed all the way up) is safe forever.</li>
+      <li>A tee that's <b>not snug</b> can still be forced back out by your own 3.</li>
+    </ul>
+    <h4>Turns</h4>
+    <ul>
+      <li>Cards get dealt in rounds (5-4-4 with 4 players). Play one card per turn.</li>
+      <li>No playable card? Your turn is skipped — tap <i>end turn</i>.</li>
+      <li>If a partner finishes, they keep playing to move their partner's tees.</li>
+    </ul>
+    <div class="bigBtns"><button class="btn primary" id="btnRulesClose">Got it</button></div>
+  </div>
+</div>
+
+<div id="lbOverlay" class="overlay hidden">
+  <div class="modalCard">
+    <h3>🏆 Leaderboard</h3>
+    <div id="lbBody"></div>
+    <p style="font-size:12.5px;color:#9ec7aa">Wins are counted on this device.</p>
+    <div class="bigBtns"><button class="btn primary" id="btnLbClose">Close</button></div>
+  </div>
+</div>
+
+<div id="onlineOverlay" class="overlay hidden">
+  <div class="modalCard">
+    <h3>Invite family &amp; online play</h3>
+    <p>Right now Nasty plays on <b>one screen</b> — pass the phone around, or fill empty seats with CPU players.</p>
+    <p><b>Coming in v2:</b> private game codes so everyone plays from their own phone, plus a public lobby when you need a 4th. (The plan is written up in HANDOFF.md.)</p>
+    <div class="bigBtns">
+      <button class="btn primary" id="btnText">Text an invite</button>
+      <button class="btn ghost" id="btnOnlineClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ============================= § UTIL ============================= */
+const $=id=>document.getElementById(id);
+const wait=ms=>new Promise(r=>setTimeout(r,ms/SPEED));
+const rand=a=>a[Math.floor(Math.random()*a.length)];
+let SPEED=1;
+if(matchMedia('(prefers-reduced-motion: reduce)').matches) SPEED=6;
+
+/* --- tiny sound synth --- */
+let AC=null, muted=localStorage.getItem('nasty-muted')==='1';
+function ac(){ if(!AC){ try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){} } return AC; }
+addEventListener('pointerdown',()=>{ const a=ac(); if(a&&a.state==='suspended')a.resume(); },{once:false});
+function tone(f,dur,type,vol,when=0,slide=0){
+  const a=ac(); if(!a||muted)return;
+  const o=a.createOscillator(),g=a.createGain(),t=a.currentTime+when;
+  o.type=type;o.frequency.setValueAtTime(f,t);
+  if(slide)o.frequency.exponentialRampToValueAtTime(Math.max(30,f+slide),t+dur);
+  g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(.0001,t+dur);
+  o.connect(g);g.connect(a.destination);o.start(t);o.stop(t+dur+.02);
+}
+function noise(dur,vol,when=0){
+  const a=ac(); if(!a||muted)return;
+  const n=a.sampleRate*dur,b=a.createBuffer(1,n,a.sampleRate),d=b.getChannelData(0);
+  for(let i=0;i<n;i++)d[i]=(Math.random()*2-1)*(1-i/n);
+  const s=a.createBufferSource(),g=a.createGain(),t=a.currentTime+when;
+  s.buffer=b;g.gain.value=vol;s.connect(g);g.connect(a.destination);s.start(t);
+}
+const sHop=i=>tone(340+i*28,.06,'square',.045);
+const sLand=()=>tone(190,.09,'triangle',.10);
+const sCard=()=>noise(.13,.10);
+const sDealT=()=>noise(.06,.05);
+const sEnter=()=>{tone(240,.16,'triangle',.12,0,220);};
+const sBoom=()=>{noise(.3,.3);tone(120,.4,'sawtooth',.22,0,-70);};
+const sSwap=()=>{tone(500,.14,'sine',.1,0,-260);tone(240,.14,'sine',.1,.08,260);};
+const sWin=()=>{[523,659,784,1047].forEach((f,i)=>tone(f,.28,'triangle',.16,i*.13));};
+const sNo=()=>tone(160,.2,'sawtooth',.07,0,-40);
+
+/* ============================= § LAYOUT ============================= */
+const COLORS4=[
+  {name:'Green', c:'#2f8f5b',dark:'#1b5637'},
+  {name:'Navy',  c:'#41598f',dark:'#273757'},
+  {name:'Pink',  c:'#e56aa5',dark:'#a53a72'},
+  {name:'Yellow',c:'#e3c23c',dark:'#95791c'},
+];
+const COLORS6=[
+  {name:'Green', c:'#2f8f5b',dark:'#1b5637'},
+  {name:'Navy',  c:'#41598f',dark:'#273757'},
+  {name:'Red',   c:'#c6444a',dark:'#7e2429'},
+  {name:'White', c:'#efe6d2',dark:'#b7a98a'},
+  {name:'Silver',c:'#aeb6be',dark:'#6f777f'},
+  {name:'Yellow',c:'#e3c23c',dark:'#95791c'},
+];
+const SCHEDULES={4:[5,4,4],6:[4,4]};   // deal-round sizes; deck reshuffles after the last round
+const HOME_N=5;
+let LAY=null;
+
+/* X/plus board. Each arm: safe row on the axis, track flanks on both sides.
+   Loop per seat segment (12 holes): start (tip, exit flank) -> 5 down exit flank ->
+   corner hole -> 5 up next arm's entry flank -> (hop across tip) next start.
+   steps: 0..L-1 on the loop, L = the private "porch" hole at the tip center,
+   L+1..L+5 = the safe row. */
+function buildLayout(n){
+  const cfg=n===4
+    ?{r0:430,sp:56,g:46,holeR:13,baseR:490,plaqR:645,spread:30}
+    :{r0:400,sp:50,g:38,holeR:10.5,baseR:440,plaqR:555,spread:26};
+  const radii=[0,1,2,3,4,5].map(i=>cfg.r0-i*cfg.sp);   // r0 (tip) .. r5 (inner)
+  const arms=[];
+  for(let s=0;s<n;s++){
+    const th=(-90+s*(360/n))*Math.PI/180;
+    const d={x:Math.cos(th),y:Math.sin(th)};
+    arms.push({th,d,p:{x:-d.y,y:d.x}});                 // p = clockwise-side perpendicular
+  }
+  const P=(a,r,off)=>({x:500+a.d.x*r+a.p.x*off,y:500+a.d.y*r+a.p.y*off});
+  const loop=[],home=[],porch=[],base=[],plaque=[];
+  for(let s=0;s<n;s++){
+    const a=arms[s],b=arms[(s+1)%n];
+    loop.push({...P(a,radii[0],cfg.g),start:s});        // colored start hole
+    for(let i=1;i<=5;i++)loop.push(P(a,radii[i],cfg.g));
+    const l5=P(a,radii[5],cfg.g),e5=P(b,radii[5],-cfg.g);
+    loop.push({x:(l5.x+e5.x)/2,y:(l5.y+e5.y)/2});       // single abrupt corner hole
+    for(let i=5;i>=1;i--)loop.push(P(b,radii[i],-cfg.g));
+  }
+  for(let s=0;s<n;s++){
+    const a=arms[s];
+    porch.push(P(a,radii[0],0));
+    home.push([1,2,3,4,5].map(i=>P(a,radii[i],0)));
+    const bt=a.th-Math.PI/n;                            // bisector toward the player's right
+    const u={x:Math.cos(bt),y:Math.sin(bt)};
+    const bc={x:500+u.x*cfg.baseR,y:500+u.y*cfg.baseR},sp2=cfg.spread;
+    base.push([{x:bc.x,y:bc.y},{x:bc.x-sp2,y:bc.y-sp2},{x:bc.x+sp2,y:bc.y-sp2},
+               {x:bc.x-sp2,y:bc.y+sp2},{x:bc.x+sp2,y:bc.y+sp2}]);
+    plaque.push({x:Math.min(934,Math.max(66,500+u.x*cfg.plaqR)),
+                 y:Math.min(952,Math.max(46,500+u.y*cfg.plaqR))});
+  }
+  return {n,L:12*n,loop,home,porch,base,plaque,holeR:cfg.holeR};
+}
+const entryIdx=s=>s*12;
+const loopIdx=(s,steps)=>(entryIdx(s)+steps)%LAY.L;
+function stepPos(s,steps){
+  if(steps<LAY.L)return LAY.loop[loopIdx(s,steps)];
+  if(steps===LAY.L)return LAY.porch[s];
+  return LAY.home[s][steps-LAY.L-1];
+}
+
+/* ============================= § STATE ============================= */
+let G=null;
+function freshDeck(){
+  const d=[]; let id=0;
+  for(const s of ['♠','♥','♦','♣'])
+    for(const r of ['A','2','3','4','5','6','7','8','9','10','J','Q','K'])
+      d.push({r,s,id:id++});
+  for(let i=d.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[d[i],d[j]]=[d[j],d[i]];}
+  return d;
+}
+function newGame(cfg){
+  G={n:cfg.n,teams:cfg.teams,seats:cfg.seats,
+     pieces:cfg.seats.map(()=>Array.from({length:5},()=>({state:'base',steps:-1}))),
+     hands:cfg.seats.map(()=>[]),
+     deck:freshDeck(),discard:[],
+     schedule:SCHEDULES[cfg.n],schedRound:0,
+     dealer:Math.floor(Math.random()*cfg.n),
+     turn:0,passStreak:0,over:false,winners:[]};
+  G.turn=(G.dealer+1)%G.n;
+  G.humanCount=cfg.seats.filter(s=>s.type==='human').length;
+}
+const partnerOf=s=>G.teams?(s+G.n/2)%G.n:-1;
+const sameTeam=(a,b)=>a===b||(G.teams&&partnerOf(a)===b);
+const allHome=s=>G.pieces[s].every(p=>p.state==='home'&&p.steps>LAY.L); // porch doesn't count
+function trackOccupant(idx){
+  for(let s=0;s<G.n;s++)for(let pi=0;pi<5;pi++){
+    const p=G.pieces[s][pi];
+    if(p.state==='track'&&loopIdx(s,p.steps)===idx)return{seat:s,pi};
+  } return null;
+}
+const homeOcc=(s,q)=>G.pieces[s].some(p=>p.state==='home'&&p.steps===q);
+function isSnug(s,pi){
+  const p=G.pieces[s][pi]; if(p.state!=='home'||p.steps<=LAY.L)return false;
+  for(let q=p.steps+1;q<=LAY.L+HOME_N;q++)if(!homeOcc(s,q))return false;
+  return true;
+}
+
+/* ============================= § ENGINE ============================= */
+/* Rules assumptions & sources: see RULES.md. steps: 0=own start hole, loop is L=12n
+   holes so starts sit exactly 12 apart; steps L = private porch hole at the tip,
+   L+1..L+5 = safe row. Opponents never touch the porch or safe row. */
+function pathForward(owner,p,n){
+  const t=p+n; if(t>LAY.L+HOME_N)return null;
+  let kick=null;
+  for(let q=p+1;q<=t;q++){
+    if(q>=LAY.L){ if(homeOcc(owner,q))return null; }
+    else{
+      const occ=trackOccupant(loopIdx(owner,q));
+      if(!occ)continue;
+      if(q<t){ if(G.teams&&occ.seat!==owner&&sameTeam(occ.seat,owner))return null; }
+      else{ if(occ.seat===owner)return null; kick=occ; }
+    }
+  }
+  return{kick};
+}
+function pathBack(owner,p,n){
+  const t=p-n; if(t<0)return null;
+  let kick=null;
+  for(let q=p-1;q>=t;q--){
+    if(q>=LAY.L){ if(homeOcc(owner,q))return null; }
+    else{
+      const occ=trackOccupant(loopIdx(owner,q));
+      if(!occ)continue;
+      if(q>t){ if(G.teams&&occ.seat!==owner&&sameTeam(occ.seat,owner))return null; }
+      else{ if(occ.seat===owner)return null; kick=occ; }
+    }
+  }
+  return{kick};
+}
+function actingOwner(seat){
+  if(G.teams&&allHome(seat)&&!allHome(partnerOf(seat)))return partnerOf(seat);
+  return seat;
+}
+function legalMoves(seat){
+  const owner=actingOwner(seat), ms=[];
+  G.hands[seat].forEach((card,ci)=>{
+    const r=card.r;
+    if(r==='K'||r==='A'){
+      const bi=G.pieces[owner].findIndex(p=>p.state==='base');
+      if(bi>=0){
+        const occ=trackOccupant(loopIdx(owner,0));
+        if(!occ||occ.seat!==owner)ms.push({ci,type:'enter',owner,pi:bi,to:0,kick:occ||null});
+      }
+    }
+    if(r==='J'){
+      G.pieces[owner].forEach((p,pi)=>{ if(p.state!=='track')return;
+        for(let ts=0;ts<G.n;ts++){ if(ts===owner)continue;
+          G.pieces[ts].forEach((tp,tpi)=>{ if(tp.state==='track')ms.push({ci,type:'swap',owner,pi,ts,tpi}); });
+        }
+      });
+    }
+    let fwd=null;
+    if(r==='A')fwd=1; else if(r==='Q')fwd=12;
+    else if(/^(2|4|5|6|7|8|9|10)$/.test(r))fwd=parseInt(r,10);
+    if(fwd!=null){
+      G.pieces[owner].forEach((p,pi)=>{
+        if(p.state==='base')return;
+        if(p.state==='home'&&isSnug(owner,pi))return;
+        const res=pathForward(owner,p.steps,fwd);
+        if(res)ms.push({ci,type:'move',owner,pi,to:p.steps+fwd,kick:res.kick});
+      });
+    }
+    if(r==='3'){
+      G.pieces[owner].forEach((p,pi)=>{
+        if(p.state==='base')return;
+        if(p.state==='home'&&isSnug(owner,pi))return;
+        const res=pathBack(owner,p.steps,3);
+        if(res)ms.push({ci,type:'back',owner,pi,to:p.steps-3,kick:res.kick});
+      });
+    }
+  });
+  return ms;
+}
+function applyMove(seat,m){
+  const card=G.hands[seat].splice(m.ci,1)[0];
+  G.discard.push(card); G.passStreak=0;
+  if(m.type==='swap'){
+    const a=G.pieces[m.owner][m.pi], b=G.pieces[m.ts][m.tpi];
+    const ia=loopIdx(m.owner,a.steps), ib=loopIdx(m.ts,b.steps);
+    a.steps=(ib-entryIdx(m.owner)+LAY.L)%LAY.L;
+    b.steps=(ia-entryIdx(m.ts)+LAY.L)%LAY.L;
+  }else{
+    if(m.kick){const v=G.pieces[m.kick.seat][m.kick.pi];v.state='base';v.steps=-1;}
+    const p=G.pieces[m.owner][m.pi];
+    p.steps=m.to; p.state=m.to>=LAY.L?'home':'track';
+  }
+  if(!G.teams&&allHome(m.owner)){G.over=true;G.winners=[m.owner];}
+  if(G.teams&&allHome(m.owner)&&allHome(partnerOf(m.owner))){G.over=true;G.winners=[m.owner,partnerOf(m.owner)];}
+  return card;
+}
+
+/* ============================= § AI ============================= */
+function dangerAt(owner,steps){
+  if(steps>=LAY.L)return 0;
+  const my=loopIdx(owner,steps); let d=0;
+  for(let s=0;s<G.n;s++){ if(sameTeam(s,owner))continue;
+    for(const p of G.pieces[s]){ if(p.state!=='track')continue;
+      const dist=(my-loopIdx(s,p.steps)+LAY.L)%LAY.L;
+      if(dist>=1&&dist<=12)d++;
+    }}
+  return d;
+}
+function kickVal(owner,k){
+  const vic=G.pieces[k.seat][k.pi];
+  if(sameTeam(k.seat,owner))return -14;
+  return 22+vic.steps*0.25;
+}
+function scoreMove(seat,m){
+  let sc=0;
+  if(m.type==='enter'){ sc+=16; if(m.kick)sc+=kickVal(m.owner,m.kick); }
+  else if(m.type==='move'){
+    const p=G.pieces[m.owner][m.pi];
+    sc+=(m.to-p.steps)*0.4+p.steps*0.06;
+    if(m.to>=LAY.L)sc+=20;
+    if(m.kick)sc+=kickVal(m.owner,m.kick); else sc-=dangerAt(m.owner,m.to)*3.5;
+  }
+  else if(m.type==='back'){
+    const p=G.pieces[m.owner][m.pi];
+    sc-=6; if(p.steps>=LAY.L)sc-=22;
+    if(m.kick)sc+=kickVal(m.owner,m.kick);
+    sc-=dangerAt(m.owner,m.to)*2;
+  }
+  else if(m.type==='swap'){
+    const a=G.pieces[m.owner][m.pi],b=G.pieces[m.ts][m.tpi];
+    const an=(loopIdx(m.ts,b.steps)-entryIdx(m.owner)+LAY.L)%LAY.L;
+    const bn=(loopIdx(m.owner,a.steps)-entryIdx(m.ts)+LAY.L)%LAY.L;
+    sc+=(an-a.steps)*0.5;
+    if(sameTeam(m.ts,m.owner))sc+=(bn-b.steps)*0.45; else sc+=(b.steps-bn)*0.3;
+  }
+  return sc;
+}
+function chooseAI(seat,moves){
+  const d=G.seats[seat].diff;
+  if(d==='easy')return rand(moves);
+  const jitter=d==='medium'?9:2;
+  let best=null,bs=-1e9;
+  for(const m of moves){
+    const s=scoreMove(seat,m)+(Math.random()*2-1)*jitter;
+    if(s>bs){bs=s;best=m;}
+  }
+  return best;
+}
+
+/* ============================= § RENDER ============================= */
+const SVG='http://www.w3.org/2000/svg';
+function el(tag,attrs,parent){const e=document.createElementNS(SVG,tag);
+  for(const k in attrs)e.setAttribute(k,attrs[k]); if(parent)parent.appendChild(e); return e;}
+function drawBoard(){
+  const svg=$('boardSvg'); svg.innerHTML='';
+  const defs=el('defs',{},svg);
+  defs.innerHTML=`
+    <linearGradient id="wood" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f0d9ab"/><stop offset=".5" stop-color="#e2c288"/>
+      <stop offset="1" stop-color="#cfa968"/></linearGradient>
+    <radialGradient id="hole"><stop offset="0" stop-color="#4a3417"/>
+      <stop offset=".75" stop-color="#6b4e26"/><stop offset="1" stop-color="#8a6a38"/></radialGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency="0.012 0.05" numOctaves="2" result="n"/>
+      <feColorMatrix in="n" type="matrix" values="0 0 0 0 0.32 0 0 0 0 0.22 0 0 0 0 0.08 0 0 0 0.16 0"/>
+      <feComposite operator="in" in2="SourceGraphic"/></filter>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000" flood-opacity="0.5"/></filter>`;
+  const c=150;
+  const oct=`${c},8 ${1000-c},8 992,${c} 992,${1000-c} ${1000-c},992 ${c},992 8,${1000-c} 8,${c}`;
+  el('polygon',{points:oct,fill:'url(#wood)',stroke:'#8a6435','stroke-width':7,filter:'url(#soft)'},svg);
+  el('polygon',{points:oct,fill:'#7a5a2e',filter:'url(#grain)',opacity:.8},svg);
+  el('polygon',{points:oct,fill:'none',stroke:'rgba(255,244,214,.45)','stroke-width':2},svg);
+  const t=el('text',{x:500,y:597,'text-anchor':'middle',fill:'rgba(90,60,20,.30)',
+    'font-family':'"Arial Black",sans-serif','font-size':20,'letter-spacing':5},svg);
+  t.textContent='N A S T Y · EST. 12/15/93';
+  // safe-row lanes ("between parallel lines")
+  for(let s=0;s<G.n;s++){
+    const col=G.seats[s].color, a=LAY.porch[s], b=LAY.home[s][HOME_N-1];
+    el('line',{x1:a.x,y1:a.y,x2:b.x,y2:b.y,stroke:col.c,'stroke-width':LAY.holeR*2+14,
+               'stroke-linecap':'round',opacity:.14},svg);
+  }
+  LAY.loop.forEach(h=>{
+    el('circle',{cx:h.x,cy:h.y,r:LAY.holeR,fill:'url(#hole)'},svg);
+    if(h.start!=null){
+      const col=G.seats[h.start].color;
+      el('circle',{cx:h.x,cy:h.y,r:LAY.holeR+5,fill:'none',stroke:col.c,'stroke-width':5},svg);
+      el('circle',{cx:h.x,cy:h.y,r:LAY.holeR+10,fill:'none',stroke:col.dark,'stroke-width':1.5,opacity:.7},svg);
+    }
+  });
+  for(let s=0;s<G.n;s++){
+    const col=G.seats[s].color, po=LAY.porch[s];
+    el('circle',{cx:po.x,cy:po.y,r:LAY.holeR,fill:'url(#hole)'},svg);
+    el('circle',{cx:po.x,cy:po.y,r:LAY.holeR+4,fill:'none',stroke:col.c,'stroke-width':2.5,
+                 opacity:.55,'stroke-dasharray':'3 4'},svg);
+    LAY.home[s].forEach(h=>{
+      el('circle',{cx:h.x,cy:h.y,r:LAY.holeR,fill:'url(#hole)'},svg);
+      el('circle',{cx:h.x,cy:h.y,r:LAY.holeR+4,fill:'none',stroke:col.c,'stroke-width':4},svg);
+    });
+    LAY.base[s].forEach(h=>{
+      el('circle',{cx:h.x,cy:h.y,r:LAY.holeR,fill:'url(#hole)'},svg);
+      el('circle',{cx:h.x,cy:h.y,r:LAY.holeR+4,fill:'none',stroke:col.c,'stroke-width':3,opacity:.75,
+                   'stroke-dasharray':'5 4'},svg);
+    });
+  }
+}
+function teeSVG(col,small){
+  const w=small?28:34,h=small?38:44;
+  return `<svg width="${w}" height="${h}" viewBox="0 0 34 44">
+    <ellipse cx="17" cy="41" rx="10" ry="3.4" fill="rgba(0,0,0,.30)"/>
+    <path d="M11 12 L15 34 Q17 38 19 34 L23 12 Z" fill="${col.dark}"/>
+    <path d="M11 12 L14 30 L17 12 Z" fill="rgba(255,255,255,.18)"/>
+    <ellipse cx="17" cy="9" rx="12" ry="7.5" fill="${col.c}" stroke="${col.dark}" stroke-width="1.6"/>
+    <ellipse cx="13.5" cy="6.8" rx="4.6" ry="2.4" fill="rgba(255,255,255,.5)"/>
+  </svg>`;
+}
+function buildTable(){
+  const layer=$('tableLayer'); layer.innerHTML='';
+  for(let s=0;s<G.n;s++)for(let pi=0;pi<5;pi++){
+    const d=document.createElement('div');
+    d.className='tee'+(G.n===6?' sel6':''); d.id=`tee-${s}-${pi}`;
+    d.innerHTML=teeSVG(G.seats[s].color,G.n===6);
+    d.addEventListener('click',()=>onTeeClick(s,pi));
+    layer.appendChild(d);
+  }
+  const pl=$('plaqueLayer'); pl.innerHTML='';
+  for(let s=0;s<G.n;s++){
+    const seat=G.seats[s],p=LAY.plaque[s];
+    const d=document.createElement('div');
+    d.className='plaque'; d.id=`plaque-${s}`;
+    d.style.left=p.x+'px'; d.style.top=p.y+'px';
+    d.style.borderLeftColor=seat.color.c; d.style.color=seat.color.c;
+    d.innerHTML=`<div class="nm" style="color:var(--cream)">${esc(seat.name)}</div>
+      <div class="sub"><span>${seat.type==='cpu'?'CPU · '+diffLabel(seat.diff):'Human'}</span>
+      <span class="cardsMini"><span class="backMini"></span><b class="cnt" style="color:var(--cream)">0</b></span></div>
+      <div class="pips">${'<span class="pip"></span>'.repeat(5)}</div>`;
+    pl.appendChild(d);
+  }
+  syncAll();
+}
+function diffLabel(d){return d==='easy'?'Easy':d==='medium'?'Tricky':'Nasty';}
+function esc(s){return s.replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));}
+function teePos(s,pi){
+  const p=G.pieces[s][pi];
+  return p.state==='base'?LAY.base[s][pi]:stepPos(s,p.steps);
+}
+function setTee(elm,pos){ elm.style.transform=`translate(${pos.x}px,${pos.y}px)`; }
+function syncAll(){
+  for(let s=0;s<G.n;s++)for(let pi=0;pi<5;pi++)
+    setTee($(`tee-${s}-${pi}`),teePos(s,pi));
+  for(let s=0;s<G.n;s++){
+    const pq=$(`plaque-${s}`);
+    pq.querySelector('.cnt').textContent=G.hands[s].length;
+    const homeCount=G.pieces[s].filter(p=>p.state==='home').length;
+    pq.querySelectorAll('.pip').forEach((pp,i)=>{
+      pp.classList.toggle('on',i<homeCount);
+      pp.style.background=i<homeCount?G.seats[s].color.c:'rgba(255,255,255,.15)';
+    });
+    pq.classList.toggle('turn',s===G.turn&&!G.over);
+  }
+  $('deckCount').textContent=G.deck.length;
+  $('dealChip').textContent=`Deal ${Math.min(G.schedRound,G.schedule.length)}/${G.schedule.length} · Dealer: ${G.seats[G.dealer].name}`;
+}
+function cardHTML(card){
+  const red=card.s==='♥'||card.s==='♦';
+  return `<div class="card ${red?'red':''}"><div class="rk">${card.r}<small>${card.s}</small></div>
+    <div class="pip">${card.s}</div><div class="rk rk2">${card.r}<small>${card.s}</small></div></div>`;
+}
+function showDiscard(card,who){
+  $('discardFace').innerHTML=cardHTML(card);
+  const lb=$('discardLabel'); lb.classList.remove('hidden');
+  lb.textContent=`${who} · ${card.r}${card.s}`;
+}
+
+/* board scaling */
+function fitBoard(){
+  const w=$('boardWrap').clientWidth,h=$('boardWrap').clientHeight;
+  const s=Math.min(w,h)/1000;
+  const bs=$('boardScale');
+  bs.style.transform=`scale(${s})`;
+  bs.style.left=((w-1000*s)/2)+'px'; bs.style.top=((h-1000*s)/2)+'px';
+}
+addEventListener('resize',fitBoard);
+
+/* ============================= § ANIM ============================= */
+function boardPoint(p){ // board coords -> viewport rect
+  const r=$('boardScale').getBoundingClientRect(), s=r.width/1000;
+  return {x:r.left+p.x*s, y:r.top+p.y*s, s};
+}
+async function animateTeePath(elm,owner,fromSteps,toSteps,dir){
+  const steps=[];
+  if(dir>0)for(let q=fromSteps+1;q<=toSteps;q++)steps.push(q);
+  else for(let q=fromSteps-1;q>=toSteps;q--)steps.push(q);
+  let prev=fromSteps<0?null:stepPos(owner,fromSteps);
+  elm.style.zIndex=30;
+  for(let i=0;i<steps.length;i++){
+    const pos=stepPos(owner,steps[i]);
+    const from=prev||pos;
+    const midX=(from.x+pos.x)/2,midY=(from.y+pos.y)/2-20;
+    await elm.animate([
+      {transform:`translate(${from.x}px,${from.y}px)`},
+      {transform:`translate(${midX}px,${midY}px) scale(1.06,1.1)`,offset:.5},
+      {transform:`translate(${pos.x}px,${pos.y}px)`}
+    ],{duration:Math.max(40,150/SPEED),easing:'ease-in-out'}).finished;
+    setTee(elm,pos); sHop(i); prev=pos;
+  }
+  sLand();
+  elm.style.zIndex='';
+}
+async function animateArc(elm,from,to,dur,spin){
+  elm.style.zIndex=35;
+  const midX=(from.x+to.x)/2,midY=Math.min(from.y,to.y)-120;
+  await elm.animate([
+    {transform:`translate(${from.x}px,${from.y}px) rotate(0deg)`},
+    {transform:`translate(${midX}px,${midY}px) rotate(${spin/2}deg) scale(1.25)`,offset:.5},
+    {transform:`translate(${to.x}px,${to.y}px) rotate(${spin}deg)`}
+  ],{duration:Math.max(80,dur/SPEED),easing:'ease-in-out'}).finished;
+  setTee(elm,to); elm.style.zIndex='';
+}
+function sparks(pos,color,count=14){
+  const fx=$('fxLayer');
+  for(let i=0;i<count;i++){
+    const sp=document.createElement('div'); sp.className='spark';
+    sp.style.left=pos.x+'px'; sp.style.top=pos.y+'px';
+    sp.style.background=i%3?color:'#fff';
+    fx.appendChild(sp);
+    const a=Math.random()*Math.PI*2,d=40+Math.random()*90;
+    sp.animate([
+      {transform:'translate(0,0) scale(1)',opacity:1},
+      {transform:`translate(${Math.cos(a)*d}px,${Math.sin(a)*d-30}px) scale(.2)`,opacity:0}
+    ],{duration:Math.max(150,650/SPEED),easing:'ease-out'}).finished.then(()=>sp.remove());
+  }
+  const ring=document.createElement('div'); ring.className='ring';
+  ring.style.left=pos.x+'px'; ring.style.top=pos.y+'px'; ring.style.width='10px'; ring.style.height='10px';
+  fx.appendChild(ring);
+  ring.animate([{opacity:.9,width:'10px',height:'10px'},{opacity:0,width:'130px',height:'130px'}],
+    {duration:Math.max(150,550/SPEED),easing:'ease-out'}).finished.then(()=>ring.remove());
+}
+async function nastyBlast(vSeat,vPi,atPos){
+  sBoom(); sparks(atPos,G.seats[vSeat].color.c,18);
+  const stamp=document.createElement('div');
+  stamp.className='nastyStamp'; stamp.style.left='500px'; stamp.style.top='430px';
+  stamp.innerHTML='<div class="sign"><b>NASTY!</b></div>';
+  $('fxLayer').appendChild(stamp);
+  stamp.animate([
+    {opacity:0,transform:'translate(-50%,-50%) rotate(-8deg) scale(3)'},
+    {opacity:1,transform:'translate(-50%,-50%) rotate(-8deg) scale(1)',offset:.35},
+    {opacity:1,offset:.8},{opacity:0}
+  ],{duration:Math.max(220,1100/SPEED),easing:'ease-out'}).finished.then(()=>stamp.remove());
+  $('boardScale').animate([
+    {translate:'0 0'},{translate:'7px -5px'},{translate:'-7px 5px'},
+    {translate:'5px 3px'},{translate:'0 0'}
+  ],{duration:Math.max(120,340/SPEED)});
+  const elm=$(`tee-${vSeat}-${vPi}`);
+  await animateArc(elm,atPos,LAY.base[vSeat][vPi],850,720);
+  sparks(LAY.base[vSeat][vPi],G.seats[vSeat].color.c,8);
+}
+async function flyCardRect(fromRect,toRect,html,dur){
+  const f=document.createElement('div'); f.className='cardFloat'; f.innerHTML=html;
+  const inner=f.firstElementChild;
+  inner.style.width=fromRect.width+'px'; inner.style.height=fromRect.height+'px';
+  document.body.appendChild(f);
+  await f.animate([
+    {transform:`translate(${fromRect.left}px,${fromRect.top}px)`,opacity:1},
+    {transform:`translate(${toRect.left}px,${toRect.top}px) scale(${toRect.width/fromRect.width})`,opacity:1}
+  ],{duration:Math.max(90,dur/SPEED),easing:'ease-in-out',fill:'forwards'}).finished;
+  f.remove();
+}
+async function animCardPlay(seat,card,cardEl){
+  sCard();
+  const to=$('discardSpot').getBoundingClientRect();
+  let from;
+  let html=cardHTML(card);
+  if(cardEl){ from=cardEl.getBoundingClientRect(); cardEl.style.visibility='hidden'; }
+  else{
+    const pq=$(`plaque-${seat}`).getBoundingClientRect();
+    from={left:pq.left+pq.width/2-32,top:pq.top,width:64,height:90};
+  }
+  await flyCardRect(from,{left:to.left,top:to.top,width:to.width},html,420);
+  showDiscard(card,G.seats[seat].name);
+}
+async function animateDeal(counts){
+  const deckR=$('deckSpot').getBoundingClientRect();
+  const jobs=[];
+  let delay=0;
+  for(let round=0;round<counts;round++){
+    for(let k=0;k<G.n;k++){
+      const s=(G.dealer+1+k)%G.n;
+      const pq=$(`plaque-${s}`).getBoundingClientRect();
+      const d=delay; delay+=Math.max(18,65/SPEED);
+      jobs.push((async()=>{
+        await new Promise(r=>setTimeout(r,d));
+        sDealT();
+        await flyCardRect({left:deckR.left,top:deckR.top,width:deckR.width,height:deckR.height},
+          {left:pq.left+pq.width/2-19,top:pq.top-8,width:38},'<div class="card back"></div>',330);
+      })());
+    }
+  }
+  await Promise.all(jobs);
+}
+function confettiBurst(){
+  const cols=G.winners.map(w=>G.seats[w].color.c).concat(['#f4c542','#ffffff']);
+  for(let i=0;i<90;i++){
+    const c=document.createElement('div'); c.className='confetti';
+    c.style.left=Math.random()*100+'vw';
+    c.style.background=rand(cols);
+    document.body.appendChild(c);
+    c.animate([
+      {transform:`translateY(-20px) rotate(0deg)`,opacity:1},
+      {transform:`translateY(${innerHeight+40}px) rotate(${360+Math.random()*720}deg)`,opacity:.9}
+    ],{duration:2200+Math.random()*2500,delay:Math.random()*900,easing:'ease-in'})
+      .finished.then(()=>c.remove());
+  }
+}
+
+/* ============================= § TURNS ============================= */
+let uiResolve=null;
+function toast(msg,ms=2200){
+  const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
+  $('toasts').appendChild(t);
+  setTimeout(()=>{t.style.transition='opacity .4s';t.style.opacity='0';
+    setTimeout(()=>t.remove(),450);},Math.max(600,ms/Math.min(SPEED,3)));
+}
+async function doDeal(){
+  if(G.schedRound>=G.schedule.length){
+    G.deck=freshDeck(); G.discard=[]; G.schedRound=0;
+    G.dealer=(G.dealer+1)%G.n; G.turn=(G.dealer+1)%G.n;
+    $('discardFace').innerHTML=''; $('discardLabel').classList.add('hidden');
+    toast(`Fresh shuffle — ${G.seats[G.dealer].name} deals`);
+    await wait(500);
+  }
+  const k=G.schedule[G.schedRound]; G.schedRound++;
+  for(let i=0;i<k;i++)for(let j=0;j<G.n;j++)
+    G.hands[(G.dealer+1+j)%G.n].push(G.deck.pop());
+  toast(`${G.seats[G.dealer].name} deals ${k} cards`);
+  await animateDeal(k);
+  syncAll(); renderHandFor(visibleHandSeat());
+}
+function seatsWithCards(){return G.hands.filter(h=>h.length>0).length;}
+async function passTurn(seat){
+  G.passStreak++;
+  if(G.passStreak>=seatsWithCards()&&seatsWithCards()>0){
+    for(const h of G.hands){G.discard.push(...h);h.length=0;}
+    G.passStreak=0;
+    toast('Nobody can play — throwing the hands in. New deal!');
+    await wait(600);
+  }
+}
+function advance(){ G.turn=(G.turn+1)%G.n; }
+async function performMove(seat,m,cardEl){
+  clearSelection();
+  const owner=m.owner;
+  const preFrom=m.type==='swap'?null:G.pieces[owner][m.pi].steps;
+  const card=G.hands[seat][m.ci];
+  await animCardPlay(seat,card,cardEl);
+  // capture positions before mutating
+  let plan=null;
+  if(m.type==='swap'){
+    const aP=teePos(owner,m.pi), bP=teePos(m.ts,m.tpi);
+    plan={aP,bP};
+  }
+  const kicked=m.kick?{seat:m.kick.seat,pi:m.kick.pi,pos:teePos(m.kick.seat,m.kick.pi)}:null;
+  applyMove(seat,m);
+  syncPlaquesOnly();
+  const elm=$(`tee-${owner}-${m.pi}`);
+  if(m.type==='enter'){
+    sEnter();
+    await animateArc(elm,LAY.base[owner][m.pi],stepPos(owner,0),650,0);
+    sparks(stepPos(owner,0),G.seats[owner].color.c,7);
+  }else if(m.type==='move'||m.type==='back'){
+    await animateTeePath(elm,owner,preFrom,m.to,m.type==='move'?1:-1);
+  }else if(m.type==='swap'){
+    sSwap();
+    const other=$(`tee-${m.ts}-${m.tpi}`);
+    await Promise.all([
+      animateArc(elm,plan.aP,plan.bP,700,360),
+      animateArc(other,plan.bP,plan.aP,700,-360)
+    ]);
+  }
+  if(kicked){
+    toast(`💥 NASTY! ${G.seats[seat].name} sends ${G.seats[kicked.seat].name} back to base!`,2600);
+    await nastyBlast(kicked.seat,kicked.pi,kicked.pos);
+  }
+  syncAll();
+  if(G.over){ await wait(600); return showWin(); }
+  advance();
+  queueMicrotask(runTurn);
+}
+function syncPlaquesOnly(){ /* card counts during anims */
+  for(let s=0;s<G.n;s++)$(`plaque-${s}`).querySelector('.cnt').textContent=G.hands[s].length;
+}
+function visibleHandSeat(){
+  if(G.humanCount===1)return G.seats.findIndex(s=>s.type==='human');
+  return G.seats[G.turn].type==='human'?G.turn:-1;
+}
+async function runTurn(){
+  if(!G||G.over)return;
+  if(G.hands.every(h=>h.length===0))await doDeal();
+  const seat=G.turn;
+  syncAll();
+  if(G.hands[seat].length===0){ advance(); return runTurn(); }
+  const seatCfg=G.seats[seat];
+  const moves=legalMoves(seat);
+  const assist=actingOwner(seat)!==seat;
+  if(seatCfg.type==='cpu'){
+    renderHandFor(visibleHandSeat());
+    await wait(750);
+    if(moves.length===0){
+      sNo(); toast(`${seatCfg.name} has no playable cards`);
+      // CPU discards nothing; turn just passes
+      await passTurn(seat); await wait(500);
+      advance(); return runTurn();
+    }
+    const m=chooseAI(seat,moves);
+    return performMove(seat,m,null);
+  }
+  // human
+  if(G.humanCount>1)await passDeviceGate(seat);
+  renderHandFor(seat);
+  if(assist)toast(`${seatCfg.name}: you're home — these cards move ${G.seats[actingOwner(seat)].name}'s tees!`,3000);
+  if(moves.length===0){
+    sNo();
+    $('handInfo').textContent="You're out of playable cards.";
+    $('btnEndTurn').classList.remove('hidden');
+    $('btnEndTurn').onclick=async()=>{
+      $('btnEndTurn').classList.add('hidden');
+      await passTurn(seat);
+      advance(); runTurn();
+    };
+    return;
+  }
+  $('handInfo').textContent=assist?`Play a card for your partner, ${seatCfg.name}`:`Your turn, ${seatCfg.name} — tap a card`;
+  enableSelection(seat,moves);
+}
+function passDeviceGate(seat){
+  return new Promise(res=>{
+    renderHandFor(-1);
+    $('passName').textContent=G.seats[seat].name;
+    const ov=$('passOverlay'); ov.classList.remove('hidden');
+    const h=()=>{ov.classList.add('hidden');ov.removeEventListener('pointerdown',h);res();};
+    ov.addEventListener('pointerdown',h);
+  });
+}
+
+/* ============================= § UI (hand & selection) ============================= */
+let SEL=null, CUR_MOVES=[], CUR_SEAT=-1;
+function renderHandFor(seat){
+  const row=$('handRow'); row.innerHTML=''; $('handInfo').textContent='';
+  $('btnEndTurn').classList.add('hidden');
+  if(seat<0){ return; }
+  const hand=G.hands[seat];
+  hand.forEach((card,ci)=>{
+    const w=document.createElement('div');
+    w.innerHTML=cardHTML(card);
+    const c=w.firstElementChild;
+    c.dataset.ci=ci;
+    row.appendChild(c);
+  });
+  if(seat!==G.turn||G.seats[seat].type!=='human')
+    row.querySelectorAll('.card').forEach(c=>c.classList.add('dead'));
+}
+function enableSelection(seat,moves){
+  CUR_MOVES=moves; CUR_SEAT=seat; SEL=null;
+  const row=$('handRow');
+  row.querySelectorAll('.card').forEach(c=>{
+    const ci=+c.dataset.ci;
+    const has=moves.some(m=>m.ci===ci);
+    c.classList.toggle('playable',has);
+    c.classList.toggle('dead',!has);
+    if(has)c.onclick=()=>selectCard(ci,c);
+  });
+}
+function selectCard(ci,cardEl){
+  if(SEL&&SEL.ci===ci){ return clearSelection(true); }
+  clearHighlights();
+  const mine=CUR_MOVES.filter(m=>m.ci===ci);
+  // King (or Ace with nothing else to do): a tee just jumps out, no piece-picking
+  if(mine.every(m=>m.type==='enter'))return performMove(CUR_SEAT,mine[0],cardEl);
+  SEL={ci,cardEl,stage:1};
+  $('handRow').querySelectorAll('.card').forEach(c=>c.classList.toggle('selCard',+c.dataset.ci===ci));
+  const pieceSet=new Set(mine.map(m=>`${m.owner}-${m.pi}`));
+  pieceSet.forEach(k=>{const[o,p]=k.split('-');$(`tee-${o}-${p}`).classList.add('selectable');});
+  mine.forEach(m=>{ if(m.type==='enter')G.pieces[m.owner].forEach((pc,pi2)=>{
+    if(pc.state==='base')$(`tee-${m.owner}-${pi2}`).classList.add('selectable');});});
+  $('handInfo').textContent=mine[0].type==='swap'?'Pick your tee to trade':'Pick a tee to move';
+}
+function onTeeClick(s,pi){
+  if(!SEL||CUR_SEAT<0||G.over)return;
+  const mine=CUR_MOVES.filter(m=>m.ci===SEL.ci);
+  if(SEL.stage===1){
+    let cand=mine.filter(m=>m.owner===s&&m.pi===pi);
+    if(!cand.length&&G.pieces[s][pi]&&G.pieces[s][pi].state==='base')
+      cand=mine.filter(m=>m.type==='enter'&&m.owner===s);   // any base tee = come out
+    if(!cand.length)return;
+    if(cand[0].type==='swap'){
+      SEL.stage=2; SEL.pi=pi;
+      clearHighlights();
+      $(`tee-${s}-${pi}`).classList.add('selectable');
+      cand.forEach(m=>$(`tee-${m.ts}-${m.tpi}`).classList.add('targetable'));
+      $('handInfo').textContent='Now pick who to trade places with';
+      return;
+    }
+    return performMove(CUR_SEAT,cand[0],SEL.cardEl);
+  }
+  if(SEL.stage===2){
+    const m=mine.find(m=>m.type==='swap'&&m.pi===SEL.pi&&m.ts===s&&m.tpi===pi);
+    if(m)return performMove(CUR_SEAT,m,SEL.cardEl);
+  }
+}
+function clearHighlights(){
+  document.querySelectorAll('.tee.selectable,.tee.targetable')
+    .forEach(t=>t.classList.remove('selectable','targetable'));
+}
+function clearSelection(keepTurn){
+  clearHighlights();
+  document.querySelectorAll('#handRow .card.selCard').forEach(c=>c.classList.remove('selCard'));
+  SEL=null;
+  if(keepTurn)$('handInfo').textContent=`Your turn — tap a card`;
+}
+
+/* ============================= § MENU / BOOT ============================= */
+const DEFAULT_NAMES={4:['Blake','Mom','Dad','Sis'],6:['Blake','Mom','Dad','Sis','Bro','Gram']};
+let CFG=JSON.parse(localStorage.getItem('nasty-setup')||'null')||{
+  n:4,teams:true,
+  seatMeta:{}
+};
+function seatDefaults(n){
+  return Array.from({length:n},(_,i)=>({
+    name:DEFAULT_NAMES[n][i]||`Player ${i+1}`,
+    type:i===0?'human':'cpu',
+    diff:'medium'
+  }));
+}
+if(!CFG.seatMeta[4])CFG.seatMeta[4]=seatDefaults(4);
+if(!CFG.seatMeta[6])CFG.seatMeta[6]=seatDefaults(6);
+function saveCfg(){localStorage.setItem('nasty-setup',JSON.stringify(CFG));}
+function renderMenu(){
+  $('p4').classList.toggle('on',CFG.n===4);
+  $('p6').classList.toggle('on',CFG.n===6);
+  $('mFFA').classList.toggle('on',!CFG.teams);
+  $('mTeams').classList.toggle('on',CFG.teams);
+  const cols=CFG.n===4?COLORS4:COLORS6;
+  if(CFG.teams){
+    const pairs=[];
+    for(let i=0;i<CFG.n/2;i++)pairs.push(`${cols[i].name} + ${cols[i+CFG.n/2].name}`);
+    $('teamNote').textContent='Partners sit across: '+pairs.join('  ·  ');
+  }else $('teamNote').textContent='';
+  const list=$('seatList'); list.innerHTML='';
+  CFG.seatMeta[CFG.n].forEach((s,i)=>{
+    const r=document.createElement('div'); r.className='seatRow';
+    r.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span>
+      <input value="${esc(s.name)}" maxlength="12" aria-label="player name">
+      <select class="typeSel"><option value="human"${s.type==='human'?' selected':''}>Human</option>
+        <option value="cpu"${s.type==='cpu'?' selected':''}>CPU</option></select>
+      <select class="diffSel" ${s.type==='human'?'style="visibility:hidden"':''}>
+        <option value="easy"${s.diff==='easy'?' selected':''}>Easy</option>
+        <option value="medium"${s.diff==='medium'?' selected':''}>Tricky</option>
+        <option value="hard"${s.diff==='hard'?' selected':''}>Nasty</option></select>`;
+    const[inp,ts,ds]=[r.querySelector('input'),r.querySelector('.typeSel'),r.querySelector('.diffSel')];
+    inp.oninput=()=>{s.name=inp.value||cols[i].name;saveCfg();};
+    ts.onchange=()=>{s.type=ts.value;ds.style.visibility=s.type==='human'?'hidden':'visible';saveCfg();};
+    ds.onchange=()=>{s.diff=ds.value;saveCfg();};
+    list.appendChild(r);
+  });
+}
+$('p4').onclick=()=>{CFG.n=4;saveCfg();renderMenu();};
+$('p6').onclick=()=>{CFG.n=6;saveCfg();renderMenu();};
+$('mFFA').onclick=()=>{CFG.teams=false;saveCfg();renderMenu();};
+$('mTeams').onclick=()=>{CFG.teams=true;saveCfg();renderMenu();};
+function startGame(){
+  const cols=CFG.n===4?COLORS4:COLORS6;
+  const seats=CFG.seatMeta[CFG.n].map((s,i)=>({name:s.name||cols[i].name,type:s.type,diff:s.diff,color:cols[i]}));
+  LAY=buildLayout(CFG.n);
+  newGame({n:CFG.n,teams:CFG.teams,seats});
+  $('menu').classList.add('hidden');
+  $('game').classList.remove('hidden');
+  $('winOverlay').classList.add('hidden');
+  $('discardFace').innerHTML=''; $('discardLabel').classList.add('hidden');
+  drawBoard(); buildTable(); fitBoard();
+  setTimeout(fitBoard,50);
+  toast(`${G.seats[G.dealer].name} deals first — ${G.seats[G.turn].name} starts`,2600);
+  runTurn();
+  window.G=G; window.LAY=LAY; // for testing / debugging
+}
+$('btnStart').onclick=startGame;
+$('btnAgain').onclick=()=>{$('winOverlay').classList.add('hidden');startGame();};
+$('btnWinMenu').onclick=()=>{location.hash='';G=null;$('winOverlay').classList.add('hidden');
+  $('game').classList.add('hidden');$('menu').classList.remove('hidden');};
+$('btnMenu').onclick=()=>{ if(confirm('Leave this game and go back to the menu?')){G=null;
+  $('game').classList.add('hidden');$('menu').classList.remove('hidden');} };
+$('btnRules').onclick=()=>$('rulesOverlay').classList.remove('hidden');
+$('btnRules2').onclick=()=>$('rulesOverlay').classList.remove('hidden');
+$('btnRulesClose').onclick=()=>$('rulesOverlay').classList.add('hidden');
+$('btnOnline').onclick=()=>$('onlineOverlay').classList.remove('hidden');
+$('btnOnlineClose').onclick=()=>$('onlineOverlay').classList.add('hidden');
+function textInvite(){
+  const msg=encodeURIComponent(`Come play NASTY with me! 🏌️ ${location.href.split('#')[0]}`);
+  location.href=`sms:&body=${msg}`;
+}
+$('btnText').onclick=textInvite;
+$('btnInviteMenu').onclick=textInvite;
+
+/* ---- leaderboard (stored on this device) ---- */
+function loadStats(){ try{return JSON.parse(localStorage.getItem('nasty-stats')||'{}');}catch(e){return{};} }
+function recordWin(){
+  if(G.recorded)return; G.recorded=true;
+  const st=loadStats(), key=(G.n===4?'w4':'w6')+(G.teams?'t':'s');
+  for(const w of G.winners){
+    const nm=G.seats[w].name;
+    st[nm]=st[nm]||{w4s:0,w4t:0,w6s:0,w6t:0};
+    st[nm][key]++;
+  }
+  localStorage.setItem('nasty-stats',JSON.stringify(st));
+}
+function renderLb(){
+  const st=loadStats(), names=Object.keys(st);
+  if(!names.length){$('lbBody').innerHTML='<p>No wins yet — go play a game!</p>';return;}
+  const tot=n=>st[n].w4s+st[n].w4t+st[n].w6s+st[n].w6t;
+  names.sort((a,b)=>tot(b)-tot(a));
+  $('lbBody').innerHTML=`<table class="lbTable"><tr><th>Player</th><th>4P solo</th>
+    <th>4P teams</th><th>6P solo</th><th>6P teams</th><th>Total</th></tr>`+
+    names.map(n=>`<tr><td>${esc(n)}</td><td>${st[n].w4s}</td><td>${st[n].w4t}</td>
+      <td>${st[n].w6s}</td><td>${st[n].w6t}</td><td>${tot(n)}</td></tr>`).join('')+`</table>`;
+}
+$('btnLb').onclick=()=>{renderLb();$('lbOverlay').classList.remove('hidden');};
+$('btnLbClose').onclick=()=>$('lbOverlay').classList.add('hidden');
+$('btnMute').onclick=()=>{muted=!muted;localStorage.setItem('nasty-muted',muted?'1':'0');
+  $('btnMute').textContent=muted?'🔇':'🔊';};
+$('btnMute').textContent=muted?'🔇':'🔊';
+function showWin(){
+  recordWin();
+  sWin(); confettiBurst();
+  const names=G.winners.map(w=>G.seats[w].name);
+  const cols=G.winners.map(w=>G.seats[w].color.name);
+  $('winTitle').textContent=names.join(' & ').toUpperCase();
+  $('winSub').textContent=G.teams?'win it together':'wins the game';
+  $('winText').textContent=G.teams
+    ?`Team ${cols.join(' + ')} got all ten tees home. That's how it's done.`
+    :`All five ${cols[0]} tees are home. Everyone else: better luck next deal.`;
+  $('winOverlay').classList.remove('hidden');
+}
+
+/* ---- autotest: #autotest = 4p FFA all-CPU, #autotest6 = 6p teams all-CPU ---- */
+function autotest(n,teams){
+  SPEED=12;
+  CFG={n,teams,seatMeta:CFG.seatMeta};
+  CFG.seatMeta[n]=CFG.seatMeta[n].map((s,i)=>({name:s.name,type:'cpu',diff:i%2?'hard':'medium'}));
+  startGame();
+}
+renderMenu();
+if(location.hash==='#autotest')autotest(4,false);
+else if(location.hash==='#autotest6')autotest(6,true);
+</script>
+</body>
+</html>

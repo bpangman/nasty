@@ -1,0 +1,10 @@
+{
+  "name": "Nasty — The Family Board Game",
+  "short_name": "Nasty",
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0e3421",
+  "theme_color": "#135c2e",
+  "icons": [{ "src": "icon.png", "sizes": "360x360", "type": "image/png" }]
+}
