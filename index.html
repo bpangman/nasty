@@ -11,13 +11,14 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY — the Pangman family board game, digitized. v0.2.
+  NASTY — the Pangman family board game, digitized. v0.3.
   Single self-contained page, deployed on GitHub Pages (no login needed).
-  Board geometry: X/plus formation — the track wraps around each arm's safe row.
-  Per arm segment (12 loop holes): start (tip, exit side) -> 5 down the exit flank ->
-  1 corner hole -> 5 up the next arm's entry flank -> hop across the tip to the next start.
-  Start holes are exactly 12 steps apart (a Queen from your start hits the next start).
-  Home approach: entry flank -> unpainted "porch" hole at the tip center -> 5 safe holes inward.
+  Board geometry (Blake-verified): X/plus formation — the track wraps around each arm's
+  safe row. Per segment (12 loop holes): your start -> 5 up your exit flank -> abrupt left
+  turn (no corner hole) -> 5 out the next arm's entry flank -> right turn -> porch hole at
+  the tip center -> that player's start. Starts are exactly 12 steps apart (a Queen from
+  your start lands on the next start). Your own porch is your last track hole; from there
+  you branch inward to your 5 safe holes.
 
   CODE MAP (for future sessions — see HANDOFF.md in this folder):
     STYLE ......... all CSS (felt table, wood board, tees, cards, animations)
@@ -153,8 +154,6 @@ button{font:inherit;cursor:pointer}
 #handRow .card.playable:hover{transform:translateY(-8px)}
 #handRow .card.selCard{transform:translateY(-14px);box-shadow:0 0 0 3px var(--gold),0 10px 20px rgba(0,0,0,.4);z-index:5}
 #handRow .card.dead{opacity:.45}
-#btnEndTurn{background:var(--red);color:#fff;border:none;border-radius:12px;padding:11px 26px;font-weight:800;font-size:16px;
-  box-shadow:0 6px 16px rgba(0,0,0,.4)}
 
 /* ---------- FX ---------- */
 .spark{position:absolute;width:9px;height:9px;border-radius:50%;pointer-events:none}
@@ -214,7 +213,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnOnline">Online play</button>
     </div>
   </div>
-  <div class="est">v0.2 demo &nbsp;·&nbsp; est. 12/15/93</div>
+  <div class="est">v0.3 demo &nbsp;·&nbsp; est. 12/15/93</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -243,7 +242,6 @@ button{font:inherit;cursor:pointer}
   <div id="handBar">
     <div id="handInfo"></div>
     <div id="handRow"></div>
-    <button id="btnEndTurn" class="hidden">You're out of playable cards — end turn</button>
   </div>
 </div>
 
@@ -293,7 +291,7 @@ button{font:inherit;cursor:pointer}
     <h4>Turns</h4>
     <ul>
       <li>Cards get dealt in rounds (5-4-4 with 4 players). Play one card per turn.</li>
-      <li>No playable card? Your turn is skipped — tap <i>end turn</i>.</li>
+      <li>No playable card? You're skipped automatically until the next deal.</li>
       <li>If a partner finishes, they keep playing to move their partner's tees.</li>
     </ul>
     <div class="bigBtns"><button class="btn primary" id="btnRulesClose">Got it</button></div>
@@ -379,10 +377,12 @@ const HOME_N=5;
 let LAY=null;
 
 /* X/plus board. Each arm: safe row on the axis, track flanks on both sides.
-   Loop per seat segment (12 holes): start (tip, exit flank) -> 5 down exit flank ->
-   corner hole -> 5 up next arm's entry flank -> (hop across tip) next start.
-   steps: 0..L-1 on the loop, L = the private "porch" hole at the tip center,
-   L+1..L+5 = the safe row. */
+   Loop per seat segment (12 holes), exactly as Blake describes it: come out on your
+   start -> 5 holes up your exit flank -> abrupt left turn (NO corner hole) -> 5 holes
+   out the next arm's entry flank -> right turn -> 1 tip-center hole ("porch") -> that
+   player's start. Starts are exactly 12 steps apart. Your own porch (steps L-1) is the
+   last shared hole before your start; from there you branch inward to the safe row
+   (steps L..L+4). */
 function buildLayout(n){
   const cfg=n===4
     ?{r0:430,sp:56,g:46,holeR:13,baseR:490,plaqR:645,spread:30}
@@ -395,18 +395,16 @@ function buildLayout(n){
     arms.push({th,d,p:{x:-d.y,y:d.x}});                 // p = clockwise-side perpendicular
   }
   const P=(a,r,off)=>({x:500+a.d.x*r+a.p.x*off,y:500+a.d.y*r+a.p.y*off});
-  const loop=[],home=[],porch=[],base=[],plaque=[];
+  const loop=[],home=[],base=[],plaque=[];
   for(let s=0;s<n;s++){
     const a=arms[s],b=arms[(s+1)%n];
     loop.push({...P(a,radii[0],cfg.g),start:s});        // colored start hole
-    for(let i=1;i<=5;i++)loop.push(P(a,radii[i],cfg.g));
-    const l5=P(a,radii[5],cfg.g),e5=P(b,radii[5],-cfg.g);
-    loop.push({x:(l5.x+e5.x)/2,y:(l5.y+e5.y)/2});       // single abrupt corner hole
-    for(let i=5;i>=1;i--)loop.push(P(b,radii[i],-cfg.g));
+    for(let i=1;i<=5;i++)loop.push(P(a,radii[i],cfg.g));// 5 up the exit flank
+    for(let i=5;i>=1;i--)loop.push(P(b,radii[i],-cfg.g));// abrupt turn, 5 out the entry flank
+    loop.push(P(b,radii[0],0));                          // porch: last hole before b's start
   }
   for(let s=0;s<n;s++){
     const a=arms[s];
-    porch.push(P(a,radii[0],0));
     home.push([1,2,3,4,5].map(i=>P(a,radii[i],0)));
     const bt=a.th-Math.PI/n;                            // bisector toward the player's right
     const u={x:Math.cos(bt),y:Math.sin(bt)};
@@ -416,14 +414,12 @@ function buildLayout(n){
     plaque.push({x:Math.min(934,Math.max(66,500+u.x*cfg.plaqR)),
                  y:Math.min(952,Math.max(46,500+u.y*cfg.plaqR))});
   }
-  return {n,L:12*n,loop,home,porch,base,plaque,holeR:cfg.holeR};
+  return {n,L:12*n,loop,home,base,plaque,holeR:cfg.holeR};
 }
 const entryIdx=s=>s*12;
 const loopIdx=(s,steps)=>(entryIdx(s)+steps)%LAY.L;
 function stepPos(s,steps){
-  if(steps<LAY.L)return LAY.loop[loopIdx(s,steps)];
-  if(steps===LAY.L)return LAY.porch[s];
-  return LAY.home[s][steps-LAY.L-1];
+  return steps<LAY.L ? LAY.loop[loopIdx(s,steps)] : LAY.home[s][steps-LAY.L];
 }
 
 /* ============================= § STATE ============================= */
@@ -449,7 +445,7 @@ function newGame(cfg){
 }
 const partnerOf=s=>G.teams?(s+G.n/2)%G.n:-1;
 const sameTeam=(a,b)=>a===b||(G.teams&&partnerOf(a)===b);
-const allHome=s=>G.pieces[s].every(p=>p.state==='home'&&p.steps>LAY.L); // porch doesn't count
+const allHome=s=>G.pieces[s].every(p=>p.state==='home');
 function trackOccupant(idx){
   for(let s=0;s<G.n;s++)for(let pi=0;pi<5;pi++){
     const p=G.pieces[s][pi];
@@ -458,17 +454,18 @@ function trackOccupant(idx){
 }
 const homeOcc=(s,q)=>G.pieces[s].some(p=>p.state==='home'&&p.steps===q);
 function isSnug(s,pi){
-  const p=G.pieces[s][pi]; if(p.state!=='home'||p.steps<=LAY.L)return false;
-  for(let q=p.steps+1;q<=LAY.L+HOME_N;q++)if(!homeOcc(s,q))return false;
+  const p=G.pieces[s][pi]; if(p.state!=='home')return false;
+  for(let q=p.steps+1;q<=LAY.L+HOME_N-1;q++)if(!homeOcc(s,q))return false;
   return true;
 }
 
 /* ============================= § ENGINE ============================= */
-/* Rules assumptions & sources: see RULES.md. steps: 0=own start hole, loop is L=12n
-   holes so starts sit exactly 12 apart; steps L = private porch hole at the tip,
-   L+1..L+5 = safe row. Opponents never touch the porch or safe row. */
+/* Rules assumptions & sources: see RULES.md. steps: 0=own start hole; loop is L=12n
+   holes so starts sit exactly 12 apart. Steps L-1 = your porch (the shared tip-center
+   hole right before your start — you CAN be kicked there). From the porch you branch
+   inward: steps L..L+4 = your safe row, which nobody else can touch. */
 function pathForward(owner,p,n){
-  const t=p+n; if(t>LAY.L+HOME_N)return null;
+  const t=p+n; if(t>LAY.L+HOME_N-1)return null;
   let kick=null;
   for(let q=p+1;q<=t;q++){
     if(q>=LAY.L){ if(homeOcc(owner,q))return null; }
@@ -637,7 +634,7 @@ function drawBoard(){
   t.textContent='N A S T Y · EST. 12/15/93';
   // safe-row lanes ("between parallel lines")
   for(let s=0;s<G.n;s++){
-    const col=G.seats[s].color, a=LAY.porch[s], b=LAY.home[s][HOME_N-1];
+    const col=G.seats[s].color, a=LAY.home[s][0], b=LAY.home[s][HOME_N-1];
     el('line',{x1:a.x,y1:a.y,x2:b.x,y2:b.y,stroke:col.c,'stroke-width':LAY.holeR*2+14,
                'stroke-linecap':'round',opacity:.14},svg);
   }
@@ -650,10 +647,7 @@ function drawBoard(){
     }
   });
   for(let s=0;s<G.n;s++){
-    const col=G.seats[s].color, po=LAY.porch[s];
-    el('circle',{cx:po.x,cy:po.y,r:LAY.holeR,fill:'url(#hole)'},svg);
-    el('circle',{cx:po.x,cy:po.y,r:LAY.holeR+4,fill:'none',stroke:col.c,'stroke-width':2.5,
-                 opacity:.55,'stroke-dasharray':'3 4'},svg);
+    const col=G.seats[s].color;
     LAY.home[s].forEach(h=>{
       el('circle',{cx:h.x,cy:h.y,r:LAY.holeR,fill:'url(#hole)'},svg);
       el('circle',{cx:h.x,cy:h.y,r:LAY.holeR+4,fill:'none',stroke:col.c,'stroke-width':4},svg);
@@ -975,21 +969,18 @@ async function runTurn(){
     const m=chooseAI(seat,moves);
     return performMove(seat,m,null);
   }
-  // human
+  // human with nothing to play: skipped automatically, no clicking needed
+  if(moves.length===0){
+    renderHandFor(visibleHandSeat());
+    sNo();
+    toast(`${seatCfg.name} is out of playable cards — skipped`,2400);
+    await wait(1400);
+    await passTurn(seat);
+    advance(); return runTurn();
+  }
   if(G.humanCount>1)await passDeviceGate(seat);
   renderHandFor(seat);
   if(assist)toast(`${seatCfg.name}: you're home — these cards move ${G.seats[actingOwner(seat)].name}'s tees!`,3000);
-  if(moves.length===0){
-    sNo();
-    $('handInfo').textContent="You're out of playable cards.";
-    $('btnEndTurn').classList.remove('hidden');
-    $('btnEndTurn').onclick=async()=>{
-      $('btnEndTurn').classList.add('hidden');
-      await passTurn(seat);
-      advance(); runTurn();
-    };
-    return;
-  }
   $('handInfo').textContent=assist?`Play a card for your partner, ${seatCfg.name}`:`Your turn, ${seatCfg.name} — tap a card`;
   enableSelection(seat,moves);
 }
@@ -1007,7 +998,6 @@ function passDeviceGate(seat){
 let SEL=null, CUR_MOVES=[], CUR_SEAT=-1;
 function renderHandFor(seat){
   const row=$('handRow'); row.innerHTML=''; $('handInfo').textContent='';
-  $('btnEndTurn').classList.add('hidden');
   if(seat<0){ return; }
   const hand=G.hands[seat];
   hand.forEach((card,ci)=>{
