@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY — the Pangman family board game, digitized. v0.5.
+  NASTY — the Pangman family board game, digitized. v0.6.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation — the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -96,8 +96,33 @@ button{font:inherit;cursor:pointer}
 #boardWrap{flex:1;position:relative;overflow:hidden}
 #boardScale{position:absolute;width:1000px;height:1000px;transform-origin:top left}
 #boardSvg{position:absolute;inset:0}
-#tableLayer,#fxLayer,#plaqueLayer,#bubbleLayer{position:absolute;inset:0;pointer-events:none}
+#tableLayer,#fxLayer,#plaqueLayer,#bubbleLayer,#pathLayer{position:absolute;inset:0;pointer-events:none}
 #tableLayer .tee{pointer-events:auto}
+
+/* ---------- Card path preview ---------- */
+.pathDot{position:absolute;width:20px;height:20px;border-radius:50%;transform:translate(-50%,-50%);
+  border:2px solid rgba(255,255,255,.35);animation:dotIn .25s ease-out}
+.pathDot.pathEnd{width:38px;height:38px;background:transparent!important;
+  border:4px solid var(--gold);box-shadow:0 0 14px rgba(244,197,66,.7)}
+.pathDot.pathKill{width:38px;height:38px;background:rgba(255,60,60,.25)!important;
+  border:4px solid #ff5c5c;box-shadow:0 0 16px rgba(255,60,60,.8);animation:killPulse .7s infinite}
+@keyframes dotIn{from{opacity:0;transform:translate(-50%,-50%) scale(.4)}}
+@keyframes killPulse{50%{transform:translate(-50%,-50%) scale(1.18)}}
+
+/* ---------- Skip catch-up + snug FX ---------- */
+.changeRing{position:absolute;width:56px;height:56px;border-radius:50%;border:4px solid #fff;
+  transform:translate(-50%,-50%);pointer-events:none;animation:changePulse .8s ease-out 4}
+@keyframes changePulse{0%{opacity:1;transform:translate(-50%,-50%) scale(.6)}
+  100%{opacity:.15;transform:translate(-50%,-50%) scale(1.5)}}
+.safeStamp{position:absolute;transform:translate(-50%,-100%);pointer-events:none;z-index:38;
+  font-family:"Arial Black",sans-serif;font-size:24px;letter-spacing:.06em;color:var(--gold);
+  text-shadow:0 2px 0 rgba(0,0,0,.5),0 0 18px rgba(244,197,66,.8);
+  animation:stampPop 1.5s ease-out forwards}
+@keyframes stampPop{0%{opacity:0;transform:translate(-50%,-60%) scale(.4)}
+  25%{opacity:1;transform:translate(-50%,-110%) scale(1.15)}
+  75%{opacity:1;transform:translate(-50%,-120%) scale(1)}
+  100%{opacity:0;transform:translate(-50%,-160%) scale(1)}}
+#btnSkip.active{background:var(--gold);color:#3a2c05;border-color:var(--gold)}
 
 /* ---------- Plaques ---------- */
 .plaque{position:absolute;transform:translate(-50%,-50%) rotate(var(--rot,0deg));
@@ -238,7 +263,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnOnline">Online play</button>
     </div>
   </div>
-  <div class="est">v0.5 demo &nbsp;·&nbsp; est. 12/15/93</div>
+  <div class="est">v0.6 demo &nbsp;·&nbsp; est. 12/15/93</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -247,6 +272,8 @@ button{font:inherit;cursor:pointer}
     <button class="iconBtn" id="btnMenu">‹ Menu</button>
     <div class="chip" id="dealChip">—</div>
     <div class="spacer"></div>
+    <button class="iconBtn hidden" id="btnSkip">⏩ Skip</button>
+    <button class="iconBtn" id="btnSpeed">▶︎ Normal</button>
     <button class="iconBtn" id="btnRules2">Rules</button>
     <button class="iconBtn" id="btnMute">🔊</button>
   </div>
@@ -263,6 +290,7 @@ button{font:inherit;cursor:pointer}
       <div class="tableCard" id="discardSpot" style="left:585px;top:500px">
         <div id="discardFace"></div><div id="discardLabel" class="hidden"></div>
       </div>
+      <div id="pathLayer"></div>
       <div id="tableLayer"></div>
       <div id="plaqueLayer"></div>
       <div id="bubbleLayer"></div>
@@ -309,8 +337,8 @@ button{font:inherit;cursor:pointer}
     </ul>
     <h4>The nasty part</h4>
     <ul>
-      <li>Land exactly on anyone — even your partner — and their tee is <b>blasted back to base</b>.</li>
-      <li>Teams: you may <b>never pass</b> your partner on the board. Landing right on them is allowed (and required if it's your only play) — kick!</li>
+      <li>Land exactly on anyone — an opponent, your partner, even <b>your own tee</b> — and it's <b>blasted back to base</b>.</li>
+      <li>You may <b>never pass your own tee</b> — or your partner's, in teams. If your only play lands right on one of them, it must happen. Slow-play your cards (a 3 backwards buys time) to avoid it!</li>
     </ul>
     <h4>Home row</h4>
     <ul>
@@ -355,8 +383,15 @@ button{font:inherit;cursor:pointer}
 const $=id=>document.getElementById(id);
 const wait=ms=>new Promise(r=>setTimeout(r,ms/SPEED));
 const rand=a=>a[Math.floor(Math.random()*a.length)];
+/* game speed = user setting × skip boost */
+const REDUCED=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const SPEED_OPTS=[[0.6,'🐢 Slow'],[1,'▶︎ Normal'],[1.7,'⏩ Fast'],[2.6,'⚡ Turbo']];
+let USER_SPEED=parseFloat(localStorage.getItem('nasty-speed')||'1');
+if(!SPEED_OPTS.some(o=>o[0]===USER_SPEED))USER_SPEED=1;
+let SKIP=false, skipSnap=null;
 let SPEED=1;
-if(matchMedia('(prefers-reduced-motion: reduce)').matches) SPEED=6;
+function applySpeed(){ SPEED=(REDUCED?Math.max(USER_SPEED,6):USER_SPEED)*(SKIP?30:1); }
+applySpeed();
 
 /* --- tiny sound synth --- */
 let AC=null, muted=localStorage.getItem('nasty-muted')==='1';
@@ -384,7 +419,16 @@ const sDealT=()=>noise(.06,.05);
 const sEnter=()=>{tone(240,.16,'triangle',.12,0,220);};
 const sBoom=()=>{noise(.3,.3);tone(120,.4,'sawtooth',.22,0,-70);};
 const sSwap=()=>{tone(500,.14,'sine',.1,0,-260);tone(240,.14,'sine',.1,.08,260);};
-const sWin=()=>{[523,659,784,1047].forEach((f,i)=>tone(f,.28,'triangle',.16,i*.13));};
+const sWin=()=>{ // big fanfare: run up, hold the chord, sparkle on top
+  [523,659,784,1047].forEach((f,i)=>tone(f,.3,'triangle',.16,i*.12));
+  [523,659,784,1047].forEach(f=>tone(f,1.1,'triangle',.09,.55));
+  tone(1319,.6,'triangle',.12,.75); tone(1568,.8,'triangle',.10,.95);
+  noise(.5,.06,.6);
+};
+const sSnug=()=>{ // safe-and-snug chime
+  tone(740,.14,'triangle',.15); tone(1109,.22,'triangle',.15,.1);
+  tone(1480,.3,'triangle',.12,.2); noise(.12,.04,.18);
+};
 const sNo=()=>tone(160,.2,'sawtooth',.07,0,-40);
 
 /* ============================= § LAYOUT ============================= */
@@ -518,6 +562,8 @@ function isSnug(s,pi){
    holes so starts sit exactly 12 apart. Steps L-1 = your porch (the shared tip-center
    hole right before your start — you CAN be kicked there). From the porch you branch
    inward: steps L..L+4 = your safe row, which nobody else can touch. */
+/* You can NEVER pass your own peg (or your partner's, in teams). Landing exactly on
+   ANY peg — even your own — takes it out; if that's your only move, it's forced. */
 function pathForward(owner,p,n){
   const t=p+n; if(t>LAY.L+HOME_N-1)return null;
   let kick=null;
@@ -526,8 +572,8 @@ function pathForward(owner,p,n){
     else{
       const occ=trackOccupant(loopIdx(owner,q));
       if(!occ)continue;
-      if(q<t){ if(G.teams&&occ.seat!==owner&&sameTeam(occ.seat,owner))return null; }
-      else{ if(occ.seat===owner)return null; kick=occ; }
+      if(q<t){ if(occ.seat===owner||(G.teams&&sameTeam(occ.seat,owner)))return null; }
+      else kick=occ;
     }
   }
   return{kick};
@@ -540,8 +586,8 @@ function pathBack(owner,p,n){
     else{
       const occ=trackOccupant(loopIdx(owner,q));
       if(!occ)continue;
-      if(q>t){ if(G.teams&&occ.seat!==owner&&sameTeam(occ.seat,owner))return null; }
-      else{ if(occ.seat===owner)return null; kick=occ; }
+      if(q>t){ if(occ.seat===owner||(G.teams&&sameTeam(occ.seat,owner)))return null; }
+      else kick=occ;
     }
   }
   return{kick};
@@ -557,8 +603,8 @@ function legalMoves(seat){
     if(r==='K'||r==='A'){
       const bi=G.pieces[owner].findIndex(p=>p.state==='base');
       if(bi>=0){
-        const occ=trackOccupant(loopIdx(owner,0));
-        if(!occ||occ.seat!==owner)ms.push({ci,type:'enter',owner,pi:bi,to:0,kick:occ||null});
+        const occ=trackOccupant(loopIdx(owner,0));   // whoever's on your start gets kicked — even your own tee
+        ms.push({ci,type:'enter',owner,pi:bi,to:0,kick:occ||null});
       }
     }
     if(r==='J'){
@@ -621,7 +667,8 @@ function dangerAt(owner,steps){
 }
 function kickVal(owner,k){
   const vic=G.pieces[k.seat][k.pi];
-  if(sameTeam(k.seat,owner))return -14;
+  if(k.seat===owner)return -45-vic.steps*0.3;        // taking out your own tee: absolute last resort
+  if(sameTeam(k.seat,owner))return -18-vic.steps*0.2;
   return 22+vic.steps*0.25;
 }
 function scoreMove(seat,m){
@@ -772,6 +819,7 @@ function syncAll(){
   }
   $('deckCount').textContent=G.deck.length;
   $('dealChip').textContent=`Deal ${Math.min(G.schedRound,G.schedule.length)}/${G.schedule.length} · Dealer: ${G.seats[G.dealer].name}`;
+  $('btnSkip').classList.toggle('hidden',G.over||G.seats[G.turn].type!=='cpu');
 }
 function cardHTML(card){
   const red=card.s==='♥'||card.s==='♦';
@@ -928,10 +976,40 @@ function confettiBurst(){
 /* ============================= § TURNS ============================= */
 let uiResolve=null;
 function toast(msg,ms=2200){
+  if(SKIP)return;   // no toast spam while fast-forwarding
   const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
   $('toasts').appendChild(t);
   setTimeout(()=>{t.style.transition='opacity .4s';t.style.opacity='0';
     setTimeout(()=>t.remove(),450);},Math.max(600,ms/Math.min(SPEED,3)));
+}
+/* ---- CPU fast-forward ---- */
+function startSkip(){
+  if(SKIP||!G||G.over)return;
+  SKIP=true; applySpeed();
+  skipSnap=G.pieces.map(ps=>ps.map(p=>({state:p.state,steps:p.steps})));
+  $('btnSkip').classList.add('active'); $('btnSkip').textContent='⏩ Skipping…';
+}
+function endSkip(){
+  if(!SKIP)return;
+  SKIP=false; applySpeed();
+  $('btnSkip').classList.remove('active'); $('btnSkip').textContent='⏩ Skip';
+  if(skipSnap){
+    let moved=0;
+    for(let s=0;s<G.n;s++)for(let pi=0;pi<5;pi++){
+      const a=skipSnap[s][pi],b=G.pieces[s][pi];
+      if(a.state!==b.state||a.steps!==b.steps){
+        moved++;
+        const pos=teePos(s,pi);
+        const r=document.createElement('div'); r.className='changeRing';
+        r.style.left=pos.x+'px'; r.style.top=pos.y+'px';
+        r.style.borderColor=G.seats[s].color.c;
+        $('fxLayer').appendChild(r);
+        setTimeout(()=>r.remove(),3400);
+      }
+    }
+    skipSnap=null;
+    if(moved)toast(`⏩ Caught up — the ${moved} tee${moved>1?'s':''} that moved are highlighted`,3200);
+  }
 }
 async function doDeal(){
   if(G.schedRound>=G.schedule.length){
@@ -972,6 +1050,7 @@ async function performMove(seat,m,cardEl){
     plan={aP,bP};
   }
   const kicked=m.kick?{seat:m.kick.seat,pi:m.kick.pi,pos:teePos(m.kick.seat,m.kick.pi)}:null;
+  const preSnug=G.pieces[owner].map((_,i)=>isSnug(owner,i));
   applyMove(seat,m);
   syncPlaquesOnly();
   const elm=$(`tee-${owner}-${m.pi}`);
@@ -990,13 +1069,36 @@ async function performMove(seat,m,cardEl){
     ]);
   }
   if(kicked){
-    toast(`💥 NASTY! ${G.seats[seat].name} sends ${G.seats[kicked.seat].name} back to base!`,2600);
+    if(kicked.seat===owner)toast(`💥 Ouch! ${G.seats[owner].name} takes out their OWN tee!`,2600);
+    else toast(`💥 NASTY! ${G.seats[seat].name} sends ${G.seats[kicked.seat].name} back to base!`,2600);
     await nastyBlast(kicked.seat,kicked.pi,kicked.pos);
+  }
+  // celebrate every tee that just became snug (safe forever)
+  if(!SKIP){
+    for(let i=0;i<5;i++){
+      if(!preSnug[i]&&isSnug(owner,i)){ celebrateSnug(owner,i); await wait(420); }
+    }
   }
   syncAll();
   if(G.over){ await wait(600); return showWin(); }
   advance();
   queueMicrotask(runTurn);
+}
+function celebrateSnug(owner,pi){
+  const pos=teePos(owner,pi);
+  sSnug();
+  sparks(pos,'#f4c542',12);
+  const lbl=document.createElement('div');
+  lbl.className='safeStamp'; lbl.textContent='SNUG!';
+  lbl.style.left=pos.x+'px'; lbl.style.top=(pos.y-26)+'px';
+  $('fxLayer').appendChild(lbl);
+  setTimeout(()=>lbl.remove(),1600);
+  const elm=$(`tee-${owner}-${pi}`);
+  elm.animate([
+    {transform:`translate(${pos.x}px,${pos.y}px) scale(1)`},
+    {transform:`translate(${pos.x}px,${pos.y - 26}px) scale(1.25)`,offset:.4},
+    {transform:`translate(${pos.x}px,${pos.y}px) scale(1)`}
+  ],{duration:Math.max(160,500/SPEED),easing:'ease-in-out'});
 }
 function syncPlaquesOnly(){ /* card counts during anims */
   for(let s=0;s<G.n;s++)$(`plaque-${s}`).querySelector('.cnt').textContent=G.hands[s].length;
@@ -1007,8 +1109,9 @@ function visibleHandSeat(){
 }
 async function runTurn(){
   if(!G||G.over)return;
-  if(G.hands.every(h=>h.length===0))await doDeal();
+  if(G.hands.every(h=>h.length===0)){ endSkip(); await doDeal(); }   // skip stops at the next hand
   const seat=G.turn;
+  if(SKIP&&G.seats[seat].type==='human')endSkip();                   // ...or at your turn
   syncAll();
   if(G.hands[seat].length===0){ advance(); return runTurn(); }
   const seatCfg=G.seats[seat];
@@ -1095,6 +1198,31 @@ function showBubbles(list,cls){
   });
 }
 function clearBubbles(){ $('bubbleLayer').innerHTML=''; }
+/* Soft preview of where each pickable tee would travel and land with the selected card.
+   Gold ring = landing spot; pulsing red ring = that landing takes somebody out. */
+function showPaths(mine){
+  clearPaths();
+  const layer=$('pathLayer');
+  mine.forEach(m=>{
+    if(m.type==='swap')return;
+    const col=G.seats[m.owner].color;
+    const cells=[];
+    if(m.type==='enter'){ cells.push(0); }
+    else{
+      const from=G.pieces[m.owner][m.pi].steps, dir=m.to>from?1:-1;
+      for(let q=from+dir; dir>0?q<=m.to:q>=m.to; q+=dir)cells.push(q);
+    }
+    cells.forEach((q,i)=>{
+      const pos=stepPos(m.owner,q), last=i===cells.length-1;
+      const d=document.createElement('div');
+      d.className='pathDot'+(last?(m.kick?' pathKill':' pathEnd'):'');
+      d.style.left=pos.x+'px'; d.style.top=pos.y+'px';
+      if(!last){ d.style.background=col.c+'66'; d.style.borderColor=col.c; }
+      layer.appendChild(d);
+    });
+  });
+}
+function clearPaths(){ $('pathLayer').innerHTML=''; }
 function selectCard(ci,cardEl){
   if(SEL&&SEL.ci===ci){ return clearSelection(true); }
   clearHighlights();
@@ -1111,6 +1239,7 @@ function selectCard(ci,cardEl){
   });
   picks.forEach(it=>$(`tee-${it.s}-${it.pi}`).classList.add('selectable'));
   showBubbles(picks,'');
+  showPaths(mine);
   $('handInfo').textContent=mine[0].type==='swap'?'Pick your tee to trade':'Pick a tee to move';
 }
 function onTeeClick(s,pi){
@@ -1139,7 +1268,7 @@ function onTeeClick(s,pi){
   }
 }
 function clearHighlights(){
-  clearBubbles();
+  clearBubbles(); clearPaths();
   document.querySelectorAll('.tee.selectable,.tee.targetable')
     .forEach(t=>t.classList.remove('selectable','targetable'));
 }
@@ -1264,6 +1393,16 @@ $('btnLbClose').onclick=()=>$('lbOverlay').classList.add('hidden');
 $('btnMute').onclick=()=>{muted=!muted;localStorage.setItem('nasty-muted',muted?'1':'0');
   $('btnMute').textContent=muted?'🔇':'🔊';};
 $('btnMute').textContent=muted?'🔇':'🔊';
+function speedLabel(){ return SPEED_OPTS.find(o=>o[0]===USER_SPEED)[1]; }
+$('btnSpeed').textContent=speedLabel();
+$('btnSpeed').onclick=()=>{
+  const i=SPEED_OPTS.findIndex(o=>o[0]===USER_SPEED);
+  USER_SPEED=SPEED_OPTS[(i+1)%SPEED_OPTS.length][0];
+  localStorage.setItem('nasty-speed',String(USER_SPEED));
+  applySpeed();
+  $('btnSpeed').textContent=speedLabel();
+};
+$('btnSkip').onclick=startSkip;
 function showWin(){
   recordWin();
   sWin(); confettiBurst();
