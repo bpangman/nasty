@@ -1185,13 +1185,28 @@ function enableSelection(seat,moves){
 function showBubbles(list,cls){
   clearBubbles();
   const layer=$('bubbleLayer');
-  const sorted=list.slice().sort((a,b)=>teePos(a.s,a.pi).x-teePos(b.s,b.pi).x);
-  sorted.forEach((it,i)=>{
+  const sorted=list.slice().sort((a,b)=>{
+    const pa=teePos(a.s,a.pi),pb=teePos(b.s,b.pi);
+    return pa.y-pb.y||pa.x-pb.x;
+  });
+  const placed=[]; // bubble centers in use — bubbles never overlap, even for stacked pegs
+  const CAND=[[0,-44],[0,-148],[-100,-44],[100,-44],[-100,-148],[100,-148],
+              [0,-252],[-200,-44],[200,-44],[-100,-252],[100,-252]];
+  sorted.forEach(it=>{
     const pos=teePos(it.s,it.pi);
+    let spot=null;
+    for(const[dx,dy]of CAND){
+      const bx=Math.min(950,Math.max(50,pos.x+dx));
+      const by=Math.max(96,pos.y+dy);
+      const cx=bx,cy=by-46;                       // bubble center (anchor is bottom-middle)
+      if(placed.every(q=>Math.hypot(q.x-cx,q.y-cy)>=100)){spot={bx,by,cx,cy};break;}
+    }
+    if(!spot){ const bx=pos.x,by=Math.max(96,pos.y-44-placed.length*104);
+      spot={bx,by,cx:bx,cy:by-46}; }
+    placed.push({x:spot.cx,y:spot.cy});
     const b=document.createElement('div');
     b.className='teeBubble'+(cls?' '+cls:'');
-    b.style.left=pos.x+'px';
-    b.style.top=(Math.max(96,pos.y-44)-(i%2)*58)+'px';   // stagger so neighbors don't stack
+    b.style.left=spot.bx+'px'; b.style.top=spot.by+'px';
     b.innerHTML=teeSVG(G.seats[it.s].color,true);
     b.addEventListener('click',e=>{e.stopPropagation();onTeeClick(it.s,it.pi);});
     layer.appendChild(b);
