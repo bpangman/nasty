@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY — the Pangman family board game, digitized. v0.6.3.
+  NASTY — the Pangman family board game, digitized. v0.7.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation — the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -30,8 +30,11 @@
     § AI .......... CPU players (easy / tricky / nasty)
     § RENDER ...... SVG board, tees, plaques, HUD
     § ANIM ........ card flights, tee hops, NASTY blast, dealing, confetti
-    § TURNS ....... async turn loop (humans + CPUs)
+    § TURNS ....... async turn loop (humans + CPUs) — network-aware (see § NET) but the
+                    offline path is untouched
     § UI .......... hand, card/piece selection, modals, menu
+    § NET ......... online multiplayer: WS client, host/join lobby UI, deterministic
+                    lockstep (server in /server, see HANDOFF.md "Online multiplayer")
     Autotest: open with #autotest (4p FFA all-CPU) or #autotest6 (6p teams) — fast-forwards a full game.
 -->
 </head>
@@ -84,12 +87,25 @@ button{font:inherit;cursor:pointer}
 .btn{border:none;border-radius:12px;padding:13px 22px;font-weight:800;font-size:16px;letter-spacing:.03em}
 .btn.primary{background:var(--gold);color:#3a2c05;box-shadow:0 6px 18px rgba(0,0,0,.35)}
 .btn.ghost{background:rgba(255,255,255,.1);color:var(--cream);border:1px solid rgba(255,255,255,.22)}
+.btn:disabled{opacity:.4;cursor:default}
 .est{margin-top:26px;font-size:12px;letter-spacing:.2em;color:#7fae8d;text-transform:uppercase}
 
 /* ---------- Game chrome ---------- */
 #game{position:fixed;inset:0;display:flex;flex-direction:column}
 #topbar{display:flex;align-items:center;gap:8px;padding:8px 12px;flex:none}
 #topbar .chip{font-size:12.5px;color:#d7ecdc;background:rgba(0,0,0,.28);border-radius:99px;padding:6px 12px}
+#netChip.reconnecting{animation:netPulse 1s infinite}
+@keyframes netPulse{50%{opacity:.4}}
+.lobbySeat{display:flex;gap:8px;align-items:center;background:rgba(255,255,255,.06);
+  border-radius:12px;padding:9px 11px;margin:7px 0}
+.lobbySeat .dot{width:20px;height:20px;border-radius:50%;flex:none;border:2px solid rgba(255,255,255,.6)}
+.lobbySeat .nm{flex:1;font-weight:700;font-size:14.5px}
+.lobbySeat .st{font-size:12px;color:#a9d2b5}
+.lobbySeat button{border:none;border-radius:8px;padding:6px 10px;font-size:12.5px;font-weight:700;
+  background:rgba(255,255,255,.12);color:var(--cream)}
+.lobbySeat.mine{box-shadow:0 0 0 2px var(--gold)}
+.lobbySeat.open{cursor:pointer}
+.lobbySeat.open:active{background:rgba(255,255,255,.16)}
 #topbar .spacer{flex:1}
 .iconBtn{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.15);color:var(--cream);
   border-radius:10px;padding:6px 11px;font-size:14px;font-weight:700}
@@ -267,7 +283,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnOnline">Online play</button>
     </div>
   </div>
-  <div class="est">v0.6.3 demo &nbsp;·&nbsp; est. 12/15/93</div>
+  <div class="est">v0.7 &nbsp;·&nbsp; est. 12/15/93</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -275,6 +291,7 @@ button{font:inherit;cursor:pointer}
   <div id="topbar">
     <button class="iconBtn" id="btnMenu">‹ Menu</button>
     <div class="chip" id="dealChip">—</div>
+    <div class="chip hidden" id="netChip">🟢 online</div>
     <div class="spacer"></div>
     <button class="iconBtn hidden" id="btnSkip">⏩ Skip</button>
     <button class="iconBtn" id="btnSpeed">▶︎ Normal</button>
@@ -369,14 +386,70 @@ button{font:inherit;cursor:pointer}
 
 <div id="onlineOverlay" class="overlay hidden">
   <div class="modalCard">
-    <h3>Invite family &amp; online play</h3>
-    <p>Right now Nasty plays on <b>one screen</b> — pass the phone around, or fill empty seats with CPU players.</p>
-    <p><b>Coming in v2:</b> private game codes so everyone plays from their own phone, plus a public lobby when you need a 4th. (The plan is written up in HANDOFF.md.)</p>
+    <h3>Play online</h3>
+    <p>Host a game and text your family a link so everyone plays from their own phone — or join a game someone else started.</p>
+    <div id="onlineErr" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
     <div class="bigBtns">
-      <button class="btn primary" id="btnText">Text an invite</button>
-      <button class="btn ghost" id="btnOnlineClose">Close</button>
+      <button class="btn primary" id="btnHostGame">Host a game</button>
+      <button class="btn ghost" id="btnJoinGame">Join a game</button>
+    </div>
+    <div class="bigBtns"><button class="btn ghost" id="btnText">📱 Text an invite (offline link)</button></div>
+    <div class="bigBtns"><button class="btn ghost" id="btnOnlineClose">Close</button></div>
+  </div>
+</div>
+
+<!-- Host: room created, waiting for guests -->
+<div id="roomOverlay" class="overlay hidden">
+  <div class="modalCard">
+    <h3>Your room is open</h3>
+    <p>Tell your family this code, or just text them the link — it fills in the code for them.</p>
+    <div style="text-align:center;margin:14px 0">
+      <div id="roomCode" style="font-family:'Arial Black',sans-serif;font-size:44px;letter-spacing:.16em;
+        color:var(--gold);background:rgba(0,0,0,.3);border-radius:14px;padding:10px 0">----</div>
+    </div>
+    <div class="bigBtns"><button class="btn primary" id="btnRoomText">📱 Text an invite</button></div>
+    <h4>Seats</h4>
+    <div id="roomSeatList"></div>
+    <div id="roomNote" style="font-size:13px;color:#ffe9a8;min-height:18px;margin-top:6px"></div>
+    <div class="bigBtns">
+      <button class="btn primary" id="btnRoomStart">Start game</button>
+      <button class="btn ghost" id="btnRoomCancel">Cancel</button>
     </div>
   </div>
+</div>
+
+<!-- Join: enter code + name, then wait for host -->
+<div id="joinOverlay" class="overlay hidden">
+  <div class="modalCard">
+    <h3>Join a game</h3>
+    <div id="joinCodeStep">
+      <p>Enter the 4-letter room code your host sent you.</p>
+      <div class="optRow"><label>Room code</label>
+        <input id="joinCodeInput" maxlength="4" style="text-transform:uppercase;font-size:20px;letter-spacing:.14em;
+          width:110px;text-align:center;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.2);
+          border-radius:8px;color:var(--cream);padding:8px"></div>
+      <div class="bigBtns"><button class="btn primary" id="btnJoinCodeNext">Continue</button></div>
+    </div>
+    <div id="joinNameStep" class="hidden">
+      <p>What should we call you?</p>
+      <div class="optRow"><label>Your name</label>
+        <input id="joinNameInput" maxlength="20" style="font-size:16px;width:160px;background:rgba(0,0,0,.25);
+          border:1px solid rgba(255,255,255,.2);border-radius:8px;color:var(--cream);padding:8px"></div>
+      <div class="bigBtns"><button class="btn primary" id="btnJoinNameNext">Continue</button></div>
+    </div>
+    <div id="joinSeatStep" class="hidden">
+      <p>Pick an open seat.</p>
+      <div id="joinSeatList"></div>
+      <div id="joinNote" style="font-size:13px;color:#ffe9a8;min-height:34px;margin-top:6px"></div>
+    </div>
+    <div id="joinErr" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
+    <div class="bigBtns"><button class="btn ghost" id="btnJoinClose">Cancel</button></div>
+  </div>
+</div>
+
+<div id="waitHostOverlay" class="overlay hidden">
+  <div class="sign"><b>PAUSED</b><small>waiting for host</small></div>
+  <p>The host's connection dropped — the game will pick back up the moment they're back.</p>
 </div>
 
 <script>
@@ -533,13 +606,15 @@ function freshDeck(){
   for(let i=d.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[d[i],d[j]]=[d[j],d[i]];}
   return d;
 }
-function newGame(cfg){
+function newGame(cfg,seed){
+  // seed (online multiplayer): {deck,dealer} generated once by the host and broadcast, so
+  // every client builds the identical starting state instead of shuffling independently.
   G={n:cfg.n,teams:cfg.teams,seats:cfg.seats,
      pieces:cfg.seats.map(()=>Array.from({length:5},()=>({state:'base',steps:-1}))),
      hands:cfg.seats.map(()=>[]),
-     deck:freshDeck(),discard:[],
+     deck:(seed&&seed.deck)?seed.deck.slice():freshDeck(),discard:[],
      schedule:SCHEDULES[cfg.n],schedRound:0,
-     dealer:Math.floor(Math.random()*cfg.n),
+     dealer:(seed&&seed.dealer!=null)?seed.dealer:Math.floor(Math.random()*cfg.n),
      turn:0,passStreak:0,over:false,winners:[]};
   G.turn=(G.dealer+1)%G.n;
   G.humanCount=cfg.seats.filter(s=>s.type==='human').length;
@@ -1035,8 +1110,22 @@ function endSkip(){
 }
 async function doDeal(){
   if(G.schedRound>=G.schedule.length){
-    G.deck=freshDeck(); G.discard=[]; G.schedRound=0;
-    G.dealer=(G.dealer+1)%G.n; G.turn=(G.dealer+1)%G.n;
+    // reshuffling draws new randomness — online, only the HOST generates it and broadcasts
+    // the resulting deck order; every client (host included) applies the same array so
+    // hands stay identical everywhere. Offline this is just a local shuffle, unchanged.
+    let deckArr,newDealer;
+    if(!NET.online){
+      deckArr=freshDeck(); newDealer=(G.dealer+1)%G.n;
+    }else{
+      const waitP=armReshuffleWait();
+      if(NET.isHost){
+        const d=freshDeck(), nd=(G.dealer+1)%G.n;
+        netSend({type:'action',action:{kind:'reshuffle',deck:d,dealer:nd}});
+      }
+      const r=await waitP; deckArr=r.deck; newDealer=r.dealer;
+    }
+    G.deck=deckArr; G.discard=[]; G.schedRound=0;
+    G.dealer=newDealer; G.turn=(G.dealer+1)%G.n;
     positionDeck(G.dealer,true);                          // slide the deck over to the new dealer
     toast(`Fresh shuffle — ${G.seats[G.dealer].name} deals`);
     await wait(500);
@@ -1126,6 +1215,9 @@ function syncPlaquesOnly(){ /* card counts during anims */
   for(let s=0;s<G.n;s++)$(`plaque-${s}`).querySelector('.cnt').textContent=G.hands[s].length;
 }
 function visibleHandSeat(){
+  // online: every phone only ever shows ITS OWN seat's hand (privacy) — dead/unclickable
+  // when it's not that seat's turn, same dimming renderHandFor already does offline.
+  if(NET.online)return NET.mySeat;
   if(G.humanCount===1)return G.seats.findIndex(s=>s.type==='human');
   return G.seats[G.turn].type==='human'?G.turn:-1;
 }
@@ -1149,10 +1241,20 @@ async function runTurn(){
       await passTurn(seat); await wait(500);
       advance(); return runTurn();
     }
-    const m=chooseAI(seat,moves);
+    if(!NET.online){
+      const m=chooseAI(seat,moves);
+      return performMove(seat,m,null);
+    }
+    // online: only the HOST computes the CPU's move; every client (host included) waits
+    // for the broadcast so all boards apply the exact same move in the exact same order.
+    const waitP=armMoveWait(seat);
+    if(NET.isHost){ const m=chooseAI(seat,moves); netSend({type:'action',action:{kind:'move',seat,m}}); }
+    const m=await waitP;
     return performMove(seat,m,null);
   }
-  // human with nothing to play: skipped automatically, no clicking needed
+  // human with nothing to play: skipped automatically, no clicking needed — this is
+  // deterministic (same hand everywhere), so every client reaches it independently, no
+  // network round-trip needed.
   if(moves.length===0){
     renderHandFor(visibleHandSeat());
     sNo();
@@ -1161,11 +1263,30 @@ async function runTurn(){
     await passTurn(seat);
     advance(); return runTurn();
   }
-  if(G.humanCount>1)await passDeviceGate(seat);
-  renderHandFor(seat);
-  if(assist)toast(`${seatCfg.name}: you're home — these cards move ${G.seats[actingOwner(seat)].name}'s tees!`,3000);
-  $('handInfo').textContent=assist?`Play a card for your partner, ${seatCfg.name}`:`Your turn, ${seatCfg.name} — tap a card`;
-  enableSelection(seat,moves);
+  if(!NET.online){
+    if(G.humanCount>1)await passDeviceGate(seat);
+    renderHandFor(seat);
+    if(assist)toast(`${seatCfg.name}: you're home — these cards move ${G.seats[actingOwner(seat)].name}'s tees!`,3000);
+    $('handInfo').textContent=assist?`Play a card for your partner, ${seatCfg.name}`:`Your turn, ${seatCfg.name} — tap a card`;
+    enableSelection(seat,moves);
+    return;
+  }
+  // online: no pass-the-phone — each seat is its own device. Only that seat's own phone
+  // shows/enables the hand; everyone else (including this same seat's other viewers, if
+  // any) just waits for the move to come over the network.
+  const waitP=armMoveWait(seat);
+  if(NET.mySeat===seat){
+    renderHandFor(seat);
+    if(assist)toast(`${seatCfg.name}: you're home — these cards move ${G.seats[actingOwner(seat)].name}'s tees!`,3000);
+    $('handInfo').textContent=assist?`Play a card for your partner, ${seatCfg.name}`:`Your turn, ${seatCfg.name} — tap a card`;
+    enableSelection(seat,moves);
+  }else{
+    renderHandFor(visibleHandSeat());
+    $('handInfo').textContent=`Waiting for ${seatCfg.name}…`;
+  }
+  const m=await waitP;
+  const ce=NET.mySeat===seat?NET.pendingCardEl:null; NET.pendingCardEl=null;
+  return performMove(seat,m,ce);
 }
 function passDeviceGate(seat){
   return new Promise(res=>{
@@ -1179,6 +1300,10 @@ function passDeviceGate(seat){
 
 /* ============================= § UI (hand & selection) ============================= */
 let SEL=null, CUR_MOVES=[], CUR_SEAT=-1;
+// SEL is a script-local `let` — unlike window.G/window.LAY/window.NET it's never assigned
+// to `window`, so tests must go through this getter rather than reading `window.SEL`
+// directly (which would silently always read `undefined`).
+window.getSelState=()=>SEL;
 function renderHandFor(seat){
   const row=$('handRow'); row.innerHTML=''; $('handInfo').textContent='';
   if(seat<0){ return; }
@@ -1251,7 +1376,7 @@ function selectCard(ci,cardEl){
   clearHighlights();
   const mine=CUR_MOVES.filter(m=>m.ci===ci);
   // King (or Ace with nothing else to do): a tee just jumps out, no piece-picking
-  if(mine.every(m=>m.type==='enter'))return performMove(CUR_SEAT,mine[0],cardEl);
+  if(mine.every(m=>m.type==='enter'))return commitMove(CUR_SEAT,mine[0],cardEl);
   SEL={ci,cardEl,stage:1};
   $('handRow').querySelectorAll('.card').forEach(c=>c.classList.toggle('selCard',+c.dataset.ci===ci));
   const picks=[],seen=new Set();
@@ -1283,11 +1408,11 @@ function onTeeClick(s,pi){
       $('handInfo').textContent='Now pick who to trade places with';
       return;
     }
-    return performMove(CUR_SEAT,cand[0],SEL.cardEl);
+    return commitMove(CUR_SEAT,cand[0],SEL.cardEl);
   }
   if(SEL.stage===2){
     const m=mine.find(m=>m.type==='swap'&&m.pi===SEL.pi&&m.ts===s&&m.tpi===pi);
-    if(m)return performMove(CUR_SEAT,m,SEL.cardEl);
+    if(m)return commitMove(CUR_SEAT,m,SEL.cardEl);
   }
 }
 function clearHighlights(){
@@ -1300,6 +1425,292 @@ function clearSelection(keepTurn){
   document.querySelectorAll('#handRow .card.selCard').forEach(c=>c.classList.remove('selCard'));
   SEL=null;
   if(keepTurn)$('handInfo').textContent=`Your turn — tap a card`;
+}
+
+/* ============================= § NET (online multiplayer) =============================
+   Deterministic lockstep over a dumb relay server (see /server/server.js). The server
+   never touches game rules — it just hands out room codes, relays every action to every
+   phone in the room in order, and remembers the log so a reconnecting phone can catch up.
+   Every phone runs the SAME §ENGINE/§TURNS code against its OWN copy of G; the only things
+   that ever cross the wire are: the game's starting seed (shuffled deck + dealer, chosen
+   once by the host), CPU move choices (host only), reshuffle decks (host only), and each
+   human seat's chosen move (captured only on the phone that owns that seat). Everyone else
+   just waits for those to arrive, then runs them through the normal applyMove/animation
+   path — so every animation works online exactly like it does offline. */
+const NET={
+  ws:null, online:false, isHost:false, wantConnection:false,
+  code:null, playerId:null, token:null, mySeat:-1,
+  lobby:null, seatOwners:null, hostConnected:true,
+  connected:false, reconnecting:false, backoff:1000,
+  actionQueue:[], waiters:{move:{},reshuffle:null}, pendingCardEl:null,
+};
+window.NET=NET; // exposed for testing/debugging, same spirit as window.G/window.LAY
+function resolveWsUrl(){
+  const qs=new URLSearchParams(location.search);
+  const override=qs.get('ws');
+  if(override){ try{sessionStorage.setItem('nasty-ws-override',override);}catch(e){} return Promise.resolve(override); }
+  try{ const stored=sessionStorage.getItem('nasty-ws-override'); if(stored)return Promise.resolve(stored); }catch(e){}
+  const base=location.href.replace(/[^/]*(?:#.*)?$/,'').split('?')[0];
+  return fetch(base+'wsurl.json?t='+Date.now(),{cache:'no-store'}).then(r=>{
+    if(!r.ok)throw new Error('server list unreachable');
+    return r.json();
+  }).then(j=>{
+    if(!j.url)throw new Error('no server published yet');
+    return j.url;
+  }).catch(()=>{
+    throw new Error("Couldn't find the game server right now — ask Blake to check the Mac Mini.");
+  });
+}
+function netSend(obj){ if(NET.ws&&NET.ws.readyState===1)NET.ws.send(JSON.stringify(obj)); }
+function updateNetChip(){
+  const chip=$('netChip'); if(!chip)return;
+  if(!NET.online){ chip.classList.add('hidden'); return; }
+  chip.classList.remove('hidden');
+  if(NET.reconnecting){ chip.textContent='🟡 reconnecting…'; chip.classList.add('reconnecting'); }
+  else if(!NET.hostConnected){ chip.textContent='⏸ waiting for host'; chip.classList.remove('reconnecting'); }
+  else{ chip.textContent='🟢 online'; chip.classList.remove('reconnecting'); }
+}
+function connectWs(){
+  return resolveWsUrl().then(url=>new Promise((resolve,reject)=>{
+    let settled=false;
+    const ws=new WebSocket(url);
+    NET.ws=ws;
+    ws.onopen=()=>{ NET.connected=true; NET.reconnecting=false; NET.backoff=1000; updateNetChip();
+      if(!settled){settled=true;resolve(ws);} };
+    ws.onmessage=e=>{ let m; try{m=JSON.parse(e.data);}catch(err){return;} handleNetMessage(m); };
+    ws.onclose=()=>{ NET.connected=false; updateNetChip();
+      if(!settled){settled=true;reject(new Error("Couldn't reach the game server."));}
+      else if(NET.online&&NET.wantConnection)scheduleReconnect(); };
+    ws.onerror=()=>{ if(!settled){settled=true;reject(new Error("Couldn't reach the game server."));} };
+  }));
+}
+function scheduleReconnect(){
+  if(NET.reconnecting)return;
+  NET.reconnecting=true; updateNetChip();
+  setTimeout(()=>{
+    connectWs().then(()=>{
+      netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token});
+    }).catch(()=>{ NET.reconnecting=false; scheduleReconnect(); });
+  },Math.min(NET.backoff,8000));
+  NET.backoff=Math.min(NET.backoff*1.7,8000);
+}
+/* an incoming move/reshuffle either resolves someone who's already waiting for it (the
+   normal live-play case) or, if nobody's waiting yet (mid reconnect catch-up, or a rare
+   ordering race), gets queued so the next arm*Wait() call picks it straight up. */
+function feedAction(entry){
+  const action=entry.action;
+  if(action.kind==='move'){
+    const w=NET.waiters.move[action.seat];
+    if(w){ delete NET.waiters.move[action.seat]; w(action.m); return; }
+  }else if(action.kind==='reshuffle'){
+    if(NET.waiters.reshuffle){ const w=NET.waiters.reshuffle; NET.waiters.reshuffle=null; w(action); return; }
+  }
+  NET.actionQueue.push(entry);
+}
+function armMoveWait(seat){
+  for(let i=0;i<NET.actionQueue.length;i++){
+    const e=NET.actionQueue[i];
+    if(e.action.kind==='move'&&e.action.seat===seat){ NET.actionQueue.splice(i,1); return Promise.resolve(e.action.m); }
+  }
+  endSkip(); // if we were fast-forwarding through reconnect history, we've now caught up to live
+  return new Promise(res=>{ NET.waiters.move[seat]=res; });
+}
+function armReshuffleWait(){
+  for(let i=0;i<NET.actionQueue.length;i++){
+    const e=NET.actionQueue[i];
+    if(e.action.kind==='reshuffle'){ NET.actionQueue.splice(i,1); return Promise.resolve(e.action); }
+  }
+  endSkip();
+  return new Promise(res=>{ NET.waiters.reshuffle=res; });
+}
+function commitMove(seat,m,cardEl){
+  if(NET.online){
+    if(cardEl)cardEl.style.visibility='hidden';
+    NET.pendingCardEl=cardEl||null;
+    netSend({type:'action',action:{kind:'move',seat,m}});
+    clearSelection();
+  }else performMove(seat,m,cardEl);
+}
+function resetNetUiFlow(){
+  $('onlineOverlay').classList.add('hidden');
+  $('roomOverlay').classList.add('hidden');
+  $('joinOverlay').classList.add('hidden');
+}
+function bootGameFromNetwork(action,isReconnect){
+  const cols=action.n===4?COLORS4:COLORS6;
+  const seats=action.seats.map((s,i)=>({name:s.name,type:s.type,diff:s.diff,color:cols[i]}));
+  LAY=buildLayout(action.n);
+  newGame({n:action.n,teams:action.teams,seats},{deck:action.deck,dealer:action.dealer});
+  resetNetUiFlow();
+  $('menu').classList.add('hidden');
+  $('game').classList.remove('hidden');
+  $('winOverlay').classList.add('hidden');
+  drawBoard(); buildTable(); fitBoard(); setTimeout(fitBoard,50);
+  window.G=G; window.LAY=LAY;
+  updateNetChip();
+  if(isReconnect&&NET.actionQueue.length)startSkip();   // fast-forward through catch-up history
+  if(!isReconnect)toast(`${G.seats[G.dealer].name} deals first — ${G.seats[G.turn].name} starts`,2600);
+  runTurn();
+}
+function onSync(m){
+  NET.online=true; NET.wantConnection=true; NET.isHost=!!m.isHost;
+  NET.lobby=m.lobby; NET.seatOwners=m.seatOwners; NET.hostConnected=m.hostConnected!==false;
+  NET.actionQueue=[]; NET.waiters={move:{},reshuffle:null};
+  const startEntry=m.log.find(e=>e.action.kind==='start');
+  m.log.forEach(e=>{ if(e!==startEntry)NET.actionQueue.push(e); });
+  NET.mySeat=NET.seatOwners.indexOf(NET.playerId);
+  updateNetChip();
+  if(startEntry)bootGameFromNetwork(startEntry.action,true);
+}
+/* rejoin token persistence — lets a phone that closed mid-game (locked, lost signal, tab
+   killed) reopen the SAME ?join=CODE link and land back in its seat instead of re-joining
+   as a stranger. Keyed by room code since a device could conceivably rejoin different
+   rooms over time. */
+function saveNetSession(){
+  try{ localStorage.setItem('nasty-net-'+NET.code, JSON.stringify({playerId:NET.playerId,token:NET.token})); }catch(e){}
+}
+function loadNetSession(code){
+  try{ const s=JSON.parse(localStorage.getItem('nasty-net-'+code)||'null'); if(s&&s.playerId&&s.token)return s; }catch(e){}
+  return null;
+}
+function leaveOnlineToMenu(msg){
+  NET.wantConnection=false;
+  if(NET.ws){ try{NET.ws.close();}catch(e){} }
+  Object.assign(NET,{ws:null,online:false,isHost:false,code:null,playerId:null,token:null,mySeat:-1,
+    lobby:null,seatOwners:null,actionQueue:[],waiters:{move:{},reshuffle:null}});
+  updateNetChip();
+  resetNetUiFlow();
+  $('waitHostOverlay').classList.add('hidden');
+  $('game').classList.add('hidden'); $('menu').classList.remove('hidden');
+  if(msg)toast(msg);
+}
+function handleNetMessage(m){
+  switch(m.type){
+    case 'created':
+      NET.online=true; NET.isHost=true; NET.wantConnection=true;
+      NET.code=m.code; NET.playerId=m.playerId; NET.token=m.token; NET.lobby=m.lobby;
+      saveNetSession(); updateNetChip(); renderRoomScreen();
+      $('onlineOverlay').classList.add('hidden'); $('roomOverlay').classList.remove('hidden');
+      return;
+    case 'joined':
+      NET.online=true; NET.isHost=false; NET.wantConnection=true;
+      NET.code=m.code; NET.playerId=m.playerId; NET.token=m.token; NET.lobby=m.lobby;
+      saveNetSession(); updateNetChip(); advanceJoinToSeatStep();
+      return;
+    case 'joinError': $('joinErr').textContent=m.message; return;
+    case 'rejoinError':
+      toast(m.message||'Lost the room connection.');
+      if(!G){ NET.online=false; NET.wantConnection=false; openJoinOverlay(NET.code||''); }
+      return;
+    case 'lobby':
+      NET.lobby=m.lobby;
+      if(m.isHost!=null){
+        NET.online=true; NET.wantConnection=true; NET.isHost=m.isHost;
+        updateNetChip();
+        if(NET.isHost){ $('onlineOverlay').classList.add('hidden'); $('joinOverlay').classList.add('hidden'); renderRoomScreen(); $('roomOverlay').classList.remove('hidden'); }
+        else advanceJoinToSeatStep();
+      } else if(NET.isHost)renderRoomScreen(); else renderJoinSeatStep();
+      return;
+    case 'kicked':
+      leaveOnlineToMenu(m.message||'The host removed your seat.');
+      return;
+    case 'presence':
+      return; // per-seat presence dots are a nice-to-have; not required for correctness
+    case 'hostStatus':
+      NET.hostConnected=!!m.connected; updateNetChip();
+      if(!$('game').classList.contains('hidden'))
+        $('waitHostOverlay').classList.toggle('hidden',NET.hostConnected);
+      return;
+    case 'gameAction':
+      if(m.action.kind==='start'){
+        NET.seatOwners=m.seatOwners; NET.mySeat=NET.seatOwners.indexOf(NET.playerId);
+        bootGameFromNetwork(m.action,false);
+      }else feedAction({seq:m.seq,action:m.action});
+      return;
+    case 'sync': onSync(m); return;
+    default: return;
+  }
+}
+
+/* ---- Host a game ---- */
+function hostCreateRoom(){
+  $('onlineErr').textContent='';
+  const cols=CFG.n===4?COLORS4:COLORS6;
+  const seats=CFG.seatMeta[CFG.n].map((s,i)=>({name:s.name||cols[i].name,type:s.type,diff:s.diff}));
+  const myName=(seats.find(s=>s.type==='human')||{}).name||'Host';
+  NET.wantConnection=true;
+  connectWs().then(()=>{
+    netSend({type:'host',name:myName,n:CFG.n,teams:CFG.teams,seats});
+  }).catch(err=>{ $('onlineErr').textContent=err.message; NET.wantConnection=false; });
+}
+function renderRoomScreen(){
+  if(!NET.lobby)return;
+  $('roomCode').textContent=NET.code||'----';
+  const list=$('roomSeatList'); list.innerHTML='';
+  const cols=NET.lobby.n===4?COLORS4:COLORS6;
+  NET.lobby.seats.forEach((s,i)=>{
+    const row=document.createElement('div'); row.className='lobbySeat'+(s.claimedBy===NET.playerId?' mine':'');
+    const statusTxt=s.type==='cpu'?'CPU':(s.claimedBy!=null?(s.claimedBy===NET.playerId?'You':'Joined ✓'):'Open — waiting…');
+    row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(s.name)}</span><span class="st">${statusTxt}</span>`;
+    if(s.claimedBy==null){
+      const btn=document.createElement('button');
+      btn.textContent=s.type==='cpu'?'Make human':'Make CPU';
+      btn.onclick=()=>netSend({type:'setSeat',seatIndex:i,patch:{type:s.type==='cpu'?'human':'cpu'}});
+      row.appendChild(btn);
+    }
+    list.appendChild(row);
+  });
+  const allSet=NET.lobby.seats.every(s=>s.type==='cpu'||s.claimedBy!=null);
+  $('btnRoomStart').disabled=!allSet;
+  $('roomNote').textContent=allSet?'':'Every human seat needs a player (or switch it to CPU) before you can start.';
+}
+
+/* ---- Join a game ---- */
+let JOIN={code:'',name:''};
+function openJoinOverlay(prefillCode){
+  resetNetUiFlow();
+  $('joinErr').textContent='';
+  $('joinCodeStep').classList.remove('hidden');
+  $('joinNameStep').classList.add('hidden');
+  $('joinSeatStep').classList.add('hidden');
+  $('joinCodeInput').value=prefillCode||'';
+  $('joinOverlay').classList.remove('hidden');
+  if(prefillCode&&prefillCode.length===4)advanceJoinToNameStep();
+}
+function advanceJoinToNameStep(){
+  const code=$('joinCodeInput').value.trim().toUpperCase();
+  if(code.length!==4){ $('joinErr').textContent='Enter the 4-letter code your host sent you.'; return; }
+  JOIN.code=code; $('joinErr').textContent='';
+  $('joinCodeStep').classList.add('hidden');
+  $('joinNameStep').classList.remove('hidden');
+}
+function joinSubmitName(){
+  const name=$('joinNameInput').value.trim();
+  if(!name){ $('joinErr').textContent='Enter your name.'; return; }
+  JOIN.name=name; $('joinErr').textContent='';
+  NET.wantConnection=true;
+  connectWs().then(()=>{ netSend({type:'join',code:JOIN.code,name}); })
+    .catch(err=>{ $('joinErr').textContent=err.message; NET.wantConnection=false; });
+}
+function advanceJoinToSeatStep(){
+  $('joinNameStep').classList.add('hidden');
+  $('joinSeatStep').classList.remove('hidden');
+  renderJoinSeatStep();
+}
+function renderJoinSeatStep(){
+  if(!NET.lobby)return;
+  const list=$('joinSeatList'); list.innerHTML='';
+  const cols=NET.lobby.n===4?COLORS4:COLORS6;
+  NET.lobby.seats.forEach((s,i)=>{
+    const mine=s.claimedBy===NET.playerId, open=s.claimedBy==null&&s.type==='human';
+    const row=document.createElement('div'); row.className='lobbySeat'+(mine?' mine':'')+(open?' open':'');
+    const statusTxt=s.type==='cpu'?'CPU':(s.claimedBy==null?'Tap to sit here':(mine?'You':'Taken'));
+    row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(s.name)}</span><span class="st">${statusTxt}</span>`;
+    if(open)row.onclick=()=>netSend({type:'claimSeat',seatIndex:i,name:JOIN.name});
+    list.appendChild(row);
+  });
+  const haveSeat=NET.lobby.seats.some(s=>s.claimedBy===NET.playerId);
+  $('joinNote').textContent=haveSeat?"You're in! Waiting for the host to start the game…":'Pick an open seat above.';
 }
 
 /* ============================= § MENU / BOOT ============================= */
@@ -1352,6 +1763,9 @@ $('p6').onclick=()=>{CFG.n=6;saveCfg();renderMenu();};
 $('mFFA').onclick=()=>{CFG.teams=false;saveCfg();renderMenu();};
 $('mTeams').onclick=()=>{CFG.teams=true;saveCfg();renderMenu();};
 function startGame(){
+  // offline/local play — guaranteed untouched by any network state, even leftover state
+  // from a cancelled online setup.
+  NET.online=false; NET.isHost=false; NET.wantConnection=false; updateNetChip();
   const cols=CFG.n===4?COLORS4:COLORS6;
   const seats=CFG.seatMeta[CFG.n].map((s,i)=>({name:s.name||cols[i].name,type:s.type,diff:s.diff,color:cols[i]}));
   LAY=buildLayout(CFG.n);
@@ -1366,22 +1780,48 @@ function startGame(){
   window.G=G; window.LAY=LAY; // for testing / debugging
 }
 $('btnStart').onclick=startGame;
-$('btnAgain').onclick=()=>{$('winOverlay').classList.add('hidden');startGame();};
+$('btnAgain').onclick=()=>{$('winOverlay').classList.add('hidden');
+  if(NET.online)leaveOnlineToMenu(); else startGame();};
 $('btnWinMenu').onclick=()=>{location.hash='';G=null;$('winOverlay').classList.add('hidden');
-  $('game').classList.add('hidden');$('menu').classList.remove('hidden');};
+  if(NET.online)leaveOnlineToMenu();
+  else{$('game').classList.add('hidden');$('menu').classList.remove('hidden');}};
 $('btnMenu').onclick=()=>{ if(confirm('Leave this game and go back to the menu?')){G=null;
-  $('game').classList.add('hidden');$('menu').classList.remove('hidden');} };
+  if(NET.online)leaveOnlineToMenu();
+  else{$('game').classList.add('hidden');$('menu').classList.remove('hidden');}} };
 $('btnRules').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRules2').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRulesClose').onclick=()=>$('rulesOverlay').classList.add('hidden');
-$('btnOnline').onclick=()=>$('onlineOverlay').classList.remove('hidden');
-$('btnOnlineClose').onclick=()=>$('onlineOverlay').classList.add('hidden');
 function textInvite(){
   const msg=encodeURIComponent(`Come play NASTY with me! 🏌️ ${location.href.split('#')[0]}`);
   location.href=`sms:&body=${msg}`;
 }
 $('btnText').onclick=textInvite;
 $('btnInviteMenu').onclick=textInvite;
+
+/* ---- Online: entry point + host/join button wiring ---- */
+$('btnOnline').onclick=()=>{ $('onlineErr').textContent=''; $('onlineOverlay').classList.remove('hidden'); };
+$('btnOnlineClose').onclick=()=>$('onlineOverlay').classList.add('hidden');
+$('btnHostGame').onclick=()=>{ $('onlineOverlay').classList.add('hidden'); hostCreateRoom(); };
+$('btnJoinGame').onclick=()=>{ $('onlineOverlay').classList.add('hidden');
+  const qs=new URLSearchParams(location.search); openJoinOverlay(qs.get('join')); };
+$('btnJoinCodeNext').onclick=advanceJoinToNameStep;
+$('btnJoinNameNext').onclick=joinSubmitName;
+$('btnJoinClose').onclick=()=>{
+  NET.wantConnection=false;
+  if(NET.ws&&!NET.online){ try{NET.ws.close();}catch(e){} }
+  $('joinOverlay').classList.add('hidden');
+};
+$('btnRoomCancel').onclick=()=>{ leaveOnlineToMenu(); };
+$('btnRoomStart').onclick=()=>{
+  if($('btnRoomStart').disabled)return;
+  const seats=NET.lobby.seats.map(s=>({name:s.name,type:s.type,diff:s.diff}));
+  const deck=freshDeck(), dealer=Math.floor(Math.random()*NET.lobby.n);
+  netSend({type:'start',action:{kind:'start',n:NET.lobby.n,teams:NET.lobby.teams,seats,dealer,deck}});
+};
+$('btnRoomText').onclick=()=>{
+  const msg=encodeURIComponent(`Come play NASTY with me! 🏌️ ${location.origin+location.pathname}?join=${NET.code}`);
+  location.href=`sms:&body=${msg}`;
+};
 
 /* ---- leaderboard (stored on this device) ---- */
 function loadStats(){ try{return JSON.parse(localStorage.getItem('nasty-stats')||'{}');}catch(e){return{};} }
@@ -1448,6 +1888,22 @@ function autotest(n,teams){
 renderMenu();
 if(location.hash==='#autotest')autotest(4,false);
 else if(location.hash==='#autotest6')autotest(6,true);
+else{
+  const qs=new URLSearchParams(location.search);
+  const joinCode=qs.get('join');
+  if(joinCode){
+    const code=joinCode.toUpperCase();
+    const saved=loadNetSession(code);
+    if(saved){
+      // we've been in this room before (this device, this browser) — try to slide back
+      // into our old seat instead of joining fresh. Falls back to a normal join if the
+      // room's gone or the token's stale.
+      NET.wantConnection=true; NET.code=code; NET.playerId=saved.playerId; NET.token=saved.token;
+      connectWs().then(()=>{ netSend({type:'rejoin',code,playerId:saved.playerId,token:saved.token}); })
+        .catch(()=>{ NET.wantConnection=false; openJoinOverlay(code); });
+    }else openJoinOverlay(code);
+  }
+}
 </script>
 </body>
 </html>

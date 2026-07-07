@@ -2,3 +2,5 @@ HANDOFF.md
 PLANNING.md
 RULES.md
 reference/
+server/node_modules/
+*.log
