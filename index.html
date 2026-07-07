@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY — the Pangman family board game, digitized. v0.4.
+  NASTY — the Pangman family board game, digitized. v0.5.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation — the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -96,22 +96,43 @@ button{font:inherit;cursor:pointer}
 #boardWrap{flex:1;position:relative;overflow:hidden}
 #boardScale{position:absolute;width:1000px;height:1000px;transform-origin:top left}
 #boardSvg{position:absolute;inset:0}
-#tableLayer,#fxLayer,#plaqueLayer{position:absolute;inset:0;pointer-events:none}
+#tableLayer,#fxLayer,#plaqueLayer,#bubbleLayer{position:absolute;inset:0;pointer-events:none}
 #tableLayer .tee{pointer-events:auto}
 
 /* ---------- Plaques ---------- */
-.plaque{position:absolute;transform:translate(-50%,-50%);background:rgba(20,14,8,.82);
-  border:1px solid rgba(255,255,255,.16);border-left-width:5px;border-radius:12px;
-  padding:7px 12px;min-width:118px;text-align:left;transition:box-shadow .3s}
-.plaque .nm{font-weight:800;font-size:16px;white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis}
-.plaque .sub{font-size:11.5px;color:#b9d6c1;margin-top:1px;display:flex;gap:7px;align-items:center}
-.plaque .pips{display:flex;gap:3px;margin-top:5px}
-.plaque .pip{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.15)}
+.plaque{position:absolute;transform:translate(-50%,-50%) rotate(var(--rot,0deg));
+  background:rgba(20,14,8,.86);
+  border:1px solid rgba(255,255,255,.16);border-left-width:4px;border-radius:10px;
+  padding:4px 9px;max-width:126px;text-align:left;transition:box-shadow .3s}
+.plaque .nm{font-weight:800;font-size:13.5px;white-space:nowrap;max-width:108px;overflow:hidden;text-overflow:ellipsis}
+.plaque .sub{font-size:10px;color:#b9d6c1;display:flex;gap:5px;align-items:center;white-space:nowrap}
+.plaque .pips{display:flex;gap:3px;margin-top:3px}
+.plaque .pip{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.15)}
 .plaque .pip.on{box-shadow:0 0 6px currentColor}
 .plaque.turn{box-shadow:0 0 0 3px var(--gold),0 0 26px rgba(244,197,66,.55);animation:turnPulse 1.6s infinite}
 @keyframes turnPulse{50%{box-shadow:0 0 0 3px var(--gold),0 0 40px rgba(244,197,66,.85)}}
-.plaque .cardsMini{display:inline-flex;align-items:center;gap:4px}
-.plaque .backMini{width:12px;height:17px;border-radius:2.5px;background:linear-gradient(160deg,#1f7d40,#0e4423);border:1px solid #d8e9dc}
+.plaque .cardsMini{display:inline-flex;align-items:center;gap:3px}
+.plaque .backMini{width:10px;height:14px;border-radius:2px;background:linear-gradient(160deg,#1f7d40,#0e4423);border:1px solid #d8e9dc}
+
+/* ---------- Tee pick bubbles (big tap targets) ---------- */
+.teeBubble{position:absolute;transform:translate(-50%,-100%);width:92px;height:92px;border-radius:50%;
+  background:rgba(15,10,6,.92);border:4px solid var(--gold);display:flex;align-items:center;justify-content:center;
+  cursor:pointer;pointer-events:auto;z-index:26;box-shadow:0 10px 24px rgba(0,0,0,.5);
+  animation:bubblePulse 1.1s infinite}
+.teeBubble::after{content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);
+  border:12px solid transparent;border-top-color:var(--gold)}
+.teeBubble.tgt{border-color:#ff5c5c}
+.teeBubble.tgt::after{border-top-color:#ff5c5c}
+.teeBubble svg{transform:scale(1.7)}
+@keyframes bubblePulse{50%{transform:translate(-50%,-100%) scale(1.07)}}
+@media (prefers-reduced-motion: reduce){ .teeBubble{animation:none} }
+
+/* ---------- In-game logo ---------- */
+#gameLogo{position:absolute;top:4px;left:50%;transform:translateX(-50%);text-align:center;
+  pointer-events:none;z-index:2;width:100%}
+#gameLogo .sign{padding:5px 16px 4px;border-width:3px;outline-width:2px;border-radius:9px}
+#gameLogo .sign b{font-size:20px;letter-spacing:.12em;text-shadow:0 2px 0 rgba(0,0,0,.35)}
+#gameLogo .sub2{margin-top:5px;font-size:9.5px;letter-spacing:.24em;color:#9ec7aa;text-transform:uppercase}
 
 /* ---------- Golf tees ---------- */
 .tee{position:absolute;left:0;top:0;width:34px;height:44px;margin-left:-17px;margin-top:-37px;
@@ -137,10 +158,12 @@ button{font:inherit;cursor:pointer}
   border:2px solid rgba(255,255,255,.35);border-radius:6px;margin:5px}
 .cardFloat{position:fixed;z-index:60;pointer-events:none;left:0;top:0}
 
-/* board-center deck & discard */
+/* deck & discard on the board */
 .tableCard{position:absolute;width:76px;height:106px;transform:translate(-50%,-50%)}
-.tableCard .card{width:76px;height:106px}
-.tableCard .card .pip{font-size:42px}
+.tableCard .card{width:100%;height:100%}
+.tableCard .card .pip{font-size:34px}
+#discardFace{position:absolute;inset:0}
+#discardFace .card{width:100%;height:100%}
 #deckCount{position:absolute;left:50%;top:100%;transform:translate(-50%,4px);font-size:12.5px;color:#eadfbe;
   background:rgba(0,0,0,.35);padding:2px 9px;border-radius:99px;white-space:nowrap}
 #discardLabel{position:absolute;left:50%;top:100%;transform:translate(-50%,4px);font-size:12.5px;color:#ffe9a8;
@@ -215,7 +238,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnOnline">Online play</button>
     </div>
   </div>
-  <div class="est">v0.4 demo &nbsp;·&nbsp; est. 12/15/93</div>
+  <div class="est">v0.5 demo &nbsp;·&nbsp; est. 12/15/93</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -228,6 +251,10 @@ button{font:inherit;cursor:pointer}
     <button class="iconBtn" id="btnMute">🔊</button>
   </div>
   <div id="boardWrap">
+    <div id="gameLogo">
+      <div class="sign"><b>NASTY</b></div>
+      <div class="sub2">Pangman Family Board Game · Est. 1993</div>
+    </div>
     <div id="boardScale">
       <svg id="boardSvg" width="1000" height="1000" viewBox="0 0 1000 1000"></svg>
       <div class="tableCard" id="deckSpot" style="left:415px;top:500px">
@@ -238,6 +265,7 @@ button{font:inherit;cursor:pointer}
       </div>
       <div id="tableLayer"></div>
       <div id="plaqueLayer"></div>
+      <div id="bubbleLayer"></div>
       <div id="fxLayer"></div>
     </div>
   </div>
@@ -390,25 +418,29 @@ let LAY=null;
    (steps L..L+4). */
 function buildLayout(n){
   const cfg=n===4
-    ?{r0:430,g:46,holeR:13,baseR:490,plaqR:645,spread:30}
-    :{r0:400,g:38,holeR:10.5,baseR:440,plaqR:555,spread:26};
+    ?{r0:430,holeR:13,baseR:470,spread:34}
+    :{r0:400,holeR:10.5,baseR:440,spread:26};
+  /* Even spacing everywhere: solve g so that flank spacing == tip-row spacing == g.
+     tc = g/tan(pi/n) is where adjacent flank lines cross (the shared corner), and
+     (r0 - tc)/5 = g  =>  g = r0 / (5 + 1/tan(pi/n)). Every consecutive pair of loop
+     holes — flanks, corners, tip rows, porch->start — is then exactly g apart. */
+  const g=cfg.r0/(5+1/Math.tan(Math.PI/n));
+  const tc=g/Math.tan(Math.PI/n), hs=g;
   const arms=[];
   for(let s=0;s<n;s++){
     const th=(-90+s*(360/n))*Math.PI/180;
     const d={x:Math.cos(th),y:Math.sin(th)};
     arms.push({th,d,p:{x:-d.y,y:d.x}});                 // p = clockwise-side perpendicular
   }
-  const tc=cfg.g/Math.tan(Math.PI/n);   // where adjacent flank lines intersect (shared corner)
-  const hs=(cfg.r0-tc)/5;               // hole spacing along the arms
   const P=(a,r,off)=>({x:500+a.d.x*r+a.p.x*off,y:500+a.d.y*r+a.p.y*off});
   const loop=[],home=[],base=[],plaque=[];
   for(let s=0;s<n;s++){
     const a=arms[s],b=arms[(s+1)%n];
-    loop.push({...P(a,cfg.r0,cfg.g),start:s});              // your start (tip row, exit side)
-    for(let k=1;k<=4;k++)loop.push(P(a,cfg.r0-k*hs,cfg.g)); // 4 up the exit flank...
-    loop.push(P(a,tc,cfg.g));                               // ...5th = the shared corner hole
-    for(let k=4;k>=0;k--)loop.push(P(b,cfg.r0-k*hs,-cfg.g));// 5 out the entry flank (last = tip level)
-    loop.push(P(b,cfg.r0,0));                               // porch: tip-row center, last before b's start
+    loop.push({...P(a,cfg.r0,g),start:s});              // your start (tip row, exit side)
+    for(let k=1;k<=4;k++)loop.push(P(a,cfg.r0-k*hs,g)); // 4 up the exit flank...
+    loop.push(P(a,tc,g));                               // ...5th = the shared corner hole
+    for(let k=4;k>=0;k--)loop.push(P(b,cfg.r0-k*hs,-g));// 5 out the entry flank (last = tip level)
+    loop.push(P(b,cfg.r0,0));                           // porch: tip-row center, last before b's start
   }
   for(let s=0;s<n;s++){
     const a=arms[s];
@@ -418,13 +450,25 @@ function buildLayout(n){
     const bc={x:500+u.x*cfg.baseR,y:500+u.y*cfg.baseR},sp2=cfg.spread;
     base.push([{x:bc.x,y:bc.y},{x:bc.x-sp2,y:bc.y-sp2},{x:bc.x+sp2,y:bc.y-sp2},
                {x:bc.x-sp2,y:bc.y+sp2},{x:bc.x+sp2,y:bc.y+sp2}]);
-    plaque.push({x:Math.min(934,Math.max(66,500+u.x*cfg.plaqR)),
-                 y:Math.min(952,Math.max(46,500+u.y*cfg.plaqR))});
+    if(n===4){
+      // the placard IS the shaved corner (Blake's idea): sits on the felt corner, rotated 45°
+      plaque.push({x:500+u.x*594,y:500+u.y*594,rot:u.x*u.y>0?-45:45});
+    }else{
+      // tucked between the center ring and the base cluster — clear of every hole
+      plaque.push({x:500+u.x*340,y:500+u.y*340,rot:0});
+    }
   }
-  const dd=(-90+180/n)*Math.PI/180;     // deck in the first free diagonal pocket, discard opposite
-  const deck={x:500+Math.cos(dd)*310,y:500+Math.sin(dd)*310};
-  return {n,L:12*n,loop,home,base,plaque,holeR:cfg.holeR,
-          deck,discard:{x:1000-deck.x,y:1000-deck.y}};
+  let deck,discard;
+  if(n===4){ // open diagonal pockets
+    const dd=(-90+45)*Math.PI/180;
+    deck={x:500+Math.cos(dd)*310,y:500+Math.sin(dd)*310};
+    discard={x:1000-deck.x,y:1000-deck.y};
+    deck.w=76; deck.h=106;
+  }else{     // 6p: the board center is open inside the ring of corner holes
+    deck={x:466,y:500,w:60,h:84}; discard={x:534,y:500};
+  }
+  discard.w=deck.w; discard.h=deck.h;
+  return {n,L:12*n,loop,home,base,plaque,holeR:cfg.holeR,deck,discard};
 }
 const entryIdx=s=>s*12;
 const loopIdx=(s,steps)=>(entryIdx(s)+steps)%LAY.L;
@@ -639,8 +683,11 @@ function drawBoard(){
   el('polygon',{points:oct,fill:'url(#wood)',stroke:'#8a6435','stroke-width':7,filter:'url(#soft)'},svg);
   el('polygon',{points:oct,fill:'#7a5a2e',filter:'url(#grain)',opacity:.8},svg);
   el('polygon',{points:oct,fill:'none',stroke:'rgba(255,244,214,.45)','stroke-width':2},svg);
-  $('deckSpot').style.left=LAY.deck.x+'px';    $('deckSpot').style.top=LAY.deck.y+'px';
-  $('discardSpot').style.left=LAY.discard.x+'px'; $('discardSpot').style.top=LAY.discard.y+'px';
+  for(const[id,sp]of[['deckSpot',LAY.deck],['discardSpot',LAY.discard]]){
+    const e=$(id);
+    e.style.left=sp.x+'px'; e.style.top=sp.y+'px';
+    e.style.width=sp.w+'px'; e.style.height=sp.h+'px';
+  }
   // safe-row lanes ("between parallel lines")
   for(let s=0;s<G.n;s++){
     const col=G.seats[s].color, a=LAY.home[s][0], b=LAY.home[s][HOME_N-1];
@@ -693,6 +740,7 @@ function buildTable(){
     const d=document.createElement('div');
     d.className='plaque'; d.id=`plaque-${s}`;
     d.style.left=p.x+'px'; d.style.top=p.y+'px';
+    d.style.setProperty('--rot',(p.rot||0)+'deg');
     d.style.borderLeftColor=seat.color.c; d.style.color=seat.color.c;
     d.innerHTML=`<div class="nm" style="color:var(--cream)">${esc(seat.name)}</div>
       <div class="sub"><span>${seat.type==='cpu'?'CPU · '+diffLabel(seat.diff):'Human'}</span>
@@ -1030,6 +1078,23 @@ function enableSelection(seat,moves){
     if(has)c.onclick=()=>selectCard(ci,c);
   });
 }
+/* Big tap bubbles above every pickable tee — easy to see and hit with a thumb */
+function showBubbles(list,cls){
+  clearBubbles();
+  const layer=$('bubbleLayer');
+  const sorted=list.slice().sort((a,b)=>teePos(a.s,a.pi).x-teePos(b.s,b.pi).x);
+  sorted.forEach((it,i)=>{
+    const pos=teePos(it.s,it.pi);
+    const b=document.createElement('div');
+    b.className='teeBubble'+(cls?' '+cls:'');
+    b.style.left=pos.x+'px';
+    b.style.top=(Math.max(96,pos.y-44)-(i%2)*58)+'px';   // stagger so neighbors don't stack
+    b.innerHTML=teeSVG(G.seats[it.s].color,true);
+    b.addEventListener('click',e=>{e.stopPropagation();onTeeClick(it.s,it.pi);});
+    layer.appendChild(b);
+  });
+}
+function clearBubbles(){ $('bubbleLayer').innerHTML=''; }
 function selectCard(ci,cardEl){
   if(SEL&&SEL.ci===ci){ return clearSelection(true); }
   clearHighlights();
@@ -1038,10 +1103,14 @@ function selectCard(ci,cardEl){
   if(mine.every(m=>m.type==='enter'))return performMove(CUR_SEAT,mine[0],cardEl);
   SEL={ci,cardEl,stage:1};
   $('handRow').querySelectorAll('.card').forEach(c=>c.classList.toggle('selCard',+c.dataset.ci===ci));
-  const pieceSet=new Set(mine.map(m=>`${m.owner}-${m.pi}`));
-  pieceSet.forEach(k=>{const[o,p]=k.split('-');$(`tee-${o}-${p}`).classList.add('selectable');});
-  mine.forEach(m=>{ if(m.type==='enter')G.pieces[m.owner].forEach((pc,pi2)=>{
-    if(pc.state==='base')$(`tee-${m.owner}-${pi2}`).classList.add('selectable');});});
+  const picks=[],seen=new Set();
+  const add=(s,pi)=>{const k=s+'-'+pi;if(!seen.has(k)){seen.add(k);picks.push({s,pi});}};
+  mine.forEach(m=>{
+    if(m.type==='enter')G.pieces[m.owner].forEach((pc,pi2)=>{if(pc.state==='base')add(m.owner,pi2);});
+    else add(m.owner,m.pi);
+  });
+  picks.forEach(it=>$(`tee-${it.s}-${it.pi}`).classList.add('selectable'));
+  showBubbles(picks,'');
   $('handInfo').textContent=mine[0].type==='swap'?'Pick your tee to trade':'Pick a tee to move';
 }
 function onTeeClick(s,pi){
@@ -1056,7 +1125,9 @@ function onTeeClick(s,pi){
       SEL.stage=2; SEL.pi=pi;
       clearHighlights();
       $(`tee-${s}-${pi}`).classList.add('selectable');
-      cand.forEach(m=>$(`tee-${m.ts}-${m.tpi}`).classList.add('targetable'));
+      const targets=cand.map(m=>({s:m.ts,pi:m.tpi}));
+      targets.forEach(t=>$(`tee-${t.s}-${t.pi}`).classList.add('targetable'));
+      showBubbles(targets,'tgt');
       $('handInfo').textContent='Now pick who to trade places with';
       return;
     }
@@ -1068,6 +1139,7 @@ function onTeeClick(s,pi){
   }
 }
 function clearHighlights(){
+  clearBubbles();
   document.querySelectorAll('.tee.selectable,.tee.targetable')
     .forEach(t=>t.classList.remove('selectable','targetable'));
 }
