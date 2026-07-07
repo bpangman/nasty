@@ -11,14 +11,15 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY — the Pangman family board game, digitized. v0.3.
+  NASTY — the Pangman family board game, digitized. v0.4.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation — the track wraps around each arm's
-  safe row. Per segment (12 loop holes): your start -> 5 up your exit flank -> abrupt left
-  turn (no corner hole) -> 5 out the next arm's entry flank -> right turn -> porch hole at
-  the tip center -> that player's start. Starts are exactly 12 steps apart (a Queen from
-  your start lands on the next start). Your own porch is your last track hole; from there
-  you branch inward to your 5 safe holes.
+  safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
+  a CORNER HOLE shared with the next leg -> turn left, 5 out the next arm's entry flank,
+  ending at tip level -> turn right, 2 holes: porch (tip-row center) then that player's
+  start (tip row = 3 holes). Starts are exactly 12 steps apart (a Queen from your start
+  lands on the next start). Your own porch is your last track hole; from there you branch
+  inward to your 5 safe holes.
 
   CODE MAP (for future sessions — see HANDOFF.md in this folder):
     STYLE ......... all CSS (felt table, wood board, tees, cards, animations)
@@ -180,7 +181,8 @@ button{font:inherit;cursor:pointer}
 .modalCard h4{margin:16px 0 4px;color:var(--gold);font-size:15px}
 .modalCard p,.modalCard li{font-size:14.5px;line-height:1.55;color:#dcefe1}
 .modalCard ul{padding-left:20px;margin:6px 0}
-.lbTable{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;margin:6px 0 10px}
+.lbScroll{overflow-x:auto;margin:6px 0 10px}
+.lbTable{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;min-width:430px}
 .lbTable th,.lbTable td{padding:7px 6px;font-size:13.5px;border-bottom:1px solid rgba(255,255,255,.12)}
 .lbTable th{color:#a9d2b5;font-size:11px;letter-spacing:.08em;text-transform:uppercase;text-align:right}
 .lbTable td{text-align:right;color:#e9f4ec}
@@ -213,7 +215,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnOnline">Online play</button>
     </div>
   </div>
-  <div class="est">v0.3 demo &nbsp;·&nbsp; est. 12/15/93</div>
+  <div class="est">v0.4 demo &nbsp;·&nbsp; est. 12/15/93</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -377,35 +379,40 @@ const HOME_N=5;
 let LAY=null;
 
 /* X/plus board. Each arm: safe row on the axis, track flanks on both sides.
-   Loop per seat segment (12 holes), exactly as Blake describes it: come out on your
-   start -> 5 holes up your exit flank -> abrupt left turn (NO corner hole) -> 5 holes
-   out the next arm's entry flank -> right turn -> 1 tip-center hole ("porch") -> that
-   player's start. Starts are exactly 12 steps apart. Your own porch (steps L-1) is the
-   last shared hole before your start; from there you branch inward to the safe row
+   Blake's exact walk-through (v0.4-final): from your start, 5 holes up your exit flank —
+   the 5th is a CORNER HOLE shared with the next leg (each of those two rows is 6 holes
+   counting the start / counting the shared corner) -> turn left, 5 more out the next
+   arm's entry flank, ending at tip level -> turn right, 2 holes: the porch (tip-row
+   center) then that player's start. The tip row has 3 holes: flank end, porch, start.
+   Starts are exactly 12 steps apart. The shared corners + innermost safe holes form the
+   little ring of holes around the board center (like the real board). Your own porch
+   (steps L-1) is your last shared hole; from it you branch inward to the safe row
    (steps L..L+4). */
 function buildLayout(n){
   const cfg=n===4
-    ?{r0:430,sp:56,g:46,holeR:13,baseR:490,plaqR:645,spread:30}
-    :{r0:400,sp:50,g:38,holeR:10.5,baseR:440,plaqR:555,spread:26};
-  const radii=[0,1,2,3,4,5].map(i=>cfg.r0-i*cfg.sp);   // r0 (tip) .. r5 (inner)
+    ?{r0:430,g:46,holeR:13,baseR:490,plaqR:645,spread:30}
+    :{r0:400,g:38,holeR:10.5,baseR:440,plaqR:555,spread:26};
   const arms=[];
   for(let s=0;s<n;s++){
     const th=(-90+s*(360/n))*Math.PI/180;
     const d={x:Math.cos(th),y:Math.sin(th)};
     arms.push({th,d,p:{x:-d.y,y:d.x}});                 // p = clockwise-side perpendicular
   }
+  const tc=cfg.g/Math.tan(Math.PI/n);   // where adjacent flank lines intersect (shared corner)
+  const hs=(cfg.r0-tc)/5;               // hole spacing along the arms
   const P=(a,r,off)=>({x:500+a.d.x*r+a.p.x*off,y:500+a.d.y*r+a.p.y*off});
   const loop=[],home=[],base=[],plaque=[];
   for(let s=0;s<n;s++){
     const a=arms[s],b=arms[(s+1)%n];
-    loop.push({...P(a,radii[0],cfg.g),start:s});        // colored start hole
-    for(let i=1;i<=5;i++)loop.push(P(a,radii[i],cfg.g));// 5 up the exit flank
-    for(let i=5;i>=1;i--)loop.push(P(b,radii[i],-cfg.g));// abrupt turn, 5 out the entry flank
-    loop.push(P(b,radii[0],0));                          // porch: last hole before b's start
+    loop.push({...P(a,cfg.r0,cfg.g),start:s});              // your start (tip row, exit side)
+    for(let k=1;k<=4;k++)loop.push(P(a,cfg.r0-k*hs,cfg.g)); // 4 up the exit flank...
+    loop.push(P(a,tc,cfg.g));                               // ...5th = the shared corner hole
+    for(let k=4;k>=0;k--)loop.push(P(b,cfg.r0-k*hs,-cfg.g));// 5 out the entry flank (last = tip level)
+    loop.push(P(b,cfg.r0,0));                               // porch: tip-row center, last before b's start
   }
   for(let s=0;s<n;s++){
     const a=arms[s];
-    home.push([1,2,3,4,5].map(i=>P(a,radii[i],0)));
+    home.push([1,2,3,4,5].map(k=>P(a,cfg.r0-k*hs,0)));
     const bt=a.th-Math.PI/n;                            // bisector toward the player's right
     const u={x:Math.cos(bt),y:Math.sin(bt)};
     const bc={x:500+u.x*cfg.baseR,y:500+u.y*cfg.baseR},sp2=cfg.spread;
@@ -414,7 +421,10 @@ function buildLayout(n){
     plaque.push({x:Math.min(934,Math.max(66,500+u.x*cfg.plaqR)),
                  y:Math.min(952,Math.max(46,500+u.y*cfg.plaqR))});
   }
-  return {n,L:12*n,loop,home,base,plaque,holeR:cfg.holeR};
+  const dd=(-90+180/n)*Math.PI/180;     // deck in the first free diagonal pocket, discard opposite
+  const deck={x:500+Math.cos(dd)*310,y:500+Math.sin(dd)*310};
+  return {n,L:12*n,loop,home,base,plaque,holeR:cfg.holeR,
+          deck,discard:{x:1000-deck.x,y:1000-deck.y}};
 }
 const entryIdx=s=>s*12;
 const loopIdx=(s,steps)=>(entryIdx(s)+steps)%LAY.L;
@@ -629,9 +639,8 @@ function drawBoard(){
   el('polygon',{points:oct,fill:'url(#wood)',stroke:'#8a6435','stroke-width':7,filter:'url(#soft)'},svg);
   el('polygon',{points:oct,fill:'#7a5a2e',filter:'url(#grain)',opacity:.8},svg);
   el('polygon',{points:oct,fill:'none',stroke:'rgba(255,244,214,.45)','stroke-width':2},svg);
-  const t=el('text',{x:500,y:597,'text-anchor':'middle',fill:'rgba(90,60,20,.30)',
-    'font-family':'"Arial Black",sans-serif','font-size':20,'letter-spacing':5},svg);
-  t.textContent='N A S T Y · EST. 12/15/93';
+  $('deckSpot').style.left=LAY.deck.x+'px';    $('deckSpot').style.top=LAY.deck.y+'px';
+  $('discardSpot').style.left=LAY.discard.x+'px'; $('discardSpot').style.top=LAY.discard.y+'px';
   // safe-row lanes ("between parallel lines")
   for(let s=0;s<G.n;s++){
     const col=G.seats[s].color, a=LAY.home[s][0], b=LAY.home[s][HOME_N-1];
@@ -1155,23 +1164,28 @@ $('btnInviteMenu').onclick=textInvite;
 function loadStats(){ try{return JSON.parse(localStorage.getItem('nasty-stats')||'{}');}catch(e){return{};} }
 function recordWin(){
   if(G.recorded)return; G.recorded=true;
-  const st=loadStats(), key=(G.n===4?'w4':'w6')+(G.teams?'t':'s');
-  for(const w of G.winners){
-    const nm=G.seats[w].name;
-    st[nm]=st[nm]||{w4s:0,w4t:0,w6s:0,w6t:0};
-    st[nm][key]++;
-  }
+  const st=loadStats(), mode=(G.n===4?'4':'6')+(G.teams?'t':'s');
+  G.seats.forEach((seat,i)=>{
+    const r=st[seat.name]=st[seat.name]||{};
+    r['g'+mode]=(r['g'+mode]||0)+1;                    // everyone at the table played a game
+    if(G.winners.includes(i))r['w'+mode]=(r['w'+mode]||0)+1;
+  });
   localStorage.setItem('nasty-stats',JSON.stringify(st));
 }
 function renderLb(){
   const st=loadStats(), names=Object.keys(st);
-  if(!names.length){$('lbBody').innerHTML='<p>No wins yet — go play a game!</p>';return;}
-  const tot=n=>st[n].w4s+st[n].w4t+st[n].w6s+st[n].w6t;
-  names.sort((a,b)=>tot(b)-tot(a));
-  $('lbBody').innerHTML=`<table class="lbTable"><tr><th>Player</th><th>4P solo</th>
-    <th>4P teams</th><th>6P solo</th><th>6P teams</th><th>Total</th></tr>`+
-    names.map(n=>`<tr><td>${esc(n)}</td><td>${st[n].w4s}</td><td>${st[n].w4t}</td>
-      <td>${st[n].w6s}</td><td>${st[n].w6t}</td><td>${tot(n)}</td></tr>`).join('')+`</table>`;
+  if(!names.length){$('lbBody').innerHTML='<p>No games yet — go play one!</p>';return;}
+  const v=(n,k)=>st[n][k]||0;
+  const wins=n=>v(n,'w4s')+v(n,'w4t')+v(n,'w6s')+v(n,'w6t');
+  const games=n=>Math.max(v(n,'g4s')+v(n,'g4t')+v(n,'g6s')+v(n,'g6t'),wins(n));
+  const pct=n=>games(n)?Math.round(wins(n)/games(n)*100)+'%':'—';
+  names.sort((a,b)=>wins(b)-wins(a)||games(a)-games(b));
+  $('lbBody').innerHTML=`<div class="lbScroll"><table class="lbTable"><tr><th>Player</th>
+    <th>4P solo</th><th>4P teams</th><th>6P solo</th><th>6P teams</th>
+    <th>Wins</th><th>Games</th><th>Win %</th></tr>`+
+    names.map(n=>`<tr><td>${esc(n)}</td><td>${v(n,'w4s')}</td><td>${v(n,'w4t')}</td>
+      <td>${v(n,'w6s')}</td><td>${v(n,'w6t')}</td><td>${wins(n)}</td>
+      <td>${games(n)}</td><td>${pct(n)}</td></tr>`).join('')+`</table></div>`;
 }
 $('btnLb').onclick=()=>{renderLb();$('lbOverlay').classList.remove('hidden');};
 $('btnLbClose').onclick=()=>$('lbOverlay').classList.add('hidden');
