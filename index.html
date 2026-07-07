@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY — the Pangman family board game, digitized. v0.6.2.
+  NASTY — the Pangman family board game, digitized. v0.6.3.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation — the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -216,12 +216,13 @@ button{font:inherit;cursor:pointer}
 .confetti{position:fixed;width:10px;height:16px;top:-20px;z-index:70;pointer-events:none}
 
 /* ---------- Toasts / overlays ---------- */
-#toasts{position:fixed;top:52px;left:50%;transform:translateX(-50%);z-index:65;display:flex;flex-direction:column;
-  gap:6px;align-items:center;pointer-events:none;width:100%;padding:0 12px}
+/* anchored below the board, just above the hand — clear of the top-bar buttons */
+#toasts{position:fixed;bottom:calc(148px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:65;
+  display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none;width:100%;padding:0 12px}
 .toast{background:rgba(15,10,6,.88);border:1px solid rgba(255,255,255,.2);border-radius:99px;
   padding:8px 18px;font-size:14.5px;font-weight:700;box-shadow:0 6px 18px rgba(0,0,0,.4);
   animation:toastIn .25s ease-out;max-width:92vw;text-align:center}
-@keyframes toastIn{from{opacity:0;transform:translateY(-12px)}}
+@keyframes toastIn{from{opacity:0;transform:translateY(12px)}}
 .overlay{position:fixed;inset:0;background:rgba(5,15,9,.9);z-index:80;display:flex;flex-direction:column;
   align-items:center;justify-content:center;padding:22px;text-align:center}
 .overlay h2{margin:16px 0 6px;font-size:26px}
@@ -244,7 +245,7 @@ button{font:inherit;cursor:pointer}
 
 <!-- ================= MENU ================= -->
 <div id="menu">
-  <div class="sign"><b>NASTY</b><small>please drive carefully</small></div>
+  <div class="sign"><b>NASTY</b></div>
   <p class="tag">The Pangman family board game — est. 12/15/93, digitized 2026.<br>
   Race your five golf tees around the board and home. Land on somebody… and send them packing.</p>
   <div class="panel">
@@ -266,7 +267,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnOnline">Online play</button>
     </div>
   </div>
-  <div class="est">v0.6.2 demo &nbsp;·&nbsp; est. 12/15/93</div>
+  <div class="est">v0.6.3 demo &nbsp;·&nbsp; est. 12/15/93</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -995,8 +996,9 @@ function confettiBurst(){
 
 /* ============================= § TURNS ============================= */
 let uiResolve=null;
-function toast(msg,ms=2200){
+function toast(msg,ms=3000){
   if(SKIP)return;   // no toast spam while fast-forwarding
+  $('toasts').replaceChildren();   // one message at a time — newest replaces the old, never stacks into the cards
   const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
   $('toasts').appendChild(t);
   setTimeout(()=>{t.style.transition='opacity .4s';t.style.opacity='0';
