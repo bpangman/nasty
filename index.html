@@ -287,7 +287,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnOnline">Online play</button>
     </div>
   </div>
-  <div class="est">v0.7.2 &nbsp;·&nbsp; est. 12/15/93</div>
+  <div class="est">v0.7.3 &nbsp;·&nbsp; est. 12/15/93</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -619,7 +619,8 @@ function newGame(cfg,seed){
      deck:(seed&&seed.deck)?seed.deck.slice():freshDeck(),discard:[],
      schedule:SCHEDULES[cfg.n],schedRound:0,
      dealer:(seed&&seed.dealer!=null)?seed.dealer:Math.floor(Math.random()*cfg.n),
-     turn:0,passStreak:0,over:false,winners:[]};
+     turn:0,passStreak:0,over:false,winners:[],
+     bowedOut:cfg.seats.map(()=>false)};   // per-seat "done for this hand" flag — see RULES.md 2026-07-08
   G.turn=(G.dealer+1)%G.n;
   G.humanCount=cfg.seats.filter(s=>s.type==='human').length;
 }
@@ -1113,6 +1114,7 @@ function endSkip(){
   }
 }
 async function doDeal(){
+  G.bowedOut=G.seats.map(()=>false);   // fresh hand — everyone's back in (RULES.md 2026-07-08)
   if(G.schedRound>=G.schedule.length){
     // reshuffling draws new randomness — online, only the HOST generates it and broadcasts
     // the resulting deck order; every client (host included) applies the same array so
@@ -1142,6 +1144,10 @@ async function doDeal(){
   syncAll(); renderHandFor(visibleHandSeat());
 }
 function seatsWithCards(){return G.hands.filter(h=>h.length>0).length;}
+// A hand is over once every seat has either played out (empty hand) or bowed out (2026-07-08
+// rule) — NOT just "all hands empty" like before bow-out existed, since a bowed-out seat can
+// still be holding leftover cards it's no longer allowed to play this hand.
+function handOver(){ return G.hands.every((h,s)=>h.length===0||G.bowedOut[s]); }
 async function passTurn(seat){
   G.passStreak++;
   if(G.passStreak>=seatsWithCards()&&seatsWithCards()>0){
@@ -1228,11 +1234,23 @@ function visibleHandSeat(){
 async function runTurn(){
   if(!G||G.over)return;
   fadeAllDiscards();                                                 // clear stale played-card visuals each turn
-  if(G.hands.every(h=>h.length===0)){ endSkip(); await doDeal(); }   // skip stops at the next hand
+  if(handOver()){   // every seat played out or bowed out — sweep bowed-out seats' dead cards
+    for(let s=0;s<G.n;s++){ if(G.hands[s].length){ G.discard.push(...G.hands[s]); G.hands[s].length=0; } }
+    endSkip(); await doDeal();   // skip stops at the next hand
+  }
   const seat=G.turn;
   syncAll();
   if(G.hands[seat].length===0){ advance(); return runTurn(); }
   const seatCfg=G.seats[seat];
+  // Bow out for the hand (Blake, 2026-07-08): the FIRST time a seat's turn comes up with no
+  // legal move, it's done for the REST OF THIS HAND — later turns auto-pass instantly even if
+  // the board changes (a Jack trade, a kick, a partner move) would've made its cards playable
+  // again. G.bowedOut is reset every doDeal() (a fresh hand puts everyone back in). Once set,
+  // skip legalMoves() entirely for this seat — the flag alone decides, board state doesn't matter.
+  if(G.bowedOut[seat]){
+    await passTurn(seat);
+    advance(); return runTurn();
+  }
   const moves=legalMoves(seat);
   const assist=actingOwner(seat)!==seat;
   if(SKIP&&seatCfg.type==='human'){
@@ -1242,6 +1260,8 @@ async function runTurn(){
     // same as a CPU turn. A remote human's pending turn can never be skipped past (their
     // move has to arrive over the network), so it always stops skip here, same as before —
     // this also keeps the reconnect catch-up fast-forward (which reuses SKIP) unaffected.
+    // (A bowed-out seat's turn returns above before reaching here, so a bowed-out human —
+    // local or remote — never stops a skip; it needs no input either way.)
     const localSeat=!NET.online||NET.mySeat===seat;
     if(!localSeat||moves.length>0)endSkip();
   }
@@ -1249,7 +1269,8 @@ async function runTurn(){
     renderHandFor(visibleHandSeat());
     await wait(750);
     if(moves.length===0){
-      sNo(); toast(`${seatCfg.name} has no playable cards`);
+      G.bowedOut[seat]=true;
+      sNo(); toast(`${seatCfg.name} can't move — out for the rest of this hand`);
       // CPU discards nothing; turn just passes
       await passTurn(seat); await wait(500);
       advance(); return runTurn();
@@ -1265,13 +1286,14 @@ async function runTurn(){
     const m=await waitP;
     return performMove(seat,m,null);
   }
-  // human with nothing to play: skipped automatically, no clicking needed — this is
-  // deterministic (same hand everywhere), so every client reaches it independently, no
+  // human with nothing to play: bows out for the rest of this hand, no clicking needed — this
+  // is deterministic (same hand everywhere), so every client reaches it independently, no
   // network round-trip needed.
   if(moves.length===0){
+    G.bowedOut[seat]=true;
     renderHandFor(visibleHandSeat());
     sNo();
-    toast(`${seatCfg.name} is out of playable cards — skipped`,2400);
+    toast(`${seatCfg.name} can't move — out for the rest of this hand`,2400);
     await wait(1400);
     await passTurn(seat);
     advance(); return runTurn();
@@ -1328,7 +1350,7 @@ function renderHandFor(seat){
     c.dataset.ci=ci;
     row.appendChild(c);
   });
-  if(seat!==G.turn||G.seats[seat].type!=='human')
+  if(seat!==G.turn||G.seats[seat].type!=='human'||G.bowedOut[seat])
     row.querySelectorAll('.card').forEach(c=>c.classList.add('dead'));
 }
 function enableSelection(seat,moves){
