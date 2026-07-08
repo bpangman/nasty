@@ -93,7 +93,11 @@ button{font:inherit;cursor:pointer}
 /* ---------- Game chrome ---------- */
 #game{position:fixed;inset:0;display:flex;flex-direction:column}
 #topbar{display:flex;align-items:center;gap:8px;padding:8px 12px;flex:none}
-#topbar .chip{font-size:12.5px;color:#d7ecdc;background:rgba(0,0,0,.28);border-radius:99px;padding:6px 12px}
+/* one row, always the same height — the deal chip shrinks/ellipsizes instead of wrapping,
+   so the board never jumps when the Skip button comes and goes */
+#topbar .chip{font-size:12.5px;color:#d7ecdc;background:rgba(0,0,0,.28);border-radius:99px;padding:6px 12px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+#topbar .iconBtn{flex:none}
 #netChip.reconnecting{animation:netPulse 1s infinite}
 @keyframes netPulse{50%{opacity:.4}}
 .lobbySeat{display:flex;gap:8px;align-items:center;background:rgba(255,255,255,.06);
@@ -283,7 +287,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnOnline">Online play</button>
     </div>
   </div>
-  <div class="est">v0.7 &nbsp;·&nbsp; est. 12/15/93</div>
+  <div class="est">v0.7.1 &nbsp;·&nbsp; est. 12/15/93</div>
 </div>
 
 <!-- ================= GAME ================= -->
