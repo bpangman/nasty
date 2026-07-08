@@ -287,7 +287,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnOnline">Online play</button>
     </div>
   </div>
-  <div class="est">v0.7.1 &nbsp;·&nbsp; est. 12/15/93</div>
+  <div class="est">v0.7.2 &nbsp;·&nbsp; est. 12/15/93</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -911,7 +911,7 @@ function syncAll(){
     pq.classList.toggle('turn',s===G.turn&&!G.over);
   }
   $('deckCount').textContent=G.deck.length;
-  $('dealChip').textContent=`Deal ${Math.min(G.schedRound,G.schedule.length)}/${G.schedule.length} · Dealer: ${G.seats[G.dealer].name}`;
+  $('dealChip').textContent=`Deal ${Math.min(G.schedRound,G.schedule.length)}/${G.schedule.length}`;
   $('btnSkip').classList.toggle('hidden',G.over||G.seats[G.turn].type!=='cpu');
 }
 function cardHTML(card){
@@ -1230,12 +1230,21 @@ async function runTurn(){
   fadeAllDiscards();                                                 // clear stale played-card visuals each turn
   if(G.hands.every(h=>h.length===0)){ endSkip(); await doDeal(); }   // skip stops at the next hand
   const seat=G.turn;
-  if(SKIP&&G.seats[seat].type==='human')endSkip();                   // ...or at your turn
   syncAll();
   if(G.hands[seat].length===0){ advance(); return runTurn(); }
   const seatCfg=G.seats[seat];
   const moves=legalMoves(seat);
   const assist=actingOwner(seat)!==seat;
+  if(SKIP&&seatCfg.type==='human'){
+    // Skip the WHOLE hand, not just one turn: a local seat (offline, or an online seat
+    // owned by this phone) only stops the fast-forward once it actually has a legal move
+    // to make — with no legal move it auto-passes below and skip rolls straight through,
+    // same as a CPU turn. A remote human's pending turn can never be skipped past (their
+    // move has to arrive over the network), so it always stops skip here, same as before —
+    // this also keeps the reconnect catch-up fast-forward (which reuses SKIP) unaffected.
+    const localSeat=!NET.online||NET.mySeat===seat;
+    if(!localSeat||moves.length>0)endSkip();
+  }
   if(seatCfg.type==='cpu'){
     renderHandFor(visibleHandSeat());
     await wait(750);
