@@ -287,7 +287,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnOnline">Online play</button>
     </div>
   </div>
-  <div class="est">v0.7.3 &nbsp;·&nbsp; est. 12/15/93</div>
+  <div class="est">v0.7.4 &nbsp;·&nbsp; est. 12/15/93</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -460,7 +460,17 @@ button{font:inherit;cursor:pointer}
 "use strict";
 /* ============================= § UTIL ============================= */
 const $=id=>document.getElementById(id);
-const wait=ms=>new Promise(r=>setTimeout(r,ms/SPEED));
+/* INSTANT (fix, 2026-07-09): reconnect catch-up used to just run the normal animated
+   performMove() pipeline at a 30x-compressed SKIP speed — every animation duration has a
+   hardcoded floor (see D() below), so a long history (a whole game's worth of moves, if you
+   step away for a bit) still took many real seconds of visibly-flashing tees/cards/blasts —
+   "made me watch every move over again" (Blake, 2026-07-09). INSTANT means "skip the visual
+   entirely, snap straight to the end state" — set ONLY for the reconnect replay (see
+   bootGameFromNetwork), never for the interactive ⏩ Skip button, which keeps its existing
+   fast-but-visible-then-highlight behavior unchanged. */
+let INSTANT=false;
+const D=(floor,base)=>INSTANT?0:Math.max(floor,base/SPEED);   // every animation duration goes through this
+const wait=ms=>new Promise(r=>setTimeout(r,INSTANT?0:ms/SPEED));
 const rand=a=>a[Math.floor(Math.random()*a.length)];
 /* game speed = user setting × skip boost */
 const REDUCED=matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -477,6 +487,7 @@ let AC=null, muted=localStorage.getItem('nasty-muted')==='1';
 function ac(){ if(!AC){ try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){} } return AC; }
 addEventListener('pointerdown',()=>{ const a=ac(); if(a&&a.state==='suspended')a.resume(); },{once:false});
 function tone(f,dur,type,vol,when=0,slide=0){
+  if(INSTANT)return;   // silent during reconnect catch-up — see INSTANT comment above
   const a=ac(); if(!a||muted)return;
   const o=a.createOscillator(),g=a.createGain(),t=a.currentTime+when;
   o.type=type;o.frequency.setValueAtTime(f,t);
@@ -485,6 +496,7 @@ function tone(f,dur,type,vol,when=0,slide=0){
   o.connect(g);g.connect(a.destination);o.start(t);o.stop(t+dur+.02);
 }
 function noise(dur,vol,when=0){
+  if(INSTANT)return;   // silent during reconnect catch-up — see INSTANT comment above
   const a=ac(); if(!a||muted)return;
   const n=a.sampleRate*dur,b=a.createBuffer(1,n,a.sampleRate),d=b.getChannelData(0);
   for(let i=0;i<n;i++)d[i]=(Math.random()*2-1)*(1-i/n);
@@ -620,7 +632,10 @@ function newGame(cfg,seed){
      schedule:SCHEDULES[cfg.n],schedRound:0,
      dealer:(seed&&seed.dealer!=null)?seed.dealer:Math.floor(Math.random()*cfg.n),
      turn:0,passStreak:0,over:false,winners:[],
-     bowedOut:cfg.seats.map(()=>false)};   // per-seat "done for this hand" flag — see RULES.md 2026-07-08
+     bowedOut:cfg.seats.map(()=>false),   // per-seat "done for this hand" flag — see RULES.md 2026-07-08
+     dealSeq:0};   // counts doDeal() calls — lets the stateCheck integrity guard match up a
+                   // digest to the SAME logical checkpoint on every client, not just whoever's
+                   // rendering fastest right now (see doDeal/gDigest)
   G.turn=(G.dealer+1)%G.n;
   G.humanCount=cfg.seats.filter(s=>s.type==='human').length;
 }
@@ -797,8 +812,8 @@ function el(tag,attrs,parent){const e=document.createElementNS(SVG,tag);
 // moves the deck to a seat's pocket; animate=true slides it there (dealer change), false snaps it (first paint)
 function positionDeck(seat,animate){
   const p=LAY.deckPockets[seat],e=$('deckSpot');
-  const dur=Math.max(160,480/SPEED)+'ms';
-  e.style.transition=animate?`left ${dur} ease-in-out,top ${dur} ease-in-out`:'none';
+  const dur=D(160,480)+'ms';
+  e.style.transition=(animate&&!INSTANT)?`left ${dur} ease-in-out,top ${dur} ease-in-out`:'none';
   e.style.left=p.x+'px'; e.style.top=p.y+'px'; e.style.width=p.w+'px'; e.style.height=p.h+'px';
 }
 function drawBoard(){
@@ -949,6 +964,7 @@ function boardPoint(p){ // board coords -> viewport rect
   return {x:r.left+p.x*s, y:r.top+p.y*s, s};
 }
 async function animateTeePath(elm,owner,fromSteps,toSteps,dir){
+  if(INSTANT){ setTee(elm,stepPos(owner,toSteps)); return; }   // snap straight there — no per-hole hops
   const steps=[];
   if(dir>0)for(let q=fromSteps+1;q<=toSteps;q++)steps.push(q);
   else for(let q=fromSteps-1;q>=toSteps;q--)steps.push(q);
@@ -962,23 +978,25 @@ async function animateTeePath(elm,owner,fromSteps,toSteps,dir){
       {transform:`translate(${from.x}px,${from.y}px)`},
       {transform:`translate(${midX}px,${midY}px) scale(1.06,1.1)`,offset:.5},
       {transform:`translate(${pos.x}px,${pos.y}px)`}
-    ],{duration:Math.max(40,150/SPEED),easing:'ease-in-out'}).finished;
+    ],{duration:D(40,150),easing:'ease-in-out'}).finished;
     setTee(elm,pos); sHop(i); prev=pos;
   }
   sLand();
   elm.style.zIndex='';
 }
 async function animateArc(elm,from,to,dur,spin){
+  if(INSTANT){ setTee(elm,to); return; }   // snap straight there — no arc flight
   elm.style.zIndex=35;
   const midX=(from.x+to.x)/2,midY=Math.min(from.y,to.y)-120;
   await elm.animate([
     {transform:`translate(${from.x}px,${from.y}px) rotate(0deg)`},
     {transform:`translate(${midX}px,${midY}px) rotate(${spin/2}deg) scale(1.25)`,offset:.5},
     {transform:`translate(${to.x}px,${to.y}px) rotate(${spin}deg)`}
-  ],{duration:Math.max(80,dur/SPEED),easing:'ease-in-out'}).finished;
+  ],{duration:D(80,dur),easing:'ease-in-out'}).finished;
   setTee(elm,to); elm.style.zIndex='';
 }
 function sparks(pos,color,count=14){
+  if(INSTANT)return;   // purely cosmetic — skip entirely during reconnect catch-up
   const fx=$('fxLayer');
   for(let i=0;i<count;i++){
     const sp=document.createElement('div'); sp.className='spark';
@@ -989,15 +1007,16 @@ function sparks(pos,color,count=14){
     sp.animate([
       {transform:'translate(0,0) scale(1)',opacity:1},
       {transform:`translate(${Math.cos(a)*d}px,${Math.sin(a)*d-30}px) scale(.2)`,opacity:0}
-    ],{duration:Math.max(150,650/SPEED),easing:'ease-out'}).finished.then(()=>sp.remove());
+    ],{duration:D(150,650),easing:'ease-out'}).finished.then(()=>sp.remove());
   }
   const ring=document.createElement('div'); ring.className='ring';
   ring.style.left=pos.x+'px'; ring.style.top=pos.y+'px'; ring.style.width='10px'; ring.style.height='10px';
   fx.appendChild(ring);
   ring.animate([{opacity:.9,width:'10px',height:'10px'},{opacity:0,width:'130px',height:'130px'}],
-    {duration:Math.max(150,550/SPEED),easing:'ease-out'}).finished.then(()=>ring.remove());
+    {duration:D(150,550),easing:'ease-out'}).finished.then(()=>ring.remove());
 }
 async function nastyBlast(vSeat,vPi,atPos){
+  if(INSTANT){ setTee($(`tee-${vSeat}-${vPi}`),LAY.base[vSeat][vPi]); return; }   // no fanfare, just relocate
   sBoom(); sparks(atPos,G.seats[vSeat].color.c,18);
   const stamp=document.createElement('div');
   stamp.className='nastyStamp'; stamp.style.left='500px'; stamp.style.top='430px';
@@ -1007,16 +1026,17 @@ async function nastyBlast(vSeat,vPi,atPos){
     {opacity:0,transform:'translate(-50%,-50%) rotate(-8deg) scale(3)'},
     {opacity:1,transform:'translate(-50%,-50%) rotate(-8deg) scale(1)',offset:.35},
     {opacity:1,offset:.8},{opacity:0}
-  ],{duration:Math.max(220,1100/SPEED),easing:'ease-out'}).finished.then(()=>stamp.remove());
+  ],{duration:D(220,1100),easing:'ease-out'}).finished.then(()=>stamp.remove());
   $('boardScale').animate([
     {translate:'0 0'},{translate:'7px -5px'},{translate:'-7px 5px'},
     {translate:'5px 3px'},{translate:'0 0'}
-  ],{duration:Math.max(120,340/SPEED)});
+  ],{duration:D(120,340)});
   const elm=$(`tee-${vSeat}-${vPi}`);
   await animateArc(elm,atPos,LAY.base[vSeat][vPi],850,720);
   sparks(LAY.base[vSeat][vPi],G.seats[vSeat].color.c,8);
 }
 async function flyCardRect(fromRect,toRect,html,dur){
+  if(INSTANT)return;   // no card-flight visual during reconnect catch-up
   const f=document.createElement('div'); f.className='cardFloat'; f.innerHTML=html;
   const inner=f.firstElementChild;
   inner.style.width=fromRect.width+'px'; inner.style.height=fromRect.height+'px';
@@ -1024,7 +1044,7 @@ async function flyCardRect(fromRect,toRect,html,dur){
   await f.animate([
     {transform:`translate(${fromRect.left}px,${fromRect.top}px)`,opacity:1},
     {transform:`translate(${toRect.left}px,${toRect.top}px) scale(${toRect.width/fromRect.width})`,opacity:1}
-  ],{duration:Math.max(90,dur/SPEED),easing:'ease-in-out',fill:'forwards'}).finished;
+  ],{duration:D(90,dur),easing:'ease-in-out',fill:'forwards'}).finished;
   f.remove();
 }
 async function animCardPlay(seat,card,cardEl){
@@ -1048,7 +1068,7 @@ async function animateDeal(counts){
     for(let k=0;k<G.n;k++){
       const s=(G.dealer+1+k)%G.n;
       const pq=$(`plaque-${s}`).getBoundingClientRect();
-      const d=delay; delay+=Math.max(18,65/SPEED);
+      const d=delay; delay+=D(18,65);
       jobs.push((async()=>{
         await new Promise(r=>setTimeout(r,d));
         sDealT();
@@ -1077,7 +1097,7 @@ function confettiBurst(){
 /* ============================= § TURNS ============================= */
 let uiResolve=null;
 function toast(msg,ms=3000){
-  if(SKIP)return;   // no toast spam while fast-forwarding
+  if(SKIP||INSTANT)return;   // no toast spam while fast-forwarding or during reconnect catch-up
   $('toasts').replaceChildren();   // one message at a time — newest replaces the old, never stacks into the cards
   const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
   $('toasts').appendChild(t);
@@ -1113,7 +1133,22 @@ function endSkip(){
     if(moved)toast(`⏩ Caught up — the ${moved} tee${moved>1?'s':''} that moved are highlighted`,3200);
   }
 }
+/* Fix, 2026-07-09: endSkip() above is called from TWO different intents that must NOT be
+   conflated. (1) runTurn()'s handOver() branch calls it every time a new hand starts — that's
+   the INTERACTIVE ⏩ Skip button's own contract ("fast-forwards to your next turn OR THE NEXT
+   DEAL"), and correctly stops SKIP/shows the highlight rings there. (2) armMoveWait/
+   armReshuffleWait call it when the backlog has nothing left for the seat/kind being waited
+   on — the TRUE "caught up to live" signal. A reconnect catch-up can span MANY hands, so if
+   (1) also cleared INSTANT, the very FIRST deal boundary in a long replay would silently turn
+   the replay back into a full-speed, fully-animated, audible slog through everything still
+   queued — exactly "made me watch every move over again" (Blake, 2026-07-09), confirmed by
+   testing: a reconnect after ~10s of play took 100+ real seconds to catch up because of this.
+   endCatchup() is the ONLY thing allowed to clear INSTANT — call site (1) no longer touches it,
+   so INSTANT now correctly persists across every deal boundary until we're GENUINELY live. */
+function endCatchup(){ INSTANT=false; endSkip(); }
 async function doDeal(){
+  const myGen=NETGEN;   // see NETGEN comment above
+  G.dealSeq++;
   G.bowedOut=G.seats.map(()=>false);   // fresh hand — everyone's back in (RULES.md 2026-07-08)
   if(G.schedRound>=G.schedule.length){
     // reshuffling draws new randomness — online, only the HOST generates it and broadcasts
@@ -1128,7 +1163,7 @@ async function doDeal(){
         const d=freshDeck(), nd=(G.dealer+1)%G.n;
         netSend({type:'action',action:{kind:'reshuffle',deck:d,dealer:nd}});
       }
-      const r=await waitP; deckArr=r.deck; newDealer=r.dealer;
+      const r=await waitP; if(myGen!==NETGEN)return; deckArr=r.deck; newDealer=r.dealer;
     }
     G.deck=deckArr; G.discard=[]; G.schedRound=0;
     G.dealer=newDealer; G.turn=(G.dealer+1)%G.n;
@@ -1141,7 +1176,24 @@ async function doDeal(){
     G.hands[(G.dealer+1+j)%G.n].push(G.deck.pop());
   toast(`${G.seats[G.dealer].name} deals ${k} cards`);
   await animateDeal(k);
+  if(myGen!==NETGEN)return;
   syncAll(); renderHandFor(visibleHandSeat());
+  // Cheap integrity guard (fix, 2026-07-09): every deal, the host broadcasts a digest of its
+  // G tagged with dealSeq (the Nth deal of the game); every client checks its OWN digest at
+  // the SAME checkpoint (right after ITS OWN Nth deal, whenever it gets there — clients don't
+  // all render at the same real-world speed, so comparing at arrival time would false-positive
+  // on a merely-slower phone). Whichever of "my deal" / "their digest" arrives second does the
+  // comparing; a mismatch means this client quietly drifted (the reconnect race NETGEN guards
+  // against, or anything else) and silently re-syncs via the same rejoin path a real reconnect
+  // already uses — no toast, no interruption.
+  if(NET.online){
+    if(NET.isHost)netSend({type:'stateCheck',seq:G.dealSeq,digest:gDigest()});
+    if(NET.pendingStateCheck&&NET.pendingStateCheck.seq===G.dealSeq){
+      if(NET.pendingStateCheck.digest!==gDigest())
+        netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token});
+      NET.pendingStateCheck=null;
+    }
+  }
 }
 function seatsWithCards(){return G.hands.filter(h=>h.length>0).length;}
 // A hand is over once every seat has either played out (empty hand) or bowed out (2026-07-08
@@ -1159,11 +1211,13 @@ async function passTurn(seat){
 }
 function advance(){ G.turn=(G.turn+1)%G.n; }
 async function performMove(seat,m,cardEl){
+  const myGen=NETGEN;   // see NETGEN comment above — a reconnect replay can land mid-animation
   clearSelection();
   const owner=m.owner;
   const preFrom=m.type==='swap'?null:G.pieces[owner][m.pi].steps;
   const card=G.hands[seat][m.ci];
   await animCardPlay(seat,card,cardEl);
+  if(myGen!==NETGEN)return;   // superseded by a fresh replay — a real runTurn() is already live
   // capture positions before mutating
   let plan=null;
   if(m.type==='swap'){
@@ -1201,9 +1255,17 @@ async function performMove(seat,m,cardEl){
     }
   }
   syncAll();
+  if(myGen!==NETGEN)return;   // guard the turn-advancing tail too — don't spawn a 2nd runTurn loop
   if(G.over){ await wait(600); return showWin(); }
   advance();
-  queueMicrotask(runTurn);
+  // Scheduled via queueMicrotask (not a direct call) to keep a long game's promise chain from
+  // growing unbounded. That leaves a real gap, though: if a reconnect replay (bootGameFromNetwork)
+  // fires between scheduling this and it actually running, plain runTurn() would capture the
+  // NEW generation as its own (it reads NETGEN fresh at its own entry) and race the replay's own
+  // fresh runTurn() call — two "valid" loops driving the same G at once. Re-check myGen at the
+  // moment this microtask actually runs, not just when it was scheduled, and skip firing at all
+  // if a newer replay has since taken over (it's already driving the loop).
+  queueMicrotask(()=>{ if(myGen===NETGEN)runTurn(); });
 }
 function celebrateSnug(owner,pi){
   const pos=teePos(owner,pi);
@@ -1219,7 +1281,7 @@ function celebrateSnug(owner,pi){
     {transform:`translate(${pos.x}px,${pos.y}px) scale(1)`},
     {transform:`translate(${pos.x}px,${pos.y - 26}px) scale(1.25)`,offset:.4},
     {transform:`translate(${pos.x}px,${pos.y}px) scale(1)`}
-  ],{duration:Math.max(160,500/SPEED),easing:'ease-in-out'});
+  ],{duration:D(160,500),easing:'ease-in-out'});
 }
 function syncPlaquesOnly(){ /* card counts during anims */
   for(let s=0;s<G.n;s++)$(`plaque-${s}`).querySelector('.cnt').textContent=G.hands[s].length;
@@ -1233,10 +1295,12 @@ function visibleHandSeat(){
 }
 async function runTurn(){
   if(!G||G.over)return;
+  const myGen=NETGEN;   // see NETGEN comment above — abort quietly if a reconnect replay supersedes us
   fadeAllDiscards();                                                 // clear stale played-card visuals each turn
   if(handOver()){   // every seat played out or bowed out — sweep bowed-out seats' dead cards
     for(let s=0;s<G.n;s++){ if(G.hands[s].length){ G.discard.push(...G.hands[s]); G.hands[s].length=0; } }
     endSkip(); await doDeal();   // skip stops at the next hand
+    if(myGen!==NETGEN)return;
   }
   const seat=G.turn;
   syncAll();
@@ -1249,6 +1313,7 @@ async function runTurn(){
   // skip legalMoves() entirely for this seat — the flag alone decides, board state doesn't matter.
   if(G.bowedOut[seat]){
     await passTurn(seat);
+    if(myGen!==NETGEN)return;
     advance(); return runTurn();
   }
   const moves=legalMoves(seat);
@@ -1268,11 +1333,13 @@ async function runTurn(){
   if(seatCfg.type==='cpu'){
     renderHandFor(visibleHandSeat());
     await wait(750);
+    if(myGen!==NETGEN)return;
     if(moves.length===0){
       G.bowedOut[seat]=true;
       sNo(); toast(`${seatCfg.name} can't move — out for the rest of this hand`);
       // CPU discards nothing; turn just passes
       await passTurn(seat); await wait(500);
+      if(myGen!==NETGEN)return;
       advance(); return runTurn();
     }
     if(!NET.online){
@@ -1284,6 +1351,7 @@ async function runTurn(){
     const waitP=armMoveWait(seat);
     if(NET.isHost){ const m=chooseAI(seat,moves); netSend({type:'action',action:{kind:'move',seat,m}}); }
     const m=await waitP;
+    if(myGen!==NETGEN)return;
     return performMove(seat,m,null);
   }
   // human with nothing to play: bows out for the rest of this hand, no clicking needed — this
@@ -1296,6 +1364,7 @@ async function runTurn(){
     toast(`${seatCfg.name} can't move — out for the rest of this hand`,2400);
     await wait(1400);
     await passTurn(seat);
+    if(myGen!==NETGEN)return;
     advance(); return runTurn();
   }
   if(!NET.online){
@@ -1320,6 +1389,7 @@ async function runTurn(){
     $('handInfo').textContent=`Waiting for ${seatCfg.name}…`;
   }
   const m=await waitP;
+  if(myGen!==NETGEN)return;
   const ce=NET.mySeat===seat?NET.pendingCardEl:null; NET.pendingCardEl=null;
   return performMove(seat,m,ce);
 }
@@ -1478,8 +1548,22 @@ const NET={
   lobby:null, seatOwners:null, hostConnected:true,
   connected:false, reconnecting:false, backoff:1000,
   actionQueue:[], waiters:{move:{},reshuffle:null}, pendingCardEl:null,
+  pendingStateCheck:null,   // {seq,digest} — see gDigest/doDeal's stateCheck integrity guard
 };
 window.NET=NET; // exposed for testing/debugging, same spirit as window.G/window.LAY
+/* Reconnect concurrency guard (fix, 2026-07-09): bootGameFromNetwork() fully replaces `G`
+   and restarts runTurn() on every rejoin/sync — including a brief reconnect on an otherwise-
+   live tab (phone locked a few seconds, wifi blip), NOT just a fresh page load. If an OLDER
+   runTurn()/performMove() call chain was suspended mid-await (mid-animation, or waiting on a
+   plain timer — network waiters are already safely orphaned by the fresh NET.waiters object)
+   when that happened, it used to resume later and mutate the NEW `G` with stale data (a move
+   or kick computed against the board as it looked BEFORE the replay) — and performMove() even
+   calls advance()+queueMicrotask(runTurn) at the end, so a stale chain could spawn a second
+   competing turn loop. That's exactly the shape of bug that produces a silent double-occupied
+   hole and a wrong/missing kick. Every live call captures NETGEN at entry and re-checks it
+   after each await; a mismatch means a newer replay has already superseded it, so it aborts
+   quietly instead of touching the new G. */
+let NETGEN=0;
 function resolveWsUrl(){
   const qs=new URLSearchParams(location.search);
   const override=qs.get('ws');
@@ -1497,6 +1581,21 @@ function resolveWsUrl(){
   });
 }
 function netSend(obj){ if(NET.ws&&NET.ws.readyState===1)NET.ws.send(JSON.stringify(obj)); }
+/* Cheap FNV-1a-style digest of the parts of G that must be identical everywhere — used only
+   for the integrity check below (see doDeal), never for game logic. Deliberately includes
+   hand LENGTHS (not the cards) so it stays a privacy-safe number, not a data leak. */
+function gDigest(){
+  const parts=[G.turn,G.dealer,G.schedRound,G.over?1:0];
+  for(let s=0;s<G.n;s++){
+    parts.push(G.hands[s].length,G.bowedOut[s]?1:0);
+    for(const p of G.pieces[s])parts.push(p.state[0],p.steps);
+  }
+  parts.push(G.deck.length,G.discard.length);
+  const str=parts.join(',');
+  let h=0x811c9dc5;
+  for(let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,0x01000193); }
+  return (h>>>0).toString(36);
+}
 function updateNetChip(){
   const chip=$('netChip'); if(!chip)return;
   if(!NET.online){ chip.classList.add('hidden'); return; }
@@ -1547,7 +1646,7 @@ function armMoveWait(seat){
     const e=NET.actionQueue[i];
     if(e.action.kind==='move'&&e.action.seat===seat){ NET.actionQueue.splice(i,1); return Promise.resolve(e.action.m); }
   }
-  endSkip(); // if we were fast-forwarding through reconnect history, we've now caught up to live
+  endCatchup(); // if we were fast-forwarding through reconnect history, we've now caught up to live
   return new Promise(res=>{ NET.waiters.move[seat]=res; });
 }
 function armReshuffleWait(){
@@ -1555,7 +1654,7 @@ function armReshuffleWait(){
     const e=NET.actionQueue[i];
     if(e.action.kind==='reshuffle'){ NET.actionQueue.splice(i,1); return Promise.resolve(e.action); }
   }
-  endSkip();
+  endCatchup();
   return new Promise(res=>{ NET.waiters.reshuffle=res; });
 }
 function commitMove(seat,m,cardEl){
@@ -1572,6 +1671,7 @@ function resetNetUiFlow(){
   $('joinOverlay').classList.add('hidden');
 }
 function bootGameFromNetwork(action,isReconnect){
+  NETGEN++;   // invalidate any runTurn()/performMove() chain left over from before this (re)boot
   const cols=action.n===4?COLORS4:COLORS6;
   const seats=action.seats.map((s,i)=>({name:s.name,type:s.type,diff:s.diff,color:cols[i]}));
   LAY=buildLayout(action.n);
@@ -1583,14 +1683,20 @@ function bootGameFromNetwork(action,isReconnect){
   drawBoard(); buildTable(); fitBoard(); setTimeout(fitBoard,50);
   window.G=G; window.LAY=LAY;
   updateNetChip();
-  if(isReconnect&&NET.actionQueue.length)startSkip();   // fast-forward through catch-up history
+  if(isReconnect&&NET.actionQueue.length){ startSkip(); INSTANT=true; }   // fix, 2026-07-09:
+  // catch-up must be INVISIBLE, not just fast — see INSTANT comment up top. startSkip() alone
+  // (the interactive ⏩ Skip button's mechanism) still plays every animation, just compressed;
+  // for a long reconnect history that's still a visible, audible replay of the whole game
+  // ("made me watch every move over again" — Blake, 2026-07-09). INSTANT snaps everything
+  // straight to its end state with no visual/audio at all; endSkip() (called automatically
+  // once the catch-up queue drains and we're back to live play) clears it.
   if(!isReconnect)toast(`${G.seats[G.dealer].name} deals first — ${G.seats[G.turn].name} starts`,2600);
   runTurn();
 }
 function onSync(m){
   NET.online=true; NET.wantConnection=true; NET.isHost=!!m.isHost;
   NET.lobby=m.lobby; NET.seatOwners=m.seatOwners; NET.hostConnected=m.hostConnected!==false;
-  NET.actionQueue=[]; NET.waiters={move:{},reshuffle:null};
+  NET.actionQueue=[]; NET.waiters={move:{},reshuffle:null}; NET.pendingStateCheck=null;
   const startEntry=m.log.find(e=>e.action.kind==='start');
   m.log.forEach(e=>{ if(e!==startEntry)NET.actionQueue.push(e); });
   NET.mySeat=NET.seatOwners.indexOf(NET.playerId);
@@ -1612,7 +1718,7 @@ function leaveOnlineToMenu(msg){
   NET.wantConnection=false;
   if(NET.ws){ try{NET.ws.close();}catch(e){} }
   Object.assign(NET,{ws:null,online:false,isHost:false,code:null,playerId:null,token:null,mySeat:-1,
-    lobby:null,seatOwners:null,actionQueue:[],waiters:{move:{},reshuffle:null}});
+    lobby:null,seatOwners:null,actionQueue:[],waiters:{move:{},reshuffle:null},pendingStateCheck:null});
   updateNetChip();
   resetNetUiFlow();
   $('waitHostOverlay').classList.add('hidden');
@@ -1663,6 +1769,18 @@ function handleNetMessage(m){
       }else feedAction({seq:m.seq,action:m.action});
       return;
     case 'sync': onSync(m); return;
+    case 'stateCheck':
+      // Host's periodic per-deal digest (see doDeal/gDigest). Compare now if we've already
+      // reached that same deal ourselves; otherwise stash it — doDeal() checks this the next
+      // time IT finishes a deal, so the comparison always happens at a matching checkpoint
+      // instead of racing real-time animation speed differences between phones.
+      if(NET.isHost||!G)return;
+      if(G.dealSeq===m.seq){
+        if(gDigest()!==m.digest)netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token});
+      }else if(G.dealSeq<m.seq){
+        NET.pendingStateCheck={seq:m.seq,digest:m.digest};
+      }
+      return;
     default: return;
   }
 }

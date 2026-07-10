@@ -262,6 +262,18 @@ wss.on("connection", (ws) => {
         return;
       }
 
+      case "stateCheck": {
+        // {type:'stateCheck', seq, digest} — the host's periodic per-deal integrity digest
+        // (see index.html gDigest/doDeal). Not part of the action log and not authoritative
+        // here: this is still "no game rules on the server" — just a relay, like everything
+        // else. Clients compare digests themselves and silently rejoin on a mismatch.
+        if (!ctx) return;
+        const { room, playerId } = ctx;
+        if (!room.started || playerId !== room.hostPlayerId) return;
+        broadcast(room, { type: "stateCheck", seq: msg.seq, digest: msg.digest }, playerId);
+        return;
+      }
+
       default:
         return;
     }
