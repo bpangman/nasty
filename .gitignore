@@ -3,4 +3,5 @@ PLANNING.md
 RULES.md
 reference/
 server/node_modules/
+server/rooms/
 *.log

@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY — the Pangman family board game, digitized. v0.7.
+  NASTY — the Pangman family board game, digitized. v0.8.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation — the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -36,6 +36,19 @@
     § NET ......... online multiplayer: WS client, host/join lobby UI, deterministic
                     lockstep (server in /server, see HANDOFF.md "Online multiplayer")
     Autotest: open with #autotest (4p FFA all-CPU) or #autotest6 (6p teams) — fast-forwards a full game.
+
+  v0.8 additions (pause, save/resume, lifecycle survival — see HANDOFF.md "v0.8"):
+    - Pause: G.paused + pauseGate()/setPaused() in § TURNS, gates the top of runTurn() only
+      (never mid-animation/mid-move). Online pause/resume is a lockstep-style broadcast
+      (netSend 'pauseToggle' -> server 'paused' -> every client applies the same way),
+      never applied locally-only.
+    - Offline save: scheduleSaveOffline()/doSaveOffline() in § TURNS persist the whole `G`
+      to localStorage (debounced) at the top of every runTurn() call; cleared on a finished
+      or deliberately-abandoned game. Menu offers "Resume your game" on boot if a save exists.
+    - Online lifecycle: last-active-room tracking (saveLastRoom/loadLastRoom) + the boot()
+      flow at the bottom of § NET/MENU auto-rejoin silently with no URL params (iOS full
+      eviction survival), plus visibilitychange/pageshow -> onForeground() proactively pings
+      and requests an immediate stateCheck instead of waiting for the next deal boundary.
 -->
 </head>
 <body>
@@ -268,6 +281,13 @@ button{font:inherit;cursor:pointer}
   <div class="sign"><b>NASTY</b></div>
   <p class="tag">The Pangman family board game — est. 12/15/93, digitized 2026.<br>
   Race your five golf tees around the board and home. Land on somebody… and send them packing.</p>
+  <div class="panel hidden" id="resumePanel" style="margin-bottom:14px">
+    <div id="resumeNote" style="font-size:13.5px;color:#ffe9a8;margin-bottom:10px"></div>
+    <div class="bigBtns">
+      <button class="btn primary hidden" id="btnResumeOffline">▶️ Resume your game</button>
+      <button class="btn ghost hidden" id="btnRejoinLast">🔄 Rejoin last online game</button>
+    </div>
+  </div>
   <div class="panel">
     <div class="optRow"><label>Players</label>
       <div class="segs"><button class="seg" id="p4">4 players</button><button class="seg" id="p6">6 players</button></div>
@@ -287,7 +307,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnOnline">Online play</button>
     </div>
   </div>
-  <div class="est">v0.7.4 &nbsp;·&nbsp; est. 12/15/93</div>
+  <div class="est">v0.8 &nbsp;·&nbsp; est. 12/15/93</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -298,6 +318,7 @@ button{font:inherit;cursor:pointer}
     <div class="chip hidden" id="netChip">🟢 online</div>
     <div class="spacer"></div>
     <button class="iconBtn hidden" id="btnSkip">⏩ Skip</button>
+    <button class="iconBtn" id="btnPause">⏸</button>
     <button class="iconBtn" id="btnSpeed">▶︎ Normal</button>
     <button class="iconBtn" id="btnRules2">Rules</button>
     <button class="iconBtn" id="btnMute">🔊</button>
@@ -454,6 +475,11 @@ button{font:inherit;cursor:pointer}
 <div id="waitHostOverlay" class="overlay hidden">
   <div class="sign"><b>PAUSED</b><small>waiting for host</small></div>
   <p>The host's connection dropped — the game will pick back up the moment they're back.</p>
+</div>
+
+<div id="pauseOverlay" class="overlay hidden">
+  <div class="sign"><b>PAUSED</b><small id="pauseSub">tap to resume</small></div>
+  <p id="pauseText">Everyone can walk away — your game is saved. Tap anywhere to keep playing.</p>
 </div>
 
 <script>
@@ -633,9 +659,10 @@ function newGame(cfg,seed){
      dealer:(seed&&seed.dealer!=null)?seed.dealer:Math.floor(Math.random()*cfg.n),
      turn:0,passStreak:0,over:false,winners:[],
      bowedOut:cfg.seats.map(()=>false),   // per-seat "done for this hand" flag — see RULES.md 2026-07-08
-     dealSeq:0};   // counts doDeal() calls — lets the stateCheck integrity guard match up a
-                   // digest to the SAME logical checkpoint on every client, not just whoever's
-                   // rendering fastest right now (see doDeal/gDigest)
+     dealSeq:0,   // counts doDeal() calls — lets the stateCheck integrity guard match up a
+                  // digest to the SAME logical checkpoint on every client, not just whoever's
+                  // rendering fastest right now (see doDeal/gDigest)
+     paused:false};   // v0.8: pause/resume — see setPaused()/pauseGate() in § TURNS
   G.turn=(G.dealer+1)%G.n;
   G.humanCount=cfg.seats.filter(s=>s.type==='human').length;
 }
@@ -1146,6 +1173,92 @@ function endSkip(){
    endCatchup() is the ONLY thing allowed to clear INSTANT — call site (1) no longer touches it,
    so INSTANT now correctly persists across every deal boundary until we're GENUINELY live. */
 function endCatchup(){ INSTANT=false; endSkip(); }
+
+/* ---- Pause (v0.8) ----
+   A single choke point: every path that begins a new turn attempt (a fresh CPU turn, a
+   human's turn coming up, the bow-out auto-pass, the very first turn after a deal) funnels
+   through the top of runTurn() — see the "await pauseGate()" call there. That guarantees
+   pausing always lands BETWEEN turns, never mid-animation/mid-move: a move already in
+   flight (mid-await inside performMove) is never interrupted, it just finishes normally and
+   then the next runTurn() call (its tail is always a queueMicrotask(runTurn) or a direct
+   recursive call) hits the gate and holds. Skipped entirely during INSTANT catch-up
+   (reconnect replay) — see the guard where it's called — so pausing never blocks a phone
+   from finishing its silent catch-up to live play. */
+let PAUSE_WAITERS=[];
+function pauseGate(){
+  return new Promise(res=>{
+    if(!G||!G.paused){ res(); return; }
+    PAUSE_WAITERS.push(res);
+  });
+}
+function updatePauseUI(){
+  const ov=$('pauseOverlay');
+  if(!G||!G.paused){ ov.classList.add('hidden'); return; }
+  if(NET.online){
+    $('pauseSub').textContent='tap Resume to keep playing';
+    $('pauseText').textContent='Someone hit pause — everyone\'s game is holding here. Any player can tap below to resume.';
+  }else{
+    $('pauseSub').textContent='tap to resume';
+    $('pauseText').textContent='Everyone can walk away — your game is saved. Tap anywhere to keep playing.';
+  }
+  ov.classList.remove('hidden');
+}
+// setPaused() is the ONLY thing that actually flips G.paused and wakes the gate — both the
+// local (offline) pause button and the online 'paused' broadcast funnel through here, so
+// there's exactly one source of truth for "are we paused" no matter how it got triggered.
+function setPaused(v){
+  if(!G)return;
+  const was=G.paused;
+  G.paused=!!v;
+  updatePauseUI();
+  if(was&&!G.paused){ const ws=PAUSE_WAITERS; PAUSE_WAITERS=[]; ws.forEach(w=>w()); }
+  scheduleSaveOffline();
+}
+// The pause button's click handler — offline this is instant/local; online it's a request
+// that only takes effect once the server echoes it back (same lockstep pattern as every
+// other online state change), so every phone (including the one that tapped) ends up
+// agreeing on the SAME paused state at the SAME moment.
+function requestPause(v){
+  if(!G||G.over)return;
+  if(NET.online)netSend({type:'pauseToggle',paused:v});
+  else setPaused(v);
+}
+
+/* ---- Offline save state (v0.8) ----
+   G is fully JSON-serializable (plain objects/arrays/numbers/strings/booleans — even
+   G.seats[].color is just a plain {name,c,dark} object), so the WHOLE thing is the save —
+   no separate "save format" to keep in sync with the engine. Debounced so a burst of
+   mutations (a deal animating in, a quick sequence of turns) doesn't hammer localStorage.
+   Skipped for online games (those persist server-side, see server/server.js) and for the
+   autotest harness (no reason to pollute localStorage with throwaway CPU-only test games). */
+let saveOfflineTimer=null;
+function scheduleSaveOffline(){
+  if(!G||NET.online)return;
+  if(location.hash.indexOf('autotest')>=0)return;
+  if(saveOfflineTimer)return;
+  saveOfflineTimer=setTimeout(()=>{ saveOfflineTimer=null; doSaveOffline(); },250);
+}
+function doSaveOffline(){
+  if(!G||NET.online||G.over)return;   // never save a finished game (see clearOfflineSave below)
+  if(location.hash.indexOf('autotest')>=0)return;
+  try{ localStorage.setItem('nasty-save-offline',JSON.stringify({G,ts:Date.now()})); }catch(e){}
+}
+function loadOfflineSave(){
+  try{
+    const s=JSON.parse(localStorage.getItem('nasty-save-offline')||'null');
+    if(s&&s.G&&!s.G.over)return s;
+  }catch(e){}
+  return null;
+}
+// Cancels any pending debounced write too, not just the stored value — otherwise a save
+// scheduled just before the game ended (the debounce is a flat 250ms of WALL-CLOCK time,
+// not scaled by game speed like everything else) could still land moments after the clear,
+// quietly resurrecting a save for a finished/abandoned game.
+function clearOfflineSave(){
+  if(saveOfflineTimer){ clearTimeout(saveOfflineTimer); saveOfflineTimer=null; }
+  try{localStorage.removeItem('nasty-save-offline');}catch(e){}
+}
+
 async function doDeal(){
   const myGen=NETGEN;   // see NETGEN comment above
   G.dealSeq++;
@@ -1296,6 +1409,12 @@ function visibleHandSeat(){
 async function runTurn(){
   if(!G||G.over)return;
   const myGen=NETGEN;   // see NETGEN comment above — abort quietly if a reconnect replay supersedes us
+  // Pause gate (v0.8): holds here — between turns, never mid-move — until someone resumes.
+  // Skipped during INSTANT catch-up so a reconnecting phone can always finish its silent
+  // replay regardless of the room's current pause state (see pauseGate() comment above).
+  if(G.paused&&!INSTANT){ await pauseGate(); if(myGen!==NETGEN||!G||G.over)return; }
+  NET.moveSentForTurn=false;   // fresh turn attempt — the double-tap guard re-arms (see commitMove)
+  scheduleSaveOffline();   // v0.8: cheap debounced snapshot after every turn-loop entry
   fadeAllDiscards();                                                 // clear stale played-card visuals each turn
   if(handOver()){   // every seat played out or bowed out — sweep bowed-out seats' dead cards
     for(let s=0;s<G.n;s++){ if(G.hands[s].length){ G.discard.push(...G.hands[s]); G.hands[s].length=0; } }
@@ -1480,6 +1599,7 @@ function selectCard(ci,cardEl){
   if(SEL&&SEL.ci===ci){ return clearSelection(true); }
   clearHighlights();
   const mine=CUR_MOVES.filter(m=>m.ci===ci);
+  if(!mine.length)return;   // stale click — selection already disarmed (see commitMove's guard)
   // King (or Ace with nothing else to do): a tee just jumps out, no piece-picking
   if(mine.every(m=>m.type==='enter'))return commitMove(CUR_SEAT,mine[0],cardEl);
   SEL={ci,cardEl,stage:1};
@@ -1549,6 +1669,9 @@ const NET={
   connected:false, reconnecting:false, backoff:1000,
   actionQueue:[], waiters:{move:{},reshuffle:null}, pendingCardEl:null,
   pendingStateCheck:null,   // {seq,digest} — see gDigest/doDeal's stateCheck integrity guard
+  silentRejoin:false,   // v0.8: true only during boot()'s no-URL-param auto-rejoin attempt —
+                        // see 'rejoinError' above and boot()/tryJoinOrRejoin() below
+  moveSentForTurn:false,   // v0.8: double-tap guard — see commitMove()
 };
 window.NET=NET; // exposed for testing/debugging, same spirit as window.G/window.LAY
 /* Reconnect concurrency guard (fix, 2026-07-09): bootGameFromNetwork() fully replaces `G`
@@ -1657,8 +1780,22 @@ function armReshuffleWait(){
   endCatchup();
   return new Promise(res=>{ NET.waiters.reshuffle=res; });
 }
+/* Double-tap guard (fix, v0.8, 2026-07-09): online, commitMove() only SENDS the move — it
+   doesn't apply until the server's echo comes back, and the hand UI stays armed (CUR_MOVES
+   from enableSelection) until that echo re-renders the hand. A second quick card+tee tap
+   inside that latency window used to send a SECOND action for the same turn, computed
+   against the PRE-first-move board — the server happily logs both, the stale one then
+   applies garbage (or crashes the turn chain) identically on every phone, AND it poisons
+   the room's action log so every FUTURE reconnect's replay hits it too. Found by driving
+   turns through the real click handlers at test speed — exactly what a fast tapper on a
+   slow connection would do. One send per local turn: the flag is set here and cleared at
+   the top of every runTurn() entry (each new turn attempt begins only after the previous
+   echo fully applied), plus on every (re)boot via onSync/bootGameFromNetwork. */
 function commitMove(seat,m,cardEl){
   if(NET.online){
+    if(NET.moveSentForTurn)return;   // already sent for this turn — wait for the echo
+    NET.moveSentForTurn=true;
+    CUR_MOVES=[];                    // disarm the hand UI until the next enableSelection
     if(cardEl)cardEl.style.visibility='hidden';
     NET.pendingCardEl=cardEl||null;
     netSend({type:'action',action:{kind:'move',seat,m}});
@@ -1676,6 +1813,7 @@ function bootGameFromNetwork(action,isReconnect){
   const seats=action.seats.map((s,i)=>({name:s.name,type:s.type,diff:s.diff,color:cols[i]}));
   LAY=buildLayout(action.n);
   newGame({n:action.n,teams:action.teams,seats},{deck:action.deck,dealer:action.dealer});
+  saveLastRoom(NET.code,true);   // v0.8: remember this is a STARTED game — see boot()'s silent auto-rejoin
   resetNetUiFlow();
   $('menu').classList.add('hidden');
   $('game').classList.remove('hidden');
@@ -1697,11 +1835,16 @@ function onSync(m){
   NET.online=true; NET.wantConnection=true; NET.isHost=!!m.isHost;
   NET.lobby=m.lobby; NET.seatOwners=m.seatOwners; NET.hostConnected=m.hostConnected!==false;
   NET.actionQueue=[]; NET.waiters={move:{},reshuffle:null}; NET.pendingStateCheck=null;
+  NET.moveSentForTurn=false;
   const startEntry=m.log.find(e=>e.action.kind==='start');
   m.log.forEach(e=>{ if(e!==startEntry)NET.actionQueue.push(e); });
   NET.mySeat=NET.seatOwners.indexOf(NET.playerId);
   updateNetChip();
-  if(startEntry)bootGameFromNetwork(startEntry.action,true);
+  if(startEntry){
+    bootGameFromNetwork(startEntry.action,true);
+    G.paused=!!m.paused; updatePauseUI();   // v0.8: current pause state travels WITH sync,
+    // not through the replayed log — see server.js pauseToggle comment.
+  }
 }
 /* rejoin token persistence — lets a phone that closed mid-game (locked, lost signal, tab
    killed) reopen the SAME ?join=CODE link and land back in its seat instead of re-joining
@@ -1714,15 +1857,31 @@ function loadNetSession(code){
   try{ const s=JSON.parse(localStorage.getItem('nasty-net-'+code)||'null'); if(s&&s.playerId&&s.token)return s; }catch(e){}
   return null;
 }
+/* v0.8: "last active room" — separate from the per-room session above (which is keyed by
+   code and can hold many rooms over time). This is just "which room did I most recently
+   touch," so a fresh page load with NO ?join=CODE in the URL (exactly what iOS gives you
+   after it fully evicts a backgrounded tab/PWA) still knows which room+token to try. Only
+   marked wasStarted once the game actually starts (see bootGameFromNetwork) — a lobby that
+   never started isn't worth silently rejoining, but IS worth offering via the menu button. */
+function saveLastRoom(code,wasStarted){
+  try{ localStorage.setItem('nasty-last-room',JSON.stringify({code,wasStarted:!!wasStarted,ts:Date.now()})); }catch(e){}
+}
+function loadLastRoom(){
+  try{ return JSON.parse(localStorage.getItem('nasty-last-room')||'null'); }catch(e){ return null; }
+}
+function clearLastRoom(){ try{localStorage.removeItem('nasty-last-room');}catch(e){} }
 function leaveOnlineToMenu(msg){
   NET.wantConnection=false;
   if(NET.ws){ try{NET.ws.close();}catch(e){} }
   Object.assign(NET,{ws:null,online:false,isHost:false,code:null,playerId:null,token:null,mySeat:-1,
     lobby:null,seatOwners:null,actionQueue:[],waiters:{move:{},reshuffle:null},pendingStateCheck:null});
+  clearLastRoom();   // v0.8: leaving is a deliberate choice — don't auto-rejoin this one later
   updateNetChip();
   resetNetUiFlow();
   $('waitHostOverlay').classList.add('hidden');
+  $('pauseOverlay').classList.add('hidden');
   $('game').classList.add('hidden'); $('menu').classList.remove('hidden');
+  updateMenuResumeButtons();
   if(msg)toast(msg);
 }
 function handleNetMessage(m){
@@ -1730,16 +1889,24 @@ function handleNetMessage(m){
     case 'created':
       NET.online=true; NET.isHost=true; NET.wantConnection=true;
       NET.code=m.code; NET.playerId=m.playerId; NET.token=m.token; NET.lobby=m.lobby;
-      saveNetSession(); updateNetChip(); renderRoomScreen();
+      saveNetSession(); saveLastRoom(m.code,false); updateNetChip(); renderRoomScreen();
       $('onlineOverlay').classList.add('hidden'); $('roomOverlay').classList.remove('hidden');
       return;
     case 'joined':
       NET.online=true; NET.isHost=false; NET.wantConnection=true;
       NET.code=m.code; NET.playerId=m.playerId; NET.token=m.token; NET.lobby=m.lobby;
-      saveNetSession(); updateNetChip(); advanceJoinToSeatStep();
+      saveNetSession(); saveLastRoom(m.code,false); updateNetChip(); advanceJoinToSeatStep();
       return;
     case 'joinError': $('joinErr').textContent=m.message; return;
     case 'rejoinError':
+      // v0.8: a SILENT auto-rejoin attempt (no URL param — see boot()'s iOS-eviction path)
+      // failing shouldn't pop the join overlay in someone's face out of nowhere; it should
+      // just quietly give up on that room and fall back to offering an offline resume.
+      if(NET.silentRejoin){
+        NET.silentRejoin=false; NET.online=false; NET.wantConnection=false;
+        clearLastRoom(); offerOfflineResumeIfAny();
+        return;
+      }
       toast(m.message||'Lost the room connection.');
       if(!G){ NET.online=false; NET.wantConnection=false; openJoinOverlay(NET.code||''); }
       return;
@@ -1781,6 +1948,17 @@ function handleNetMessage(m){
         NET.pendingStateCheck={seq:m.seq,digest:m.digest};
       }
       return;
+    case 'requestStateCheck':
+      // v0.8: another phone came back from the background and wants an immediate integrity
+      // check instead of waiting for the next deal boundary (see onForeground()). Only the
+      // host actually computes/broadcasts digests, same as the periodic per-deal one.
+      if(NET.isHost&&G)netSend({type:'stateCheck',seq:G.dealSeq,digest:gDigest()});
+      return;
+    case 'paused':
+      // v0.8: pause/resume broadcast — applies the SAME way on every phone, including
+      // whichever one requested it (see requestPause()/setPaused() in § TURNS).
+      if(G)setPaused(!!m.paused);
+      return;
     default: return;
   }
 }
@@ -1813,9 +1991,12 @@ function renderRoomScreen(){
     }
     list.appendChild(row);
   });
-  const allSet=NET.lobby.seats.every(s=>s.type==='cpu'||s.claimedBy!=null);
-  $('btnRoomStart').disabled=!allSet;
-  $('roomNote').textContent=allSet?'':'Every human seat needs a player (or switch it to CPU) before you can start.';
+  // v0.8: Start is never blocked on empty seats anymore — any seat nobody's sitting in when
+  // you tap Start just plays as a computer (see btnRoomStart.onclick below). Host no longer
+  // has to pre-flip a CPU seat to human before texting the invite — a guest can claim ANY
+  // open seat, CPU-marked or not (see claimSeat handling on the server / renderJoinSeatStep).
+  $('btnRoomStart').disabled=false;
+  $('roomNote').textContent='Open seats become computer players when you start.';
 }
 
 /* ---- Join a game ---- */
@@ -1855,15 +2036,22 @@ function renderJoinSeatStep(){
   const list=$('joinSeatList'); list.innerHTML='';
   const cols=NET.lobby.n===4?COLORS4:COLORS6;
   NET.lobby.seats.forEach((s,i)=>{
-    const mine=s.claimedBy===NET.playerId, open=s.claimedBy==null&&s.type==='human';
+    // v0.8: any seat nobody's claimed is fair game — including ones still marked CPU
+    // (claiming converts it to human, see server.js claimSeat). The host's own seat is
+    // the one exception (hostSeatIndex, a display hint from the server — see lobbySnapshot).
+    const mine=s.claimedBy===NET.playerId, isHostSeat=i===NET.lobby.hostSeatIndex;
+    const open=!mine&&!isHostSeat&&s.claimedBy==null;
     const row=document.createElement('div'); row.className='lobbySeat'+(mine?' mine':'')+(open?' open':'');
-    const statusTxt=s.type==='cpu'?'CPU':(s.claimedBy==null?'Tap to sit here':(mine?'You':'Taken'));
+    const statusTxt=isHostSeat?'Host'
+      :mine?'You'
+      :s.claimedBy!=null?'Taken'
+      :s.type==='cpu'?'CPU — tap to join':'Tap to sit here';
     row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(s.name)}</span><span class="st">${statusTxt}</span>`;
     if(open)row.onclick=()=>netSend({type:'claimSeat',seatIndex:i,name:JOIN.name});
     list.appendChild(row);
   });
   const haveSeat=NET.lobby.seats.some(s=>s.claimedBy===NET.playerId);
-  $('joinNote').textContent=haveSeat?"You're in! Waiting for the host to start the game…":'Pick an open seat above.';
+  $('joinNote').textContent=haveSeat?"You're in! Waiting for the host to start the game…":'Pick any open seat above — even ones marked CPU.';
 }
 
 /* ============================= § MENU / BOOT ============================= */
@@ -1934,13 +2122,15 @@ function startGame(){
 }
 $('btnStart').onclick=startGame;
 $('btnAgain').onclick=()=>{$('winOverlay').classList.add('hidden');
-  if(NET.online)leaveOnlineToMenu(); else startGame();};
+  if(NET.online)leaveOnlineToMenu(); else{clearOfflineSave();startGame();}};
 $('btnWinMenu').onclick=()=>{location.hash='';G=null;$('winOverlay').classList.add('hidden');
   if(NET.online)leaveOnlineToMenu();
-  else{$('game').classList.add('hidden');$('menu').classList.remove('hidden');}};
+  else{clearOfflineSave();$('game').classList.add('hidden');$('menu').classList.remove('hidden');updateMenuResumeButtons();}};
 $('btnMenu').onclick=()=>{ if(confirm('Leave this game and go back to the menu?')){G=null;
   if(NET.online)leaveOnlineToMenu();
-  else{$('game').classList.add('hidden');$('menu').classList.remove('hidden');}} };
+  // v0.8: leaving on purpose ("abandoned by choice") clears the offline save — a game you
+  // quit through the menu isn't offered back to you next time you open the app.
+  else{clearOfflineSave();$('game').classList.add('hidden');$('menu').classList.remove('hidden');updateMenuResumeButtons();}} };
 $('btnRules').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRules2').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRulesClose').onclick=()=>$('rulesOverlay').classList.add('hidden');
@@ -1966,8 +2156,15 @@ $('btnJoinClose').onclick=()=>{
 };
 $('btnRoomCancel').onclick=()=>{ leaveOnlineToMenu(); };
 $('btnRoomStart').onclick=()=>{
-  if($('btnRoomStart').disabled)return;
-  const seats=NET.lobby.seats.map(s=>({name:s.name,type:s.type,diff:s.diff}));
+  // v0.8: Start is never disabled now (see renderRoomScreen) — any seat nobody claimed — CPU-marked or an unclaimed human seat — just plays as
+  // CPU from here (see renderRoomScreen's note + RULES). This is the only place that
+  // decision gets made; a claimed seat is always sent as 'human' regardless of what its
+  // `type` happened to say (claimSeat already sets type:'human' when claimed, but this is
+  // the authoritative source of truth at the moment the game actually starts).
+  const seats=NET.lobby.seats.map(s=>({
+    name:s.name, diff:s.diff||'medium',
+    type: s.claimedBy!=null ? 'human' : 'cpu',
+  }));
   const deck=freshDeck(), dealer=Math.floor(Math.random()*NET.lobby.n);
   netSend({type:'start',action:{kind:'start',n:NET.lobby.n,teams:NET.lobby.teams,seats,dealer,deck}});
 };
@@ -2018,8 +2215,11 @@ $('btnSpeed').onclick=()=>{
   $('btnSpeed').textContent=speedLabel();
 };
 $('btnSkip').onclick=startSkip;
+$('btnPause').onclick=()=>requestPause(true);
+$('pauseOverlay').addEventListener('pointerdown',()=>requestPause(false));
 function showWin(){
   recordWin();
+  clearOfflineSave();   // v0.8: finished games don't offer a resume
   sWin(); confettiBurst();
   const names=G.winners.map(w=>G.seats[w].name);
   const cols=G.winners.map(w=>G.seats[w].color.name);
@@ -2030,6 +2230,84 @@ function showWin(){
     :`All five ${cols[0]} tees are home. Everyone else: better luck next deal.`;
   $('winOverlay').classList.remove('hidden');
 }
+
+/* ---- Resume buttons on the main menu (v0.8) ---- */
+function updateMenuResumeButtons(){
+  const offline=loadOfflineSave();
+  $('btnResumeOffline').classList.toggle('hidden',!offline);
+  const last=loadLastRoom();
+  const canRejoin=!!(last&&loadNetSession(last.code));
+  $('btnRejoinLast').classList.toggle('hidden',!canRejoin);
+  $('resumePanel').classList.toggle('hidden', !offline&&!canRejoin);
+  if(offline){
+    const g=offline.G;
+    $('resumeNote').textContent=`Unfinished game — ${g.n===4?'4':'6'}-player${g.teams?' teams':''}, `+
+      `Deal ${Math.min(g.schedRound,g.schedule.length)}/${g.schedule.length}.`;
+  }else if(canRejoin){
+    $('resumeNote').textContent=`You were in room ${last.code} — rejoin to pick up where you left off.`;
+  }
+}
+function resumeOfflineGame(){
+  const saved=loadOfflineSave();
+  if(!saved)return;
+  // Unlike an online reconnect, there's no history to replay here — the save IS the exact
+  // current state, so re-rendering it is inherently instant (drawBoard/buildTable/syncAll
+  // just position tees directly, no animation involved either way; nothing to snap FROM).
+  G=saved.G;
+  LAY=buildLayout(G.n);
+  NET.online=false; NET.isHost=false; NET.wantConnection=false; updateNetChip();
+  $('menu').classList.add('hidden');
+  $('game').classList.remove('hidden');
+  $('winOverlay').classList.add('hidden');
+  drawBoard(); buildTable(); fitBoard(); setTimeout(fitBoard,50);
+  window.G=G; window.LAY=LAY;
+  updatePauseUI();
+  toast('Welcome back — resuming your game',2200);
+  runTurn();
+}
+$('btnResumeOffline').onclick=resumeOfflineGame;
+$('btnRejoinLast').onclick=()=>{ const last=loadLastRoom(); if(last)tryJoinOrRejoin(last.code,false); };
+
+/* ---- Join/rejoin helper (v0.8) — shared by the ?join=CODE URL path and the silent
+   no-URL-param auto-rejoin path below. `silent` means "don't pop the join overlay or any
+   error toast if this fails, just fall back to offering an offline resume instead" — used
+   only for the iOS-full-eviction case where the user didn't ask for anything, the app is
+   just trying to get them back where they were. */
+function tryJoinOrRejoin(code,silent){
+  const saved=loadNetSession(code);
+  if(saved){
+    NET.silentRejoin=!!silent;
+    NET.wantConnection=true; NET.code=code; NET.playerId=saved.playerId; NET.token=saved.token;
+    connectWs().then(()=>{ netSend({type:'rejoin',code,playerId:saved.playerId,token:saved.token}); })
+      .catch(()=>{
+        NET.wantConnection=false; NET.silentRejoin=false;
+        if(silent){ clearLastRoom(); updateMenuResumeButtons(); } else openJoinOverlay(code);
+      });
+  }else if(silent){
+    updateMenuResumeButtons();
+  }else{
+    openJoinOverlay(code);
+  }
+}
+
+/* ---- App-lifecycle survival (v0.8) ----
+   iOS fully EVICTS backgrounded tabs/PWAs — coming back means a complete fresh page load
+   with NO url params (handled by the boot sequence at the very bottom: silent auto-rejoin
+   via the last-active-room record, see tryJoinOrRejoin above). This covers the OTHER case:
+   the page actually SURVIVES backgrounding (shorter backgrounds, most non-iOS browsers, a
+   foreground PWA) but its socket may have quietly died while unattended. Don't wait for the
+   next ping/digest to notice — check the moment focus comes back. */
+function onForeground(){
+  if(!NET.online)return;
+  if(!NET.ws||NET.ws.readyState!==1){
+    if(!NET.reconnecting&&NET.wantConnection)scheduleReconnect();
+    return;
+  }
+  try{ netSend({type:'ping',t:Date.now()}); }catch(e){}
+  if(G&&!NET.isHost)netSend({type:'requestStateCheck'});   // see server.js/handleNetMessage
+}
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible')onForeground(); });
+addEventListener('pageshow',onForeground);
 
 /* ---- autotest: #autotest = 4p FFA all-CPU, #autotest6 = 6p teams all-CPU ---- */
 function autotest(n,teams){
@@ -2045,16 +2323,15 @@ else{
   const qs=new URLSearchParams(location.search);
   const joinCode=qs.get('join');
   if(joinCode){
-    const code=joinCode.toUpperCase();
-    const saved=loadNetSession(code);
-    if(saved){
-      // we've been in this room before (this device, this browser) — try to slide back
-      // into our old seat instead of joining fresh. Falls back to a normal join if the
-      // room's gone or the token's stale.
-      NET.wantConnection=true; NET.code=code; NET.playerId=saved.playerId; NET.token=saved.token;
-      connectWs().then(()=>{ netSend({type:'rejoin',code,playerId:saved.playerId,token:saved.token}); })
-        .catch(()=>{ NET.wantConnection=false; openJoinOverlay(code); });
-    }else openJoinOverlay(code);
+    tryJoinOrRejoin(joinCode.toUpperCase(),false);
+  }else{
+    // v0.8: no ?join=CODE — either a plain fresh visit, or exactly what iOS gives you after
+    // fully evicting a backgrounded tab/PWA. If we were in a STARTED game recently, try to
+    // silently slide back into it first; otherwise (or if that fails) fall through to
+    // offering an offline resume via the menu buttons.
+    const lastRoom=loadLastRoom();
+    if(lastRoom&&lastRoom.wasStarted)tryJoinOrRejoin(lastRoom.code,true);
+    else updateMenuResumeButtons();
   }
 }
 </script>
