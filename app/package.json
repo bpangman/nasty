@@ -1,0 +1,28 @@
+{
+  "name": "nasty-ios-app",
+  "version": "1.0.0",
+  "description": "Capacitor iOS wrapper for the Nasty board game (bundles the same index.html the website serves).",
+  "private": true,
+  "scripts": {
+    "build:www": "node scripts/build-www.js",
+    "sync": "npm run build:www && npx cap sync ios",
+    "assets": "npm run build:www && npx capacitor-assets generate --ios",
+    "open": "npx cap open ios"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@capacitor/app": "8.1.0",
+    "@capacitor/core": "8.4.1",
+    "@capacitor/ios": "8.4.1",
+    "@capacitor/share": "8.0.1",
+    "@capacitor/splash-screen": "8.0.1",
+    "@capacitor/status-bar": "8.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "3.0.5",
+    "@capacitor/cli": "8.4.1"
+  }
+}

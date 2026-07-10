@@ -66,6 +66,11 @@ body{font-family:-apple-system,"Segoe UI",system-ui,sans-serif;color:var(--cream
   overflow:hidden;user-select:none;-webkit-user-select:none}
 button{font:inherit;cursor:pointer}
 .hidden{display:none!important}
+/* Belt-and-suspenders vs. the iOS app's rubber-band bounce/pull-to-refresh — the real fix is
+   capacitor.config.json's ios.scrollEnabled:false (disables the WKWebView's scroll view
+   entirely), but this class (added in JS only when IS_APP is true — see § CAPACITOR above)
+   costs nothing extra and doesn't touch the plain website at all. */
+.capacitor-app,.capacitor-app body{overscroll-behavior:none}
 
 /* ---------- NASTY road sign ---------- */
 .sign{display:inline-block;background:linear-gradient(180deg,var(--sign1),var(--sign2));
@@ -78,7 +83,7 @@ button{font:inherit;cursor:pointer}
 .sign small{display:block;margin-top:6px;font-size:13px;letter-spacing:.28em;text-transform:uppercase;color:#dff2e2}
 
 /* ---------- Menu ---------- */
-#menu{position:fixed;inset:0;overflow-y:auto;padding:26px 16px 60px;text-align:center}
+#menu{position:fixed;inset:0;overflow-y:auto;padding:calc(26px + env(safe-area-inset-top)) 16px 60px;text-align:center}
 #menu .tag{margin:14px auto 22px;max-width:420px;color:#cfe8d6;font-size:15px;line-height:1.5}
 .panel{max-width:520px;margin:0 auto;background:rgba(9,32,20,.55);border:1px solid rgba(255,255,255,.14);
   border-radius:18px;padding:18px 16px 22px;backdrop-filter:blur(6px);text-align:left}
@@ -105,7 +110,7 @@ button{font:inherit;cursor:pointer}
 
 /* ---------- Game chrome ---------- */
 #game{position:fixed;inset:0;display:flex;flex-direction:column}
-#topbar{display:flex;align-items:center;gap:8px;padding:8px 12px;flex:none}
+#topbar{display:flex;align-items:center;gap:8px;padding:calc(8px + env(safe-area-inset-top)) 12px 8px;flex:none}
 /* one row, always the same height — the deal chip shrinks/ellipsizes instead of wrapping,
    so the board never jumps when the Skip button comes and goes */
 #topbar .chip{font-size:12.5px;color:#d7ecdc;background:rgba(0,0,0,.28);border-radius:99px;padding:6px 12px;
@@ -484,6 +489,21 @@ button{font:inherit;cursor:pointer}
 
 <script>
 "use strict";
+/* ============================= § CAPACITOR (iOS app shell) =============================
+   Guards so this ONE file works, unchanged, both as the public website AND as the bundled
+   iOS app (see /app in the repo — a Capacitor wrapper that copies this file into app/www
+   verbatim at build time; nothing here is app/www-specific). Every native-only behavior
+   below checks IS_APP first, so a plain browser (CAP undefined) takes the exact same code
+   path it always has. See HANDOFF.md "iOS app" for the full rundown. */
+const CAP=window.Capacitor;
+const IS_APP=!!(CAP&&CAP.isNativePlatform&&CAP.isNativePlatform());
+const PUBLIC_URL='https://bpangman.github.io/nasty/';   // canonical link to put in invites when
+  // running in-app — location.href there is capacitor://localhost/... or a local file URL,
+  // not something a friend could ever open, so always point invites at the real website.
+if(IS_APP){
+  document.documentElement.classList.add('capacitor-app');
+  try{ CAP.Plugins.StatusBar.setStyle({style:'LIGHT'}); }catch(e){}   // light icons/text on our dark felt background
+}
 /* ============================= § UTIL ============================= */
 const $=id=>document.getElementById(id);
 /* INSTANT (fix, 2026-07-09): reconnect catch-up used to just run the normal animated
@@ -1692,7 +1712,10 @@ function resolveWsUrl(){
   const override=qs.get('ws');
   if(override){ try{sessionStorage.setItem('nasty-ws-override',override);}catch(e){} return Promise.resolve(override); }
   try{ const stored=sessionStorage.getItem('nasty-ws-override'); if(stored)return Promise.resolve(stored); }catch(e){}
-  const base=location.href.replace(/[^/]*(?:#.*)?$/,'').split('?')[0];
+  // In the iOS app (IS_APP) the page is served from the local bundle (capacitor://localhost),
+  // where wsurl.json doesn't exist — and bundling a copy would go stale the moment the tunnel
+  // restarts. Always ask the live website; the website itself keeps using its own origin.
+  const base=IS_APP?PUBLIC_URL:location.href.replace(/[^/]*(?:#.*)?$/,'').split('?')[0];
   return fetch(base+'wsurl.json?t='+Date.now(),{cache:'no-store'}).then(r=>{
     if(!r.ok)throw new Error('server list unreachable');
     return r.json();
@@ -2134,10 +2157,20 @@ $('btnMenu').onclick=()=>{ if(confirm('Leave this game and go back to the menu?'
 $('btnRules').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRules2').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRulesClose').onclick=()=>$('rulesOverlay').classList.add('hidden');
-function textInvite(){
-  const msg=encodeURIComponent(`Come play NASTY with me! 🏌️ ${location.href.split('#')[0]}`);
-  location.href=`sms:&body=${msg}`;
+/* sendInvite: shared by the offline "text an invite" buttons and the online room's invite
+   button below. In-app (IS_APP), sms: links don't reliably hand off to Messages inside a
+   Capacitor WKWebView, so route through the native share sheet instead (@capacitor/share) —
+   the user still picks Messages (or Mail/WhatsApp/copy/etc.) same as tapping share anywhere
+   else on iOS. On the plain website this is completely untouched: still sms:&body=... */
+function sendInvite(link){
+  const text=`Come play NASTY with me! 🏌️ ${link}`;
+  if(IS_APP&&CAP.Plugins&&CAP.Plugins.Share){
+    CAP.Plugins.Share.share({title:'Nasty',text,dialogTitle:'Invite someone to play'}).catch(()=>{});
+    return;
+  }
+  location.href=`sms:&body=${encodeURIComponent(text)}`;
 }
+function textInvite(){ sendInvite(IS_APP?PUBLIC_URL:location.href.split('#')[0]); }
 $('btnText').onclick=textInvite;
 $('btnInviteMenu').onclick=textInvite;
 
@@ -2169,8 +2202,7 @@ $('btnRoomStart').onclick=()=>{
   netSend({type:'start',action:{kind:'start',n:NET.lobby.n,teams:NET.lobby.teams,seats,dealer,deck}});
 };
 $('btnRoomText').onclick=()=>{
-  const msg=encodeURIComponent(`Come play NASTY with me! 🏌️ ${location.origin+location.pathname}?join=${NET.code}`);
-  location.href=`sms:&body=${msg}`;
+  sendInvite(`${IS_APP?PUBLIC_URL:location.origin+location.pathname}?join=${NET.code}`);
 };
 
 /* ---- leaderboard (stored on this device) ---- */
