@@ -1573,15 +1573,35 @@ async function runTurn(){
   // online: no pass-the-phone — each seat is its own device. Only that seat's own phone
   // shows/enables the hand; everyone else (including this same seat's other viewers, if
   // any) just waits for the move to come over the network.
+  //
+  // Backlog race (fix, v0.9 — found during production-style reconnect/self-heal soak
+  // testing): armMoveWait(seat) has two very different ways to resolve — (a) it finds this
+  // seat's move ALREADY sitting in NET.actionQueue (arrived early, e.g. this phone's own
+  // earlier move whose echo was queued while several OTHER seats' turns played out first)
+  // and resolves practically instantly, or (b) nothing's queued yet, so it hands back a
+  // pending promise and genuinely waits live. For MY OWN seat specifically, the old code
+  // called enableSelection() (arming the hand for a NEW tap) unconditionally, in BOTH
+  // cases — so case (a) could arm a fresh tap target for a turn that was actually about to
+  // be completed by the ALREADY-QUEUED backlog action a moment later. If a tap (or, at test
+  // speed, this same seat's own driver) landed in that window, TWO actions went out for the
+  // same turn-arming cycle: the queued one and the fresh tap. Both are individually "valid"
+  // sends (same NETGEN, same not-yet-sent moveSentForTurn), so nothing in the existing
+  // double-tap/CUR_GEN guards catches it — but the SECOND one, once actually applied (after
+  // the first already spliced a card out of the hand), indexes into a hand that's already
+  // shifted, producing exactly the "cardHTML: Cannot read properties of undefined" crash
+  // that poisoned the shared action log for every phone at the table. Fixed: only arm the
+  // hand for a fresh tap when nothing for this seat is ALREADY sitting in the backlog —
+  // peek the queue before deciding, same information armMoveWait itself is about to use.
+  const alreadyQueued=NET.actionQueue.some(e=>e.action.kind==='move'&&e.action.seat===seat);
   const waitP=armMoveWait(seat);
-  if(NET.mySeat===seat){
+  if(NET.mySeat===seat&&!alreadyQueued){
     renderHandFor(seat);
     if(assist)toast(`${seatCfg.name}: you're home — these cards move ${G.seats[actingOwner(seat)].name}'s tees!`,3000);
     $('handInfo').textContent=assist?`Play a card for your partner, ${seatCfg.name}`:`Your turn, ${seatCfg.name} — tap a card`;
     enableSelection(seat,moves);
   }else{
     renderHandFor(visibleHandSeat());
-    $('handInfo').textContent=`Waiting for ${seatCfg.name}…`;
+    $('handInfo').textContent=NET.mySeat===seat?'Catching up…':`Waiting for ${seatCfg.name}…`;
   }
   const m=await waitP;
   if(myGen!==NETGEN)return;
@@ -1604,6 +1624,8 @@ let SEL=null, CUR_MOVES=[], CUR_SEAT=-1, CUR_GEN=-1;
 // to `window`, so tests must go through this getter rather than reading `window.SEL`
 // directly (which would silently always read `undefined`).
 window.getSelState=()=>SEL;
+window.getCurGen=()=>CUR_GEN;   // debug/test hook, same pattern as getSelState above
+window.getCurSeat=()=>CUR_SEAT; // debug/test hook
 function renderHandFor(seat){
   const row=$('handRow'); row.innerHTML=''; $('handInfo').textContent='';
   if(seat<0){ return; }
@@ -1785,6 +1807,7 @@ window.NET=NET; // exposed for testing/debugging, same spirit as window.G/window
    after each await; a mismatch means a newer replay has already superseded it, so it aborts
    quietly instead of touching the new G. */
 let NETGEN=0;
+window.getNetGen=()=>NETGEN;   // debug/test hook, same pattern as getSelState/getCurGen
 function resolveWsUrl(){
   const qs=new URLSearchParams(location.search);
   const override=qs.get('ws');

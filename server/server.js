@@ -182,6 +182,14 @@ function schedulePersist(room) {
   if (persistTimers.has(room.code)) return;
   persistTimers.set(room.code, setTimeout(() => {
     persistTimers.delete(room.code);
+    // Bug found + fixed during v0.9's production smoke test: a room's own `ws.on("close")`
+    // handler calls touch(room) (to persist the now-disconnected player) using its closure's
+    // `room` reference — which still fires even after an admin DELETE or the automatic
+    // prune has already removed the room from the `rooms` map and unlinked its file (socket
+    // close is asynchronous, so that handler can easily run AFTER the deletion completed).
+    // That resurrected a just-deleted room's rooms/<CODE>.json a moment later. Only persist a
+    // room that's STILL actually live in the `rooms` map at the moment this fires.
+    if (rooms.get(room.code) !== room) return;
     persistRoomNow(room);
   }, PERSIST_DEBOUNCE_MS));
 }
@@ -190,6 +198,15 @@ function persistRoomNow(room) {
   catch (e) { log("persist failed", room.code, e.message); }
 }
 function deleteRoomFile(code) {
+  // Bug found + fixed during v0.9's production smoke test: deleting a room (admin god-mode
+  // DELETE, or the normal 30-min/1-week prune) unlinked rooms/<CODE>.json but left any
+  // already-scheduled debounced persistRoomNow() timer (from the room's last touch() before
+  // deletion — schedulePersist()/persistTimers above) still pending. That timer firing
+  // ~800ms later resurrected the just-deleted room's file from its stale in-closure `room`
+  // object, even though the room was already gone from the `rooms` map. Always cancel any
+  // pending timer for this code FIRST, so nothing can write the file back after this point.
+  const t = persistTimers.get(code);
+  if (t) { clearTimeout(t); persistTimers.delete(code); }
   try { fs.unlinkSync(roomFile(code)); } catch (e) { /* already gone, fine */ }
 }
 function loadRoomsFromDisk() {
