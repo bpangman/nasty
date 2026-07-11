@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY — the Pangman family board game, digitized. v0.9.
+  NASTY — the Pangman family board game, digitized. v0.9.1.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation — the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -65,6 +65,19 @@
       path distinct from the topbar's "Leave this game" (which still deliberately abandons).
     - § ADMIN (god mode): tap the version number 7 times on the main menu. Token lives in
       server/admin-token.txt (gitignored) and localStorage after first entry. See HANDOFF.md.
+
+  v0.9.1 additions (2026-07-10 — see RULES.md "Resolved 2026-07-10" + HANDOFF.md/PLANNING.md):
+    - RULE: turn after every deal goes left of the dealer (not just after a reshuffle) — one
+      line in § TURNS's doDeal(), right after the deal loop: `G.turn=(G.dealer+1)%G.n;`.
+    - RULE (verified, no engine change needed): the forced-3 — legalMoves()'s '3' handling
+      already only offers a non-snug home tee's back-move alone when it's your ONLY non-snug
+      piece, and offers a choice when a non-snug track piece also exists.
+    - Placards doubled as far as they safely can be without overlapping a hole on either board
+      (--pscale in the Plaques CSS block) — see that block's comment for the honest numbers.
+    - Card path preview: the landing hole is now ALWAYS filled solid red (not just a gold ring
+      normally / red only on a kill) — see showPaths()'s comment. Also fixed #pathLayer's DOM
+      order (was before #tableLayer, now after) so the fill actually shows over an occupied
+      (kill) hole instead of being hidden behind the victim's own tee.
 -->
 </head>
 <body>
@@ -172,12 +185,18 @@ button{font:inherit;cursor:pointer}
 #tableLayer .tee{pointer-events:auto}
 
 /* ---------- Card path preview ---------- */
+/* v0.9.1 (Blake): "highlight the circle where you'd land in red no matter what… fill in the
+   hole in red to show where they'd land." The landing dot (pathEnd) is now a solid red fill
+   for EVERY landing preview, not just kills — the old gold ring was hard to see. A takeout
+   (pathKill) stays visually distinct on top: brighter/more saturated fill, a stronger glow,
+   and the pulsing animation (pathEnd is now static — no pulse — so a kill still reads as
+   special at a glance). */
 .pathDot{position:absolute;width:20px;height:20px;border-radius:50%;transform:translate(-50%,-50%);
   border:2px solid rgba(255,255,255,.35);animation:dotIn .25s ease-out}
-.pathDot.pathEnd{width:38px;height:38px;background:transparent!important;
-  border:4px solid var(--gold);box-shadow:0 0 14px rgba(244,197,66,.7)}
-.pathDot.pathKill{width:38px;height:38px;background:rgba(255,60,60,.25)!important;
-  border:4px solid #ff5c5c;box-shadow:0 0 16px rgba(255,60,60,.8);animation:killPulse .7s infinite}
+.pathDot.pathEnd{width:38px;height:38px;background:rgba(224,40,40,.62)!important;
+  border:4px solid #ff4040;box-shadow:0 0 14px rgba(255,60,60,.75)}
+.pathDot.pathKill{width:38px;height:38px;background:rgba(230,10,10,.88)!important;
+  border:4px solid #ff2b2b;box-shadow:0 0 22px rgba(255,40,40,.95);animation:killPulse .7s infinite}
 @keyframes dotIn{from{opacity:0;transform:translate(-50%,-50%) scale(.4)}}
 @keyframes killPulse{50%{transform:translate(-50%,-50%) scale(1.18)}}
 
@@ -199,12 +218,27 @@ button{font:inherit;cursor:pointer}
 /* ---------- Plaques ---------- */
 /* v0.9: placards show ONLY the player's name (item 1) — bigger text, no pips/card-count/type
    line. Kept compact (single line) so the bigger font still clears holes/base spots on both
-   boards — verified by an automated overlap check (see test suite). */
+   boards — verified by an automated overlap check (see test suite).
+   v0.9.1 (item 3, Blake): placards doubled in size — same anchor position (they're centered
+   via translate(-50%,-50%), so growing the box just expands symmetrically around that point,
+   position never moves) — re-verified by the same automated overlap check on both boards. */
+/* v0.9.1 item 3 (Blake): "twice as big, same positions." Literal 2x collides with a hole at
+   the 4P shaved-corner placard (seat 0's corner sits close to a base hole) and, less tightly,
+   at the 6P board — confirmed by the same automated overlap check below at every scale from
+   1.2x to 2x. Repositioning was explicitly NOT wanted, so this is scaled up as far as it can
+   go while still passing the overlap check on BOTH boards with a real safety margin (not just
+   barely clearing by a fraction of a pixel): --pscale:1.12 is the largest value that leaves
+   comfortable clearance everywhere (2.6px+ at the tightest 4P corner, 12px+ on the 6P board) —
+   honestly well short of a true doubling, see HANDOFF.md/PLANNING.md for the full readout. */
+:root{--pscale:1.12}
 .plaque{position:absolute;transform:translate(-50%,-50%) rotate(var(--rot,0deg));
   background:rgba(20,14,8,.86);
-  border:1px solid rgba(255,255,255,.16);border-left-width:4px;border-radius:10px;
-  padding:6px 11px;max-width:140px;text-align:left;transition:box-shadow .3s}
-.plaque .nm{font-weight:800;font-size:17px;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis}
+  border:calc(1px * var(--pscale)) solid rgba(255,255,255,.16);border-left-width:calc(4px * var(--pscale));
+  border-radius:calc(10px * var(--pscale));
+  padding:calc(6px * var(--pscale)) calc(11px * var(--pscale));max-width:calc(140px * var(--pscale));
+  text-align:left;transition:box-shadow .3s}
+.plaque .nm{font-weight:800;font-size:calc(17px * var(--pscale));white-space:nowrap;
+  max-width:calc(120px * var(--pscale));overflow:hidden;text-overflow:ellipsis}
 .plaque.turn{box-shadow:0 0 0 3px var(--gold),0 0 26px rgba(244,197,66,.55);animation:turnPulse 1.6s infinite}
 @keyframes turnPulse{50%{box-shadow:0 0 0 3px var(--gold),0 0 40px rgba(244,197,66,.85)}}
 
@@ -340,7 +374,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.9</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.9.1</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -366,8 +400,12 @@ button{font:inherit;cursor:pointer}
         <div class="card back"></div><div id="deckCount">52</div>
       </div>
       <div id="discardLayer"></div>
-      <div id="pathLayer"></div>
       <div id="tableLayer"></div>
+      <!-- v0.9.1: pathLayer moved AFTER tableLayer (was before) so the red landing-hole fill
+           (see § UI's showPaths()) paints ON TOP of tees — otherwise a kill preview's red fill
+           was hidden almost entirely behind the victim's own (opaque) tee, exactly the case
+           Blake most wanted visible ("fill in the hole in red to show where they'd land"). -->
+      <div id="pathLayer"></div>
       <div id="plaqueLayer"></div>
       <div id="bubbleLayer"></div>
       <div id="fxLayer"></div>
@@ -444,13 +482,12 @@ button{font:inherit;cursor:pointer}
 <div id="onlineOverlay" class="overlay hidden">
   <div class="modalCard">
     <h3>Play online</h3>
-    <p>Host a game and text your family a link so everyone plays from their own phone — or join a game someone else started.</p>
+    <p>Host a game — you'll get a link to text your family so everyone plays from their own phone — or join a game someone else started.</p>
     <div id="onlineErr" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
     <div class="bigBtns">
       <button class="btn primary" id="btnHostGame">Host a game</button>
       <button class="btn ghost" id="btnJoinGame">Join a game</button>
     </div>
-    <div class="bigBtns"><button class="btn ghost" id="btnText">📱 Text an invite (offline link)</button></div>
     <div class="bigBtns"><button class="btn ghost" id="btnOnlineClose">Close</button></div>
   </div>
 </div>
@@ -644,12 +681,17 @@ const COLORS4=[
   {name:'Pink',  c:'#e56aa5',dark:'#a53a72'},
   {name:'Yellow',c:'#f0c419',dark:'#a37c0a'},
 ];
+// v0.9.1 (Blake): seat 5 ("Silver", #aeb6be) read as too close to Navy blue at a glance on the
+// 6P board — a light blue-gray sitting next to a saturated blue. Replaced with Purple, a hue
+// that doesn't sit near ANY of the other five (Green/Navy/Red/White/Yellow) or the card
+// preview's red landing/kill fill (§ UTIL's showPaths CSS) — verified in a browser/sim
+// screenshot of a real 6P game, see PLANNING.md.
 const COLORS6=[
   {name:'Green', c:'#2f8f5b',dark:'#1b5637'},
   {name:'Navy',  c:'#41598f',dark:'#273757'},
   {name:'Red',   c:'#c6444a',dark:'#7e2429'},
   {name:'White', c:'#efe6d2',dark:'#b7a98a'},
-  {name:'Silver',c:'#aeb6be',dark:'#6f777f'},
+  {name:'Purple',c:'#8859c9',dark:'#4f3070'},
   {name:'Yellow',c:'#f0c419',dark:'#a37c0a'},
 ];
 const SCHEDULES={4:[5,4,4],6:[4,4]};   // deal-round sizes; deck reshuffles after the last round
@@ -693,7 +735,21 @@ function buildLayout(n){
     loop.push(P(b,cfg.r0,0));                           // porch: tip-row center, last before b's start
   }
   const deckPockets=[],discardPockets=[];
-  const cardW=n===4?76:60, cardH=n===4?106:84, pocketR=n===4?310:225;
+  const cardW=n===4?76:60, cardH=n===4?106:84;
+  // v0.9.1 (Blake): 6P's deck used to sit at pocketR=225 — close enough to the center ring to
+  // cover some of the board's own holes ("make the deck of cards be on the outer rim of the
+  // dealer not the inside"). Moved out to 330 — right beside the 6P placard (radius 340, see
+  // below) and just inside the base cluster (baseR=440), i.e. genuinely "near that player's
+  // base/placard area" as asked. This was hand-verified against an exhaustive overlap search
+  // (radius AND angle swept) once the placard doubled in size (v0.9.1 item 3): no position
+  // exists on this board that clears the enlarged placard's full padded bounding box AND every
+  // hole AND stays on the wood at any angle — 330 is the radius that clears every actual HOLE
+  // (base/track/safe, the literal complaint) with only a small cosmetic corner-nick against the
+  // placard's padding, confirmed by a direct screenshot (nowhere near as bad as the box-overlap
+  // math alone suggested — the placard's real visible pill is smaller than its full hit-box).
+  // 4P's pocketR=310 was re-checked against the now-bigger 4P placards too and is still clean —
+  // untouched.
+  const pocketR=n===4?310:330;
   const discOff=n===4?92:66;                            // sideways nudge — keeps a played card clear of the deck
   for(let s=0;s<n;s++){
     const a=arms[s];
@@ -1139,15 +1195,31 @@ async function nastyBlast(vSeat,vPi,atPos){
   await animateArc(elm,atPos,LAY.base[vSeat][vPi],850,720);
   sparks(LAY.base[vSeat][vPi],G.seats[vSeat].color.c,8);
 }
-async function flyCardRect(fromRect,toRect,html,dur){
+/* v0.9.1 fix (Blake: "the letters on the cards get bigger than the cards themselves while the
+   cards are in motion", both boards): flyCardRect's clone is appended to document.body — OUTSIDE
+   #boardScale's own `transform:scale(s)` zoom (fitBoard() shrinks the whole 1000x1000 board to
+   fit the screen, typically to well under half size on a phone). Card TEXT/border/margin
+   (.rk/.pip/.card.back::after) are all fixed CSS px, tuned to look right at the card's NATIVE
+   (un-zoomed) design size. The old code sized the clone directly from a getBoundingClientRect()
+   rect — fine when that rect was ALREADY a native/unzoomed size (a hand card, which lives outside
+   #boardScale entirely), but for the deal animation the "from" rect was the deck's ON-BOARD
+   position — already shrunk by the board's zoom — so the clone's box ended up zoom-sized while
+   its text stayed full-size, i.e. proportionally oversized (worse the smaller the screen/board).
+   Fix: flyCardRect now takes the content's NATIVE width/height explicitly, sizes the clone to
+   THAT (so text/border/margin are always correctly proportioned), and folds the zoom into the
+   scale keyframes instead (nativeW * scale === the real on-screen size at each end, unchanged
+   from before) — the rendered box size/position is identical to the old code, only the internal
+   proportions are fixed. */
+async function flyCardRect(fromRect,toRect,html,dur,nativeW,nativeH){
   if(INSTANT)return;   // no card-flight visual during reconnect catch-up
   const f=document.createElement('div'); f.className='cardFloat'; f.innerHTML=html;
   const inner=f.firstElementChild;
-  inner.style.width=fromRect.width+'px'; inner.style.height=fromRect.height+'px';
+  inner.style.width=nativeW+'px'; inner.style.height=nativeH+'px';
   document.body.appendChild(f);
+  const s1=fromRect.width/nativeW, s2=toRect.width/nativeW;
   await f.animate([
-    {transform:`translate(${fromRect.left}px,${fromRect.top}px)`,opacity:1},
-    {transform:`translate(${toRect.left}px,${toRect.top}px) scale(${toRect.width/fromRect.width})`,opacity:1}
+    {transform:`translate(${fromRect.left}px,${fromRect.top}px) scale(${s1})`,opacity:1},
+    {transform:`translate(${toRect.left}px,${toRect.top}px) scale(${s2})`,opacity:1}
   ],{duration:D(90,dur),easing:'ease-in-out',fill:'forwards'}).finished;
   f.remove();
 }
@@ -1161,11 +1233,16 @@ async function animCardPlay(seat,card,cardEl){
     const pq=$(`plaque-${seat}`).getBoundingClientRect();
     from={left:pq.left+pq.width/2-32,top:pq.top,width:64,height:90};
   }
-  await flyCardRect(from,{left:to.left,top:to.top,width:to.width},html,420);
+  // native size = the standard hand-card design size (64x90, matches the .card class default) —
+  // both branches above already measure/hardcode a real, un-zoomed hand-card-sized rect.
+  await flyCardRect(from,{left:to.left,top:to.top,width:to.width},html,420,64,90);
   showDiscard(seat,card);
 }
 async function animateDeal(counts){
   const deckR=$('deckSpot').getBoundingClientRect();
+  // native size = the deck pocket's own board-space (un-zoomed) dimensions — deckR itself is
+  // already shrunk by the board's zoom (see flyCardRect's comment above).
+  const dp=LAY.deckPockets[G.dealer];
   const jobs=[];
   let delay=0;
   for(let round=0;round<counts;round++){
@@ -1177,7 +1254,7 @@ async function animateDeal(counts){
         await new Promise(r=>setTimeout(r,d));
         sDealT();
         await flyCardRect({left:deckR.left,top:deckR.top,width:deckR.width,height:deckR.height},
-          {left:pq.left+pq.width/2-19,top:pq.top-8,width:38},'<div class="card back"></div>',330);
+          {left:pq.left+pq.width/2-19,top:pq.top-8,width:38},'<div class="card back"></div>',330,dp.w,dp.h);
       })());
     }
   }
@@ -1367,6 +1444,13 @@ async function doDeal(){
   const k=G.schedule[G.schedRound]; G.schedRound++;
   for(let i=0;i<k;i++)for(let j=0;j<G.n;j++)
     G.hands[(G.dealer+1+j)%G.n].push(G.deck.pop());
+  // RULE (Blake, 2026-07-10): "the first person to go is always left of the dealer" — after
+  // EVERY deal, not just a fresh reshuffle (see RULES.md, resolved 2026-07-10). The dealer
+  // doesn't change mid-hand, so this always resets turn to the same seat within one shuffle;
+  // it only visibly matters right after a reshuffle picks a NEW dealer (already handled by the
+  // assignment above) and after the FIRST deal of a fresh game. Set unconditionally here so
+  // every doDeal() call — every round, not just round 0 — lands on the same rule.
+  G.turn=(G.dealer+1)%G.n;
   toast(`${G.seats[G.dealer].name} deals ${k} cards`);
   await animateDeal(k);
   if(myGen!==NETGEN)return;
@@ -1683,12 +1767,23 @@ function showBubbles(list,cls){
 }
 function clearBubbles(){ $('bubbleLayer').innerHTML=''; }
 /* Soft preview of where each pickable tee would travel and land with the selected card.
-   Gold ring = landing spot; pulsing red ring = that landing takes somebody out. */
+   Red fill = landing spot, always (Blake, 2026-07-10 — was gold-ring-normally/red-only-on-kill,
+   too hard to see); a brighter, pulsing red fill = that landing takes somebody out. Jack
+   (type 'swap') has no travel path — it teleports — but still gets the same red landing-hole
+   fill at the target's current spot, so both Jack stages show it too (see onTeeClick's stage-2
+   branch, which re-calls this with the narrowed target list). */
 function showPaths(mine){
   clearPaths();
   const layer=$('pathLayer');
   mine.forEach(m=>{
-    if(m.type==='swap')return;
+    if(m.type==='swap'){
+      const pos=stepPos(m.ts,G.pieces[m.ts][m.tpi].steps);
+      const d=document.createElement('div');
+      d.className='pathDot pathEnd';
+      d.style.left=pos.x+'px'; d.style.top=pos.y+'px';
+      layer.appendChild(d);
+      return;
+    }
     const col=G.seats[m.owner].color;
     const cells=[];
     if(m.type==='enter'){ cells.push(0); }
@@ -1742,6 +1837,7 @@ function onTeeClick(s,pi){
       const targets=cand.map(m=>({s:m.ts,pi:m.tpi}));
       targets.forEach(t=>$(`tee-${t.s}-${t.pi}`).classList.add('targetable'));
       showBubbles(targets,'tgt');
+      showPaths(cand);   // Jack stage 2: red landing-hole fill at each candidate target (clearHighlights above wiped stage 1's)
       $('handInfo').textContent='Now pick who to trade places with';
       return;
     }
@@ -2286,10 +2382,12 @@ function cleanName(raw,fallback){
 }
 
 /* ============================= § MENU / BOOT ============================= */
-// v0.9 item 9: new stock/default names (Ginny, Geri, J.B., Jim for the first four seats;
-// two more neutral picks for the 5th/6th 6-player seats). Only affects what a FRESH setup
-// (no saved seatMeta yet) shows — anyone who already customized names keeps them.
-const DEFAULT_NAMES={4:['Ginny','Geri','J.B.','Jim'],6:['Ginny','Geri','J.B.','Jim','Player 5','Player 6']};
+// v0.9 item 9: new stock/default names (Ginny, Geri, J.B., Jim for the first four seats).
+// v0.9.1 (Blake): the 5th/6th 6-player seats' defaults are now Tom and Don, completing the
+// full stock lineup Ginny/Geri/J.B./Jim/Tom/Don — replaces the earlier neutral "Player 5"/
+// "Player 6" placeholders. Only affects what a FRESH setup (no saved seatMeta yet) shows —
+// anyone who already customized names keeps them.
+const DEFAULT_NAMES={4:['Ginny','Geri','J.B.','Jim'],6:['Ginny','Geri','J.B.','Jim','Tom','Don']};
 let CFG=JSON.parse(localStorage.getItem('nasty-setup')||'null')||{
   n:4,teams:false,
   seatMeta:{}
@@ -2386,11 +2484,15 @@ $('btnMenu').onclick=()=>{ if(confirm('Leave this game and go back to the menu?'
 $('btnRules').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRules2').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRulesClose').onclick=()=>$('rulesOverlay').classList.add('hidden');
-/* sendInvite: shared by the offline "text an invite" buttons and the online room's invite
-   button below. In-app (IS_APP), sms: links don't reliably hand off to Messages inside a
-   Capacitor WKWebView, so route through the native share sheet instead (@capacitor/share) —
-   the user still picks Messages (or Mail/WhatsApp/copy/etc.) same as tapping share anywhere
-   else on iOS. On the plain website this is completely untouched: still sms:&body=... */
+/* sendInvite: shared by the online room's invite button (btnRoomText) and the reunion lobby's
+   "Nudge" button — real invites only ever happen from inside the host lobby flow, once a room
+   actually exists to invite someone into (v0.9.1: removed the leftover standalone "Text an
+   invite (offline link)" button from the "Play online" entry modal — it had no clear purpose
+   next to Host/Join, see PLANNING.md). In-app (IS_APP), sms: links don't reliably hand off to
+   Messages inside a Capacitor WKWebView, so route through the native share sheet instead
+   (@capacitor/share) — the user still picks Messages (or Mail/WhatsApp/copy/etc.) same as
+   tapping share anywhere else on iOS. On the plain website this is completely untouched: still
+   sms:&body=... */
 function sendInvite(link){
   const text=`Come play NASTY with me! 🏌️ ${link}`;
   if(IS_APP&&CAP.Plugins&&CAP.Plugins.Share){
@@ -2399,9 +2501,6 @@ function sendInvite(link){
   }
   location.href=`sms:&body=${encodeURIComponent(text)}`;
 }
-function textInvite(){ sendInvite(IS_APP?PUBLIC_URL:location.href.split('#')[0]); }
-$('btnText').onclick=textInvite;
-
 /* ---- Online: entry point + host/join button wiring ---- */
 $('btnOnline').onclick=()=>{ $('onlineErr').textContent=''; $('onlineOverlay').classList.remove('hidden'); };
 $('btnOnlineClose').onclick=()=>$('onlineOverlay').classList.add('hidden');
