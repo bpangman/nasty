@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY — the Pangman family board game, digitized. v0.8.
+  NASTY — the Pangman family board game, digitized. v0.9.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation — the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -49,6 +49,22 @@
       flow at the bottom of § NET/MENU auto-rejoin silently with no URL params (iOS full
       eviction survival), plus visibilitychange/pageshow -> onForeground() proactively pings
       and requests an immediate stateCheck instead of waiting for the next deal boundary.
+
+  v0.9 additions (Blake's tenth edit list — see HANDOFF.md "v0.9" + PLANNING.md):
+    - Placards are name-only now (bigger text); § NAMES section (new, right before § MENU)
+      holds the shared 10-char limit + modest profanity blocklist used by setup/join/server.
+    - Leaderboard v2: humans only, new "h"-prefixed stat keys (old CPU-tainted keys untouched
+      but never displayed), a simple points system (pointsForWin), and a shared GLOBAL board
+      for online games — see server.js "recordResult"/"/leaderboard" and this file's
+      fetchGlobalLeaderboard()/mergeStats().
+    - Menu: one "▶ Play a saved game" button replaces the old two-button resume panel
+      (SAVED_GAME/updateMenuResumeButtons); players/mode no longer persist across a fresh load
+      (always defaults 4p/FFA); "Text an invite" removed from the main menu (still in the
+      online lobby flow).
+    - Pause overlay: "Save & quit to menu" (saveAndQuitToMenu) — explicit, discoverable save
+      path distinct from the topbar's "Leave this game" (which still deliberately abandons).
+    - § ADMIN (god mode): tap the version number 7 times on the main menu. Token lives in
+      server/admin-token.txt (gitignored) and localStorage after first entry. See HANDOFF.md.
 -->
 </head>
 <body>
@@ -84,7 +100,15 @@ button{font:inherit;cursor:pointer}
 
 /* ---------- Menu ---------- */
 #menu{position:fixed;inset:0;overflow-y:auto;padding:calc(26px + env(safe-area-inset-top)) 16px 60px;text-align:center}
+#menu .estTop{margin-top:9px;font-size:11px;letter-spacing:.24em;color:#9ec7aa;text-transform:uppercase}
 #menu .tag{margin:14px auto 22px;max-width:420px;color:#cfe8d6;font-size:15px;line-height:1.5}
+/* v0.9 refinement: "Resume Saved Game" tile — a distinct full-width row ABOVE the main
+   Start/Online buttons, only shown when a save exists (see updateMenuResumeButtons). */
+.savedTile{display:block;width:100%;text-align:left;border:none;border-radius:14px;
+  padding:14px 16px;margin-bottom:12px;background:linear-gradient(135deg,rgba(244,197,66,.22),rgba(244,197,66,.08));
+  border:1px solid rgba(244,197,66,.5);color:var(--cream)}
+.savedTile .t1{font-weight:800;font-size:15.5px;color:var(--gold)}
+.savedTile .t2{font-size:13px;color:#dcefe1;margin-top:2px}
 .panel{max-width:520px;margin:0 auto;background:rgba(9,32,20,.55);border:1px solid rgba(255,255,255,.14);
   border-radius:18px;padding:18px 16px 22px;backdrop-filter:blur(6px);text-align:left}
 .optRow{display:flex;gap:10px;align-items:center;justify-content:space-between;margin:10px 2px}
@@ -110,9 +134,19 @@ button{font:inherit;cursor:pointer}
 
 /* ---------- Game chrome ---------- */
 #game{position:fixed;inset:0;display:flex;flex-direction:column}
-#topbar{display:flex;align-items:center;gap:8px;padding:calc(8px + env(safe-area-inset-top)) 12px 8px;flex:none}
+#topbar{display:flex;align-items:center;gap:5px;padding:calc(8px + env(safe-area-inset-top)) 8px 8px;
+  flex:none;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+#topbar::-webkit-scrollbar{display:none}
 /* one row, always the same height — the deal chip shrinks/ellipsizes instead of wrapping,
-   so the board never jumps when the Skip button comes and goes */
+   so the board never jumps when the Skip button comes and goes. Buttons-only topbar (v0.9
+   item 3, Deal chip removed) still has to fit Menu+Pause+Skip+Speed+Rules+Sound on one line
+   on a real phone — measured on an iPhone 17 (402pt logical width, the WIDEST current
+   iPhone): with the original 11px button padding and 8px gaps, the six buttons overflowed
+   the viewport by ~32px whenever Skip was showing (a CPU turn), leaving Sound unreachable —
+   found while reviewing iOS simulator screenshots for this release. Fixed by trimming
+   padding/gap (below) so mainstream phones fit with room to spare, AND keeping this
+   overflow-x:auto as a safety net for anything narrower still (iPhone SE etc.) — a horizontal
+   swipe always reaches every button, it's never truly stuck off-screen. */
 #topbar .chip{font-size:12.5px;color:#d7ecdc;background:rgba(0,0,0,.28);border-radius:99px;padding:6px 12px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 #topbar .iconBtn{flex:none}
@@ -130,7 +164,7 @@ button{font:inherit;cursor:pointer}
 .lobbySeat.open:active{background:rgba(255,255,255,.16)}
 #topbar .spacer{flex:1}
 .iconBtn{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.15);color:var(--cream);
-  border-radius:10px;padding:6px 11px;font-size:14px;font-weight:700}
+  border-radius:10px;padding:6px 8px;font-size:13px;font-weight:700;white-space:nowrap;flex-shrink:0}
 #boardWrap{flex:1;position:relative;overflow:hidden}
 #boardScale{position:absolute;width:1000px;height:1000px;transform-origin:top left}
 #boardSvg{position:absolute;inset:0}
@@ -163,19 +197,16 @@ button{font:inherit;cursor:pointer}
 #btnSkip.active{background:var(--gold);color:#3a2c05;border-color:var(--gold)}
 
 /* ---------- Plaques ---------- */
+/* v0.9: placards show ONLY the player's name (item 1) — bigger text, no pips/card-count/type
+   line. Kept compact (single line) so the bigger font still clears holes/base spots on both
+   boards — verified by an automated overlap check (see test suite). */
 .plaque{position:absolute;transform:translate(-50%,-50%) rotate(var(--rot,0deg));
   background:rgba(20,14,8,.86);
   border:1px solid rgba(255,255,255,.16);border-left-width:4px;border-radius:10px;
-  padding:4px 9px;max-width:126px;text-align:left;transition:box-shadow .3s}
-.plaque .nm{font-weight:800;font-size:13.5px;white-space:nowrap;max-width:108px;overflow:hidden;text-overflow:ellipsis}
-.plaque .sub{font-size:10px;color:#b9d6c1;display:flex;gap:5px;align-items:center;white-space:nowrap}
-.plaque .pips{display:flex;gap:3px;margin-top:3px}
-.plaque .pip{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.15)}
-.plaque .pip.on{box-shadow:0 0 6px currentColor}
+  padding:6px 11px;max-width:140px;text-align:left;transition:box-shadow .3s}
+.plaque .nm{font-weight:800;font-size:17px;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis}
 .plaque.turn{box-shadow:0 0 0 3px var(--gold),0 0 26px rgba(244,197,66,.55);animation:turnPulse 1.6s infinite}
 @keyframes turnPulse{50%{box-shadow:0 0 0 3px var(--gold),0 0 40px rgba(244,197,66,.85)}}
-.plaque .cardsMini{display:inline-flex;align-items:center;gap:3px}
-.plaque .backMini{width:10px;height:14px;border-radius:2px;background:linear-gradient(160deg,#1f7d40,#0e4423);border:1px solid #d8e9dc}
 
 /* ---------- Tee pick bubbles (big tap targets) ---------- */
 .teeBubble{position:absolute;transform:translate(-50%,-100%);width:84px;height:84px;border-radius:50%;
@@ -195,7 +226,7 @@ button{font:inherit;cursor:pointer}
   pointer-events:none;z-index:2;width:100%}
 #gameLogo .sign{padding:5px 16px 4px;border-width:3px;outline-width:2px;border-radius:9px}
 #gameLogo .sign b{font-size:20px;letter-spacing:.12em;text-shadow:0 2px 0 rgba(0,0,0,.35)}
-#gameLogo .sub2{margin-top:5px;font-size:9.5px;letter-spacing:.24em;color:#9ec7aa;text-transform:uppercase}
+#gameLogo .sub2{margin-top:9px;font-size:9.5px;letter-spacing:.24em;color:#9ec7aa;text-transform:uppercase}
 
 /* ---------- Golf tees ---------- */
 .tee{position:absolute;left:0;top:0;width:34px;height:44px;margin-left:-17px;margin-top:-37px;
@@ -284,16 +315,13 @@ button{font:inherit;cursor:pointer}
 <!-- ================= MENU ================= -->
 <div id="menu">
   <div class="sign"><b>NASTY</b></div>
-  <p class="tag">The Pangman family board game — est. 12/15/93, digitized 2026.<br>
-  Race your five golf tees around the board and home. Land on somebody… and send them packing.</p>
-  <div class="panel hidden" id="resumePanel" style="margin-bottom:14px">
-    <div id="resumeNote" style="font-size:13.5px;color:#ffe9a8;margin-bottom:10px"></div>
-    <div class="bigBtns">
-      <button class="btn primary hidden" id="btnResumeOffline">▶️ Resume your game</button>
-      <button class="btn ghost hidden" id="btnRejoinLast">🔄 Rejoin last online game</button>
-    </div>
-  </div>
+  <div class="estTop">Est. 1993</div>
+  <p class="tag">Race your five golf tees around the board and home. Land on somebody… and send them packing.</p>
   <div class="panel">
+    <button class="savedTile hidden" id="btnSavedGame">
+      <div class="t1">▶ Resume Saved Game</div>
+      <div class="t2" id="savedGameDetail"></div>
+    </button>
     <div class="optRow"><label>Players</label>
       <div class="segs"><button class="seg" id="p4">4 players</button><button class="seg" id="p6">6 players</button></div>
     </div>
@@ -302,28 +330,27 @@ button{font:inherit;cursor:pointer}
     </div>
     <div id="teamNote"></div>
     <div id="seatList"></div>
+    <div id="nameWarn" style="font-size:12.5px;color:#ff9a9a;min-height:16px;margin:2px 2px 0"></div>
     <div class="bigBtns">
       <button class="btn primary" id="btnStart">Start game</button>
-      <button class="btn ghost" id="btnInviteMenu">📱 Text an invite</button>
+      <button class="btn ghost" id="btnOnline">Online play</button>
     </div>
     <div class="bigBtns">
       <button class="btn ghost" id="btnRules">How to play</button>
       <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
-      <button class="btn ghost" id="btnOnline">Online play</button>
     </div>
   </div>
-  <div class="est">v0.8 &nbsp;·&nbsp; est. 12/15/93</div>
+  <div class="est"><span id="verTap">v0.9</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
 <div id="game" class="hidden">
   <div id="topbar">
     <button class="iconBtn" id="btnMenu">‹ Menu</button>
-    <div class="chip" id="dealChip">—</div>
     <div class="chip hidden" id="netChip">🟢 online</div>
     <div class="spacer"></div>
-    <button class="iconBtn hidden" id="btnSkip">⏩ Skip</button>
     <button class="iconBtn" id="btnPause">⏸</button>
+    <button class="iconBtn hidden" id="btnSkip">⏩ Skip</button>
     <button class="iconBtn" id="btnSpeed">▶︎ Normal</button>
     <button class="iconBtn" id="btnRules2">Rules</button>
     <button class="iconBtn" id="btnMute">🔊</button>
@@ -331,7 +358,7 @@ button{font:inherit;cursor:pointer}
   <div id="boardWrap">
     <div id="gameLogo">
       <div class="sign"><b>NASTY</b></div>
-      <div class="sub2">Pangman Family Board Game · Est. 1993</div>
+      <div class="sub2">Est. 1993</div>
     </div>
     <div id="boardScale">
       <svg id="boardSvg" width="1000" height="1000" viewBox="0 0 1000 1000"></svg>
@@ -409,7 +436,7 @@ button{font:inherit;cursor:pointer}
   <div class="modalCard">
     <h3>🏆 Leaderboard</h3>
     <div id="lbBody"></div>
-    <p style="font-size:12.5px;color:#9ec7aa">Wins are counted on this device.</p>
+    <p style="font-size:12.5px;color:#9ec7aa">Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a human — humans only, CPUs never show up here.</p>
     <div class="bigBtns"><button class="btn primary" id="btnLbClose">Close</button></div>
   </div>
 </div>
@@ -461,9 +488,9 @@ button{font:inherit;cursor:pointer}
       <div class="bigBtns"><button class="btn primary" id="btnJoinCodeNext">Continue</button></div>
     </div>
     <div id="joinNameStep" class="hidden">
-      <p>What should we call you?</p>
+      <p>What should we call you? (10 characters max)</p>
       <div class="optRow"><label>Your name</label>
-        <input id="joinNameInput" maxlength="20" style="font-size:16px;width:160px;background:rgba(0,0,0,.25);
+        <input id="joinNameInput" maxlength="10" style="font-size:16px;width:160px;background:rgba(0,0,0,.25);
           border:1px solid rgba(255,255,255,.2);border-radius:8px;color:var(--cream);padding:8px"></div>
       <div class="bigBtns"><button class="btn primary" id="btnJoinNameNext">Continue</button></div>
     </div>
@@ -482,9 +509,51 @@ button{font:inherit;cursor:pointer}
   <p>The host's connection dropped — the game will pick back up the moment they're back.</p>
 </div>
 
+<!-- § REUNION (v0.9 refinement) — shown only to whoever tapped "Resume Saved Game" on an
+     online room, so a comeback game doesn't just drop one lone player onto a moving board.
+     See HANDOFF.md "Resuming an online game" for the full writeup. -->
+<div id="reunionOverlay" class="overlay hidden">
+  <div class="modalCard">
+    <h3>Getting the table back together</h3>
+    <p>Everyone needs to be back before play picks up again.</p>
+    <div id="reunionSeats"></div>
+    <div id="reunionNote" style="font-size:13px;color:#ffe9a8;min-height:18px;margin-top:6px"></div>
+    <div class="bigBtns">
+      <button class="btn primary hidden" id="btnReunionResume">▶ Resume game</button>
+      <button class="btn ghost" id="btnReunionClose">Keep waiting in background</button>
+    </div>
+  </div>
+</div>
+
 <div id="pauseOverlay" class="overlay hidden">
   <div class="sign"><b>PAUSED</b><small id="pauseSub">tap to resume</small></div>
   <p id="pauseText">Everyone can walk away — your game is saved. Tap anywhere to keep playing.</p>
+  <div class="bigBtns"><button class="btn ghost" id="btnSaveQuit">💾 Save &amp; quit to menu</button></div>
+</div>
+
+<!-- God mode (v0.9) — hidden admin panel, revealed by tapping the version number 7 times.
+     See HANDOFF.md "God mode" for how Blake uses this. -->
+<div id="adminOverlay" class="overlay hidden">
+  <div class="modalCard" style="max-width:560px">
+    <h3>🛠️ Admin</h3>
+    <div id="adminLocked">
+      <p>Enter the admin token (saved on this device after the first time).</p>
+      <div class="optRow"><label>Token</label>
+        <input id="adminTokenInput" type="password" style="font-size:14px;width:220px;background:rgba(0,0,0,.25);
+          border:1px solid rgba(255,255,255,.2);border-radius:8px;color:var(--cream);padding:8px"></div>
+      <div id="adminErr" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
+      <div class="bigBtns"><button class="btn primary" id="btnAdminUnlock">Unlock</button>
+        <button class="btn ghost" id="btnAdminClose">Close</button></div>
+    </div>
+    <div id="adminUnlocked" class="hidden">
+      <h4>Rooms</h4>
+      <div id="adminRooms" style="font-size:13.5px"></div>
+      <h4>Global leaderboard</h4>
+      <div id="adminLb" style="font-size:13.5px"></div>
+      <div class="bigBtns"><button class="btn ghost" id="btnAdminRefresh">Refresh</button>
+        <button class="btn ghost" id="btnAdminClose2">Close</button></div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -573,7 +642,7 @@ const COLORS4=[
   {name:'Green', c:'#2f8f5b',dark:'#1b5637'},
   {name:'Navy',  c:'#41598f',dark:'#273757'},
   {name:'Pink',  c:'#e56aa5',dark:'#a53a72'},
-  {name:'Yellow',c:'#e3c23c',dark:'#95791c'},
+  {name:'Yellow',c:'#f0c419',dark:'#a37c0a'},
 ];
 const COLORS6=[
   {name:'Green', c:'#2f8f5b',dark:'#1b5637'},
@@ -581,7 +650,7 @@ const COLORS6=[
   {name:'Red',   c:'#c6444a',dark:'#7e2429'},
   {name:'White', c:'#efe6d2',dark:'#b7a98a'},
   {name:'Silver',c:'#aeb6be',dark:'#6f777f'},
-  {name:'Yellow',c:'#e3c23c',dark:'#95791c'},
+  {name:'Yellow',c:'#f0c419',dark:'#a37c0a'},
 ];
 const SCHEDULES={4:[5,4,4],6:[4,4]};   // deal-round sizes; deck reshuffles after the last round
 const HOME_N=5;
@@ -937,10 +1006,7 @@ function buildTable(){
     d.style.left=p.x+'px'; d.style.top=p.y+'px';
     d.style.setProperty('--rot',(p.rot||0)+'deg');
     d.style.borderLeftColor=seat.color.c; d.style.color=seat.color.c;
-    d.innerHTML=`<div class="nm" style="color:var(--cream)">${esc(seat.name)}</div>
-      <div class="sub"><span>${seat.type==='cpu'?'CPU · '+diffLabel(seat.diff):'Human'}</span>
-      <span class="cardsMini"><span class="backMini"></span><b class="cnt" style="color:var(--cream)">0</b></span></div>
-      <div class="pips">${'<span class="pip"></span>'.repeat(5)}</div>`;
+    d.innerHTML=`<div class="nm" style="color:var(--cream)">${esc(seat.name)}</div>`;
     pl.appendChild(d);
   }
   const dl=$('discardLayer'); dl.innerHTML='';
@@ -953,7 +1019,6 @@ function buildTable(){
   }
   syncAll();
 }
-function diffLabel(d){return d==='easy'?'Easy':d==='medium'?'Tricky':'Nasty';}
 function esc(s){return s.replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));}
 function teePos(s,pi){
   const p=G.pieces[s][pi];
@@ -964,17 +1029,9 @@ function syncAll(){
   for(let s=0;s<G.n;s++)for(let pi=0;pi<5;pi++)
     setTee($(`tee-${s}-${pi}`),teePos(s,pi));
   for(let s=0;s<G.n;s++){
-    const pq=$(`plaque-${s}`);
-    pq.querySelector('.cnt').textContent=G.hands[s].length;
-    const homeCount=G.pieces[s].filter(p=>p.state==='home').length;
-    pq.querySelectorAll('.pip').forEach((pp,i)=>{
-      pp.classList.toggle('on',i<homeCount);
-      pp.style.background=i<homeCount?G.seats[s].color.c:'rgba(255,255,255,.15)';
-    });
-    pq.classList.toggle('turn',s===G.turn&&!G.over);
+    $(`plaque-${s}`).classList.toggle('turn',s===G.turn&&!G.over);
   }
   $('deckCount').textContent=G.deck.length;
-  $('dealChip').textContent=`Deal ${Math.min(G.schedRound,G.schedule.length)}/${G.schedule.length}`;
   $('btnSkip').classList.toggle('hidden',G.over||G.seats[G.turn].type!=='cpu');
 }
 function cardHTML(card){
@@ -1213,7 +1270,10 @@ function pauseGate(){
 }
 function updatePauseUI(){
   const ov=$('pauseOverlay');
-  if(!G||!G.paused){ ov.classList.add('hidden'); return; }
+  if(!G||!G.paused){ ov.classList.add('hidden'); closeReunionOverlay(); return; }
+  // v0.9: the reunion lobby (see § REUNION) is its OWN overlay with its own "we're paused,
+  // waiting on people" story — don't stack the plain pause overlay on top of it too.
+  if(NET.reunionOpen){ ov.classList.add('hidden'); return; }
   if(NET.online){
     $('pauseSub').textContent='tap Resume to keep playing';
     $('pauseText').textContent='Someone hit pause — everyone\'s game is holding here. Any player can tap below to resume.';
@@ -1360,7 +1420,6 @@ async function performMove(seat,m,cardEl){
   const kicked=m.kick?{seat:m.kick.seat,pi:m.kick.pi,pos:teePos(m.kick.seat,m.kick.pi)}:null;
   const preSnug=G.pieces[owner].map((_,i)=>isSnug(owner,i));
   applyMove(seat,m);
-  syncPlaquesOnly();
   const elm=$(`tee-${owner}-${m.pi}`);
   if(m.type==='enter'){
     sEnter();
@@ -1415,9 +1474,6 @@ function celebrateSnug(owner,pi){
     {transform:`translate(${pos.x}px,${pos.y - 26}px) scale(1.25)`,offset:.4},
     {transform:`translate(${pos.x}px,${pos.y}px) scale(1)`}
   ],{duration:D(160,500),easing:'ease-in-out'});
-}
-function syncPlaquesOnly(){ /* card counts during anims */
-  for(let s=0;s<G.n;s++)$(`plaque-${s}`).querySelector('.cnt').textContent=G.hands[s].length;
 }
 function visibleHandSeat(){
   // online: every phone only ever shows ITS OWN seat's hand (privacy) — dead/unclickable
@@ -1543,7 +1599,7 @@ function passDeviceGate(seat){
 }
 
 /* ============================= § UI (hand & selection) ============================= */
-let SEL=null, CUR_MOVES=[], CUR_SEAT=-1;
+let SEL=null, CUR_MOVES=[], CUR_SEAT=-1, CUR_GEN=-1;
 // SEL is a script-local `let` — unlike window.G/window.LAY/window.NET it's never assigned
 // to `window`, so tests must go through this getter rather than reading `window.SEL`
 // directly (which would silently always read `undefined`).
@@ -1563,7 +1619,21 @@ function renderHandFor(seat){
     row.querySelectorAll('.card').forEach(c=>c.classList.add('dead'));
 }
 function enableSelection(seat,moves){
-  CUR_MOVES=moves; CUR_SEAT=seat; SEL=null;
+  // CUR_GEN (fix, v0.9, reconnect-storm crash): stamps the NETGEN that was live when this
+  // seat's hand was armed for tapping — see commitMove()'s guard for why this matters. Unlike
+  // every OTHER seat's turn (which is driven from INSIDE runTurn()'s own await chain, already
+  // re-checked against NETGEN after every await), the LOCAL human's own turn is armed here and
+  // then runTurn() simply RETURNS — the actual move only happens later, from a totally separate
+  // call chain (a DOM click, or a test's direct call) that runTurn()'s own NETGEN checks never
+  // see. Before this fix, a reconnect (bootGameFromNetwork) mid-turn left the OLD armed hand
+  // fully clickable; tapping it (or, for a fast-reconnecting client, code doing so on its
+  // behalf) sent a move computed against the STALE pre-reconnect board on top of the FRESH
+  // post-reconnect one — an out-of-turn action the server (which enforces no game rules, just
+  // relays) dutifully logged and broadcast, which every client then crashed trying to apply
+  // (`G.hands[seat][m.ci]` undefined — the hand had already moved on). Reproduced with a
+  // pathological back-to-back reconnect storm (see HANDOFF.md's reconnect-bug write-up); fixed
+  // by refusing to commit unless this generation still matches at send time.
+  CUR_MOVES=moves; CUR_SEAT=seat; CUR_GEN=NETGEN; SEL=null;
   const row=$('handRow');
   row.querySelectorAll('.card').forEach(c=>{
     const ci=+c.dataset.ci;
@@ -1692,6 +1762,14 @@ const NET={
   silentRejoin:false,   // v0.8: true only during boot()'s no-URL-param auto-rejoin attempt —
                         // see 'rejoinError' above and boot()/tryJoinOrRejoin() below
   moveSentForTurn:false,   // v0.8: double-tap guard — see commitMove()
+  enteringViaResume:false, // v0.9: set right before rejoining from the menu's "Resume Saved
+                           // Game" tile; onSync() checks it once (then clears it) to decide
+                           // whether to show the § REUNION lobby instead of dropping straight
+                           // onto the board. NOT set for a normal in-session reconnect blip.
+  presence:{},             // v0.9: playerId -> connected, seeded from sync's `presence` map
+                           // and kept current by the existing 'presence' broadcast — powers
+                           // the reunion lobby's green/gray dots.
+  reunionOpen:false,       // v0.9: true while the reunion lobby overlay is on screen.
 };
 window.NET=NET; // exposed for testing/debugging, same spirit as window.G/window.LAY
 /* Reconnect concurrency guard (fix, 2026-07-09): bootGameFromNetwork() fully replaces `G`
@@ -1815,6 +1893,12 @@ function armReshuffleWait(){
    the top of every runTurn() entry (each new turn attempt begins only after the previous
    echo fully applied), plus on every (re)boot via onSync/bootGameFromNetwork. */
 function commitMove(seat,m,cardEl){
+  // Stale-generation guard (fix, v0.9 — see the CUR_GEN comment in enableSelection()): a
+  // reconnect between when this seat's hand was armed and now means CUR_GEN no longer matches
+  // NETGEN — this commit was computed against a board that's since been fully replaced, so it
+  // must be silently dropped rather than sent (online) or applied (offline, for symmetry/
+  // belt-and-suspenders even though offline never reboots mid-game today).
+  if(CUR_GEN!==NETGEN)return;
   if(NET.online){
     if(NET.moveSentForTurn)return;   // already sent for this turn — wait for the echo
     NET.moveSentForTurn=true;
@@ -1832,6 +1916,12 @@ function resetNetUiFlow(){
 }
 function bootGameFromNetwork(action,isReconnect){
   NETGEN++;   // invalidate any runTurn()/performMove() chain left over from before this (re)boot
+  // Also immediately disarm any locally-armed hand from before this (re)boot (fix, v0.9 — see
+  // the CUR_GEN comment in enableSelection()/commitMove()): CUR_GEN!==NETGEN alone already
+  // blocks a stale commit from doing anything, but clearing CUR_MOVES/CUR_SEAT here too means
+  // the OLD hand isn't left looking tappable for the brief instant before runTurn() re-renders
+  // the new one — belt and suspenders, not just a silent no-op.
+  CUR_MOVES=[]; CUR_SEAT=-1; SEL=null;
   const cols=action.n===4?COLORS4:COLORS6;
   const seats=action.seats.map((s,i)=>({name:s.name,type:s.type,diff:s.diff,color:cols[i]}));
   LAY=buildLayout(action.n);
@@ -1859,6 +1949,7 @@ function onSync(m){
   NET.lobby=m.lobby; NET.seatOwners=m.seatOwners; NET.hostConnected=m.hostConnected!==false;
   NET.actionQueue=[]; NET.waiters={move:{},reshuffle:null}; NET.pendingStateCheck=null;
   NET.moveSentForTurn=false;
+  NET.presence=m.presence||{};   // v0.9: playerId->connected snapshot, for the reunion lobby
   const startEntry=m.log.find(e=>e.action.kind==='start');
   m.log.forEach(e=>{ if(e!==startEntry)NET.actionQueue.push(e); });
   NET.mySeat=NET.seatOwners.indexOf(NET.playerId);
@@ -1867,8 +1958,60 @@ function onSync(m){
     bootGameFromNetwork(startEntry.action,true);
     G.paused=!!m.paused; updatePauseUI();   // v0.8: current pause state travels WITH sync,
     // not through the replayed log — see server.js pauseToggle comment.
+    // v0.9 refinement: coming back via the menu's "Resume Saved Game" tile (as opposed to a
+    // normal brief mid-session reconnect blip) shows the reunion lobby instead of dropping
+    // straight onto a possibly-moving board — see § REUNION below.
+    if(NET.enteringViaResume){
+      NET.enteringViaResume=false;
+      if(!G.paused)requestPause(true);
+      openReunionOverlay();
+    }
   }
 }
+
+/* ============================= § REUNION (v0.9 refinement) =============================
+   "Getting the table back together" — shown only to whoever resumed an online game from the
+   menu's saved-game tile. Lists every HUMAN seat with a live green/gray presence dot; anyone
+   can nudge an absent seat (SMS/share-sheet invite + a server-relayed live nudge, best-effort
+   — it only reaches a friend who still has the app open SOMEWHERE with a live connection,
+   same honest limitation as the rest of § NET); once every human seat shows connected, the
+   HOST gets a "Resume game" button that unpauses for everyone at once (plain lockstep
+   pauseToggle, same mechanism the topbar's Pause button already uses). */
+function humanSeatList(){
+  // {seat, playerId, name} for every seat a human owns — CPU seats have no owner.
+  if(!NET.seatOwners||!G)return[];
+  return NET.seatOwners.map((pid,seat)=>({seat,playerId:pid,name:G.seats[seat].name}))
+    .filter(x=>x.playerId!=null);
+}
+function renderReunionOverlay(){
+  const humans=humanSeatList();
+  const allHere=humans.every(h=>NET.presence[h.playerId]);
+  $('reunionSeats').innerHTML=humans.map(h=>{
+    const here=!!NET.presence[h.playerId];
+    return `<div class="lobbySeat"><span class="dot" style="background:${here?'#3fae5c':'#888'}"></span>
+      <span class="nm">${esc(h.name)}</span><span class="st">${here?'Here':'Not back yet'}</span>
+      ${here?'':`<button data-pid="${h.playerId}" data-name="${esc(h.name)}" class="btnNudge">Nudge</button>`}</div>`;
+  }).join('');
+  $('reunionSeats').querySelectorAll('.btnNudge').forEach(b=>b.onclick=()=>nudgePlayer(+b.dataset.pid,b.dataset.name));
+  $('reunionNote').textContent=allHere?'Everyone\'s back!':'Waiting on everyone to be back before play picks up again.';
+  $('btnReunionResume').classList.toggle('hidden', !(allHere&&NET.isHost));
+}
+function openReunionOverlay(){
+  NET.reunionOpen=true;
+  $('pauseOverlay').classList.add('hidden');
+  renderReunionOverlay();
+  $('reunionOverlay').classList.remove('hidden');
+}
+function closeReunionOverlay(){
+  NET.reunionOpen=false;
+  $('reunionOverlay').classList.add('hidden');
+}
+function nudgePlayer(playerId,name){
+  netSend({type:'nudge',targetPlayerId:playerId});
+  sendInvite(`We're starting NASTY back up — come rejoin! ${IS_APP?PUBLIC_URL:location.origin+location.pathname}?join=${NET.code}`);
+}
+$('btnReunionClose').onclick=()=>{ closeReunionOverlay(); updatePauseUI(); };
+$('btnReunionResume').onclick=()=>{ requestPause(false); };
 /* rejoin token persistence — lets a phone that closed mid-game (locked, lost signal, tab
    killed) reopen the SAME ?join=CODE link and land back in its seat instead of re-joining
    as a stranger. Keyed by room code since a device could conceivably rejoin different
@@ -1893,12 +2036,18 @@ function loadLastRoom(){
   try{ return JSON.parse(localStorage.getItem('nasty-last-room')||'null'); }catch(e){ return null; }
 }
 function clearLastRoom(){ try{localStorage.removeItem('nasty-last-room');}catch(e){} }
-function leaveOnlineToMenu(msg){
+// v0.9 item 4: `keepRoom` — "Save & quit to menu" from the pause overlay is a DIFFERENT
+// intent than the existing "Leave this game" menu confirm: it's not abandoning the game, it's
+// the explicit save-and-continue-later path, so it must NOT clear the last-room record — that
+// record is exactly what powers the menu's "▶ Play a saved game" button afterward. Every
+// other caller (kicked, "Leave this game", cancelling a room you hosted) keeps the original
+// deliberate-abandon behavior (clears it) by simply not passing this flag.
+function leaveOnlineToMenu(msg,keepRoom){
   NET.wantConnection=false;
   if(NET.ws){ try{NET.ws.close();}catch(e){} }
   Object.assign(NET,{ws:null,online:false,isHost:false,code:null,playerId:null,token:null,mySeat:-1,
     lobby:null,seatOwners:null,actionQueue:[],waiters:{move:{},reshuffle:null},pendingStateCheck:null});
-  clearLastRoom();   // v0.8: leaving is a deliberate choice — don't auto-rejoin this one later
+  if(!keepRoom)clearLastRoom();   // v0.8: leaving is a deliberate choice — don't auto-rejoin this one later
   updateNetChip();
   resetNetUiFlow();
   $('waitHostOverlay').classList.add('hidden');
@@ -1946,7 +2095,16 @@ function handleNetMessage(m){
       leaveOnlineToMenu(m.message||'The host removed your seat.');
       return;
     case 'presence':
-      return; // per-seat presence dots are a nice-to-have; not required for correctness
+      // v0.9: kept for the reunion lobby's green/gray dots (see § REUNION) — everywhere else
+      // this is still just a nice-to-have, not required for correctness.
+      NET.presence[m.playerId]=!!m.connected;
+      if(NET.reunionOpen)renderReunionOverlay();
+      return;
+    case 'nudged':
+      // v0.9: someone in the reunion lobby is trying to get this player back to the table —
+      // best-effort (only reaches a phone that still has a live connection here somewhere).
+      toast(`👋 ${m.fromName||'Someone'} is trying to get the game going again!`,3400);
+      return;
     case 'hostStatus':
       NET.hostConnected=!!m.connected; updateNetChip();
       if(!$('game').classList.contains('hidden'))
@@ -2042,8 +2200,9 @@ function advanceJoinToNameStep(){
   $('joinNameStep').classList.remove('hidden');
 }
 function joinSubmitName(){
-  const name=$('joinNameInput').value.trim();
+  const name=cleanName($('joinNameInput').value,'');
   if(!name){ $('joinErr').textContent='Enter your name.'; return; }
+  if(isBadName(name)){ $('joinErr').textContent='Pick a nicer name.'; return; }
   JOIN.name=name; $('joinErr').textContent='';
   NET.wantConnection=true;
   connectWs().then(()=>{ netSend({type:'join',code:JOIN.code,name}); })
@@ -2077,12 +2236,45 @@ function renderJoinSeatStep(){
   $('joinNote').textContent=haveSeat?"You're in! Waiting for the host to start the game…":'Pick any open seat above — even ones marked CPU.';
 }
 
+/* ============================= § NAMES (limits + decency, v0.9 item 9) =============================
+   Shared by the setup screen, the online join flow, and (duplicated, since the server is a
+   separate plain-Node file with no shared module) server.js — see its own copy + comment.
+   Modest on purpose (Blake's ask: "don't over-engineer") — a short blocklist of common
+   English profanity/slurs, matched as a substring after a cheap leetspeak normalization, plus
+   a flat 10-character limit. Never used to punish silently: callers show a friendly message
+   and fall back to the previous good value instead of accepting the bad one. */
+const NAME_MAX=10;
+const NAME_BLOCKLIST=['fuck','shit','bitch','asshole','bastard','dick','pussy','cunt',
+  'nigger','nigga','fag','faggot','retard','whore','slut','cock','twat','coon','spic',
+  'chink','kike','tranny','rape','nazi','dyke','cracker'];
+function normalizeName(s){
+  return String(s||'').toLowerCase()
+    .replace(/0/g,'o').replace(/1/g,'i').replace(/3/g,'e').replace(/4/g,'a')
+    .replace(/5/g,'s').replace(/7/g,'t').replace(/\$/g,'s').replace(/@/g,'a')
+    .replace(/[^a-z]/g,'');
+}
+function isBadName(raw){
+  const n=normalizeName(raw);
+  return !!n && NAME_BLOCKLIST.some(w=>n.includes(w));
+}
+function cleanName(raw,fallback){
+  const s=String(raw||'').trim().slice(0,NAME_MAX);
+  return s||fallback||'';
+}
+
 /* ============================= § MENU / BOOT ============================= */
-const DEFAULT_NAMES={4:['Blake','Mom','Dad','Sis'],6:['Blake','Mom','Dad','Sis','Bro','Gram']};
+// v0.9 item 9: new stock/default names (Ginny, Geri, J.B., Jim for the first four seats;
+// two more neutral picks for the 5th/6th 6-player seats). Only affects what a FRESH setup
+// (no saved seatMeta yet) shows — anyone who already customized names keeps them.
+const DEFAULT_NAMES={4:['Ginny','Geri','J.B.','Jim'],6:['Ginny','Geri','J.B.','Jim','Player 5','Player 6']};
 let CFG=JSON.parse(localStorage.getItem('nasty-setup')||'null')||{
-  n:4,teams:true,
+  n:4,teams:false,
   seatMeta:{}
 };
+// v0.9 item 5: players/mode no longer persist across a fresh load — every visit starts at
+// 4 players + Everyone for themselves, no matter what was picked last time. Seat names/types
+// (seatMeta below) still remember what you customized, same as before.
+CFG.n=4; CFG.teams=false;
 function seatDefaults(n){
   return Array.from({length:n},(_,i)=>({
     name:DEFAULT_NAMES[n][i]||`Player ${i+1}`,
@@ -2108,7 +2300,7 @@ function renderMenu(){
   CFG.seatMeta[CFG.n].forEach((s,i)=>{
     const r=document.createElement('div'); r.className='seatRow';
     r.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span>
-      <input value="${esc(s.name)}" maxlength="12" aria-label="player name">
+      <input value="${esc(s.name)}" maxlength="${NAME_MAX}" aria-label="player name">
       <select class="typeSel"><option value="human"${s.type==='human'?' selected':''}>Human</option>
         <option value="cpu"${s.type==='cpu'?' selected':''}>CPU</option></select>
       <select class="diffSel" ${s.type==='human'?'style="visibility:hidden"':''}>
@@ -2116,7 +2308,21 @@ function renderMenu(){
         <option value="medium"${s.diff==='medium'?' selected':''}>Tricky</option>
         <option value="hard"${s.diff==='hard'?' selected':''}>Nasty</option></select>`;
     const[inp,ts,ds]=[r.querySelector('input'),r.querySelector('.typeSel'),r.querySelector('.diffSel')];
-    inp.oninput=()=>{s.name=inp.value||cols[i].name;saveCfg();};
+    // v0.9 item 9: 10-char cap (maxlength above covers typing; this also covers paste) +
+    // a modest profanity block — a bad name is silently rejected back to the last good
+    // value with a friendly inline note, never saved/sent.
+    inp.oninput=()=>{
+      const val=inp.value.slice(0,NAME_MAX);
+      if(isBadName(val)){
+        $('nameWarn').textContent='Pick a nicer name.';
+        inp.value=s.name;
+        return;
+      }
+      $('nameWarn').textContent='';
+      inp.value=val;
+      s.name=cleanName(val,cols[i].name);
+      saveCfg();
+    };
     ts.onchange=()=>{s.type=ts.value;ds.style.visibility=s.type==='human'?'hidden':'visible';saveCfg();};
     ds.onchange=()=>{s.diff=ds.value;saveCfg();};
     list.appendChild(r);
@@ -2172,7 +2378,6 @@ function sendInvite(link){
 }
 function textInvite(){ sendInvite(IS_APP?PUBLIC_URL:location.href.split('#')[0]); }
 $('btnText').onclick=textInvite;
-$('btnInviteMenu').onclick=textInvite;
 
 /* ---- Online: entry point + host/join button wiring ---- */
 $('btnOnline').onclick=()=>{ $('onlineErr').textContent=''; $('onlineOverlay').classList.remove('hidden'); };
@@ -2205,34 +2410,96 @@ $('btnRoomText').onclick=()=>{
   sendInvite(`${IS_APP?PUBLIC_URL:location.origin+location.pathname}?join=${NET.code}`);
 };
 
-/* ---- leaderboard (stored on this device) ---- */
+/* ---- leaderboard v2 (v0.9 item 7) ----
+   Humans only — CPU seats never accrue stats (recordWin skips them entirely). Points scheme
+   (documented plainly in PLANNING.md): when you win, you earn 1 point for every Easy CPU you
+   beat, 2 for every Tricky CPU, 3 for every Nasty CPU, and 3 for every human opponent you
+   beat (teammates don't count) — a win over 3 Nasty CPUs is 3+3+3=9. Every human seat on the
+   winning side earns the full total, not a split share.
+   Storage: everything here is under NEW "h"-prefixed keys (hg4s/hw4s/.../hpts) — deliberately
+   NOT the old g4s/w4s keys (which used to include CPU seats too). This means old data is
+   never touched or destroyed, but the leaderboard display only ever reads the new human-only
+   keys, so any old CPU-tainted entries are naturally filtered out of view. Online games are
+   recorded to the SHARED SERVER leaderboard instead of this device's local storage (see
+   sendOnlineResult below) — otherwise a family game would get double-counted (once locally
+   per phone, once globally). Offline games still record locally exactly like before. */
+const DIFF_POINTS={easy:1,medium:2,hard:3};
 function loadStats(){ try{return JSON.parse(localStorage.getItem('nasty-stats')||'{}');}catch(e){return{};} }
+function pointsForWin(winSet){
+  let pts=0;
+  G.seats.forEach((opp,j)=>{ if(winSet.has(j))return; pts+=opp.type==='human'?3:(DIFF_POINTS[opp.diff]||0); });
+  return pts;
+}
 function recordWin(){
   if(G.recorded)return; G.recorded=true;
-  const st=loadStats(), mode=(G.n===4?'4':'6')+(G.teams?'t':'s');
+  const mode=(G.n===4?'4':'6')+(G.teams?'t':'s');
+  const winSet=new Set(G.winners);
+  if(NET.online){
+    // Shared server-side board — only the host submits, so a game is recorded exactly once
+    // no matter how many phones are at the table (see server.js "recordResult").
+    if(NET.isHost){
+      const entries=[];
+      G.seats.forEach((seat,i)=>{
+        if(seat.type!=='human')return;
+        const delta={}; delta['hg'+mode]=1;
+        if(winSet.has(i)){ delta['hw'+mode]=1; delta.hpts=pointsForWin(winSet); }
+        entries.push({name:seat.name,delta});
+      });
+      if(entries.length)netSend({type:'recordResult',entries});
+    }
+    return;
+  }
+  const st=loadStats();
   G.seats.forEach((seat,i)=>{
+    if(seat.type!=='human')return;               // v0.9: CPUs never appear on the leaderboard
     const r=st[seat.name]=st[seat.name]||{};
-    r['g'+mode]=(r['g'+mode]||0)+1;                    // everyone at the table played a game
-    if(G.winners.includes(i))r['w'+mode]=(r['w'+mode]||0)+1;
+    r['hg'+mode]=(r['hg'+mode]||0)+1;
+    if(winSet.has(i)){
+      r['hw'+mode]=(r['hw'+mode]||0)+1;
+      r.hpts=(r.hpts||0)+pointsForWin(winSet);
+    }
   });
   localStorage.setItem('nasty-stats',JSON.stringify(st));
 }
-function renderLb(){
-  const st=loadStats(), names=Object.keys(st);
+function wsToHttp(u){ return u.replace(/^wss:/,'https:').replace(/^ws:/,'http:'); }
+async function fetchGlobalLeaderboard(){
+  try{
+    const wsUrl=await resolveWsUrl();
+    const r=await fetch(wsToHttp(wsUrl)+'/leaderboard',{cache:'no-store'});
+    if(!r.ok)return null;
+    return await r.json();
+  }catch(e){ return null; }
+}
+function mergeStats(local,global){
+  if(!global)return local;
+  const out={}, names=new Set([...Object.keys(local),...Object.keys(global)]);
+  names.forEach(n=>{
+    const a=local[n]||{}, b=global[n]||{}, keys=new Set([...Object.keys(a),...Object.keys(b)]);
+    const merged={}; keys.forEach(k=>merged[k]=(a[k]||0)+(b[k]||0));
+    out[n]=merged;
+  });
+  return out;
+}
+function renderLb(st){
+  const names=Object.keys(st);
   if(!names.length){$('lbBody').innerHTML='<p>No games yet — go play one!</p>';return;}
   const v=(n,k)=>st[n][k]||0;
-  const wins=n=>v(n,'w4s')+v(n,'w4t')+v(n,'w6s')+v(n,'w6t');
-  const games=n=>Math.max(v(n,'g4s')+v(n,'g4t')+v(n,'g6s')+v(n,'g6t'),wins(n));
+  const wins=n=>v(n,'hw4s')+v(n,'hw4t')+v(n,'hw6s')+v(n,'hw6t');
+  const games=n=>Math.max(v(n,'hg4s')+v(n,'hg4t')+v(n,'hg6s')+v(n,'hg6t'),wins(n));
+  const pts=n=>v(n,'hpts');
   const pct=n=>games(n)?Math.round(wins(n)/games(n)*100)+'%':'—';
-  names.sort((a,b)=>wins(b)-wins(a)||games(a)-games(b));
+  names.sort((a,b)=>pts(b)-pts(a)||wins(b)-wins(a)||games(a)-games(b));
   $('lbBody').innerHTML=`<div class="lbScroll"><table class="lbTable"><tr><th>Player</th>
-    <th>4P solo</th><th>4P teams</th><th>6P solo</th><th>6P teams</th>
-    <th>Wins</th><th>Games</th><th>Win %</th></tr>`+
-    names.map(n=>`<tr><td>${esc(n)}</td><td>${v(n,'w4s')}</td><td>${v(n,'w4t')}</td>
-      <td>${v(n,'w6s')}</td><td>${v(n,'w6t')}</td><td>${wins(n)}</td>
-      <td>${games(n)}</td><td>${pct(n)}</td></tr>`).join('')+`</table></div>`;
+    <th>Games</th><th>Wins</th><th>Win %</th><th>Points</th></tr>`+
+    names.map(n=>`<tr><td>${esc(n)}</td><td>${games(n)}</td><td>${wins(n)}</td>
+      <td>${pct(n)}</td><td>${pts(n)}</td></tr>`).join('')+`</table></div>`;
 }
-$('btnLb').onclick=()=>{renderLb();$('lbOverlay').classList.remove('hidden');};
+$('btnLb').onclick=()=>{
+  $('lbOverlay').classList.remove('hidden');
+  const local=loadStats();
+  renderLb(local);   // show local instantly, then upgrade to merged if the server answers
+  fetchGlobalLeaderboard().then(g=>{ if(g)renderLb(mergeStats(local,g)); });
+};
 $('btnLbClose').onclick=()=>$('lbOverlay').classList.add('hidden');
 $('btnMute').onclick=()=>{muted=!muted;localStorage.setItem('nasty-muted',muted?'1':'0');
   $('btnMute').textContent=muted?'🔇':'🔊';};
@@ -2249,6 +2516,26 @@ $('btnSpeed').onclick=()=>{
 $('btnSkip').onclick=startSkip;
 $('btnPause').onclick=()=>requestPause(true);
 $('pauseOverlay').addEventListener('pointerdown',()=>requestPause(false));
+/* v0.9 item 4: explicit "Save & quit to menu" from the pause overlay. Offline, the game
+   already autosaves every turn (see scheduleSaveOffline) — this just forces an immediate
+   flush (no reason to wait out the debounce) and goes to the menu WITHOUT clearing the save,
+   unlike the topbar's "‹ Menu" button (that one is a deliberate abandon and clears it on
+   purpose). Online, the room is already continuously persisted server-side; leaving here
+   keeps the last-room record alive (keepRoom=true) so "▶ Play a saved game" can rejoin it. */
+function saveAndQuitToMenu(){
+  if(!G)return;
+  if(NET.online)leaveOnlineToMenu(null,true);
+  else{
+    doSaveOffline();
+    $('pauseOverlay').classList.add('hidden');   // G.paused stays true IN THE SAVE — just stop
+    // covering the menu with it now that we've actually left the game screen (see leaveOnlineToMenu,
+    // which already does the same for the online path).
+    $('game').classList.add('hidden'); $('menu').classList.remove('hidden');
+    updateMenuResumeButtons();
+  }
+}
+$('btnSaveQuit').addEventListener('pointerdown',e=>e.stopPropagation());
+$('btnSaveQuit').onclick=saveAndQuitToMenu;
 function showWin(){
   recordWin();
   clearOfflineSave();   // v0.8: finished games don't offer a resume
@@ -2263,22 +2550,42 @@ function showWin(){
   $('winOverlay').classList.remove('hidden');
 }
 
-/* ---- Resume buttons on the main menu (v0.8) ---- */
+/* ---- "Resume Saved Game" tile, main menu (v0.9 item 4, refined after Blake's preview) ----
+   Absorbs what used to be two separate buttons ("Resume your game" + "Rejoin last online
+   game") into a single full-width tile sitting ABOVE Start game/Online play, only shown when
+   a save exists. If both an offline save and a rejoinable online room happen to exist,
+   whichever was touched more recently wins (both records carry a timestamp already). */
+let SAVED_GAME=null;   // {kind:'offline'|'online', ...} — set by updateMenuResumeButtons, read by its click handler
 function updateMenuResumeButtons(){
   const offline=loadOfflineSave();
-  $('btnResumeOffline').classList.toggle('hidden',!offline);
   const last=loadLastRoom();
   const canRejoin=!!(last&&loadNetSession(last.code));
-  $('btnRejoinLast').classList.toggle('hidden',!canRejoin);
-  $('resumePanel').classList.toggle('hidden', !offline&&!canRejoin);
-  if(offline){
-    const g=offline.G;
-    $('resumeNote').textContent=`Unfinished game — ${g.n===4?'4':'6'}-player${g.teams?' teams':''}, `+
-      `Deal ${Math.min(g.schedRound,g.schedule.length)}/${g.schedule.length}.`;
-  }else if(canRejoin){
-    $('resumeNote').textContent=`You were in room ${last.code} — rejoin to pick up where you left off.`;
+  SAVED_GAME=null;
+  if(offline&&canRejoin) SAVED_GAME=offline.ts>=last.ts?{kind:'offline',offline}:{kind:'online',last};
+  else if(offline) SAVED_GAME={kind:'offline',offline};
+  else if(canRejoin) SAVED_GAME={kind:'online',last};
+  const btn=$('btnSavedGame');
+  btn.classList.toggle('hidden',!SAVED_GAME);
+  if(!SAVED_GAME)return;
+  if(SAVED_GAME.kind==='offline'){
+    const g=SAVED_GAME.offline.G;
+    $('savedGameDetail').textContent=`${g.n===4?'4':'6'} players${g.teams?' · teams':''} · `+
+      `Deal ${Math.min(g.schedRound,g.schedule.length)}/${g.schedule.length}`;
+  }else{
+    $('savedGameDetail').textContent=`Room ${SAVED_GAME.last.code} · online`;
   }
 }
+$('btnSavedGame').onclick=()=>{
+  if(!SAVED_GAME)return;
+  if(SAVED_GAME.kind==='offline')resumeOfflineGame();
+  else{
+    // v0.9 refinement: an online resume goes through the "getting the table back together"
+    // reunion lobby (see § REUNION below) instead of dropping straight onto the board —
+    // onSync() checks this flag once, then clears it.
+    NET.enteringViaResume=true;
+    tryJoinOrRejoin(SAVED_GAME.last.code,false);
+  }
+};
 function resumeOfflineGame(){
   const saved=loadOfflineSave();
   if(!saved)return;
@@ -2286,6 +2593,13 @@ function resumeOfflineGame(){
   // current state, so re-rendering it is inherently instant (drawBoard/buildTable/syncAll
   // just position tees directly, no animation involved either way; nothing to snap FROM).
   G=saved.G;
+  // v0.9 refinement (Blake's preview feedback): resuming must drop you straight back into
+  // the game, not bounce through another "tap to resume" / save prompt. Whatever G.paused
+  // was AT THE MOMENT it got saved (e.g., you tapped Pause -> Save & quit) is stale once
+  // you've explicitly chosen to come back — the act of tapping "Resume Saved Game" IS the
+  // resume, so it always unpauses. (Online resumes are different on purpose — see the new
+  // reunion lobby below, which pauses deliberately until the humans are back at the table.)
+  G.paused=false;
   LAY=buildLayout(G.n);
   NET.online=false; NET.isHost=false; NET.wantConnection=false; updateNetChip();
   $('menu').classList.add('hidden');
@@ -2297,8 +2611,6 @@ function resumeOfflineGame(){
   toast('Welcome back — resuming your game',2200);
   runTurn();
 }
-$('btnResumeOffline').onclick=resumeOfflineGame;
-$('btnRejoinLast').onclick=()=>{ const last=loadLastRoom(); if(last)tryJoinOrRejoin(last.code,false); };
 
 /* ---- Join/rejoin helper (v0.8) — shared by the ?join=CODE URL path and the silent
    no-URL-param auto-rejoin path below. `silent` means "don't pop the join overlay or any
@@ -2341,6 +2653,105 @@ function onForeground(){
 document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible')onForeground(); });
 addEventListener('pageshow',onForeground);
 
+/* ============================= § ADMIN (god mode, v0.9 item 9) =============================
+   Blake's own admin tool — tap the version number 7 times on the main menu to reveal it. The
+   token is entered once and remembered on that device (localStorage). All admin actions are
+   plain HTTP calls to the SAME relay server (see server.js "§ ADMIN"), authenticated with an
+   `X-Admin-Token` header. See HANDOFF.md "God mode" for how Blake actually uses this. */
+const ADMIN_TOKEN_KEY='nasty-admin-token';
+async function adminFetch(pathAndQuery,opts){
+  const wsUrl=await resolveWsUrl();
+  const token=localStorage.getItem(ADMIN_TOKEN_KEY)||'';
+  const o=Object.assign({},opts,{headers:Object.assign({'X-Admin-Token':token,'content-type':'application/json'},(opts&&opts.headers)||{})});
+  const r=await fetch(wsToHttp(wsUrl)+pathAndQuery,o);
+  if(r.status===401)throw new Error('unauthorized');
+  return r;
+}
+let verTapCount=0, verTapTimer=null;
+$('verTap').addEventListener('click',()=>{
+  verTapCount++;
+  clearTimeout(verTapTimer);
+  verTapTimer=setTimeout(()=>{verTapCount=0;},2500);
+  if(verTapCount>=7){ verTapCount=0; openAdminPanel(); }
+});
+function openAdminPanel(){
+  $('adminErr').textContent='';
+  $('adminOverlay').classList.remove('hidden');
+  const saved=localStorage.getItem(ADMIN_TOKEN_KEY);
+  if(saved){ $('adminTokenInput').value=saved; tryAdminUnlock(); }
+  else{ $('adminLocked').classList.remove('hidden'); $('adminUnlocked').classList.add('hidden'); }
+}
+async function tryAdminUnlock(){
+  const token=$('adminTokenInput').value.trim();
+  if(!token){ $('adminErr').textContent='Enter the token.'; return; }
+  localStorage.setItem(ADMIN_TOKEN_KEY,token);
+  try{
+    await adminFetch('/admin/leaderboard');
+    $('adminLocked').classList.add('hidden'); $('adminUnlocked').classList.remove('hidden');
+    refreshAdminPanel();
+  }catch(e){
+    localStorage.removeItem(ADMIN_TOKEN_KEY);
+    $('adminErr').textContent='That token was rejected.';
+  }
+}
+async function refreshAdminPanel(){
+  try{
+    const rooms=await(await adminFetch('/admin/rooms')).json();
+    $('adminRooms').innerHTML=rooms.length?rooms.map(r=>`
+      <div class="lobbySeat" style="flex-wrap:wrap">
+        <span class="nm">${esc(r.code)}</span>
+        <span class="st">${r.started?'in progress':'lobby'}</span>
+        <button data-code="${r.code}" class="adminDelRoom">Delete room</button>
+        <div style="flex-basis:100%;display:flex;flex-direction:column;gap:4px;margin-top:4px">
+        ${(r.players||[]).map(p=>`<div style="display:flex;gap:6px;align-items:center">
+          <span class="st" style="min-width:70px">${esc(p.name)}${p.isHost?' (host)':''}</span>
+          <input class="adminRenameInput" data-code="${r.code}" data-pid="${p.id}" value="${esc(p.name)}"
+            style="width:110px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.2);border-radius:6px;color:var(--cream);padding:4px 6px">
+          <button data-code="${r.code}" data-pid="${p.id}" class="adminRenameBtn">Rename</button>
+        </div>`).join('')}
+        </div>
+      </div>`).join('')
+      :'<p style="font-size:13px;color:#a9d2b5">No rooms right now.</p>';
+    $('adminRooms').querySelectorAll('.adminDelRoom').forEach(b=>b.onclick=async()=>{
+      if(!confirm(`Delete room ${b.dataset.code}? This can't be undone.`))return;
+      await adminFetch('/admin/rooms/'+b.dataset.code,{method:'DELETE'});
+      refreshAdminPanel();
+    });
+    $('adminRooms').querySelectorAll('.adminRenameBtn').forEach(b=>b.onclick=async()=>{
+      const input=$('adminRooms').querySelector(`.adminRenameInput[data-code="${b.dataset.code}"][data-pid="${b.dataset.pid}"]`);
+      const name=cleanName(input.value,'Player');
+      await adminFetch(`/admin/rooms/${b.dataset.code}/rename`,{method:'POST',
+        body:JSON.stringify({playerId:parseInt(b.dataset.pid,10),name})});
+      refreshAdminPanel();
+    });
+    const lb=await(await adminFetch('/admin/leaderboard')).json();
+    const names=Object.keys(lb);
+    $('adminLb').innerHTML=names.length?names.map(n=>{
+      const r=lb[n];
+      const pts=(r.hpts||0);
+      return `<div class="lobbySeat"><span class="nm">${esc(n)}</span>
+        <span class="st">pts: <input class="adminPtsInput" data-name="${esc(n)}" type="number" style="width:56px" value="${pts}"></span>
+        <button data-name="${esc(n)}" class="adminSavePts">Save</button>
+        <button data-name="${esc(n)}" class="adminDelLb">Delete</button></div>`;
+    }).join(''):'<p style="font-size:13px;color:#a9d2b5">No entries yet.</p>';
+    $('adminLb').querySelectorAll('.adminSavePts').forEach(b=>b.onclick=async()=>{
+      const input=$('adminLb').querySelector(`.adminPtsInput[data-name="${b.dataset.name}"]`);
+      await adminFetch('/admin/leaderboard/'+encodeURIComponent(b.dataset.name),
+        {method:'PATCH',body:JSON.stringify({hpts:parseInt(input.value,10)||0})});
+      refreshAdminPanel();
+    });
+    $('adminLb').querySelectorAll('.adminDelLb').forEach(b=>b.onclick=async()=>{
+      if(!confirm(`Delete ${b.dataset.name} from the leaderboard?`))return;
+      await adminFetch('/admin/leaderboard/'+encodeURIComponent(b.dataset.name),{method:'DELETE'});
+      refreshAdminPanel();
+    });
+  }catch(e){ $('adminErr').textContent='Lost the admin connection — try Refresh.'; }
+}
+$('btnAdminUnlock').onclick=tryAdminUnlock;
+$('btnAdminClose').onclick=()=>$('adminOverlay').classList.add('hidden');
+$('btnAdminClose2').onclick=()=>$('adminOverlay').classList.add('hidden');
+$('btnAdminRefresh').onclick=refreshAdminPanel;
+
 /* ---- autotest: #autotest = 4p FFA all-CPU, #autotest6 = 6p teams all-CPU ---- */
 function autotest(n,teams){
   SPEED=12;
@@ -2357,13 +2768,16 @@ else{
   if(joinCode){
     tryJoinOrRejoin(joinCode.toUpperCase(),false);
   }else{
-    // v0.8: no ?join=CODE — either a plain fresh visit, or exactly what iOS gives you after
-    // fully evicting a backgrounded tab/PWA. If we were in a STARTED game recently, try to
-    // silently slide back into it first; otherwise (or if that fails) fall through to
-    // offering an offline resume via the menu buttons.
-    const lastRoom=loadLastRoom();
-    if(lastRoom&&lastRoom.wasStarted)tryJoinOrRejoin(lastRoom.code,true);
-    else updateMenuResumeButtons();
+    // v0.9 refinement (superseding v0.8's silent auto-rejoin): no ?join=CODE — either a plain
+    // fresh visit, or exactly what iOS gives you after fully evicting a backgrounded
+    // tab/PWA. Previously a STARTED game silently auto-rejoined right here with no user
+    // action at all — but that's exactly the "bounced somewhere unexpected" complaint Blake
+    // raised in preview: a lone player could get dropped straight onto a possibly-moving
+    // board with no chance to gather everyone first (see § REUNION). Now EVERY saved game —
+    // offline or online, freshly opened or coming back from eviction — surfaces through the
+    // same single, deliberate "▶ Resume Saved Game" tile on the menu; tapping it is what
+    // actually rejoins (and, for an online game, opens the reunion lobby).
+    updateMenuResumeButtons();
   }
 }
 </script>

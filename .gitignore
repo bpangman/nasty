@@ -4,6 +4,8 @@ RULES.md
 reference/
 server/node_modules/
 server/rooms/
+server/admin-token.txt
+server/leaderboard.json
 *.log
 
 # --- iOS app wrapper (app/) — see app/APPSTORE.md ---

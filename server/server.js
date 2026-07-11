@@ -42,6 +42,110 @@ const rooms = new Map();
 function log(...a) { console.log(new Date().toISOString(), ...a); }
 
 /* ---------------------------------------------------------------------------------------
+ * v0.9 § NAMES — same shared limit + modest profanity blocklist as index.html's § NAMES
+ * section (duplicated, not imported: this is a standalone Node file with zero dependencies
+ * beyond `ws`, on purpose, and index.html is a browser script — no shared module between
+ * them). Keep these two copies in sync if the list/limit ever changes. This is the
+ * server-side half of item 9's "enforced everywhere, including server-side" requirement —
+ * the client already blocks bad names before sending, this is defense-in-depth (and the
+ * only enforcement a non-browser client would ever see).
+ * ------------------------------------------------------------------------------------- */
+const NAME_MAX = 10;
+const NAME_BLOCKLIST = ["fuck","shit","bitch","asshole","bastard","dick","pussy","cunt",
+  "nigger","nigga","fag","faggot","retard","whore","slut","cock","twat","coon","spic",
+  "chink","kike","tranny","rape","nazi","dyke","cracker"];
+function normalizeName(s) {
+  return String(s || "").toLowerCase()
+    .replace(/0/g, "o").replace(/1/g, "i").replace(/3/g, "e").replace(/4/g, "a")
+    .replace(/5/g, "s").replace(/7/g, "t").replace(/\$/g, "s").replace(/@/g, "a")
+    .replace(/[^a-z]/g, "");
+}
+function isBadName(raw) {
+  const n = normalizeName(raw);
+  return !!n && NAME_BLOCKLIST.some(w => n.includes(w));
+}
+// Cleans + length-caps a name; falls back to `fallback` if empty OR blocked (never returns
+// a profane name — callers that need to distinguish "was rejected" from "was empty" should
+// check isBadName() themselves first, as host/join/claimSeat/setSeat do below).
+function cleanName(raw, fallback) {
+  const s = String(raw || "").trim().slice(0, NAME_MAX);
+  return s || fallback || "";
+}
+
+/* ---------------------------------------------------------------------------------------
+ * v0.9 § ADMIN — "god mode" for Blake. A single shared secret (the admin token) authenticates
+ * HTTP calls to a handful of /admin/* endpoints (see the http.createServer handler below).
+ * The token is generated once and written to admin-token.txt next to this file (gitignored,
+ * chmod 600) — if that file is ever missing (fresh checkout, or the planned move to a cloud
+ * host), a fresh token is generated and saved automatically, so this survives redeployment
+ * without any manual setup. Override the path with NASTY_ADMIN_TOKEN_FILE for tests, so a
+ * test server never reads/writes the real production token file.
+ * ------------------------------------------------------------------------------------- */
+const ADMIN_TOKEN_FILE = process.env.NASTY_ADMIN_TOKEN_FILE
+  ? path.resolve(process.env.NASTY_ADMIN_TOKEN_FILE)
+  : path.join(__dirname, "admin-token.txt");
+function loadOrCreateAdminToken() {
+  try {
+    const t = fs.readFileSync(ADMIN_TOKEN_FILE, "utf8").trim();
+    if (t) return t;
+  } catch (e) { /* doesn't exist yet — fall through and create one */ }
+  const t = crypto.randomBytes(24).toString("hex");
+  try {
+    fs.writeFileSync(ADMIN_TOKEN_FILE, t + "\n", { mode: 0o600 });
+    fs.chmodSync(ADMIN_TOKEN_FILE, 0o600); // belt-and-suspenders: writeFileSync's mode can be masked by umask
+  } catch (e) { log("could not persist admin token", e.message); }
+  return t;
+}
+const ADMIN_TOKEN = loadOrCreateAdminToken();
+function checkAdminToken(req, url) {
+  const header = req.headers["x-admin-token"];
+  const q = url.searchParams.get("token");
+  const given = header || q || "";
+  return given && given === ADMIN_TOKEN;
+}
+
+/* ---------------------------------------------------------------------------------------
+ * v0.9 § LEADERBOARD — the shared, all-time, human-only leaderboard for online games (see
+ * HANDOFF.md / PLANNING.md "v0.9" for the points scheme). Keyed by player name, same schema
+ * as index.html's local "h"-prefixed stats object (hg4s/hw4s/.../hpts) so merging local +
+ * global on the client is a trivial per-key sum. Persisted next to rooms/ (sibling file, not
+ * inside it — it isn't a room). Only the room HOST ever sends `recordResult` (see the ws
+ * message handler below) so a game is recorded exactly once no matter how many phones are at
+ * the table. Still "no game rules on the server" in spirit — this just adds numbers a client
+ * computed into a bucket named after a string; the server never decides who won anything.
+ * ------------------------------------------------------------------------------------- */
+const LEADERBOARD_FILE = process.env.NASTY_LEADERBOARD_FILE
+  ? path.resolve(process.env.NASTY_LEADERBOARD_FILE)
+  : path.join(__dirname, "leaderboard.json");
+let globalBoard = {};
+function loadLeaderboard() {
+  try { globalBoard = JSON.parse(fs.readFileSync(LEADERBOARD_FILE, "utf8")) || {}; }
+  catch (e) { globalBoard = {}; }
+}
+let lbPersistTimer = null;
+function scheduleLeaderboardPersist() {
+  if (lbPersistTimer) return;
+  lbPersistTimer = setTimeout(() => { lbPersistTimer = null; persistLeaderboardNow(); }, PERSIST_DEBOUNCE_MS);
+}
+function persistLeaderboardNow() {
+  try { fs.writeFileSync(LEADERBOARD_FILE, JSON.stringify(globalBoard)); }
+  catch (e) { log("leaderboard persist failed", e.message); }
+}
+const NUMERIC_STAT_KEY = /^(hg[46][st]|hw[46][st]|hpts)$/;
+function applyLeaderboardEntry(name, delta) {
+  const clean = cleanName(name, "");
+  if (!clean || isBadName(clean) || !delta || typeof delta !== "object") return;
+  const r = globalBoard[clean] = globalBoard[clean] || {};
+  for (const k of Object.keys(delta)) {
+    if (!NUMERIC_STAT_KEY.test(k)) continue;
+    const v = Number(delta[k]);
+    if (!Number.isFinite(v)) continue;
+    r[k] = (r[k] || 0) + v;
+  }
+  scheduleLeaderboardPersist();
+}
+
+/* ---------------------------------------------------------------------------------------
  * v0.8: on-disk persistence. Only the essentials survive a restart — room code, lobby
  * config, the action log (so a rejoining client can replay/catch up exactly like it
  * already does after a live reconnect), and each player's stable id+token (so an old
@@ -179,6 +283,12 @@ function broadcast(room, obj, exceptPlayerId) {
     send(p.ws, obj);
   }
 }
+// v0.9: playerId -> connected, for the client's reunion lobby (see index.html § REUNION).
+function presenceSnapshot(room) {
+  const out = {};
+  for (const p of room.players.values()) out[p.id] = !!p.connected;
+  return out;
+}
 function lobbySnapshot(room) {
   if (!room.lobby) return null;
   const snap = JSON.parse(JSON.stringify(room.lobby));
@@ -192,10 +302,113 @@ function roomIsFullyDisconnected(room) {
   return true;
 }
 
+/* ---- tiny HTTP helpers (no framework, matches the rest of this file's style) ---- */
+function readJsonBody(req) {
+  return new Promise((resolve) => {
+    let data = "";
+    req.on("data", (c) => { data += c; if (data.length > 1e6) req.destroy(); });
+    req.on("end", () => { try { resolve(data ? JSON.parse(data) : {}); } catch (e) { resolve({}); } });
+    req.on("error", () => resolve({}));
+  });
+}
+function sendJson(res, status, obj) {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(obj));
+}
+// v0.9 § ADMIN — HTTP endpoints for god mode (list/edit/delete the global leaderboard,
+// rename any player in any room, delete a room). All require the admin token (see
+// checkAdminToken above) via an `X-Admin-Token` header or a `?token=` query param.
+async function handleAdminRoute(req, res, url) {
+  if (!checkAdminToken(req, url)) { sendJson(res, 401, { error: "unauthorized" }); return true; }
+  const parts = url.pathname.split("/").filter(Boolean); // ["admin", ...]
+
+  if (parts.length === 2 && parts[1] === "rooms" && req.method === "GET") {
+    const list = Array.from(rooms.values()).map(r => ({
+      code: r.code, started: r.started,
+      playerCount: r.players.size,
+      players: Array.from(r.players.values()).map(p => ({ id: p.id, name: p.name, isHost: p.isHost, connected: p.connected })),
+    }));
+    sendJson(res, 200, list);
+    return true;
+  }
+  if (parts.length === 3 && parts[1] === "rooms" && req.method === "DELETE") {
+    const code = parts[2].toUpperCase();
+    const room = rooms.get(code);
+    if (room) {
+      for (const p of room.players.values()) { if (p.ws) { try { p.ws.close(); } catch (e) {} } }
+      rooms.delete(code);
+      deleteRoomFile(code);
+      log("admin deleted room", code);
+    }
+    sendJson(res, 200, { ok: true });
+    return true;
+  }
+  if (parts.length === 4 && parts[1] === "rooms" && parts[3] === "rename" && req.method === "POST") {
+    const code = parts[2].toUpperCase();
+    const room = rooms.get(code);
+    if (!room) { sendJson(res, 404, { error: "no such room" }); return true; }
+    const body = await readJsonBody(req);
+    const p = room.players.get(Number(body.playerId));
+    if (!p) { sendJson(res, 404, { error: "no such player" }); return true; }
+    const name = cleanName(body.name, p.name);
+    if (isBadName(name)) { sendJson(res, 400, { error: "that name is blocked" }); return true; }
+    p.name = name;
+    if (room.lobby) {
+      const seat = room.lobby.seats.find(s => s.claimedBy === p.id);
+      if (seat) seat.name = name;
+      touch(room);
+      broadcast(room, { type: "lobby", lobby: lobbySnapshot(room) });
+    } else {
+      touch(room);
+    }
+    log("admin renamed player", code, p.id, "->", name);
+    sendJson(res, 200, { ok: true });
+    return true;
+  }
+  if (parts.length === 2 && parts[1] === "leaderboard" && req.method === "GET") {
+    sendJson(res, 200, globalBoard);
+    return true;
+  }
+  if (parts.length === 3 && parts[1] === "leaderboard" && req.method === "PATCH") {
+    const name = decodeURIComponent(parts[2]);
+    if (!globalBoard[name]) { sendJson(res, 404, { error: "no such entry" }); return true; }
+    const body = await readJsonBody(req);
+    for (const k of Object.keys(body || {})) {
+      if (!NUMERIC_STAT_KEY.test(k)) continue;
+      const v = Number(body[k]);
+      if (Number.isFinite(v)) globalBoard[name][k] = v; // PATCH sets absolute values (edit), unlike recordResult's additive deltas
+    }
+    scheduleLeaderboardPersist();
+    log("admin edited leaderboard entry", name);
+    sendJson(res, 200, globalBoard[name]);
+    return true;
+  }
+  if (parts.length === 3 && parts[1] === "leaderboard" && req.method === "DELETE") {
+    const name = decodeURIComponent(parts[2]);
+    delete globalBoard[name];
+    scheduleLeaderboardPersist();
+    log("admin deleted leaderboard entry", name);
+    sendJson(res, 200, { ok: true });
+    return true;
+  }
+  sendJson(res, 404, { error: "no such admin route" });
+  return true;
+}
+
 const server = http.createServer((req, res) => {
-  if (req.url === "/health" || req.url === "/health/") {
+  const url = new URL(req.url, "http://localhost");
+  if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, rooms: rooms.size, uptime: process.uptime() }));
+    return;
+  }
+  if (url.pathname === "/leaderboard") {
+    // v0.9: public, read-only — powers the in-game leaderboard's "merged local+global" view.
+    sendJson(res, 200, globalBoard);
+    return;
+  }
+  if (url.pathname.startsWith("/admin/")) {
+    handleAdminRoute(req, res, url).catch((e) => { log("admin route error", e); sendJson(res, 500, { error: "server error" }); });
     return;
   }
   res.writeHead(404, { "content-type": "text/plain" });
@@ -252,14 +465,16 @@ wss.on("connection", (ws, req) => {
           log("rate-limited host attempt", "ip="+ip);
           return;
         }
+        if (isBadName(msg.name)) { send(ws, { type: "error", message: "Pick a nicer name and try hosting again." }); return; }
         const code = newCode();
         const room = makeRoom(code);
         const playerId = room.nextPlayerId++;
         const token = newToken();
         room.hostPlayerId = playerId;
-        room.players.set(playerId, { id: playerId, token, name: String(msg.name || "Host").slice(0, 20), ws, connected: true, isHost: true });
+        room.players.set(playerId, { id: playerId, token, name: cleanName(msg.name, "Host"), ws, connected: true, isHost: true });
         const seats = Array.isArray(msg.seats) ? msg.seats.map(s => ({
-          name: String(s.name || "").slice(0, 20), type: s.type === "cpu" ? "cpu" : "human", diff: s.diff || "medium", claimedBy: null,
+          name: isBadName(s.name) ? cleanName("", "Player") : cleanName(s.name, ""),
+          type: s.type === "cpu" ? "cpu" : "human", diff: s.diff || "medium", claimedBy: null,
         })) : [];
         const firstHuman = seats.findIndex(s => s.type === "human");
         if (firstHuman >= 0) { seats[firstHuman].claimedBy = playerId; seats[firstHuman].name = room.players.get(playerId).name; }
@@ -277,9 +492,10 @@ wss.on("connection", (ws, req) => {
         const room = rooms.get(code);
         if (!room) { send(ws, { type: "joinError", message: "That room code doesn't exist. Double check it with the host." }); return; }
         if (room.started) { send(ws, { type: "joinError", message: "That game already started. Ask the host to send a new code, or reconnect if you were already playing." }); return; }
+        if (isBadName(msg.name)) { send(ws, { type: "joinError", message: "Pick a nicer name." }); return; }
         const playerId = room.nextPlayerId++;
         const token = newToken();
-        room.players.set(playerId, { id: playerId, token, name: String(msg.name || "Player").slice(0, 20), ws, connected: true, isHost: false });
+        room.players.set(playerId, { id: playerId, token, name: cleanName(msg.name, "Player"), ws, connected: true, isHost: false });
         identify(room, playerId);
         touch(room);
         send(ws, { type: "joined", code, playerId, token, lobby: lobbySnapshot(room) });
@@ -300,7 +516,7 @@ wss.on("connection", (ws, req) => {
         touch(room);
         const isHost = playerId === room.hostPlayerId;
         if (room.started) {
-          send(ws, { type: "sync", lobby: lobbySnapshot(room), seatOwners: room.seatOwners, log: room.log, isHost, hostConnected: !!(room.players.get(room.hostPlayerId) || {}).connected, paused: !!room.paused });
+          send(ws, { type: "sync", lobby: lobbySnapshot(room), seatOwners: room.seatOwners, log: room.log, isHost, hostConnected: !!(room.players.get(room.hostPlayerId) || {}).connected, paused: !!room.paused, presence: presenceSnapshot(room) });
         } else {
           send(ws, { type: "lobby", lobby: lobbySnapshot(room), isHost });
         }
@@ -326,7 +542,7 @@ wss.on("connection", (ws, req) => {
         room.lobby.seats.forEach(s => { if (s.claimedBy === playerId) s.claimedBy = null; });
         seat.claimedBy = playerId;
         seat.type = "human";   // claiming a CPU seat converts it to human
-        if (msg.name) seat.name = String(msg.name).slice(0, 20);
+        if (msg.name && !isBadName(msg.name)) seat.name = cleanName(msg.name, seat.name);
         touch(room);
         broadcast(room, { type: "lobby", lobby: lobbySnapshot(room) });
         return;
@@ -348,7 +564,7 @@ wss.on("connection", (ws, req) => {
         }
         if (patch.type) seat.type = patch.type === "cpu" ? "cpu" : "human";
         if (patch.diff) seat.diff = patch.diff;
-        if (patch.name != null) seat.name = String(patch.name).slice(0, 20);
+        if (patch.name != null && !isBadName(patch.name)) seat.name = cleanName(patch.name, seat.name);
         touch(room);
         broadcast(room, { type: "lobby", lobby: lobbySnapshot(room) });
         return;
@@ -432,6 +648,38 @@ wss.on("connection", (ws, req) => {
         return;
       }
 
+      case "recordResult": {
+        // v0.9 item 7: {type:'recordResult', entries:[{name, delta:{...}}]} — the shared
+        // global leaderboard for online games. Only the HOST may send this (mirrors the
+        // reshuffle/CPU-move authorization pattern already used elsewhere) so a game is
+        // recorded exactly once no matter how many phones are seated at the table. An old
+        // server that doesn't know this message type would just hit its own default case —
+        // forward compatible by construction, nothing special needed for that direction.
+        if (!ctx) return;
+        const { room, playerId } = ctx;
+        if (!room.started || playerId !== room.hostPlayerId) return;
+        if (Array.isArray(msg.entries)) {
+          for (const e of msg.entries) { if (e && e.name) applyLeaderboardEntry(e.name, e.delta); }
+        }
+        return;
+      }
+
+      case "nudge": {
+        // v0.9 refinement: reunion lobby "Nudge" button — {type:'nudge', targetPlayerId}.
+        // Purely a best-effort relay (still "no game rules"): if that player has a live
+        // socket in THIS room right now, they get a 'nudged' toast; if they're fully
+        // disconnected there's nothing to relay to here (the client's own SMS/share-sheet
+        // half of the Nudge button covers that case separately). Anyone seated can nudge
+        // anyone else — no host-only restriction, this is just a friendly ping.
+        if (!ctx) return;
+        const { room, playerId } = ctx;
+        if (!room.started) return;
+        const target = room.players.get(msg.targetPlayerId);
+        const sender = room.players.get(playerId);
+        if (target && target.ws) send(target.ws, { type: "nudged", fromPlayerId: playerId, fromName: sender ? sender.name : "Someone" });
+        return;
+      }
+
       default:
         return;
     }
@@ -463,12 +711,16 @@ const pruneTimer = setInterval(() => {
 }, PRUNE_EVERY_MS);
 
 loadRoomsFromDisk(); // v0.8: bring back rooms that existed before this process started
+loadLeaderboard();   // v0.9: bring back the shared global leaderboard, same idea
+log(`admin token file: ${ADMIN_TOKEN_FILE}`);
 
 server.listen(PORT, () => log(`nasty relay listening on :${PORT}`));
 
 function shutdown() {
   clearInterval(hb); clearInterval(pruneTimer);
   flushAllPersists(); // make sure every debounced write actually lands before we exit
+  if (lbPersistTimer) { clearTimeout(lbPersistTimer); lbPersistTimer = null; }
+  persistLeaderboardNow();
   // v0.8 fix: `server.close()` only stops ACCEPTING new connections — it does NOT touch
   // sockets that are already open, and its callback doesn't fire until every existing
   // connection closes on its own. If any phone is still connected at restart time (the
