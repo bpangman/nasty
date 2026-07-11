@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY — the Pangman family board game, digitized. v0.9.1.
+  NASTY — the Pangman family board game, digitized. v0.10.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation — the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -78,6 +78,24 @@
       normally / red only on a kill) — see showPaths()'s comment. Also fixed #pathLayer's DOM
       order (was before #tableLayer, now after) so the fill actually shows over an occupied
       (kill) hole instead of being hidden behind the victim's own tee.
+
+  v0.10 additions (2026-07-11 — see HANDOFF.md/PLANNING.md for the full readout):
+    - Name plates, genuinely ~2x this time: NAME TEXT is 34px (2x the pre-v0.9.1 17px baseline)
+      on BOTH boards, ALL seats, EVERY viewport in the test matrix, zero hole/pocket overlap —
+      see the Plaques CSS block + positionPlaques()/PLAQUE_SLIDE (§ RENDER). Needed two new
+      moves beyond v0.9.1's in-place scale-up: (1) --pfont/--pscale split so text can grow harder
+      than the box, (2) each plaque SLIDES outward along its seat's own bisector, clamped live
+      every fitBoard() call against the ACTUAL rendered boardWrap/plaque rects (never a fixed
+      guess — the safe distance differs by screen aspect). That slide alone still weren't enough
+      on a portrait phone (zero letterbox margin on the tight axis, see CANVAS_PAD's comment) —
+      fitBoard() now fits the board into a virtual canvas a bit bigger than 1000x1000, trading a
+      little board size for the margin a doubled plate needs on every screen.
+    - Adaptive sizing pass: hand cards, topbar/lobby buttons, and toasts were the last fixed-px
+      chrome — hand cards now clamp() to the viewport (cardNativeSize() keeps the flying-card
+      animation in sync), every button has a real 44px tap target, and toasts anchor off the
+      hand bar's actual measured height instead of a guessed constant. A dedicated short-landscape
+      media query (phone rotated sideways) reclaims chrome space so the board isn't a postage
+      stamp in that one pathological aspect ratio.
 -->
 </head>
 <body>
@@ -128,16 +146,16 @@ button{font:inherit;cursor:pointer}
 .optRow label{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#a9d2b5}
 .segs{display:flex;gap:6px}
 .seg{border:1px solid rgba(255,255,255,.25);background:transparent;color:var(--cream);
-  padding:8px 16px;border-radius:10px;font-weight:700;font-size:15px}
+  padding:8px 16px;border-radius:10px;font-weight:700;font-size:15px;min-height:44px}
 .seg.on{background:var(--gold);border-color:var(--gold);color:#3a2c05}
 #teamNote{font-size:13px;color:#ffe9a8;margin:2px 2px 8px;min-height:18px}
 .seatRow{display:flex;gap:8px;align-items:center;background:rgba(255,255,255,.06);
   border-radius:12px;padding:8px 10px;margin:8px 0}
 .seatRow .dot{width:22px;height:22px;border-radius:50%;flex:none;border:2px solid rgba(255,255,255,.6)}
 .seatRow input{flex:1;min-width:60px;width:60px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.18);
-  border-radius:8px;color:var(--cream);padding:8px 10px;font-size:15px}
+  border-radius:8px;color:var(--cream);padding:8px 10px;font-size:15px;min-height:44px}
 .seatRow select{background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.18);border-radius:8px;
-  color:var(--cream);padding:8px 6px;font-size:14px}
+  color:var(--cream);padding:8px 6px;font-size:14px;min-height:44px}
 .bigBtns{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:18px}
 .btn{border:none;border-radius:12px;padding:13px 22px;font-weight:800;font-size:16px;letter-spacing:.03em}
 .btn.primary{background:var(--gold);color:#3a2c05;box-shadow:0 6px 18px rgba(0,0,0,.35)}
@@ -171,13 +189,19 @@ button{font:inherit;cursor:pointer}
 .lobbySeat .nm{flex:1;font-weight:700;font-size:14.5px}
 .lobbySeat .st{font-size:12px;color:#a9d2b5}
 .lobbySeat button{border:none;border-radius:8px;padding:6px 10px;font-size:12.5px;font-weight:700;
-  background:rgba(255,255,255,.12);color:var(--cream)}
+  background:rgba(255,255,255,.12);color:var(--cream);min-height:44px}
 .lobbySeat.mine{box-shadow:0 0 0 2px var(--gold)}
 .lobbySeat.open{cursor:pointer}
 .lobbySeat.open:active{background:rgba(255,255,255,.16)}
 #topbar .spacer{flex:1}
+/* v0.10: min-height:44px is the standard iOS/Android comfortable-tap-target size — the old
+   6px-padding buttons measured ~30px tall (see HANDOFF.md matrix testing), too small to
+   reliably tap on a phone. flex centering keeps the visible label sitting the same tight-looking
+   size as before; only the invisible hit area around it grows. Topbar's own height still never
+   jumps (v0.7.1's fix) since this changes EVERY button uniformly, not conditionally. */
 .iconBtn{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.15);color:var(--cream);
-  border-radius:10px;padding:6px 8px;font-size:13px;font-weight:700;white-space:nowrap;flex-shrink:0}
+  border-radius:10px;padding:6px 8px;font-size:13px;font-weight:700;white-space:nowrap;flex-shrink:0;
+  min-height:44px;display:inline-flex;align-items:center;justify-content:center}
 #boardWrap{flex:1;position:relative;overflow:hidden}
 #boardScale{position:absolute;width:1000px;height:1000px;transform-origin:top left}
 #boardSvg{position:absolute;inset:0}
@@ -225,20 +249,35 @@ button{font:inherit;cursor:pointer}
 /* v0.9.1 item 3 (Blake): "twice as big, same positions." Literal 2x collides with a hole at
    the 4P shaved-corner placard (seat 0's corner sits close to a base hole) and, less tightly,
    at the 6P board — confirmed by the same automated overlap check below at every scale from
-   1.2x to 2x. Repositioning was explicitly NOT wanted, so this is scaled up as far as it can
-   go while still passing the overlap check on BOTH boards with a real safety margin (not just
-   barely clearing by a fraction of a pixel): --pscale:1.12 is the largest value that leaves
-   comfortable clearance everywhere (2.6px+ at the tightest 4P corner, 12px+ on the 6P board) —
-   honestly well short of a true doubling, see HANDOFF.md/PLANNING.md for the full readout. */
-:root{--pscale:1.12}
+   1.2x to 2x. Repositioning was explicitly NOT wanted at the time, so v0.9.1 shipped scaled up
+   only as far as it could go IN PLACE: --pscale:1.12 — honestly well short of a true doubling.
+   v0.10 (Blake asked again — sliding is now explicitly allowed): "around where they are" reread
+   as "same seat, may slide outward," not "pixel-locked." Two independent levers, both measured
+   empirically (real DOM bounding boxes vs. every hole/pocket, not hand geometry — see
+   plaqueSlideMax()/positionPlaques() in § RENDER):
+     --pscale  (box: border/radius/padding/max-width) grows modestly so the box doesn't balloon
+     --pfont   (name text only) grows much harder — this is what actually reads as "2x" to Blake
+   Each seat's plaque then slides outward along its own base->plaque bisector (LAY.plaqueDir) by
+   the largest board-space distance that still clears every hole/deck/discard pocket with a real
+   margin (found via binary search against live getBoundingClientRect() measurements, both
+   boards, all seats — see scripts/plaque_search.js-style probe run for this release). That
+   binary-searched distance is a per-board CONSTANT (PLAQUE_SLIDE[n], pure board-space geometry,
+   independent of viewport) — but #boardWrap's overflow:hidden letterbox margin around the
+   scaled board is NOT constant (differs per screen/aspect ratio), so positionPlaques() re-clamps
+   that slide every fitBoard() call using the ACTUAL rendered boardWrap/plaque rects, pulling
+   back toward the original anchor (never past it — the anchor itself was already hole-safe
+   since v0.9.1) on any viewport too tight to afford the full slide. Net result: text scales all
+   the way to ~2x the pre-v0.9.1 baseline (34px, up from 17px) on every screen, box/position only
+   grows/moves as far as each screen actually allows — see HANDOFF.md/PLANNING.md for numbers. */
+:root{--pscale:1.25;--pfont:2}
 .plaque{position:absolute;transform:translate(-50%,-50%) rotate(var(--rot,0deg));
   background:rgba(20,14,8,.86);
   border:calc(1px * var(--pscale)) solid rgba(255,255,255,.16);border-left-width:calc(4px * var(--pscale));
   border-radius:calc(10px * var(--pscale));
-  padding:calc(6px * var(--pscale)) calc(11px * var(--pscale));max-width:calc(140px * var(--pscale));
+  padding:calc(6px * var(--pscale)) calc(11px * var(--pscale));max-width:calc(150px * var(--pfont));
   text-align:left;transition:box-shadow .3s}
-.plaque .nm{font-weight:800;font-size:calc(17px * var(--pscale));white-space:nowrap;
-  max-width:calc(120px * var(--pscale));overflow:hidden;text-overflow:ellipsis}
+.plaque .nm{font-weight:800;font-size:calc(17px * var(--pfont));white-space:nowrap;
+  max-width:calc(130px * var(--pfont));overflow:hidden;text-overflow:ellipsis}
 .plaque.turn{box-shadow:0 0 0 3px var(--gold),0 0 26px rgba(244,197,66,.55);animation:turnPulse 1.6s infinite}
 @keyframes turnPulse{50%{box-shadow:0 0 0 3px var(--gold),0 0 40px rgba(244,197,66,.85)}}
 
@@ -273,12 +312,21 @@ button{font:inherit;cursor:pointer}
 @keyframes teeTarget{50%{filter:drop-shadow(0 0 12px #ff5c5c) drop-shadow(0 5px 3px rgba(0,0,0,.38))}}
 
 /* ---------- Cards ---------- */
-.card{width:64px;height:90px;border-radius:8px;background:var(--cream);color:#232323;
+/* v0.10: hand cards used to be a flat 64x90px — fine on the phone width they were designed for,
+   but too big for a 5-card hand on a 320px-wide phone (would overflow #handRow) and too small/
+   lost on a big iPad/desktop screen. Now sized off the viewport (clamp, same technique as the
+   plaques' font/box split) with a fixed aspect-ratio so it always reads as a card; the deck/
+   discard/table copies (.tableCard .card, .dFace .card below) size to their OWN fixed pocket,
+   untouched. cardNativeSize() (§ ANIM) mirrors this exact formula in JS for the two flying-card
+   animation call sites that used to hardcode the old 64x90 "native" size. */
+.card{width:clamp(46px,16vw,76px);aspect-ratio:64/90;border-radius:8px;background:var(--cream);color:#232323;
   border:1px solid #c9bfa8;box-shadow:0 4px 10px rgba(0,0,0,.35);position:relative;flex:none}
-.card .rk{position:absolute;top:4px;left:6px;font-family:Georgia,serif;font-weight:700;font-size:17px;line-height:1}
-.card .rk small{display:block;font-size:13px;text-align:center}
+.card .rk{position:absolute;top:4px;left:6px;font-family:Georgia,serif;font-weight:700;
+  font-size:clamp(13px,4.25vw,17px);line-height:1}
+.card .rk small{display:block;font-size:clamp(10px,3.25vw,13px);text-align:center}
 .card .rk2{position:absolute;bottom:4px;right:6px;transform:rotate(180deg)}
-.card .pip{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:34px}
+.card .pip{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:clamp(26px,8.5vw,34px)}
 .card.red{color:var(--red)}
 .card.back{background:linear-gradient(160deg,#1f7d40,#0d3d20);border:2px solid #e7efe4}
 .card.back::after{content:"NASTY";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
@@ -288,8 +336,13 @@ button{font:inherit;cursor:pointer}
 
 /* deck & discard on the board */
 .tableCard{position:absolute;width:76px;height:106px;transform:translate(-50%,-50%)}
-.tableCard .card{width:100%;height:100%}
+.tableCard .card{width:100%;height:100%;aspect-ratio:auto}
 .tableCard .card .pip{font-size:34px}
+/* deck/discard cards are fixed board-space objects (scaled only by the board's own zoom, never
+   by hand ergonomics) — pin their rank text back to the original flat size so #handRow's new
+   viewport-responsive .card .rk (above) doesn't also shrink these on a narrow phone. */
+.tableCard .card .rk{font-size:17px}
+.tableCard .card .rk small{font-size:13px}
 /* per-seat discard: one .tableCard per player (see buildTable), faded out when quiet */
 .discardCard{opacity:0;transition:opacity .35s ease-in-out}
 .discardCard.show{opacity:1}
@@ -319,8 +372,11 @@ button{font:inherit;cursor:pointer}
 .confetti{position:fixed;width:10px;height:16px;top:-20px;z-index:70;pointer-events:none}
 
 /* ---------- Toasts / overlays ---------- */
-/* anchored below the board, just above the hand — clear of the top-bar buttons */
-#toasts{position:fixed;bottom:calc(148px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:65;
+/* anchored below the board, just above the hand — clear of the top-bar buttons.
+   v0.10: --handH is the REAL, measured #handBar height (updateToastOffset(), § RENDER/ANIM) —
+   replaces a flat 148px that was only correct for the old fixed-size hand card. --handH already
+   includes the safe-area inset (handBar's own padding adds it), so it isn't added again here. */
+#toasts{position:fixed;bottom:calc(var(--handH,148px) + 8px);left:50%;transform:translateX(-50%);z-index:65;
   display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none;width:100%;padding:0 12px}
 .toast{background:rgba(15,10,6,.88);border:1px solid rgba(255,255,255,.2);border-radius:99px;
   padding:8px 18px;font-size:14.5px;font-weight:700;box-shadow:0 6px 18px rgba(0,0,0,.4);
@@ -344,6 +400,23 @@ button{font:inherit;cursor:pointer}
 .lbTable th:first-child,.lbTable td:first-child{text-align:left}
 .lbTable td:last-child{font-weight:800;color:var(--gold)}
 @media (prefers-reduced-motion: reduce){ .plaque.turn,.tee.selectable,.tee.targetable{animation:none} }
+
+/* v0.10: a phone rotated into landscape (short viewport height — the web version has no
+   orientation lock, unlike the native iOS app) squeezes the board hard: topbar + hand bar are
+   both fixed-ish heights that were sized for portrait, and on something like 844x390 they were
+   eating ~40% of the total height between them, leaving the board a small square. This doesn't
+   change proportions on a normal portrait phone (max-height:480px catches ONLY short/landscape
+   screens) — it trims topbar/hand chrome so more of a short screen goes to the board itself.
+   Tap targets shrink from the usual 44px floor to 36px here — a deliberate, narrow tradeoff for
+   the one pathological aspect ratio in the matrix, not the general phone case. */
+@media (max-height:480px) and (orientation:landscape){
+  #topbar{padding-top:4px;padding-bottom:4px}
+  .iconBtn{min-height:36px;padding:5px 7px}
+  #handBar{min-height:0;padding-top:2px;padding-bottom:calc(4px + env(safe-area-inset-bottom));gap:3px}
+  #handInfo{font-size:12px;min-height:14px}
+  #handRow{gap:4px}
+  .card{width:clamp(34px,9vh,56px)}
+}
 </style>
 
 <!-- ================= MENU ================= -->
@@ -374,7 +447,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.9.1</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.10</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -725,7 +798,7 @@ function buildLayout(n){
     arms.push({th,d,p:{x:-d.y,y:d.x}});                 // p = clockwise-side perpendicular
   }
   const P=(a,r,off)=>({x:500+a.d.x*r+a.p.x*off,y:500+a.d.y*r+a.p.y*off});
-  const loop=[],home=[],base=[],plaque=[];
+  const loop=[],home=[],base=[],plaque=[],plaqueDir=[];
   for(let s=0;s<n;s++){
     const a=arms[s],b=arms[(s+1)%n];
     loop.push({...P(a,cfg.r0,g),start:s});              // your start (tip row, exit side)
@@ -766,6 +839,11 @@ function buildLayout(n){
       // tucked between the center ring and the base cluster — clear of every hole
       plaque.push({x:500+u.x*340,y:500+u.y*340,rot:0});
     }
+    // v0.10: outward unit vector for this seat's plaque — positionPlaques() (§ RENDER) slides
+    // the plaque further out along this exact line (same bisector the anchor above already
+    // uses) so a bigger name plate can grow without eating into a hole. Same vector for every
+    // board (u), stored once here so the render code never has to re-derive it.
+    plaqueDir.push(u);
     // the deck sits in the DEALER's quarter and slides over when the deal passes
     const dx=500+u.x*pocketR,dy=500+u.y*pocketR;
     deckPockets.push({x:dx,y:dy,w:cardW,h:cardH});
@@ -775,7 +853,7 @@ function buildLayout(n){
     discardPockets.push({x:dx+perp.x*discOff,y:dy+perp.y*discOff,w:cardW,h:cardH});
   }
   const discard={x:500,y:500,w:cardW,h:cardH};          // unused visually now — kept for shape stability
-  return {n,L:12*n,loop,home,base,plaque,holeR:cfg.holeR,deckPockets,discardPockets,discard};
+  return {n,L:12*n,loop,home,base,plaque,plaqueDir,holeR:cfg.holeR,deckPockets,discardPockets,discard};
 }
 const entryIdx=s=>s*12;
 const loopIdx=(s,steps)=>(entryIdx(s)+steps)%LAY.L;
@@ -1109,14 +1187,87 @@ function fadeAllDiscards(){
 }
 
 /* board scaling */
+/* v0.10: CANVAS_PAD — measured empirically (see HANDOFF.md) that a PORTRAIT phone's #boardWrap
+   has ZERO letterbox margin on its tight (width) axis: the 1000x1000 board is fit via
+   s=min(w,h)/1000, and on a phone w<h, so the scaled board's width exactly equals boardWrap's
+   width — no slack at all on that axis, only on the other one (landscape/tablet is the mirror
+   image: zero margin on height instead). A doubled name plate needs to slide out past a hole
+   (esp. the 6P deck-pocket/base-cluster corridor) by more than that tight axis has room for, on
+   SOME seat direction, on EVERY device — there is no fixed slide distance that clears the hole
+   AND stays on-screen without this. Fix: fit the board into a virtual canvas slightly BIGGER
+   than 1000x1000 (pad on every side) instead of exactly 1000x1000 — this reserves the same
+   uniform margin around the board on EVERY axis, on EVERY aspect ratio (the letterbox is what
+   varies per screen; this pad doesn't, so it's the one thing sliding plaques can always rely
+   on). The board itself renders a little smaller inside boardWrap as the tradeoff (CANVAS_PAD/
+   (500+CANVAS_PAD) ~14% smaller) — worth it for genuinely-2x, never-clipped name plates on
+   every screen. Board geometry (hole coordinates etc.) is completely untouched — this only
+   changes the fit-to-container SCALE factor, not board-space coordinates. */
+const CANVAS_PAD=100;
 function fitBoard(){
   const w=$('boardWrap').clientWidth,h=$('boardWrap').clientHeight;
-  const s=Math.min(w,h)/1000;
+  const s=Math.min(w,h)/(1000+CANVAS_PAD*2);
   const bs=$('boardScale');
   bs.style.transform=`scale(${s})`;
   bs.style.left=((w-1000*s)/2)+'px'; bs.style.top=((h-1000*s)/2)+'px';
+  positionPlaques();
+  updateToastOffset();
 }
 addEventListener('resize',fitBoard);
+
+/* v0.10 — name plates, actually ~2x (Blake asked twice).
+   Two independent levers (see the Plaques CSS block comment for the full story):
+     --pfont grows the NAME TEXT hard (target 34px, 2x the pre-v0.9.1 17px baseline)
+     --pscale grows the box itself only modestly (border/padding/radius)
+   ...and each plaque SLIDES outward along its own seat bisector (LAY.plaqueDir) far enough to
+   stay clear of every hole/deck/discard pocket at that bigger size — PLAQUE_SLIDE below is that
+   distance, found once per board via a binary/linear search against real getBoundingClientRect()
+   measurements (never hand geometry — rotation + variable name length make that unreliable).
+   PLAQUE_SLIDE_MIN is the smallest slide that's still hole-safe with a real margin (not a
+   fraction-of-a-pixel clearance) — positionPlaques() never goes below it.
+   That board-space distance is a fixed geometry fact, but #boardWrap's own letterbox margin
+   (the gap between the scaled board and boardWrap's actual edge) is NOT fixed — it depends on
+   the device's aspect ratio (see HANDOFF.md: portrait phones have ZERO horizontal margin, the
+   board exactly fills the width; landscape/desktop have zero VERTICAL margin instead). So the
+   slide picked here is a ceiling, re-measured and pulled back live against the real rendered
+   boardWrap/plaque rects every time fitBoard() runs (every resize/orientation change) — this is
+   the "measure the real clip boundary first" empirical approach, done continuously instead of
+   baked in for one screen size. */
+const PLAQUE_SLIDE     ={4:70, 6:220};   // desired — used whenever the screen has room
+const PLAQUE_SLIDE_MIN ={4:40, 6:200};   // floor — the smallest hole-safe distance; never go below
+function positionPlaques(){
+  if(!G||!LAY||!LAY.plaqueDir)return;
+  const pl=$('plaqueLayer'); if(!pl||!pl.children.length)return;
+  const wrap=$('boardWrap').getBoundingClientRect();
+  const bs=$('boardScale').getBoundingClientRect();
+  const s=bs.width/1000; if(!s)return;
+  const BUF=1; // screen px safety margin so nothing sits exactly on the boundary
+  const target=PLAQUE_SLIDE[G.n]||0, min=PLAQUE_SLIDE_MIN[G.n]||0;
+  for(let seat=0;seat<G.n;seat++){
+    const el=$(`plaque-${seat}`); if(!el)continue;
+    const anchor=LAY.plaque[seat], dir=LAY.plaqueDir[seat];
+    let slide=target;
+    for(let iter=0;iter<14;iter++){
+      const bx=anchor.x+dir.x*slide, by=anchor.y+dir.y*slide;
+      el.style.left=bx+'px'; el.style.top=by+'px';
+      const r=el.getBoundingClientRect();
+      const worst=Math.max(wrap.left-r.left, r.right-wrap.right,
+                            wrap.top-r.top, r.bottom-wrap.bottom, 0);
+      if(worst<=BUF)break;
+      if(slide<=min)break;              // already at the hole-safe floor — best effort, stop
+      slide=Math.max(min, slide-(worst/s+2));
+    }
+  }
+}
+/* v0.10: #toasts used to anchor at a hardcoded `bottom:148px` tuned for the old flat 64x90 hand
+   card — now that hand cards are viewport-responsive (clamp, see the .card CSS comment) the
+   hand bar's real height varies too, so the toast offset is measured live off the actual
+   #handBar instead of assumed. Called after every hand render (renderHandFor) and on resize
+   (fitBoard) — cheap (one getBoundingClientRect + one CSS var write), and keeps toasts sitting
+   snugly just above the hand on every screen instead of a gap that's only correct at one size. */
+function updateToastOffset(){
+  const h=$('handBar').getBoundingClientRect().height;
+  document.documentElement.style.setProperty('--handH',h+'px');
+}
 
 /* ============================= § ANIM ============================= */
 function boardPoint(p){ // board coords -> viewport rect
@@ -1223,19 +1374,29 @@ async function flyCardRect(fromRect,toRect,html,dur,nativeW,nativeH){
   ],{duration:D(90,dur),easing:'ease-in-out',fill:'forwards'}).finished;
   f.remove();
 }
+/* v0.10: hand cards are no longer a flat 64x90 (see the .card CSS comment) — cardNativeSize()
+   mirrors that exact clamp(46px,16vw,76px) formula in JS so the two flying-card call sites below
+   size their clone to whatever the CURRENT viewport's real hand-card size is, not a stale
+   constant (same "wrong native size = text/card mismatched while flying" bug class the v0.9.1
+   fix above already covers for the zoom case — this covers the viewport-resize case). */
+function cardNativeSize(){
+  const w=Math.min(76,Math.max(46,innerWidth*0.16));
+  return {w,h:w*90/64};
+}
 async function animCardPlay(seat,card,cardEl){
   sCard();
   const to=$(`discard-${seat}`).getBoundingClientRect();  // lands in the PLAYING seat's own corner
   let from;
   let html=cardHTML(card);
+  const cw=cardNativeSize();
   if(cardEl){ from=cardEl.getBoundingClientRect(); cardEl.style.visibility='hidden'; }
   else{
     const pq=$(`plaque-${seat}`).getBoundingClientRect();
-    from={left:pq.left+pq.width/2-32,top:pq.top,width:64,height:90};
+    from={left:pq.left+pq.width/2-cw.w/2,top:pq.top,width:cw.w,height:cw.h};
   }
-  // native size = the standard hand-card design size (64x90, matches the .card class default) —
-  // both branches above already measure/hardcode a real, un-zoomed hand-card-sized rect.
-  await flyCardRect(from,{left:to.left,top:to.top,width:to.width},html,420,64,90);
+  // native size = the CURRENT standard hand-card design size — both branches above already
+  // measure/derive a real, un-zoomed hand-card-sized rect.
+  await flyCardRect(from,{left:to.left,top:to.top,width:to.width},html,420,cw.w,cw.h);
   showDiscard(seat,card);
 }
 async function animateDeal(counts){
@@ -1723,6 +1884,7 @@ function renderHandFor(seat){
   });
   if(seat!==G.turn||G.seats[seat].type!=='human'||G.bowedOut[seat])
     row.querySelectorAll('.card').forEach(c=>c.classList.add('dead'));
+  updateToastOffset();
 }
 function enableSelection(seat,moves){
   // CUR_GEN (fix, v0.9, reconnect-storm crash): stamps the NETGEN that was live when this
