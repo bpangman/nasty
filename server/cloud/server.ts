@@ -22,16 +22,25 @@
 //    so an idle room just falls out of KV on its own; no polling loop needed. Log entries
 //    carry a longer backstop TTL so they always outlive the meta key they belong to.
 // 3. CROSS-ISOLATE RELAY — this is the one that actually matters for correctness. Deno
-//    Deploy runs each WebSocket connection on whichever regional isolate is nearest that
-//    client; isolates do NOT share in-memory state. If this were ported naively (one
+//    Deploy can run each WebSocket connection on whichever regional instance is nearest that
+//    client; instances do NOT share in-memory state. If this were ported naively (one
 //    in-memory `rooms` Map, like Node), two family members connecting from different
-//    regions could land on two different isolates and never see each other's moves — the
-//    relay would silently only work for players who happen to share an isolate. Fixed by
-//    using BroadcastChannel (Deno Deploy's supported cross-isolate fanout primitive, the
-//    documented pattern for exactly this "realtime app on Deploy" case): every broadcast/
+//    regions could land on two different instances and never see each other's moves — the
+//    relay would silently only work for players who happen to share an instance. Guarded with
+//    BroadcastChannel (documented cross-isolate fanout on the OLD/classic Deploy platform this
+//    file was originally written for; the NEW platform's docs don't document it either way —
+//    see HANDOFF.md "Cloud hosting" for what was actually verified). Every broadcast/
 //    targeted-send goes out to this isolate's own locally-connected sockets AND is posted to
 //    a per-room BroadcastChannel so every OTHER isolate holding a live socket for that room
-//    delivers it too. See broadcastRoom()/sendToPlayer()/deliverLocal() below.
+//    delivers it too — but every BroadcastChannel call is try/caught (see getChannel()/
+//    postToChannel() below): if it's unsupported/misbehaves on the new platform, that just
+//    means cross-instance delivery silently doesn't happen instead of crashing the process,
+//    which is a non-issue given deploy runs the app pinned to a single region (see
+//    HANDOFF.md) where, at this app's traffic level, one instance serves everything anyway.
+//    New-platform addition: a § HEARTBEAT interval (below) sends periodic 'pong' frames over
+//    every open socket so the platform's idle-instance teardown (as short as 5s of total
+//    silence, per its docs) never fires mid-game — old clients already silently ignore an
+//    unsolicited 'pong', so this is not a wire-protocol change.
 //
 // Admin token: read from the NASTY_ADMIN_TOKEN env var (a Deno Deploy secret) instead of a
 // file — set it to the SAME value as server/admin-token.txt so Blake's existing token in the
@@ -42,7 +51,8 @@
 // server.ts` (NASTY_PORT / NASTY_KV_PATH / NASTY_ADMIN_TOKEN env vars mirror the Node
 // version's NASTY_PORT / NASTY_ROOMS_DIR+NASTY_LEADERBOARD_FILE / NASTY_ADMIN_TOKEN_FILE —
 // always point NASTY_KV_PATH at a private scratch file for tests, never the default/prod KV).
-// Deploy: `deployctl deploy --project=<name> server/cloud/server.ts` (see HANDOFF.md).
+// Deploy: `deno deploy --org <org> --app <app> --prod` from this directory (see HANDOFF.md
+// "Cloud hosting" for the full new-platform CLI walkthrough — deployctl/classic is retired).
 
 const PORT = Number(Deno.env.get("NASTY_PORT") ?? 8484);
 const KV_PATH = Deno.env.get("NASTY_KV_PATH") || undefined; // undefined = Deploy's managed KV / local default
@@ -53,7 +63,28 @@ const LOG_TTL_MS = STARTED_ROOM_TTL_MS + 24 * 60 * 60 * 1000; // backstop: alway
 
 const CODE_ALPHABET = "BCDFGHJKMNPQRSTVWXZ"; // no vowels/Y, no 0/O/1/I/L confusion
 
-const kv = await Deno.openKv(KV_PATH);
+// LAZY KV INIT — new-platform adaptation, 2026-07-11, load-bearing (not just defensive).
+// `const kv = await Deno.openKv(...)` at module top level made every deploy to the new
+// platform fail its build step, 100% reproducibly, confirmed by bisecting a series of probe
+// apps down to this exact line: a bare `const kv = await Deno.openKv();` with NOTHING else in
+// the file was enough to fail "building" on its own, while the identical file with `kv`
+// wrapped in a function that's merely DEFINED (never called at module scope) built and
+// deployed fine. Conclusion: the new platform's build step fully imports/evaluates the
+// entrypoint module (probably to validate it, discover exports, etc.) but does not simulate a
+// request against it — so top-level `await` on something build-time doesn't have access to
+// (KV needs the app's database link, not yet resolved during build) fails the whole
+// deployment, while code that only RUNS on an actual incoming request is untouched. Fix:
+// `kv` is opened lazily, on the first real request, via ensureKv() — called once at the top
+// of handler() (below), which every code path (HTTP routes AND the WebSocket upgrade, which
+// handler() dispatches to synchronously after that await resolves) is reached through, so by
+// the time anything below actually touches `kv` it's always already open. Locally under
+// `deno run` this is a no-op behavior change (no separate build phase there either way).
+let kv: Deno.Kv;
+let kvReady: Promise<void> | null = null;
+function ensureKv(): Promise<void> {
+  if (!kvReady) kvReady = Deno.openKv(KV_PATH).then((k) => { kv = k; });
+  return kvReady;
+}
 
 function log(...a: unknown[]) { console.log(new Date().toISOString(), ...a); }
 
@@ -239,14 +270,41 @@ function deliverLocal(code: string, msg: Envelope) {
     send(ws, msg.payload);
   }
 }
-function getChannel(code: string): BroadcastChannel {
-  let ch = channels.get(code);
-  if (!ch) {
-    ch = new BroadcastChannel("nasty-room-" + code);
+// BroadcastChannel guard (new-platform adaptation, 2026-07-11): the classic Deno Deploy docs
+// explicitly documented BroadcastChannel as the cross-isolate fanout primitive this code was
+// originally written against; the NEW platform's docs don't mention it at all (that page is
+// tagged classic-only, sunsetting 2026-07-20). It may still work, may be a same-instance no-op,
+// or may throw — untested by Deno for the new platform, so treat it as optional. If it's
+// unavailable/misbehaves, every getChannel()/postMessage() call below degrades to a silent
+// no-op instead of crashing the process; relay then falls back to "this isolate's own local
+// sockets only" (deliverLocal), which is exactly correct whenever there's a single running
+// instance — the common case for this app's traffic — and merely misses cross-instance
+// delivery (not a crash, not data loss; KV stays the source of truth and rejoin/sync replays
+// the log) in the rare case multiple instances are up AND BroadcastChannel doesn't relay.
+let bcWarned = false;
+function warnBcOnce(e: unknown) {
+  if (bcWarned) return;
+  bcWarned = true;
+  log("BroadcastChannel unavailable/failed on this platform — falling back to " +
+    "single-instance-only relay for cross-isolate delivery:", e);
+}
+function getChannel(code: string): BroadcastChannel | null {
+  const existing = channels.get(code);
+  if (existing) return existing;
+  try {
+    const ch = new BroadcastChannel("nasty-room-" + code);
     ch.onmessage = (ev) => deliverLocal(code, ev.data as Envelope);
     channels.set(code, ch);
+    return ch;
+  } catch (e) {
+    warnBcOnce(e);
+    return null;
   }
-  return ch;
+}
+function postToChannel(code: string, msg: unknown) {
+  const ch = getChannel(code);
+  if (!ch) return;
+  try { ch.postMessage(msg); } catch (e) { warnBcOnce(e); }
 }
 function closeChannel(code: string) {
   const ch = channels.get(code);
@@ -255,16 +313,16 @@ function closeChannel(code: string) {
 function broadcastRoom(code: string, payload: unknown, exceptPlayerId?: number | null) {
   const envelope: Envelope = { payload, exceptPlayerId: exceptPlayerId ?? null };
   deliverLocal(code, envelope); // this isolate's own local sockets (BroadcastChannel doesn't loop back to self)
-  getChannel(code).postMessage(envelope); // every other isolate's local sockets
+  postToChannel(code, envelope); // every other isolate's local sockets, if BroadcastChannel works here
 }
 function sendToPlayer(code: string, playerId: number, payload: unknown) {
   const envelope: Envelope = { payload, to: playerId };
   deliverLocal(code, envelope);
-  getChannel(code).postMessage(envelope);
+  postToChannel(code, envelope);
 }
 function forceCloseRoomSockets(code: string) {
   deliverLocal(code, { control: "close" });
-  getChannel(code).postMessage({ control: "close" });
+  postToChannel(code, { control: "close" });
   closeChannel(code);
 }
 function registerLocalSocket(code: string, playerId: number, ws: WebSocket) {
@@ -309,6 +367,28 @@ setInterval(() => {
     if (kept.length) hostRateMap.set(ip, kept); else hostRateMap.delete(ip);
   }
 }, HOST_RATE_WINDOW_MS);
+
+/* ---------------------------------------------------------------------------------------
+ * § HEARTBEAT — new-platform adaptation, 2026-07-11. The new Deno Deploy platform tears an
+ * instance down after "no new incoming requests ... or responses ... for a period of time"
+ * as short as 5 SECONDS in the worst case (docs: "between 5 seconds and 10 minutes"), but
+ * explicitly says WebSocket connections that actively transmit data — including ping/pong
+ * frames — count as activity and keep the instance (and the socket) alive. Real games have
+ * long idle gaps (someone's deciding a move, a phone's just sitting on the board), so without
+ * this, a family member who steps away for a couple minutes could come back to a silently
+ * dropped connection. This sends the SAME 'pong' message the protocol already uses (echoed
+ * today only in response to a client 'ping', see the "ping" case above) to every socket this
+ * isolate holds, often enough to stay comfortably under the platform's shortest possible idle
+ * window. Old/unmodified clients already silently ignore an unsolicited 'pong' (no matching
+ * switch case in handleNetMessage does anything with it) — zero wire-protocol change.
+ * ------------------------------------------------------------------------------------- */
+const HEARTBEAT_MS = 4000;
+setInterval(() => {
+  const now = Date.now();
+  for (const socks of localSockets.values()) {
+    for (const ws of socks.values()) send(ws, { type: "pong", t: now });
+  }
+}, HEARTBEAT_MS);
 
 /* ---------------------------------------------------------------------------------------
  * § HTTP — CORS + /health, /leaderboard, /admin/*. See server.js's CORS_HEADERS comment for
@@ -700,6 +780,8 @@ function handleWsUpgrade(req: Request, ip: string): Response {
  * § ENTRYPOINT
  * ------------------------------------------------------------------------------------- */
 async function handler(req: Request, info: Deno.ServeHandlerInfo): Promise<Response> {
+  await ensureKv(); // see the lazy-init comment above `let kv` — must happen before ANY of
+  // this request's code paths (HTTP routes below, or the WS upgrade they dispatch to) touch kv.
   const url = new URL(req.url);
   const ip = remoteIp(req, info);
 
