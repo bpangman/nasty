@@ -328,8 +328,20 @@ function readJsonBody(req) {
     req.on("error", () => resolve({}));
   });
 }
+// CORS (fix, v0.9 — found via the production tunnel smoke test): the real website
+// (bpangman.github.io) and the tunnel server (*.trycloudflare.com) are different origins, and
+// none of these HTTP endpoints ever sent an Access-Control-Allow-Origin header — a browser
+// blocks a cross-origin fetch() without one. The core game itself never noticed (WebSocket
+// connections aren't subject to CORS the same way), but EVERY plain fetch() here — the global
+// leaderboard's merged display AND the entire admin/god-mode panel — was silently failing in
+// any real browser hitting the real website, always falling back to local-only / a spinner
+// that never resolves. Caught because the test harness's own Node-side fetch() checks (no CORS
+// enforcement outside a browser) kept passing while the actual in-page fetch() failed. Public
+// endpoints, no cookies/credentials involved, so `*` is fine — the admin routes are already
+// protected by the token, not by origin.
+const CORS_HEADERS = { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS", "access-control-allow-headers": "content-type, x-admin-token" };
 function sendJson(res, status, obj) {
-  res.writeHead(status, { "content-type": "application/json" });
+  res.writeHead(status, Object.assign({ "content-type": "application/json" }, CORS_HEADERS));
   res.end(JSON.stringify(obj));
 }
 // v0.9 § ADMIN — HTTP endpoints for god mode (list/edit/delete the global leaderboard,
@@ -414,8 +426,14 @@ async function handleAdminRoute(req, res, url) {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://localhost");
+  if (req.method === "OPTIONS") {
+    // CORS preflight — PATCH/DELETE and the custom X-Admin-Token header both trigger one.
+    res.writeHead(204, CORS_HEADERS);
+    res.end();
+    return;
+  }
   if (url.pathname === "/health") {
-    res.writeHead(200, { "content-type": "application/json" });
+    res.writeHead(200, Object.assign({ "content-type": "application/json" }, CORS_HEADERS));
     res.end(JSON.stringify({ ok: true, rooms: rooms.size, uptime: process.uptime() }));
     return;
   }
@@ -428,7 +446,7 @@ const server = http.createServer((req, res) => {
     handleAdminRoute(req, res, url).catch((e) => { log("admin route error", e); sendJson(res, 500, { error: "server error" }); });
     return;
   }
-  res.writeHead(404, { "content-type": "text/plain" });
+  res.writeHead(404, Object.assign({ "content-type": "text/plain" }, CORS_HEADERS));
   res.end("nasty relay — see /health");
 });
 
