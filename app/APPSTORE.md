@@ -16,7 +16,7 @@ together and how to rebuild/relaunch it.
   save/resume survives an app relaunch, and an online room can be hosted/joined through the
   real tunnel server from inside the app.
 - `privacy.html` and `support.html` published at the repo root (live at
-  `https://bpangman.github.io/nasty/privacy.html` and `.../support.html`) — ready to paste into
+  `https://nastyboardgame.com/privacy.html` and `.../support.html`) — ready to paste into
   the two listing fields Apple requires.
 
 ## Step 1 — Apple Developer account (Blake, ~15 min + $99/year)
@@ -62,8 +62,8 @@ Create the app at appstoreconnect.apple.com (**My Apps → +** → **New App**),
 | **Price** | Free |
 | **Age rating** | 4+ (uses a standard deck of playing cards, no gambling — rates clean on the questionnaire) |
 | **Copyright** | © 2026 Blake Pangman |
-| **Privacy Policy URL** | https://bpangman.github.io/nasty/privacy.html |
-| **Support URL** | https://bpangman.github.io/nasty/support.html |
+| **Privacy Policy URL** | https://nastyboardgame.com/privacy.html |
+| **Support URL** | https://nastyboardgame.com/support.html |
 
 **Promotional text** (top of the listing, editable without a new review):
 > The Pangman family's homemade 1993 board game, finally in your pocket. Race your tees home,
@@ -92,7 +92,7 @@ Create the app at appstoreconnect.apple.com (**My Apps → +** → **New App**),
 **Keywords** (100 char limit):
 > board game,family,cards,marbles,pegs,aggravation,sorry,trouble,race,party,classic,wahoo
 
-**Screenshots**: the gallery at https://bpangman.github.io/nasty/appstore/ (setup screen,
+**Screenshots**: the gallery at https://nastyboardgame.com/appstore/ (setup screen,
 4-player board, card path preview, the NASTY! takeout blast, the win screen, 6-player teams
 board) — resize to Apple's required exact iPhone dimensions (6.9" and 6.5" display sizes are
 the mandatory set as of iOS 26) before uploading; App Store Connect will reject anything off
@@ -119,7 +119,7 @@ days; a rejection just means answering a question and resubmitting, not starting
 
 ## Known gaps / things to revisit before or shortly after submission
 
-- **Deep links / Universal Links** (`nasty://` or `https://bpangman.github.io/nasty/?join=CODE`
+- **Deep links / Universal Links** (`nasty://` or `https://nastyboardgame.com/?join=CODE`
   opening the installed app directly) are NOT wired up yet — that needs the paid developer
   account (an Associated Domains entitlement + an `apple-app-site-association` file hosted on
   the website) which didn't exist while this was built. For now, the in-app "Join a game" /

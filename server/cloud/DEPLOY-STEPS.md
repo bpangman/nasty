@@ -1,37 +1,38 @@
-# Putting Nasty's online server in the cloud — the one step left for Blake
+# Putting Nasty's online server in the cloud — one step left for Blake
 
 Right now, online games run through the Mac Mini at home. That's fine, but if the Mac
 is ever off or asleep, online play stops working. There's a free cloud version ready
-to go — built, tested, AND already switched on and running (2026-07-11). It just needs
-one thing from you before it can actually take over: your home internet's security
-feature is currently blocking it.
+to go — built, tested, and running. Now that you own `nastyboardgame.com`, the plan
+changed (in a good way): instead of asking your home internet to trust a random
+Deno-owned address, the game will reach the cloud server at your own address,
+`play.nastyboardgame.com`. See `DNS-FOR-BLAKE.md` at the top of the repo for the
+Squarespace DNS records — that's the main thing to paste in.
 
-## What's happening
+## The other thing needed — a login, once, ~5 minutes
 
-Your Spectrum/Charter internet has a built-in security feature called **Security
-Shield** — it watches for shady websites and blocks them automatically. Because the
-new cloud address is brand new (it went live today), Security Shield doesn't
-recognize it yet and is treating it like a suspicious site, the same way it would
-treat an actual scam site it's never seen before. It's not doing anything wrong,
-it just needs to be told this one's OK.
+To finish wiring up `play.nastyboardgame.com` on Deno's side (the company hosting the
+server), I need one more permission that only you can grant — a login-only step, no
+typing DNS records or anything technical:
 
-I can't fix this myself — it's a setting in an app on your phone, not something in
-the code.
+1. Go to **https://console.deno.com** and sign in the same way you did before
+   (continue with GitHub).
+2. Open the **dadio** organization → **Settings** → **Access Tokens** → **Create
+   Token**.
+3. Copy the token it gives you and send it to me (Cortana) — I'll save it the same
+   way I saved the last one.
 
-## What to do
+That's it — once I have that, I finish everything else myself: registering the
+subdomain, giving you the exact DNS lines for Squarespace, waiting for it to verify,
+and switching the site over. No further logins needed after this one, for this or
+anything else Deno-related in the future.
 
-1. Open the **My Spectrum** app on your phone (or go to spectrum.com and log in).
-2. Look for **Security Shield** or **Advanced Security** — it's usually under your
-   WiFi or network security settings.
-3. Either:
-   - Add `dadio.deno.net` as a trusted/allowed site, **or**
-   - Turn Security Shield off, let me finish testing everything, then turn it back
-     on afterward with that exception saved.
-4. Let me know (or I'll notice next time I check in) — once it's unblocked I'll
-   finish the rest automatically: double-check everything works from a real phone,
-   switch the website over to the cloud server, and keep the home Mac server running
-   in the background for about a week as a safety net before fully retiring it.
+## Heads-up for later
 
-Nothing about how the game plays changes for anyone — this is just where the
-"phone-to-phone" relay lives. See `HANDOFF.md`'s "Cloud hosting" section (under
-"The blocker") for the full technical writeup if you ever want it.
+`nastyboardgame.com` is a brand-new domain too, so it's possible (not guaranteed) some
+home network's security software flags it as "unfamiliar" for the first little while,
+the same way Spectrum's Security Shield did with the old address. If that ever
+happens, the fix is the same one-click "trust this site" step in whatever security
+app is doing the blocking — I'll let you know if and when it comes up.
+
+See `HANDOFF.md`'s "Cloud hosting" section (the "Custom domain cutover" part) for the
+full technical writeup if you ever want it.
