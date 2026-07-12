@@ -20,10 +20,16 @@ at bpangman.github.io/nasty.
 What each does: the four **A** records point the bare `nastyboardgame.com` at GitHub's
 servers. The **CNAME** makes `www.nastyboardgame.com` work too, redirecting to the same place.
 
-**After you save these:** it can take anywhere from a few minutes to a few hours for the
-internet to catch up (DNS propagation). Once it does, the site will start loading at
-`nastyboardgame.com` automatically — nothing else to do on your end. I'll turn on the padlock
-(HTTPS) once GitHub confirms it sees the new address.
+**Save these right away** — the old `bpangman.github.io/nasty` address already forwards to
+`nastyboardgame.com`, so until these records are saved, that forward lands on Squarespace's
+"parked domain" page instead of the game. Once you save, it can take a few minutes to a few
+hours for the internet to catch up (DNS propagation), then both addresses show the game again.
+I'll turn on the padlock (HTTPS) once GitHub confirms it sees the new address.
+
+**One more Squarespace thing while you're in there:** if the DNS page already shows records
+pointing at Squarespace itself (their "parked page" — A records on `@` with values starting
+`198.185...` or `198.49...`, or a `www` CNAME to `ext-sq.squarespace.com`), delete those.
+They're what's showing the parked page, and they conflict with the new ones above.
 
 ## The game server (not yet — one more thing needed from me first)
 
@@ -35,8 +41,8 @@ how the game plays changes until then** — online games keep working exactly as
 
 ## Quick reference — what's live where, right now
 
-- Website: still `bpangman.github.io/nasty` today; `nastyboardgame.com` comes online once the
-  records above are saved and DNS catches up. Both will work at the same time during the
-  switch — nothing breaks.
+- Website: `nastyboardgame.com` comes online once the records above are saved and DNS catches
+  up; `bpangman.github.io/nasty` forwards there automatically. Until the records land, the old
+  address shows a Squarespace "parked" page — saving the records above is the fix.
 - Game server: still the Mac Mini at home, unchanged. `play.nastyboardgame.com` is a future
   step, not needed today.
