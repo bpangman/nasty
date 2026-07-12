@@ -26,23 +26,29 @@ servers. The **CNAME** makes `www.nastyboardgame.com` work too, redirecting to t
 hours for the internet to catch up (DNS propagation), then both addresses show the game again.
 I'll turn on the padlock (HTTPS) once GitHub confirms it sees the new address.
 
-**One more Squarespace thing while you're in there:** if the DNS page already shows records
-pointing at Squarespace itself (their "parked page" — A records on `@` with values starting
-`198.185...` or `198.49...`, or a `www` CNAME to `ext-sq.squarespace.com`), delete those.
-They're what's showing the parked page, and they conflict with the new ones above.
+**One more Squarespace thing while you're in there — IMPORTANT, please double-check this one
+(2026-07-11 night check):** if the DNS page already shows records pointing at Squarespace
+itself (their "parked page" — A records on `@` with values starting `198.185...` or
+`198.49...`, or a `www` CNAME to `ext-sq.squarespace.com`), **delete those.** As of tonight the
+new GitHub records ARE saved and correct, but the site is still randomly flipping between the
+real game and the Squarespace "Coming Soon" page depending which server answers — that's the
+signature of the OLD Squarespace records still sitting there alongside the new ones (both
+answering at once, not a simple wait-it-out propagation delay). Please go back into DNS
+Settings and remove any leftover `@` A records pointing at `198.185.x.x` / `198.49.x.x`, or a
+leftover `www` CNAME to `ext-sq.squarespace.com` — just the new records above should remain.
+The padlock (HTTPS) can't turn on until this is clean, since GitHub won't issue a certificate
+while it's still seeing inconsistent answers for the domain.
 
-## The game server (not yet — one more thing needed from me first)
+## The game server — DONE, this is already live
 
-`play.nastyboardgame.com` will be where phones find the online game server, replacing the Mac
-Mini eventually. I'm not ready to hand you those DNS lines yet — I need one more login-only
-step from you first (see `server/cloud/DEPLOY-STEPS.md`, or just wait for me to ask). Once
-that's done, I'll send you 1-2 more lines to add here, the same way as above. **Nothing about
-how the game plays changes until then** — online games keep working exactly as they do today.
+`play.nastyboardgame.com` is live and healthy (the online relay server, replacing the Mac
+Mini). No DNS action needed from you here — this part is finished.
 
 ## Quick reference — what's live where, right now
 
-- Website: `nastyboardgame.com` comes online once the records above are saved and DNS catches
-  up; `bpangman.github.io/nasty` forwards there automatically. Until the records land, the old
-  address shows a Squarespace "parked" page — saving the records above is the fix.
-- Game server: still the Mac Mini at home, unchanged. `play.nastyboardgame.com` is a future
-  step, not needed today.
+- Website: `nastyboardgame.com` DNS records are saved and mostly correct, but still flapping
+  between the real site and Squarespace's parked page — see the "IMPORTANT" note above, this
+  needs the leftover Squarespace records deleted before it's fully stable and before HTTPS can
+  turn on.
+- Game server: `play.nastyboardgame.com` — done, live, healthy. Online games now run in the
+  cloud instead of the Mac Mini.

@@ -16,6 +16,14 @@ URL_FILE="$REPO_DIR/wsurl.json"
 PORT="${NASTY_PORT:-8484}"
 
 update_wsurl() {
+  # GATED (cloud cutover, 2026-07-12): wsurl.json now points at the cloud relay
+  # (wss://play.nastyboardgame.com), and the site discovers the server from THAT file, not
+  # this Mac's tunnel anymore. Left this function and its call site intact (not deleted) so
+  # a rollback is just deleting the two lines below and un-commenting nothing else -- the
+  # tunnel/server themselves keep running in drain mode so any game already in flight here
+  # finishes normally. See HANDOFF.md's "Cloud hosting" section, rollback subsection.
+  echo "[tunnel.sh] Cloud cutover is live -- skipping wsurl.json auto-republish (would overwrite the cloud URL with a stale tunnel URL)." | tee -a "$LOG_FILE"
+  return 0
   local https_url="$1"
   local wss_url="${https_url/https:\/\//wss://}"
   echo "[tunnel.sh] New tunnel URL: $https_url -> $wss_url" | tee -a "$LOG_FILE"
