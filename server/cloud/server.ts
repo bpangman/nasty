@@ -61,6 +61,18 @@ const ROOM_TTL_MS = 30 * 60 * 1000; // never-started lobby, fully disconnected
 const STARTED_ROOM_TTL_MS = 7 * 24 * 60 * 60 * 1000; // started-but-unfinished game
 const LOG_TTL_MS = STARTED_ROOM_TTL_MS + 24 * 60 * 60 * 1000; // backstop: always outlives the meta key
 
+// v0.10.3: token-less recovery ("reclaim by name") — ONLY implemented/tested locally (`deno
+// run`, see file header) per this session's server-change rule, NOT deployed. Kept in-memory
+// per-isolate (like server.js), which is only fully correct when the reclaim request and the
+// host's approval land on the SAME isolate — consistent with this file's existing
+// single-instance-in-practice reasoning for BroadcastChannel (see § RELAY below); if a FUTURE
+// deploy ever needs true cross-isolate correctness here, this would need to move into KV the
+// same way rooms did. The common, uncontested case (the named seat is already disconnected)
+// needs no cross-isolate coordination at all — it's a normal touchRoom mutation.
+type PendingReclaim = { code: string; targetPlayerId: number; socket: WebSocket; expires: number };
+const pendingReclaims = new Map<string, PendingReclaim>();
+const RECLAIM_TIMEOUT_MS = 30 * 1000;
+
 const CODE_ALPHABET = "BCDFGHJKMNPQRSTVWXZ"; // no vowels/Y, no 0/O/1/I/L confusion
 
 // LAZY KV INIT — new-platform adaptation, 2026-07-11, load-bearing (not just defensive).
@@ -388,6 +400,14 @@ setInterval(() => {
   for (const socks of localSockets.values()) {
     for (const ws of socks.values()) send(ws, { type: "pong", t: now });
   }
+  // v0.10.3: a contested reclaim (see PendingReclaim above) the host never answered — tell the
+  // requester instead of leaving them hanging forever.
+  for (const [reqId, pending] of pendingReclaims) {
+    if (now > pending.expires) {
+      pendingReclaims.delete(reqId);
+      send(pending.socket, { type: "reclaimError", message: "The host didn't respond in time — try again." });
+    }
+  }
 }, HEARTBEAT_MS);
 
 /* ---------------------------------------------------------------------------------------
@@ -497,6 +517,10 @@ function handleWsUpgrade(req: Request, ip: string): Response {
     ctx = { code, playerId };
     registerLocalSocket(code, playerId, socket);
   }
+  // v0.10.3: lets a reclaimApprove processed on a DIFFERENT connection (the host's) identify
+  // THIS socket once approved — see "reclaimApprove" below, which can't reach into another
+  // connection's local `ctx` closure any other way. Same pattern as server.js's `ws.identify`.
+  (socket as WebSocket & { identify?: typeof identify }).identify = identify;
 
   async function handleMessage(msg: Record<string, unknown>) {
     switch (msg.type) {
@@ -539,7 +563,9 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         const code = String(msg.code || "").toUpperCase();
         const preCheck = await kv.get<RoomMeta>(roomKey(code));
         if (!preCheck.value) { send(socket, { type: "joinError", message: "That room code doesn't exist. Double check it with the host." }); return; }
-        if (preCheck.value.started) { send(socket, { type: "joinError", message: "That game already started. Ask the host to send a new code, or reconnect if you were already playing." }); return; }
+        // v0.10.3: `reason:"started"` lets the client fall back to "reclaim" automatically
+        // (see the "reclaim" case below) instead of dead-ending — same reasoning as server.js.
+        if (preCheck.value.started) { send(socket, { type: "joinError", message: "That game already started. Ask the host to send a new code, or reconnect if you were already playing.", reason: "started" }); return; }
         if (isBadName(msg.name)) { send(socket, { type: "joinError", message: "Pick a nicer name." }); return; }
         const r = await touchRoom(code, (meta) => {
           if (meta.started) return false;
@@ -589,6 +615,100 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         broadcastRoom(code, { type: "presence", playerId, connected: true }, playerId);
         if (playerId === r.meta.hostPlayerId) broadcastRoom(code, { type: "hostStatus", connected: true }, playerId);
         log("player rejoined", code, playerId, "ip=" + ip);
+        return;
+      }
+
+      case "reclaim": {
+        // v0.10.3: {type:'reclaim', code, name} — token-less recovery, mirrors server.js's
+        // "reclaim" case. See the PendingReclaim comment near the top of this file for the
+        // known same-isolate caveat on the contested branch.
+        const code = String(msg.code || "").toUpperCase();
+        const pre = await kv.get<RoomMeta>(roomKey(code));
+        if (!pre.value) { send(socket, { type: "reclaimError", message: "That room code doesn't exist or has expired." }); return; }
+        if (!pre.value.started) { send(socket, { type: "reclaimError", message: "That game hasn't started yet — use Join a game instead.", reason: "notStarted" }); return; }
+        if (isBadName(msg.name)) { send(socket, { type: "reclaimError", message: "Pick a nicer name." }); return; }
+        const wantName = String(msg.name || "").trim().toLowerCase();
+        const candidates = pre.value.players.filter((p) => p.name.trim().toLowerCase() === wantName);
+        if (candidates.length === 0) { send(socket, { type: "reclaimError", message: `No one named "${cleanName(msg.name, "that")}" is in that game.` }); return; }
+        const targetPre = candidates.find((p) => !p.connected) || candidates[0];
+        if (targetPre.connected) {
+          const hostP = pre.value.players.find((p) => p.id === pre.value!.hostPlayerId);
+          if (!hostP || !hostP.connected) {
+            send(socket, { type: "reclaimError", message: `${targetPre.name} is already connected and the host isn't reachable to confirm a takeover — try again in a bit.` });
+            return;
+          }
+          const reqId = newToken();
+          pendingReclaims.set(reqId, { code, targetPlayerId: targetPre.id, socket, expires: Date.now() + RECLAIM_TIMEOUT_MS });
+          sendToPlayer(code, hostP.id, { type: "reclaimRequest", reqId, name: targetPre.name });
+          send(socket, { type: "reclaimPending", message: `${targetPre.name} looks like they're already connected — asking the host to confirm.` });
+          log("reclaim contested, asked host", code, targetPre.id, "ip=" + ip);
+          return;
+        }
+        const r = await touchRoom(code, (meta) => {
+          const p = meta.players.find((pp) => pp.id === targetPre.id);
+          if (!p || p.connected) return false; // lost the race since the pre-check above
+          p.token = newToken();
+          p.connected = true;
+          return { playerId: p.id, token: p.token };
+        });
+        if (!r.ok) { send(socket, { type: "reclaimError", message: "Try again — that seat just changed state." }); return; }
+        identify(code, r.extra.playerId as number);
+        const isHost = (r.extra.playerId as number) === r.meta.hostPlayerId;
+        const gameLog = await getRoomLog(code, r.meta.logCount);
+        const hostP2 = r.meta.players.find((p) => p.id === r.meta.hostPlayerId);
+        send(socket, {
+          type: "reclaimed", code, playerId: r.extra.playerId, token: r.extra.token,
+          lobby: lobbySnapshot(r.meta), seatOwners: r.meta.seatOwners, log: gameLog, isHost,
+          hostConnected: !!(hostP2 && hostP2.connected), paused: !!r.meta.paused, presence: presenceSnapshot(r.meta),
+        });
+        broadcastRoom(code, { type: "presence", playerId: r.extra.playerId as number, connected: true }, r.extra.playerId as number);
+        if (isHost) broadcastRoom(code, { type: "hostStatus", connected: true }, r.extra.playerId as number);
+        log("player reclaimed seat by name", code, r.extra.playerId, "ip=" + ip);
+        return;
+      }
+
+      case "reclaimApprove": {
+        // host-only: {type:'reclaimApprove', reqId, approve:true|false}
+        if (!ctx) return;
+        const { code, playerId } = ctx;
+        const cur0 = await kv.get<RoomMeta>(roomKey(code));
+        if (!cur0.value || playerId !== cur0.value.hostPlayerId) return;
+        const pending = pendingReclaims.get(msg.reqId as string);
+        if (!pending || pending.code !== code) return; // not found here — see same-isolate caveat above
+        pendingReclaims.delete(msg.reqId as string);
+        if (!msg.approve) { send(pending.socket, { type: "reclaimError", message: "The host didn't approve that." }); return; }
+        const r = await touchRoom(code, (meta) => {
+          const p = meta.players.find((pp) => pp.id === pending.targetPlayerId);
+          if (!p) return false;
+          p.token = newToken();
+          p.connected = true;
+          return { playerId: p.id, token: p.token };
+        });
+        if (!r.ok) { send(pending.socket, { type: "reclaimError", message: "That seat is gone now." }); return; }
+        const targetPlayerId = r.extra.playerId as number;
+        // Tell (and, if it's local to THIS isolate, forcibly close) whatever connection
+        // currently holds that playerId BEFORE re-registering it to the new one — otherwise
+        // the old connection's eventual "close" would race the takeover (see the onclose guard
+        // below, added alongside this for the same reason server.js needed one).
+        const oldLocalWs = localSockets.get(code)?.get(targetPlayerId);
+        sendToPlayer(code, targetPlayerId, { type: "kicked", message: "Someone else took over your seat." });
+        if (oldLocalWs && oldLocalWs !== pending.socket) { try { oldLocalWs.close(); } catch (_e) { /* ignore */ } }
+        // Same connection that's about to receive "reclaimed" also needs its OWN ctx set so
+        // its future 'action'/etc. messages are authorized — call ITS OWN identify() (exposed
+        // as socket.identify, see handleWsUpgrade's top) since this code is running inside the
+        // HOST's connection, not the reclaiming one.
+        const pendingSocket = pending.socket as WebSocket & { identify?: (code: string, playerId: number) => void };
+        if (pendingSocket.identify) pendingSocket.identify(code, targetPlayerId);
+        else registerLocalSocket(code, targetPlayerId, pending.socket); // best-effort fallback
+        const isHost = targetPlayerId === r.meta.hostPlayerId;
+        const gameLog = await getRoomLog(code, r.meta.logCount);
+        send(pending.socket, {
+          type: "reclaimed", code, playerId: targetPlayerId, token: r.extra.token,
+          lobby: lobbySnapshot(r.meta), seatOwners: r.meta.seatOwners, log: gameLog, isHost,
+          hostConnected: true, paused: !!r.meta.paused, presence: presenceSnapshot(r.meta),
+        });
+        broadcastRoom(code, { type: "presence", playerId: targetPlayerId, connected: true }, targetPlayerId);
+        log("reclaim approved by host", code, targetPlayerId);
         return;
       }
 
@@ -759,6 +879,19 @@ function handleWsUpgrade(req: Request, ip: string): Response {
     (async () => {
       if (!ctx) return;
       const { code, playerId } = ctx;
+      // v0.10.3 fix (found via the reclaim wire-protocol test, same root cause as server.js's
+      // identical fix): a contested "reclaim" approval hands this playerId to a NEW socket and
+      // closes this old one (see "reclaimApprove" above) — this "close" handler can fire AFTER
+      // that handover, and without this guard would wrongly mark the (now different) live
+      // connection as disconnected, since both sockets shared the same playerId by design.
+      // Only apply a disconnect if THIS closing socket is still the one THIS isolate has
+      // locally registered for that player. (Known limitation, same shape as this file's
+      // documented BroadcastChannel caveat: if the takeover happened on a DIFFERENT isolate,
+      // this isolate's own localSockets map was never updated, so this guard can't see it —
+      // acceptable given the whole feature is local-only/undeployed pending the app being
+      // pinned to a single instance, same reasoning as § RELAY above.)
+      const stillCurrent = localSockets.get(code)?.get(playerId) === socket;
+      if (!stillCurrent) return; // a takeover already replaced us locally — don't unregister IT
       unregisterLocalSocket(code, playerId);
       const r = await touchRoom(code, (meta) => {
         const p = meta.players.find((pp) => pp.id === playerId);

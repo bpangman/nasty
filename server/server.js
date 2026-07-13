@@ -38,6 +38,12 @@ const CODE_ALPHABET = "BCDFGHJKMNPQRSTVWXZ";
 
 /** @type {Map<string, Room>} */
 const rooms = new Map();
+// v0.10.3: token-less recovery — {reqId -> {code, targetPlayerId, ws, expires}}. A contested
+// "reclaim" (the named seat is still showing connected) parks here waiting for the host to
+// approve/deny; see "reclaim"/"reclaimApprove" below and the periodic sweep near the room
+// pruner further down this file.
+const pendingReclaims = new Map();
+const RECLAIM_TIMEOUT_MS = 30 * 1000;
 
 function log(...a) { console.log(new Date().toISOString(), ...a); }
 
@@ -476,7 +482,13 @@ wss.on("connection", (ws, req) => {
     if (!ctx) return;
     const { room, playerId } = ctx;
     const p = room.players.get(playerId);
-    if (p) {
+    // v0.10.3 fix (found via the reclaim wire-protocol test): a contested "reclaim" hands the
+    // SAME playerId over to a NEW socket and force-terminates the old one (see
+    // "reclaimApprove" above) — that old socket's "close" event fires AFTER the handover, and
+    // without this guard it would blow away the state the takeover just set (p.connected=true,
+    // p.ws=<new socket>) because both sockets share the same player record by design. Only
+    // apply a disconnect if THIS closing socket is still the one on record for that player.
+    if (p && p.ws === ws) {
       p.connected = false;
       p.ws = null;
       touch(room);
@@ -486,6 +498,10 @@ wss.on("connection", (ws, req) => {
   });
 
   function identify(room, playerId) { ctx = { room, playerId }; }
+  ws.identify = identify; // v0.10.3: lets a DIFFERENT connection's handler (the host,
+  // approving a contested "reclaim") identify THIS socket via its own closure — see
+  // "reclaimApprove" below, which can't reach into another connection's local `ctx` any
+  // other way.
 
   function handleMessage(msg) {
     switch (msg.type) {
@@ -526,7 +542,11 @@ wss.on("connection", (ws, req) => {
         const code = String(msg.code || "").toUpperCase();
         const room = rooms.get(code);
         if (!room) { send(ws, { type: "joinError", message: "That room code doesn't exist. Double check it with the host." }); return; }
-        if (room.started) { send(ws, { type: "joinError", message: "That game already started. Ask the host to send a new code, or reconnect if you were already playing." }); return; }
+        // v0.10.3: `reason:"started"` lets the client automatically fall back to the
+        // token-less "reclaim by name" path (see "reclaim" below) instead of just dead-ending
+        // here — the client already collected code+name for this very "join" attempt, so it
+        // can retry as a reclaim with zero extra typing.
+        if (room.started) { send(ws, { type: "joinError", message: "That game already started. Ask the host to send a new code, or reconnect if you were already playing.", reason: "started" }); return; }
         if (isBadName(msg.name)) { send(ws, { type: "joinError", message: "Pick a nicer name." }); return; }
         const playerId = room.nextPlayerId++;
         const token = newToken();
@@ -558,6 +578,79 @@ wss.on("connection", (ws, req) => {
         broadcast(room, { type: "presence", playerId, connected: true }, playerId);
         if (playerId === room.hostPlayerId) broadcast(room, { type: "hostStatus", connected: true }, playerId);
         log("player rejoined", code, playerId, "ip="+ip);
+        return;
+      }
+
+      case "reclaim": {
+        // v0.10.3: {type:'reclaim', code, name} — token-less recovery. Blake lost a save when
+        // his device's local storage didn't survive (see HANDOFF.md "save/quit/reload"); the
+        // room + the seat's identity already live server-side for up to a week (STARTED_ROOM_TTL_MS),
+        // this just gives a phone with NO stored token (a different device, or one that lost
+        // localStorage) a way back in: the room code + the exact name they were seated under.
+        // Family game, low abuse risk by design — but if that name's seat looks like it's
+        // STILL connected right now, don't just silently hand it over; ask the host first
+        // (see the "contested" branch below / "reclaimApprove").
+        const code = String(msg.code || "").toUpperCase();
+        const room = rooms.get(code);
+        if (!room) { send(ws, { type: "reclaimError", message: "That room code doesn't exist or has expired." }); return; }
+        if (!room.started) { send(ws, { type: "reclaimError", message: "That game hasn't started yet — use Join a game instead.", reason: "notStarted" }); return; }
+        if (isBadName(msg.name)) { send(ws, { type: "reclaimError", message: "Pick a nicer name." }); return; }
+        const wantName = String(msg.name || "").trim().toLowerCase();
+        const candidates = Array.from(room.players.values()).filter(p => p.name.trim().toLowerCase() === wantName);
+        if (candidates.length === 0) { send(ws, { type: "reclaimError", message: `No one named "${cleanName(msg.name,'that')}" is in that game.` }); return; }
+        // Prefer a currently-disconnected match (the normal case); if every match with that
+        // name is connected, the first one is the contested case below.
+        const target = candidates.find(p => !p.connected) || candidates[0];
+        if (target.connected) {
+          const hostP = room.players.get(room.hostPlayerId);
+          if (!hostP || !hostP.connected || !hostP.ws) {
+            send(ws, { type: "reclaimError", message: `${target.name} is already connected and the host isn't reachable to confirm a takeover — try again in a bit.` });
+            return;
+          }
+          const reqId = newToken();
+          pendingReclaims.set(reqId, { code, targetPlayerId: target.id, ws, expires: Date.now() + RECLAIM_TIMEOUT_MS });
+          send(hostP.ws, { type: "reclaimRequest", reqId, name: target.name });
+          send(ws, { type: "reclaimPending", message: `${target.name} looks like they're already connected — asking the host to confirm.` });
+          log("reclaim contested, asked host", code, target.id, "ip="+ip);
+          return;
+        }
+        target.token = newToken();
+        target.ws = ws; target.connected = true;
+        identify(room, target.id);
+        touch(room);
+        const isHost = target.id === room.hostPlayerId;
+        send(ws, { type: "reclaimed", code, playerId: target.id, token: target.token, lobby: lobbySnapshot(room), seatOwners: room.seatOwners, log: room.log, isHost, hostConnected: !!(room.players.get(room.hostPlayerId) || {}).connected, paused: !!room.paused, presence: presenceSnapshot(room) });
+        broadcast(room, { type: "presence", playerId: target.id, connected: true }, target.id);
+        if (isHost) broadcast(room, { type: "hostStatus", connected: true }, target.id);
+        log("player reclaimed seat by name", code, target.id, "ip="+ip);
+        return;
+      }
+
+      case "reclaimApprove": {
+        // host-only: {type:'reclaimApprove', reqId, approve:true|false} — the host's answer to
+        // a "reclaimRequest" toast (contested reclaim, see "reclaim" above).
+        if (!ctx) return;
+        const { room, playerId } = ctx;
+        if (playerId !== room.hostPlayerId) return;
+        const pending = pendingReclaims.get(msg.reqId);
+        if (!pending || pending.code !== room.code) return;
+        pendingReclaims.delete(msg.reqId);
+        const target = room.players.get(pending.targetPlayerId);
+        if (!msg.approve || !target) { send(pending.ws, { type: "reclaimError", message: "The host didn't approve that." }); return; }
+        const oldWs = target.ws;
+        target.token = newToken();
+        target.ws = pending.ws; target.connected = true;
+        // This is running inside the HOST's own connection handler, so it can't set the
+        // reclaiming socket's `ctx` directly — call that socket's OWN identify() (exposed as
+        // ws.identify, see wss.on("connection") above) so ITS future messages (moves, etc.)
+        // are recognized as coming from `target`.
+        if (pending.ws.identify) pending.ws.identify(room, target.id);
+        touch(room);
+        if (oldWs && oldWs !== pending.ws) { try { send(oldWs, { type: "kicked", message: "Someone else took over your seat." }); oldWs.terminate(); } catch (e) {} }
+        const isHost = target.id === room.hostPlayerId;
+        send(pending.ws, { type: "reclaimed", code: room.code, playerId: target.id, token: target.token, lobby: lobbySnapshot(room), seatOwners: room.seatOwners, log: room.log, isHost, hostConnected: true, paused: !!room.paused, presence: presenceSnapshot(room) });
+        broadcast(room, { type: "presence", playerId: target.id, connected: true }, target.id);
+        log("reclaim approved by host", room.code, target.id);
         return;
       }
 
@@ -745,6 +838,19 @@ const pruneTimer = setInterval(() => {
   }
 }, PRUNE_EVERY_MS);
 
+// v0.10.3: a contested reclaim (see "reclaim"/"reclaimApprove" above) the host never answered
+// — tell the requester rather than leaving them hanging forever. Runs far more often than the
+// room pruner above since RECLAIM_TIMEOUT_MS is only 30s.
+const reclaimSweepTimer = setInterval(() => {
+  const now = Date.now();
+  for (const [reqId, pending] of pendingReclaims) {
+    if (now > pending.expires) {
+      pendingReclaims.delete(reqId);
+      send(pending.ws, { type: "reclaimError", message: "The host didn't respond in time — try again." });
+    }
+  }
+}, 5000);
+
 loadRoomsFromDisk(); // v0.8: bring back rooms that existed before this process started
 loadLeaderboard();   // v0.9: bring back the shared global leaderboard, same idea
 log(`admin token file: ${ADMIN_TOKEN_FILE}`);
@@ -752,7 +858,7 @@ log(`admin token file: ${ADMIN_TOKEN_FILE}`);
 server.listen(PORT, () => log(`nasty relay listening on :${PORT}`));
 
 function shutdown() {
-  clearInterval(hb); clearInterval(pruneTimer);
+  clearInterval(hb); clearInterval(pruneTimer); clearInterval(reclaimSweepTimer);
   flushAllPersists(); // make sure every debounced write actually lands before we exit
   if (lbPersistTimer) { clearTimeout(lbPersistTimer); lbPersistTimer = null; }
   persistLeaderboardNow();

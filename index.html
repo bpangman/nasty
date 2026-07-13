@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY — the Pangman family board game, digitized. v0.10.2.
+  NASTY — the Pangman family board game, digitized. v0.10.3.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation — the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -116,6 +116,29 @@
       from a tucked-in position, so CANVAS_PAD (v0.10's board-shrinking margin reservation)
       could drop from 100 to a per-board sliver (20 for 4P, 40 for 6P) — the board renders at
       96-98% of its pre-v0.10 size again, still zero hole/pocket overlap on every tested screen.
+
+  v0.10.3 (2026-07-13 — see HANDOFF.md/PLANNING.md for the full readout):
+    - REAL BUG FOUND + FIXED: the topbar "‹ Menu" button silently and PERMANENTLY deleted your
+      save (clearOfflineSave()/leaveOnlineToMenu() with no keepRoom) with a confirm() that never
+      said so ("Leave this game and go back to the menu?") — the single most obvious "I'm done
+      for now" button in the whole app was actually a hidden delete. Reproduced exactly against
+      Blake's report (solo game, tap Menu, confirm, close tab, reopen -> save gone). Fixed: this
+      button now PRESERVES progress (same as Pause -> "Save & quit to menu") and says so.
+    - Belt-and-suspenders hardening on top of the fix above (no other save-losing bug found —
+      the debounce/close-tab/reload paths were re-tested exhaustively and already held up):
+      an IndexedDB mirror alongside localStorage for the offline save (separate storage
+      mechanism, separate failure modes — self-heals localStorage from IndexedDB at boot if
+      needed, see syncOfflineSaveFromIdb()), and a pagehide/visibilitychange-hidden flush of
+      any still-pending debounced save (belt-and-suspenders against the 250ms window).
+    - Online: token-less "reclaim by name" — a phone with NO stored rejoin token (a different
+      device, or one that lost its browser storage) can get back into an ALREADY-STARTED room
+      via the existing "Join a game" code+name screen: if the code belongs to a started game,
+      the client automatically retries as a "reclaim." A currently-disconnected seat is handed
+      over immediately; a seat that still looks CONNECTED asks the host to confirm first (a
+      small non-blocking overlay, not a page-freezing confirm()) before the takeover happens.
+      Server-side (server.js + server/cloud/server.ts, kept in sync as always) — see HANDOFF.md
+      for deploy status; the Node version is fully tested, the Deno version is implemented +
+      locally tested only, per this session's "don't deploy" constraint.
 -->
 </head>
 <body>
@@ -467,7 +490,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.10.2</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.10.3</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -611,6 +634,7 @@ button{font:inherit;cursor:pointer}
     <h3>Join a game</h3>
     <div id="joinCodeStep">
       <p>Enter the 4-letter room code your host sent you.</p>
+      <p style="font-size:13px;color:#9ec7aa">Had a game going? Enter its 4-letter code and your name — if your seat's still open, you'll be back in.</p>
       <div class="optRow"><label>Room code</label>
         <input id="joinCodeInput" maxlength="4" style="text-transform:uppercase;font-size:20px;letter-spacing:.14em;
           width:110px;text-align:center;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.2);
@@ -651,6 +675,26 @@ button{font:inherit;cursor:pointer}
     <div class="bigBtns">
       <button class="btn primary hidden" id="btnReunionResume">▶ Resume game</button>
       <button class="btn ghost" id="btnReunionClose">Keep waiting in background</button>
+    </div>
+  </div>
+</div>
+
+<!-- v0.10.3: host-side confirmation for a CONTESTED "reclaim by name" — the named seat still
+     looks connected here, so someone else claiming to be that player from a new device needs
+     the host's OK before taking it over. Non-blocking (unlike a native confirm()), so it never
+     freezes the host's own live game while it waits. -->
+<!-- z-index:90, ABOVE the shared .overlay stacking level (80, see the ".overlay" CSS rule) —
+     this can need to be actioned by the host even while another overlay (most plausibly
+     #pauseOverlay/#reunionOverlay, since a reclaim is most likely to happen exactly when
+     someone's away/reconnecting) is already showing; without this it could sit behind an
+     unclickable/invisible confirmation the host has no way to respond to. -->
+<div id="reclaimReqOverlay" class="overlay hidden" style="z-index:90">
+  <div class="modalCard">
+    <h3>Someone wants back in</h3>
+    <p id="reclaimReqText"></p>
+    <div class="bigBtns">
+      <button class="btn primary" id="btnReclaimApprove">Let them in</button>
+      <button class="btn ghost" id="btnReclaimDeny">No, keep their seat as is</button>
     </div>
   </div>
 </div>
@@ -1712,7 +1756,9 @@ function scheduleSaveOffline(){
 function doSaveOffline(){
   if(!G||NET.online||G.over)return;   // never save a finished game (see clearOfflineSave below)
   if(location.hash.indexOf('autotest')>=0)return;
-  try{ localStorage.setItem('nasty-save-offline',JSON.stringify({G,ts:Date.now()})); }catch(e){}
+  const obj={G,ts:Date.now()};
+  try{ localStorage.setItem('nasty-save-offline',JSON.stringify(obj)); }catch(e){}
+  idbPutSave(obj);   // v0.10.3: best-effort IndexedDB mirror, see "IndexedDB mirror" below
 }
 function loadOfflineSave(){
   try{
@@ -1728,6 +1774,86 @@ function loadOfflineSave(){
 function clearOfflineSave(){
   if(saveOfflineTimer){ clearTimeout(saveOfflineTimer); saveOfflineTimer=null; }
   try{localStorage.removeItem('nasty-save-offline');}catch(e){}
+  idbDeleteSave();
+}
+// v0.10.3 hardening: flush any still-PENDING debounced save immediately if the page is about
+// to go away or become hidden — belt and suspenders against the 250ms debounce theoretically
+// not having landed yet if a tab is closed/backgrounded an instant after a move. Idempotent
+// and cheap (doSaveOffline() itself already no-ops safely with nothing new to write).
+function flushPendingOfflineSave(){
+  if(saveOfflineTimer){ clearTimeout(saveOfflineTimer); saveOfflineTimer=null; doSaveOffline(); }
+}
+
+/* ---- IndexedDB mirror (v0.10.3 hardening) ----
+   Real Safari/iOS storage loss isn't always a code bug — ITP can evict a site's localStorage
+   after enough days without a visit, and some content blockers/low-storage conditions can make
+   a localStorage write silently fail (the try/catch above swallows it, by design, so a save
+   attempt never crashes the game — but that also means a failure is invisible). IndexedDB is a
+   genuinely separate storage mechanism with its own quota/eviction behavior, so mirroring into
+   it is real, independent redundancy, not just a second copy of the same risk. Every offline
+   save/clear mirrors here too (best-effort, never throws to the caller); at boot,
+   syncOfflineSaveFromIdb() restores IndexedDB's copy into localStorage if localStorage's is
+   missing or older, so the existing SYNCHRONOUS read path (loadOfflineSave/
+   updateMenuResumeButtons) picks it up completely unchanged — IndexedDB itself has no
+   synchronous API, so this self-heal is necessarily async and runs once at boot, after the
+   normal (synchronous, localStorage-only) first paint. */
+const IDB_NAME='nasty-saves', IDB_STORE='saves', IDB_KEY='offline';
+let idbOpenPromise=null;
+function openIdb(){
+  if(idbOpenPromise)return idbOpenPromise;
+  idbOpenPromise=new Promise(resolve=>{
+    if(!window.indexedDB){resolve(null);return;}
+    try{
+      const req=indexedDB.open(IDB_NAME,1);
+      req.onupgradeneeded=()=>{ try{req.result.createObjectStore(IDB_STORE);}catch(e){} };
+      req.onsuccess=()=>resolve(req.result);
+      req.onerror=()=>resolve(null);
+    }catch(e){ resolve(null); }
+  });
+  return idbOpenPromise;
+}
+async function idbPutSave(obj){
+  try{
+    const db=await openIdb(); if(!db)return;
+    await new Promise(res=>{
+      const tx=db.transaction(IDB_STORE,'readwrite');
+      tx.objectStore(IDB_STORE).put(obj,IDB_KEY);
+      tx.oncomplete=res; tx.onerror=()=>res(); tx.onabort=()=>res();
+    });
+  }catch(e){ /* best-effort only — localStorage stays the primary, synchronous copy */ }
+}
+async function idbDeleteSave(){
+  try{
+    const db=await openIdb(); if(!db)return;
+    await new Promise(res=>{
+      const tx=db.transaction(IDB_STORE,'readwrite');
+      tx.objectStore(IDB_STORE).delete(IDB_KEY);
+      tx.oncomplete=res; tx.onerror=()=>res(); tx.onabort=()=>res();
+    });
+  }catch(e){}
+}
+async function idbGetSave(){
+  try{
+    const db=await openIdb(); if(!db)return null;
+    return await new Promise(res=>{
+      const tx=db.transaction(IDB_STORE,'readonly');
+      const rq=tx.objectStore(IDB_STORE).get(IDB_KEY);
+      rq.onsuccess=()=>res(rq.result||null);
+      rq.onerror=()=>res(null);
+    });
+  }catch(e){ return null; }
+}
+async function syncOfflineSaveFromIdb(){
+  try{
+    const idb=await idbGetSave();
+    if(!idb||!idb.G||idb.G.over)return;
+    let local=null;
+    try{ local=JSON.parse(localStorage.getItem('nasty-save-offline')||'null'); }catch(e){}
+    if(!local||!local.ts||idb.ts>local.ts){
+      try{ localStorage.setItem('nasty-save-offline',JSON.stringify(idb)); }catch(e){}
+      updateMenuResumeButtons();   // re-render — the earlier synchronous boot call may have shown nothing
+    }
+  }catch(e){}
 }
 
 async function doDeal(){
@@ -2533,6 +2659,23 @@ function nudgePlayer(playerId,name){
 }
 $('btnReunionClose').onclick=()=>{ closeReunionOverlay(); updatePauseUI(); };
 $('btnReunionResume').onclick=()=>{ requestPause(false); };
+
+/* ---- v0.10.3: host-side confirmation for a CONTESTED "reclaim by name" (see HANDOFF.md
+   "Token-less online recovery"). Only ever shown to the host, since the server only ever
+   relays 'reclaimRequest' to the room's host — see server.js/server.ts's "reclaim" case. */
+let PENDING_RECLAIM_REQ=null;
+function handleReclaimRequest(m){
+  PENDING_RECLAIM_REQ=m.reqId;
+  $('reclaimReqText').textContent=`${m.name} is trying to get back into the game from a new device, but they still look connected here. Let them take over that seat?`;
+  $('reclaimReqOverlay').classList.remove('hidden');
+}
+function answerReclaimRequest(approve){
+  if(PENDING_RECLAIM_REQ)netSend({type:'reclaimApprove',reqId:PENDING_RECLAIM_REQ,approve});
+  PENDING_RECLAIM_REQ=null;
+  $('reclaimReqOverlay').classList.add('hidden');
+}
+$('btnReclaimApprove').onclick=()=>answerReclaimRequest(true);
+$('btnReclaimDeny').onclick=()=>answerReclaimRequest(false);
 /* rejoin token persistence — lets a phone that closed mid-game (locked, lost signal, tab
    killed) reopen the SAME ?join=CODE link and land back in its seat instead of re-joining
    as a stranger. Keyed by room code since a device could conceivably rejoin different
@@ -2590,7 +2733,34 @@ function handleNetMessage(m){
       NET.code=m.code; NET.playerId=m.playerId; NET.token=m.token; NET.lobby=m.lobby;
       saveNetSession(); saveLastRoom(m.code,false); updateNetChip(); advanceJoinToSeatStep();
       return;
-    case 'joinError': $('joinErr').textContent=m.message; return;
+    case 'joinError':
+      // v0.10.3: a code that turns out to belong to an ALREADY-STARTED game — the code+name
+      // the "Join a game" screen just collected are exactly what token-less "reclaim by name"
+      // needs, so retry automatically as a reclaim instead of just dead-ending here (see
+      // "reclaim"/"reclaimed" below and server.js/server.ts's matching `reason:"started"`).
+      if(m.reason==='started'&&JOIN.code&&JOIN.name){
+        $('joinErr').textContent='That game already started — trying to get you back into your seat…';
+        netSend({type:'reclaim',code:JOIN.code,name:JOIN.name});
+        return;
+      }
+      $('joinErr').textContent=m.message;
+      return;
+    case 'reclaimError': $('joinErr').textContent=m.message; return;
+    case 'reclaimPending': $('joinErr').textContent=m.message||'Asking the host to confirm…'; return;
+    case 'reclaimed':
+      // v0.10.3: token-less recovery succeeded — this connection didn't have a stored
+      // playerId/token for this room (a different device, or one that lost localStorage), so
+      // unlike a normal 'rejoin' response, the server hands us a FRESH one here. Store it
+      // exactly like any other session, then flow through the SAME sync/reunion path a normal
+      // resume uses (onSync()'s enteringViaResume branch) — coming back from "I lost my save"
+      // deserves the same safe "get everyone back to the table" regroup screen, not a drop
+      // straight onto a possibly-moving board.
+      NET.code=m.code; NET.playerId=m.playerId; NET.token=m.token;
+      saveNetSession();
+      NET.enteringViaResume=true;
+      onSync(m);
+      return;
+    case 'reclaimRequest': handleReclaimRequest(m); return;
     case 'rejoinError':
       // v0.8: a SILENT auto-rejoin attempt (no URL param — see boot()'s iOS-eviction path)
       // failing shouldn't pop the join overlay in someone's face out of nowhere; it should
@@ -2882,11 +3052,28 @@ $('btnAgain').onclick=()=>{$('winOverlay').classList.add('hidden');
 $('btnWinMenu').onclick=()=>{location.hash='';G=null;$('winOverlay').classList.add('hidden');
   if(NET.online)leaveOnlineToMenu();
   else{clearOfflineSave();$('game').classList.add('hidden');$('menu').classList.remove('hidden');updateMenuResumeButtons();}};
-$('btnMenu').onclick=()=>{ if(confirm('Leave this game and go back to the menu?')){G=null;
-  if(NET.online)leaveOnlineToMenu();
-  // v0.8: leaving on purpose ("abandoned by choice") clears the offline save — a game you
-  // quit through the menu isn't offered back to you next time you open the app.
-  else{clearOfflineSave();$('game').classList.add('hidden');$('menu').classList.remove('hidden');updateMenuResumeButtons();}} };
+// v0.10.3 FIX (real bug, Blake's 2026-07-13 report): this used to be a SILENT, PERMANENT
+// delete of your progress (clearOfflineSave() / leaveOnlineToMenu() with no keepRoom) — and
+// its confirm() only ever said "leave", never "your save will be lost." The topbar "‹ Menu"
+// button is the single most obvious, always-visible "I'm done for now" affordance in the
+// whole app — far more discoverable than Pause -> "Save & quit to menu" — so a non-technical
+// player choosing the obvious button to step away had their entire game deleted with no
+// warning. Reproduced exactly (Playwright): start a solo game, tap "‹ Menu", confirm, close
+// the tab, reopen — the "Resume Saved Game" tile was gone, matching the report precisely.
+// Fix: this now behaves exactly like "Save & quit to menu" — it PRESERVES progress instead of
+// deleting it, and says so. A genuinely finished game already clears its own save via
+// showWin(); nothing in this app should ever silently destroy a game still in progress.
+$('btnMenu').onclick=()=>{
+  if(confirm('Leave this game? Your progress is saved — resume it anytime from the main menu.')){
+    if(NET.online){
+      leaveOnlineToMenu(null,true);   // keepRoom=true — same as "Save & quit to menu", see its comment
+    }else{
+      doSaveOffline();   // flush the CURRENT state first — must run before G is cleared below
+      G=null;
+      $('game').classList.add('hidden');$('menu').classList.remove('hidden');updateMenuResumeButtons();
+    }
+  }
+};
 $('btnRules').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRules2').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRulesClose').onclick=()=>$('rulesOverlay').classList.add('hidden');
@@ -3178,8 +3365,15 @@ function onForeground(){
   try{ netSend({type:'ping',t:Date.now()}); }catch(e){}
   if(G&&!NET.isHost)netSend({type:'requestStateCheck'});   // see server.js/handleNetMessage
 }
-document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible')onForeground(); });
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible')onForeground();
+  else flushPendingOfflineSave();   // v0.10.3: see flushPendingOfflineSave() — going hidden
+  // (backgrounding, or the OS about to suspend/kill the tab) is exactly the moment a pending
+  // debounced offline save needs to land NOW, not in up to 250ms.
+});
 addEventListener('pageshow',onForeground);
+addEventListener('pagehide',flushPendingOfflineSave);   // v0.10.3: belt-and-suspenders — some
+// browsers fire pagehide without a preceding 'hidden' visibilitychange on an outright tab close.
 
 /* ============================= § ADMIN (god mode, v0.9 item 9) =============================
    Blake's own admin tool — tap the version number 7 times on the main menu to reveal it. The
@@ -3288,6 +3482,9 @@ function autotest(n,teams){
   startGame();
 }
 renderMenu();
+syncOfflineSaveFromIdb();   // v0.10.3: async self-heal — see "IndexedDB mirror" above. Runs
+// after the synchronous first paint below; re-renders the resume tile itself if it finds
+// something localStorage didn't have.
 if(location.hash==='#autotest')autotest(4,false);
 else if(location.hash==='#autotest6')autotest(6,true);
 else{
