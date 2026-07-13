@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY — the Pangman family board game, digitized. v0.10.
+  NASTY — the Pangman family board game, digitized. v0.10.2.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation — the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -96,6 +96,26 @@
       hand bar's actual measured height instead of a guessed constant. A dedicated short-landscape
       media query (phone rotated sideways) reclaims chrome space so the board isn't a postage
       stamp in that one pathological aspect ratio.
+
+  v0.10.2 (2026-07-12 — see HANDOFF.md/PLANNING.md for the full readout):
+    - Root-cause fix for the online save/quit/reload/resume desync + freeze: a reconnecting
+      client's INSTANT catch-up replay could silently race PAST a pause the room requested
+      moments earlier (the regroup lobby's force-pause on resume), because deterministic
+      bow-out transitions never checked whether the real backlog had actually run out — see
+      runTurn()'s comment, § TURNS, and endCatchup()/waitForCatchup(), § ANIM-ish util block.
+      Hardened with defense in depth: applyMove()'s swap case now validates both pieces are
+      genuinely on the track before touching them (ImpossibleStateError otherwise), runTurn()/
+      performMove() both resync instead of dying on any uncaught exception
+      (handleTurnLoopError()), the stateCheck integrity digest now fires after every kick/Jack
+      too (not just once per deal, see runStateCheck()/G.actionSeq), and the plain pause
+      overlay no longer lets just anyone dismiss a reunion-gated pause before everyone's
+      actually back (see updatePauseUI()'s PAUSE_TAP_ALLOWED gate).
+    - Board size restored, name plates moved onto the board's own corner chamfers: plaques now
+      anchor directly at the octagon's diagonal cut corners (buildLayout()'s plaqueAnchor,
+      § LAYOUT — 6P shares 2 of the 4 corners between pairs of seats) instead of sliding out
+      from a tucked-in position, so CANVAS_PAD (v0.10's board-shrinking margin reservation)
+      could drop from 100 to a per-board sliver (20 for 4P, 40 for 6P) — the board renders at
+      96-98% of its pre-v0.10 size again, still zero hole/pocket overlap on every tested screen.
 -->
 </head>
 <body>
@@ -447,7 +467,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.10</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.10.2</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -824,27 +844,71 @@ function buildLayout(n){
   // untouched.
   const pocketR=n===4?310:330;
   const discOff=n===4?92:66;                            // sideways nudge — keeps a played card clear of the deck
+  // v0.10.2 (Blake: "have the name plates run along that short cut off corner on every side
+  // of the board"): the octagon's wood polygon (see drawBoard()'s `oct`, § RENDER) always has
+  // its 4 diagonal chamfers at exactly ±45°/±135° from center, regardless of n — that's a
+  // property of the physical board shape, not the seat layout. 4P's 4 bisectors land EXACTLY
+  // on those 4 corners (a happy coincidence of 90° spacing), so every 4P seat gets its own. 6P's
+  // 6 bisectors (60° apart) can't all get a private corner — every seat still finds whichever of
+  // the 4 corners is angularly closest (an exact tie, for the 2 seats pointing at the board's
+  // plain left/right edges, breaks toward the first corner checked — see CORNER_ANGLES' order),
+  // landing 2 corners with 2 seats and 2 with 1. A corner with 2 seats offsets them along its own
+  // tangent (perpendicular to its radial direction) so they sit side by side ALONG that corner,
+  // not stacked — CORNER_TANGENT_GAP is that offset, tuned (see HANDOFF.md) against real
+  // getBoundingClientRect() measurements the same way v0.10's PLAQUE_SLIDE was. rot alternates
+  // -45/45 per corner (checkerboard, same sign rule the original 4P-only code used: u.x*u.y>0 ?
+  // -45 : 45) so every plate lies flush and readable against its corner's actual diagonal cut.
+  const CORNER_ANGLES=[-3*Math.PI/4,-Math.PI/4,Math.PI/4,3*Math.PI/4];   // NW, NE, SE, SW
+  const CORNER_R=n===4?630:596;   // radius to just past the chamfer's midpoint (drawBoard's oct,
+                                   // c=150, puts the chamfer itself at ~radius 595) — 4P pushes a
+                                   // touch further since nothing shares its corners; both found
+                                   // empirically against real hole/pocket/viewport measurements.
+  const CORNER_TANGENT_GAP=120;   // board-space offset between two plates sharing one corner (6P only)
+  const cornerGroups=CORNER_ANGLES.map(()=>[]);
+  const seatBt=[];
+  for(let s=0;s<n;s++){
+    const bt=arms[s].th-Math.PI/n;                      // this seat's own bisector (still used for base/deck below)
+    seatBt.push(bt);
+    let best=0,bestDiff=Infinity;
+    for(let c=0;c<4;c++){
+      let diff=Math.abs(bt-CORNER_ANGLES[c])%(2*Math.PI);
+      if(diff>Math.PI)diff=2*Math.PI-diff;
+      if(diff<bestDiff){bestDiff=diff;best=c;}
+    }
+    cornerGroups[best].push(s);
+  }
+  const plaqueAnchor=new Array(n);
+  for(let c=0;c<4;c++){
+    const ang=CORNER_ANGLES[c];
+    const cu={x:Math.cos(ang),y:Math.sin(ang)};
+    const tangent={x:-cu.y,y:cu.x};
+    const rot=cu.x*cu.y>0?-45:45;
+    const seats=cornerGroups[c];
+    seats.forEach((s,i)=>{
+      // 1 seat at this corner: dead center on it. 2 seats: offset apart along the tangent,
+      // symmetric around the corner's own anchor point (more than 2 never happens — 4 corners,
+      // at most 6 seats, pigeonhole caps any one corner at 2 in this layout).
+      const off=seats.length===1?0:(i===0?-1:1)*CORNER_TANGENT_GAP/2;
+      plaqueAnchor[s]={x:500+cu.x*CORNER_R+tangent.x*off,y:500+cu.y*CORNER_R+tangent.y*off,rot};
+    });
+  }
   for(let s=0;s<n;s++){
     const a=arms[s];
     home.push([1,2,3,4,5].map(k=>P(a,cfg.r0-k*hs,0)));
-    const bt=a.th-Math.PI/n;                            // bisector toward the player's right
+    const bt=seatBt[s];                                 // bisector toward the player's right
     const u={x:Math.cos(bt),y:Math.sin(bt)};
     const bc={x:500+u.x*cfg.baseR,y:500+u.y*cfg.baseR},sp2=cfg.spread;
     base.push([{x:bc.x,y:bc.y},{x:bc.x-sp2,y:bc.y-sp2},{x:bc.x+sp2,y:bc.y-sp2},
                {x:bc.x-sp2,y:bc.y+sp2},{x:bc.x+sp2,y:bc.y+sp2}]);
-    if(n===4){
-      // the placard IS the shaved corner (Blake's idea): sits on the felt corner, rotated 45°
-      plaque.push({x:500+u.x*594,y:500+u.y*594,rot:u.x*u.y>0?-45:45});
-    }else{
-      // tucked between the center ring and the base cluster — clear of every hole
-      plaque.push({x:500+u.x*340,y:500+u.y*340,rot:0});
-    }
-    // v0.10: outward unit vector for this seat's plaque — positionPlaques() (§ RENDER) slides
-    // the plaque further out along this exact line (same bisector the anchor above already
-    // uses) so a bigger name plate can grow without eating into a hole. Same vector for every
-    // board (u), stored once here so the render code never has to re-derive it.
-    plaqueDir.push(u);
-    // the deck sits in the DEALER's quarter and slides over when the deal passes
+    plaque.push(plaqueAnchor[s]);
+    // v0.10: outward unit vector for this seat's plaque — positionPlaques() (§ RENDER) can
+    // still nudge the plaque a little further out along this line (now the CORNER's own radial
+    // direction, not necessarily this seat's bisector — see plaqueAnchor above) if a screen has
+    // room to spare; the anchor above is already the primary, corner-safe position.
+    const anchorAng=Math.atan2(plaqueAnchor[s].y-500,plaqueAnchor[s].x-500);
+    plaqueDir.push({x:Math.cos(anchorAng),y:Math.sin(anchorAng)});
+    // the deck sits in the DEALER's quarter and slides over when the deal passes — unrelated
+    // to the plaque redesign above, still keyed off this seat's OWN bisector as always.
     const dx=500+u.x*pocketR,dy=500+u.y*pocketR;
     deckPockets.push({x:dx,y:dy,w:cardW,h:cardH});
     // each seat's played cards land just beside their OWN deck pocket, offset so it
@@ -885,6 +949,10 @@ function newGame(cfg,seed){
      dealSeq:0,   // counts doDeal() calls — lets the stateCheck integrity guard match up a
                   // digest to the SAME logical checkpoint on every client, not just whoever's
                   // rendering fastest right now (see doDeal/gDigest)
+     actionSeq:0, // v0.10.2: counts applyMove() calls (every real move/swap, game-lifetime) —
+                  // a FINER-grained checkpoint than dealSeq for the integrity guard, so a
+                  // silent drift gets caught within a few moves instead of up to a whole hand
+                  // later (see the kick/swap stateCheck trigger in performMove(), § TURNS).
      paused:false};   // v0.8: pause/resume — see setPaused()/pauseGate() in § TURNS
   G.turn=(G.dealer+1)%G.n;
   G.humanCount=cfg.seats.filter(s=>s.type==='human').length;
@@ -984,11 +1052,28 @@ function legalMoves(seat){
   });
   return ms;
 }
+// v0.10.2: thrown by applyMove() when it's asked to do something the current G genuinely
+// can't support (see the swap guard below) — a signal to the turn loop to resync instead of
+// silently corrupting state or crashing uncaught. See handleTurnLoopError(), § TURNS.
+class ImpossibleStateError extends Error{}
 function applyMove(seat,m){
   const card=G.hands[seat].splice(m.ci,1)[0];
-  G.discard.push(card); G.passStreak=0;
+  G.discard.push(card); G.passStreak=0; G.actionSeq++;
   if(m.type==='swap'){
     const a=G.pieces[m.owner][m.pi], b=G.pieces[m.ts][m.tpi];
+    // Integrity guard (fix, v0.10.2 — the save/quit/reload/resume desync Blake hit
+    // 2026-07-12): a swap is only ever legal between two pieces that are BOTH still on the
+    // track (legalMoves() never offers one otherwise — see RULES.md, a Jack can never target
+    // a safe-row/home piece). If this client's own copy of either piece has already drifted to
+    // 'home' or 'base' — i.e. the action was computed against a DIFFERENT, no-longer-matching
+    // G on whichever client sent it — blindly feeding a home/base `steps` value into
+    // loopIdx() (which assumes a valid 0..L-1 loop position) produces a garbage, off-board
+    // position instead of an error: exactly how a piece ended up "one spot up but to the
+    // right, outside the safe zone" in Blake's report. Detect it and let the caller resync
+    // instead of corrupting G further.
+    if(a.state!=='track'||b.state!=='track'){
+      throw new ImpossibleStateError(`swap target off-track: owner=${m.owner}/${m.pi} state=${a.state}, ts=${m.ts}/${m.tpi} state=${b.state}`);
+    }
     const ia=loopIdx(m.owner,a.steps), ib=loopIdx(m.ts,b.steps);
     a.steps=(ib-entryIdx(m.owner)+LAY.L)%LAY.L;
     b.steps=(ia-entryIdx(m.ts)+LAY.L)%LAY.L;
@@ -1202,10 +1287,26 @@ function fadeAllDiscards(){
    (500+CANVAS_PAD) ~14% smaller) — worth it for genuinely-2x, never-clipped name plates on
    every screen. Board geometry (hole coordinates etc.) is completely untouched — this only
    changes the fit-to-container SCALE factor, not board-space coordinates. */
-const CANVAS_PAD=100;
+/* v0.10.2 (Blake: "make the board as big as it was before you slightly shrunk it"): CANVAS_PAD
+   was v0.10's fix for a genuinely different plaque design (each seat sliding out along its OWN
+   bisector, which for 6P needed room well past the wood's edge). Now that plaques anchor
+   directly at the board's own corner chamfers (see buildLayout's plaqueAnchor, § LAYOUT) —
+   already-spacious felt space that exists INSIDE the 0..1000 board-space square, not a made-up
+   margin around it — that extra reserved margin is barely needed anymore. Back to near-zero
+   (down from v0.10's 100): 4P needs the tiniest sliver (20) to keep real, not
+   fraction-of-a-pixel, clearance at the tightest tested screen (320×568) — without it, the
+   doubled-text plates and the base holes are close enough to nearly touch there. 6P (a
+   fundamentally tighter fit — see the corner-sharing comment above) needs a bit more (40). Both
+   found empirically the same way v0.10's slide distances were: real getBoundingClientRect()
+   sweeps against real holes/pockets/viewport, not hand geometry. Net effect: the board renders
+   96-98% of its full pre-v0.10 size (4P/6P respectively) instead of v0.10's ~86% — see
+   HANDOFF.md for the exact before/after pixel measurements. */
+const CANVAS_PAD_BY_N={4:20,6:40};
+function currentCanvasPad(){ return CANVAS_PAD_BY_N[(G&&G.n)||4]; }
 function fitBoard(){
   const w=$('boardWrap').clientWidth,h=$('boardWrap').clientHeight;
-  const s=Math.min(w,h)/(1000+CANVAS_PAD*2);
+  const pad=currentCanvasPad();
+  const s=Math.min(w,h)/(1000+pad*2);
   const bs=$('boardScale');
   bs.style.transform=`scale(${s})`;
   bs.style.left=((w-1000*s)/2)+'px'; bs.style.top=((h-1000*s)/2)+'px';
@@ -1232,8 +1333,14 @@ addEventListener('resize',fitBoard);
    boardWrap/plaque rects every time fitBoard() runs (every resize/orientation change) — this is
    the "measure the real clip boundary first" empirical approach, done continuously instead of
    baked in for one screen size. */
-const PLAQUE_SLIDE     ={4:70, 6:220};   // desired — used whenever the screen has room
-const PLAQUE_SLIDE_MIN ={4:40, 6:200};   // floor — the smallest hole-safe distance; never go below
+/* v0.10.2: with plaques now anchored directly at the board's corner chamfers (see
+   buildLayout's plaqueAnchor, § LAYOUT) the anchor itself is already the target position — no
+   outward slide needed to clear a hole the way the old bisector-based placement did. Left at 0
+   (rather than deleted) so positionPlaques()'s existing real-clip-boundary pull-back stays
+   available as a safety net for an aspect ratio nobody's tested yet, same "measure first, don't
+   hand-tune" spirit as before — see that function. */
+const PLAQUE_SLIDE     ={4:0, 6:0};
+const PLAQUE_SLIDE_MIN ={4:0, 6:0};
 function positionPlaques(){
   if(!G||!LAY||!LAY.plaqueDir)return;
   const pl=$('plaqueLayer'); if(!pl||!pl.children.length)return;
@@ -1487,7 +1594,19 @@ function endSkip(){
    testing: a reconnect after ~10s of play took 100+ real seconds to catch up because of this.
    endCatchup() is the ONLY thing allowed to clear INSTANT — call site (1) no longer touches it,
    so INSTANT now correctly persists across every deal boundary until we're GENUINELY live. */
-function endCatchup(){ INSTANT=false; endSkip(); }
+let CATCHUP_WAITERS=[];   // v0.10.2: see waitForCatchup() — resolved by endCatchup() below
+function endCatchup(){
+  INSTANT=false; endSkip();
+  const ws=CATCHUP_WAITERS; CATCHUP_WAITERS=[]; ws.forEach(w=>w());
+}
+// v0.10.2: resolves once catch-up is GENUINELY done (INSTANT has actually cleared), not just
+// once bootGameFromNetwork()'s own synchronous setup has returned — the real replay runs
+// async across many runTurn() calls after that. Used by the reunion lobby (§ REUNION) so
+// "you're back!" / the green presence dot / the host's Resume button never appear before this
+// client has actually caught its OWN G up to the live board — see onSync()'s comment.
+function waitForCatchup(){
+  return new Promise(res=>{ if(!INSTANT){ res(); return; } CATCHUP_WAITERS.push(res); });
+}
 
 /* ---- Pause (v0.8) ----
    A single choke point: every path that begins a new turn attempt (a fresh CPU turn, a
@@ -1506,6 +1625,10 @@ function pauseGate(){
     PAUSE_WAITERS.push(res);
   });
 }
+// v0.10.2: gates the plain pause overlay's tap-to-resume — see the comment inside
+// updatePauseUI() below for why. Defaults open (true) so offline/pre-game states never
+// accidentally lock a legitimate resume.
+let PAUSE_TAP_ALLOWED=true;
 function updatePauseUI(){
   const ov=$('pauseOverlay');
   if(!G||!G.paused){ ov.classList.add('hidden'); closeReunionOverlay(); return; }
@@ -1513,9 +1636,39 @@ function updatePauseUI(){
   // waiting on people" story — don't stack the plain pause overlay on top of it too.
   if(NET.reunionOpen){ ov.classList.add('hidden'); return; }
   if(NET.online){
-    $('pauseSub').textContent='tap Resume to keep playing';
-    $('pauseText').textContent='Someone hit pause — everyone\'s game is holding here. Any player can tap below to resume.';
+    // v0.10.2: a real gap this session's testing surfaced — the reunion lobby's force-pause
+    // (someone resuming a saved online game, see onSync()'s NET.enteringViaResume branch)
+    // shares this SAME G.paused/pauseOverlay machinery with a casual "walk away" pause. This
+    // screen is shown to anyone who did NOT themselves open the reunion overlay (typically the
+    // host, since the returning player sees the dedicated reunion lobby instead) — and it used
+    // to let ANY player tap-to-resume unconditionally, even while someone was still visibly
+    // missing, defeating the reunion lobby's whole point ("wait for everyone to be back"
+    // before play continues). Can't tell a reunion-triggered pause apart from a manual one
+    // without a new server-relayed field (a server change, out of scope for this client-side
+    // fix) — approximate it instead from data already broadcast with zero protocol change:
+    // NET.presence (kept current by the server's existing 'presence' broadcast). Every human
+    // seat connected reads as an ordinary walk-away pause — unchanged, any player can tap to
+    // resume. Someone missing reads as a regroup in progress — require the dedicated reunion
+    // "Resume" flow instead (shown on the RECONNECTED player's own screen once it's genuinely
+    // caught up and every seat shows present, see renderReunionOverlay()).
+    // h.seat===NET.mySeat short-circuits MY OWN seat as always-present: NET.presence only
+    // ever gets populated for OTHER players (via 'sync's presenceSnapshot, for whoever just
+    // reconnected, or the 'presence' broadcast, which explicitly excludes its own sender) — a
+    // client that's been continuously connected since it created/joined the room (typically
+    // the host) never receives an entry for its OWN playerId, which would otherwise make this
+    // permanently false for them even when everyone genuinely IS here.
+    const humans=humanSeatList();
+    const allHere=humans.length===0||humans.every(h=>h.seat===NET.mySeat||NET.presence[h.playerId]);
+    PAUSE_TAP_ALLOWED=allHere;
+    if(allHere){
+      $('pauseSub').textContent='tap Resume to keep playing';
+      $('pauseText').textContent='Someone hit pause — everyone\'s game is holding here. Any player can tap below to resume.';
+    }else{
+      $('pauseSub').textContent='waiting for everyone to be back';
+      $('pauseText').textContent='Someone\'s getting back to the table — hang tight, play resumes once everyone\'s here.';
+    }
   }else{
+    PAUSE_TAP_ALLOWED=true;
     $('pauseSub').textContent='tap to resume';
     $('pauseText').textContent='Everyone can walk away — your game is saved. Tap anywhere to keep playing.';
   }
@@ -1616,22 +1769,11 @@ async function doDeal(){
   await animateDeal(k);
   if(myGen!==NETGEN)return;
   syncAll(); renderHandFor(visibleHandSeat());
-  // Cheap integrity guard (fix, 2026-07-09): every deal, the host broadcasts a digest of its
-  // G tagged with dealSeq (the Nth deal of the game); every client checks its OWN digest at
-  // the SAME checkpoint (right after ITS OWN Nth deal, whenever it gets there — clients don't
-  // all render at the same real-world speed, so comparing at arrival time would false-positive
-  // on a merely-slower phone). Whichever of "my deal" / "their digest" arrives second does the
-  // comparing; a mismatch means this client quietly drifted (the reconnect race NETGEN guards
-  // against, or anything else) and silently re-syncs via the same rejoin path a real reconnect
-  // already uses — no toast, no interruption.
-  if(NET.online){
-    if(NET.isHost)netSend({type:'stateCheck',seq:G.dealSeq,digest:gDigest()});
-    if(NET.pendingStateCheck&&NET.pendingStateCheck.seq===G.dealSeq){
-      if(NET.pendingStateCheck.digest!==gDigest())
-        netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token});
-      NET.pendingStateCheck=null;
-    }
-  }
+  // Integrity guard: see runStateCheck(), § TURNS. Was per-deal only (dealSeq) until v0.10.2;
+  // now keyed off G.actionSeq (still just once here, at the deal boundary — the finer-grained
+  // per-kick/swap trigger lives in performMove()) so both triggers share one checkpoint slot
+  // with no wire-protocol change (the server only ever relays an opaque {seq,digest} pair).
+  if(NET.online)runStateCheck();
 }
 function seatsWithCards(){return G.hands.filter(h=>h.length>0).length;}
 // A hand is over once every seat has either played out (empty hand) or bowed out (2026-07-08
@@ -1648,7 +1790,45 @@ async function passTurn(seat){
   }
 }
 function advance(){ G.turn=(G.turn+1)%G.n; }
+// v0.10.2: last-resort handler for an exception inside the turn loop (see performMove()/
+// runTurn()'s try/catch wrappers below) — an impossible state (ImpossibleStateError from
+// applyMove(), or literally anything else unexpected) must never just kill the loop. Online,
+// the fix is the same self-heal path the stateCheck digest-mismatch guard already uses: ask
+// the server for a fresh, authoritative sync and rebuild G from it, silently. A short cooldown
+// avoids hammering the server if something's persistently broken (each resync gets a full
+// fresh chance to resolve it; retrying more than once every couple of seconds wouldn't help
+// and would just spam the wire). Offline there's nothing to resync against — surface it
+// plainly instead of leaving a silently-dead game with no explanation.
+let lastImpossibleStateResyncAt=0;
+async function handleTurnLoopError(e){
+  console.error('[NASTY] turn loop hit an unexpected/impossible state — recovering:',e);
+  if(NET.online&&NET.wantConnection){
+    const now=Date.now();
+    if(now-lastImpossibleStateResyncAt<2000)return;
+    lastImpossibleStateResyncAt=now;
+    if(NET.ws&&NET.ws.readyState===1)
+      netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token});
+    else scheduleReconnect();
+  }else if(G&&!G.over){
+    toast('Something went wrong with that move — try Menu → Resume, or reload the page.',5000);
+  }
+}
+// Turn-loop crash guard (fix, v0.10.2 — the freeze half of Blake's 2026-07-12 report). Neither
+// performMove() nor runTurn() ever had a try/catch — an uncaught exception anywhere in either
+// (an ImpossibleStateError from applyMove(), see above, or literally anything else: this is a
+// blanket safety net) just silently died as an unhandled promise rejection, and since
+// performMove()'s own tail is what schedules the NEXT runTurn() call, that death was permanent
+// — nothing was ever going to call runTurn() again. That's the "then it just froze entirely"
+// half of the report: a divergence didn't just corrupt a piece, it could ALSO kill the loop
+// outright. Both entry points are now thin wrappers around their real bodies (renamed
+// *Inner) so every call — including every recursive one, since the recursive calls below still
+// go through the wrapped names — gets its own try/catch; handleTurnLoopError() resyncs instead
+// of leaving the game dead.
 async function performMove(seat,m,cardEl){
+  try{ await performMoveInner(seat,m,cardEl); }
+  catch(e){ await handleTurnLoopError(e); }
+}
+async function performMoveInner(seat,m,cardEl){
   const myGen=NETGEN;   // see NETGEN comment above — a reconnect replay can land mid-animation
   clearSelection();
   const owner=m.owner;
@@ -1664,7 +1844,10 @@ async function performMove(seat,m,cardEl){
   }
   const kicked=m.kick?{seat:m.kick.seat,pi:m.kick.pi,pos:teePos(m.kick.seat,m.kick.pi)}:null;
   const preSnug=G.pieces[owner].map((_,i)=>isSnug(owner,i));
-  applyMove(seat,m);
+  applyMove(seat,m);   // may throw ImpossibleStateError (swap guard) — caught by the wrapper above
+  // Integrity guard, widened v0.10.2: check more often than once per deal for exactly the two
+  // action types most likely to expose a drifted piece (see runStateCheck()'s comment).
+  if(NET.online&&(kicked||m.type==='swap'))runStateCheck();
   const elm=$(`tee-${owner}-${m.pi}`);
   if(m.type==='enter'){
     sEnter();
@@ -1728,8 +1911,32 @@ function visibleHandSeat(){
   return G.seats[G.turn].type==='human'?G.turn:-1;
 }
 async function runTurn(){
+  try{ await runTurnInner(); }
+  catch(e){ await handleTurnLoopError(e); }
+}
+// See the crash-guard comment above performMove() — same shape, same reason. Every internal
+// recursive call below (`return runTurn()`) goes through the wrapped name, so every turn of
+// the loop gets its own fresh try/catch, not just the first one.
+async function runTurnInner(){
   if(!G||G.over)return;
   const myGen=NETGEN;   // see NETGEN comment above — abort quietly if a reconnect replay supersedes us
+  // Root-cause fix, v0.10.2 (the save/quit/reload/resume desync+freeze Blake hit 2026-07-12):
+  // INSTANT catch-up must end the MOMENT there's no more real history left to replay — not
+  // just the next time armMoveWait()/armReshuffleWait() happen to find their backlog empty.
+  // Deterministic no-network-needed transitions (a bow-out chain: everyone-but-me already
+  // bowedOut, or reaching MY OWN seat's turn) never go through either of those functions, so
+  // without this check a reconnecting client could keep calling runTurn()->runTurn() under
+  // INSTANT indefinitely — sailing straight past a pause the room requested (e.g. the regroup
+  // lobby's force-pause on resume) because the pause gate right below is explicitly skipped
+  // while INSTANT is true. That's exactly how a returning player's client could silently race
+  // ahead of the live board: it marches through a string of bow-outs the OTHER (paused, holding)
+  // clients never got to, lands on "my own turn" at a turn NUMBER nobody else has reached yet,
+  // and arms its own hand for a tap against that phantom-future state — the seam a later Jack
+  // trade or any other action can then desync against. Ending catch-up here, before the pause
+  // gate and before any bow-out/hand-arming decision gets made, means the very next check of
+  // G.paused (right below, same call) correctly holds at exactly the same point every OTHER
+  // client is already holding at.
+  if(NET.online&&INSTANT&&NET.actionQueue.length===0)endCatchup();
   // Pause gate (v0.8): holds here — between turns, never mid-move — until someone resumes.
   // Skipped during INSTANT catch-up so a reconnecting phone can always finish its silent
   // replay regardless of the room's current pause state (see pauseGate() comment above).
@@ -2038,7 +2245,7 @@ const NET={
   lobby:null, seatOwners:null, hostConnected:true,
   connected:false, reconnecting:false, backoff:1000,
   actionQueue:[], waiters:{move:{},reshuffle:null}, pendingCardEl:null,
-  pendingStateCheck:null,   // {seq,digest} — see gDigest/doDeal's stateCheck integrity guard
+  pendingStateCheck:null,   // {seq,digest} — see gDigest/runStateCheck's integrity guard
   silentRejoin:false,   // v0.8: true only during boot()'s no-URL-param auto-rejoin attempt —
                         // see 'rejoinError' above and boot()/tryJoinOrRejoin() below
   moveSentForTurn:false,   // v0.8: double-tap guard — see commitMove()
@@ -2100,6 +2307,30 @@ function gDigest(){
   let h=0x811c9dc5;
   for(let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,0x01000193); }
   return (h>>>0).toString(36);
+}
+/* Integrity guard (fix, 2026-07-09; widened v0.10.2). Originally fired once per deal, keyed on
+   dealSeq — for an online game mid-hand, a silent drift could sit undetected for up to a whole
+   hand's worth of turns before the next checkpoint caught it. v0.10.2 re-keys the SAME
+   mechanism onto G.actionSeq (counts every real move/swap, game-lifetime — see applyMove()) and
+   calls it a second time, from performMove(), right after any kick or Jack swap — the two
+   action types most likely to touch a piece whose state might have quietly diverged (see the
+   ImpossibleStateError guard in applyMove() for the other half of this fix). One shared pending
+   slot, one wire message shape ({type:'stateCheck',seq,digest} — unchanged, no server update
+   needed): the host computes+broadcasts a digest tagged with ITS OWN current actionSeq;
+   every OTHER client compares its OWN digest once ITS OWN actionSeq reaches that same number
+   (not at message-arrival time — phones don't render at the same real-world speed), silently
+   re-syncing (the same rejoin path a real reconnect uses) on a mismatch. No popup, no
+   interruption — this is pure defense in depth: the save/quit/reload/resume desync's actual
+   root cause is fixed at the source (see the INSTANT/pause-catchup comment in runTurn()); this
+   is the backstop for anything else that might someday cause the same shape of drift. */
+function runStateCheck(){
+  if(!NET.online||!G)return;
+  if(NET.isHost)netSend({type:'stateCheck',seq:G.actionSeq,digest:gDigest()});
+  if(NET.pendingStateCheck&&NET.pendingStateCheck.seq===G.actionSeq){
+    if(NET.pendingStateCheck.digest!==gDigest())
+      netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token});
+    NET.pendingStateCheck=null;
+  }
 }
 function updateNetChip(){
   const chip=$('netChip'); if(!chip)return;
@@ -2245,7 +2476,16 @@ function onSync(m){
     if(NET.enteringViaResume){
       NET.enteringViaResume=false;
       if(!G.paused)requestPause(true);
-      openReunionOverlay();
+      // v0.10.2: don't open the "you're back!" reunion lobby until THIS client's own catch-up
+      // replay has actually finished (waitForCatchup(), not just bootGameFromNetwork()'s own
+      // synchronous setup returning above) — the real replay runs async across many runTurn()
+      // calls after that point. Opening it early used to show a green "Here" dot and (for a
+      // host) an enabled Resume button while this phone's G could still be many turns behind
+      // where it's about to end up, which is the seam the save/quit/reload/resume desync came
+      // from (see the runTurn() catch-up-vs-pause comment, § TURNS). NETGEN-guarded in case a
+      // newer reconnect supersedes this one while we're waiting.
+      const myGen=NETGEN;
+      waitForCatchup().then(()=>{ if(myGen===NETGEN)openReunionOverlay(); });
     }
   }
 }
@@ -2376,10 +2616,13 @@ function handleNetMessage(m){
       leaveOnlineToMenu(m.message||'The host removed your seat.');
       return;
     case 'presence':
-      // v0.9: kept for the reunion lobby's green/gray dots (see § REUNION) — everywhere else
-      // this is still just a nice-to-have, not required for correctness.
+      // v0.9: kept for the reunion lobby's green/gray dots (see § REUNION). v0.10.2: ALSO
+      // feeds the plain pause overlay's tap-to-resume gate (updatePauseUI(), § TURNS) — so a
+      // returning player's dot flipping green live-updates whether the OTHER player(s) still
+      // sitting on the plain paused screen see it as resumable.
       NET.presence[m.playerId]=!!m.connected;
       if(NET.reunionOpen)renderReunionOverlay();
+      else updatePauseUI();
       return;
     case 'nudged':
       // v0.9: someone in the reunion lobby is trying to get this player back to the table —
@@ -2399,22 +2642,23 @@ function handleNetMessage(m){
       return;
     case 'sync': onSync(m); return;
     case 'stateCheck':
-      // Host's periodic per-deal digest (see doDeal/gDigest). Compare now if we've already
-      // reached that same deal ourselves; otherwise stash it — doDeal() checks this the next
-      // time IT finishes a deal, so the comparison always happens at a matching checkpoint
-      // instead of racing real-time animation speed differences between phones.
+      // Host's digest, tagged with G.actionSeq (see runStateCheck/gDigest, § TURNS — widened
+      // v0.10.2 from per-deal-only to also fire after every kick/Jack swap). Compare now if
+      // we've already reached that same actionSeq ourselves; otherwise stash it —
+      // runStateCheck() checks this the next time IT runs, so the comparison always happens
+      // at a matching checkpoint instead of racing real-time animation speed differences.
       if(NET.isHost||!G)return;
-      if(G.dealSeq===m.seq){
+      if(G.actionSeq===m.seq){
         if(gDigest()!==m.digest)netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token});
-      }else if(G.dealSeq<m.seq){
+      }else if(G.actionSeq<m.seq){
         NET.pendingStateCheck={seq:m.seq,digest:m.digest};
       }
       return;
     case 'requestStateCheck':
       // v0.8: another phone came back from the background and wants an immediate integrity
-      // check instead of waiting for the next deal boundary (see onForeground()). Only the
-      // host actually computes/broadcasts digests, same as the periodic per-deal one.
-      if(NET.isHost&&G)netSend({type:'stateCheck',seq:G.dealSeq,digest:gDigest()});
+      // check instead of waiting for the next checkpoint (see onForeground()). Only the host
+      // actually computes/broadcasts digests, same as the periodic one.
+      if(NET.isHost&&G)netSend({type:'stateCheck',seq:G.actionSeq,digest:gDigest()});
       return;
     case 'paused':
       // v0.8: pause/resume broadcast — applies the SAME way on every phone, including
@@ -2799,7 +3043,7 @@ $('btnSpeed').onclick=()=>{
 };
 $('btnSkip').onclick=startSkip;
 $('btnPause').onclick=()=>requestPause(true);
-$('pauseOverlay').addEventListener('pointerdown',()=>requestPause(false));
+$('pauseOverlay').addEventListener('pointerdown',()=>{ if(PAUSE_TAP_ALLOWED)requestPause(false); });
 /* v0.9 item 4: explicit "Save & quit to menu" from the pause overlay. Offline, the game
    already autosaves every turn (see scheduleSaveOffline) — this just forces an immediate
    flush (no reason to wait out the debounce) and goes to the menu WITHOUT clearing the save,
