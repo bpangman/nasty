@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY - the Pangman family board game, digitized. v0.11.
+  NASTY - the Pangman family board game, digitized. v0.11.1.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation - the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -167,6 +167,32 @@
       hidden up top right now"). Toasts reserve a right-hand lane so the two can never overlap.
       Nothing else moves when Skip appears/disappears - it was the only thing ever popping in/out
       of the topbar row, and it's not in that row anymore.
+
+  v0.11.1 (2026-07-15 - two centering fixes, see HANDOFF.md/PLANNING.md for the full readout):
+    - Splash logo, actually centered on every device now. v0.11's rebuilt splash SOURCE image was
+      already dead-centered (confirmed by measuring app/assets/splash.png directly - sign bounding
+      box within 0.04% of the 2732x2732 canvas's true center) - the source was never the bug.
+      Root-caused (screenshotting every 100-150ms through real launches on 3 simulator sizes) to
+      @capacitor/splash-screen's OWN plugin code: it re-shows the launch image as a held overlay
+      and keeps its frame live-synced to `window.bounds` via a KVO observer "to handle rotation
+      resizing" - and that observer fires at least once during the hold with a bounds value that
+      renders the sign well below center, self-correcting only later. That's third-party plugin
+      code (not safe to hand-patch - a future `pod install` would overwrite it), so this app no
+      longer asks the plugin to hold a splash at all (`launchShowDuration:0`,
+      capacitor.config.json). What holds the gap instead: the OS's own LaunchScreen image (shown
+      natively before any app code runs - pure system compositing, nothing to glitch), then
+      #bootCover (§ STYLE/§ CAPACITOR) - a minimal flexbox-centered stand-in inside the page
+      itself, with no native KVO tracking to race against, shown the instant this script runs and
+      hidden only once #menu is confirmed actually settled (menuSettled(), polled every rAF, 2.5s
+      hard fallback) - so nothing wrong is ever on screen, regardless of how long a given device
+      takes to get there.
+    - Toast vertical centering: toasts in the band between the board and the hand used to only
+      anchor at the BOTTOM (grow upward), so a 1-line toast sat visibly lower than a 2-line one.
+      #toasts (§ STYLE) now has a real top edge too - `--toastBandTop`, the board's measured
+      bottom edge (updateToastOffset(), § RENDER/ANIM) - and centers within that band via
+      `justify-content:center`, same distance to the board above and the hand below regardless of
+      line count. The bottom edge (handH+8px) is unchanged, so the existing no-collision math
+      against the pinned-right #btnSkip doesn't move.
 -->
 </head>
 <body>
@@ -471,9 +497,19 @@ button{font:inherit;cursor:pointer}
    + a real 10px clearance gap, checked against actual rendered geometry at 320/390/430/844
    logical widths, not just eyeballed) so a long toast's text can never run under Skip - the
    offset approach, not just a narrower max-width, so the two truly can't collide regardless of
-   toast text length. */
-#toasts{position:fixed;bottom:calc(var(--handH,148px) + 8px);left:12px;right:124px;z-index:65;
-  display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none;padding:0}
+   toast text length.
+   v0.11.1 (Blake: bottom-anchoring made a 1-line toast sit visibly lower than a 2-line one -
+   he wants it centered in the band instead, same distance to the board above and the hand
+   below no matter how many lines). #toasts now has a real TOP edge too - `--toastBandTop`,
+   the board's actual measured bottom edge (updateToastOffset(), § RENDER/ANIM), set the same
+   way --handH already was. `bottom` is unchanged (still handH+8px, so the no-collision math
+   against #btnSkip - which anchors off that exact same value - doesn't move), so the fix is
+   purely "give the flex column a top AND bottom and center within them" instead of "just grow
+   upward from the bottom." */
+#toasts{position:fixed;top:var(--toastBandTop,40vh);bottom:calc(var(--handH,148px) + 8px);
+  left:12px;right:124px;z-index:65;
+  display:flex;flex-direction:column;justify-content:center;gap:6px;align-items:center;
+  pointer-events:none;padding:0}
 .toast{background:rgba(15,10,6,.88);border:1px solid rgba(255,255,255,.2);border-radius:99px;
   padding:8px 18px;font-size:14.5px;font-weight:700;box-shadow:0 6px 18px rgba(0,0,0,.4);
   animation:toastIn .25s ease-out;max-width:100%;text-align:center}
@@ -513,9 +549,29 @@ button{font:inherit;cursor:pointer}
   #handRow{gap:4px}
   .card{width:clamp(34px,9vh,56px)}
 }
+
+/* v0.11.1 (iOS app only, see § CAPACITOR): #menu's `.sign` - correctly centered on every
+   device once the page fully settles (verified via the splash source PNG measurement) - was
+   observed on real simulators to render ALONE, mid-screen, for several hundred ms right after
+   the native launch image hands off, before the rest of #menu (tagline/buttons) paints and
+   everything snaps to the real near-the-top layout together. Screenshotting every 100-150ms
+   through a real launch confirmed this is a genuine WebView first-layout settle delay, not
+   just a timer race - hiding the native splash later (on `load`+rAF, then on a DOM poll for
+   #menu actually being laid out) still let it show, sometimes for longer. Rather than chase
+   the exact native cause further, #bootCover is a minimal, dependency-free stand-in - flexbox
+   centered directly on the viewport, no padding-top/safe-area math, no nested document flow -
+   shown (native-app-only) the instant the script block runs and hidden the moment #menu is
+   confirmed actually settled (pollMenuSettled(), § CAPACITOR), papering over that WebView
+   settle window with the same sign so nothing wrong is ever visible in between. Hidden by
+   default (`.hidden`) so the plain website - which has no such handoff and no complaints about
+   it - is completely unaffected. */
+#bootCover{position:fixed;inset:0;z-index:999;display:flex;align-items:center;justify-content:center;
+  background:radial-gradient(120% 95% at 50% 28%,var(--felt1),var(--felt2) 78%)}
 </style>
 
 <!-- ================= MENU ================= -->
+<!-- v0.11.1, iOS app only - see #bootCover's CSS comment above and § CAPACITOR -->
+<div id="bootCover" class="hidden"><div class="sign"><b>NASTY</b></div></div>
 <div id="menu">
   <div class="sign"><b>NASTY</b></div>
   <div class="estTop">Est. 1993</div>
@@ -543,7 +599,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.11</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.11.1</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -826,6 +882,47 @@ const PUBLIC_URL='https://nastyboardgame.com/';   // canonical link to put in in
 if(IS_APP){
   document.documentElement.classList.add('capacitor-app');
   try{ CAP.Plugins.StatusBar.setStyle({style:'LIGHT'}); }catch(e){}   // light icons/text on our dark felt background
+  /* v0.11.1 splash-centering fix (Blake: "isn't centered in the middle of the screen").
+     ROOT CAUSE, tracked down by screenshotting every 100-150ms through real launches on 3
+     simulator sizes: the static splash IMAGE itself was never the problem (measured dead-center
+     in the source PNG, sub-pixel) - and neither was any WebView/JS timing, which was the first
+     (wrong) theory: the wrong frame reliably appeared WHILE the fixed-duration native splash was
+     still supposed to be up, well before any JS in this page could have run or a WKWebView could
+     have painted anything. That points at Capacitor's own SplashScreen plugin
+     (@capacitor/splash-screen's SplashScreen.swift): it re-instantiates the LaunchScreen
+     storyboard as an overlay and keeps its frame live-synced to `window.bounds` via a `frame`/
+     `bounds` KVO observer on its parent view "to handle rotation resizing" - and on these
+     launches (no rotation involved) that observer still fires at least once during the hold with
+     a bounds value that renders the sign well below center, before a later relayout corrects it.
+     That's third-party plugin code (@capacitor/splash-screen, in node_modules/Pods - not safe to
+     hand-patch, it'd be overwritten by the next `pod install`), so rather than chase a native fix
+     there, this app doesn't ask the plugin to hold a splash at all anymore
+     (`launchShowDuration:0` in capacitor.config.json - `buildViews()` still runs harmlessly, but
+     `showSplash()` - the part that actually adds the glitchy live-tracked overlay - never does).
+     What's left holding the gap is exactly what the OS gives every app for free (the plain
+     LaunchScreen.storyboard image, shown natively before any app/plugin code runs at all - pure
+     system compositing, nothing to glitch) followed immediately by #bootCover (§ STYLE, right
+     after <body>) - a minimal, dependency-free STAND-IN inside the page itself: flexbox-centered
+     directly on the viewport, no native KVO tracking to race against. Shown here as the very
+     first thing this script does (note: § UTIL's `$` helper isn't defined yet this early, so this
+     block uses document.getElementById directly, not `$`, which would throw/temporal-dead-zone)
+     and hidden only once #menu is CONFIRMED actually settled - see menuSettled() below. */
+  document.getElementById('bootCover').classList.remove('hidden');
+  let splashHidden=false;
+  const hideSplash=()=>{
+    if(splashHidden)return; splashHidden=true;
+    try{CAP.Plugins.SplashScreen.hide();}catch(e){}
+    document.getElementById('bootCover').classList.add('hidden');
+  };
+  const menuSettled=()=>{
+    const sign=document.querySelector('#menu .sign'), tag=document.querySelector('#menu .tag');
+    if(!sign||!tag)return false;
+    const sr=sign.getBoundingClientRect(), tr=tag.getBoundingClientRect();
+    return sr.top>0 && sr.top<innerHeight*0.3 && tr.height>0;
+  };
+  const pollMenuSettled=()=>{ if(menuSettled())hideSplash(); else requestAnimationFrame(pollMenuSettled); };
+  addEventListener('load',()=>requestAnimationFrame(pollMenuSettled));
+  setTimeout(hideSplash,2500);   // hard fallback - hide() is idempotent either way
 }
 /* ============================= § UTIL ============================= */
 const $=id=>document.getElementById(id);
@@ -1045,6 +1142,13 @@ function buildLayout(n){
 }
 const entryIdx=s=>s*12;
 const loopIdx=(s,steps)=>(entryIdx(s)+steps)%LAY.L;
+/* v0.11.1: HANDOFF.md's soak-testing recipe has long said loopIdx()/entryIdx() are "exposed on
+   window alongside G/LAY for exactly this kind of check" (converting a seat-relative `steps` to
+   a shared absolute board position before comparing pieces across seats) - that claim was
+   actually false (only G/LAY were ever assigned to window), caught for real this session when a
+   soak-test script following that exact recipe hit `window.loopIdx is not a function`. Actually
+   exposing them now so the documented recipe is true. */
+window.entryIdx=entryIdx; window.loopIdx=loopIdx;
 function stepPos(s,steps){
   return steps<LAY.L ? LAY.loop[loopIdx(s,steps)] : LAY.home[s][steps-LAY.L];
 }
@@ -1494,10 +1598,27 @@ function positionPlaques(){
    hand bar's real height varies too, so the toast offset is measured live off the actual
    #handBar instead of assumed. Called after every hand render (renderHandFor) and on resize
    (fitBoard) - cheap (one getBoundingClientRect + one CSS var write), and keeps toasts sitting
-   snugly just above the hand on every screen instead of a gap that's only correct at one size. */
+   snugly just above the hand on every screen instead of a gap that's only correct at one size.
+   v0.11.1: also measures the board's real bottom edge (--toastBandTop) so #toasts's CSS can
+   give the toast band both a top AND a bottom and vertically CENTER within it (see #toasts,
+   § STYLE) instead of only growing upward from the hand - fixes a 1-line toast sitting lower
+   than a 2-line one. #boardScale is present (if empty) even on the menu screen, and its rect
+   collapses to 0 while #game is display:none, same non-issue --handH already had - both vars
+   only matter once a toast can actually show, which is gameplay-only. Clamped against
+   `bandBottom` (the same point #toasts's own `bottom:calc(handH+8px)` resolves to): on the one
+   pathological aspect ratio in the matrix (very short landscape, e.g. 844x390 - see the
+   max-height:480px landscape media query above), the board's measured bottom edge can sit AT
+   or slightly past the hand's top edge (near-zero letterbox margin at that size), which would
+   invert top past bottom and pin the band to one collapsed point instead of centering it -
+   confirmed by testing that exact size. Clamping bandTop to never exceed bandBottom collapses
+   that one edge case back to the pre-fix hand-hugging spot instead of an inverted box; every
+   normal portrait size has real room above the hand and is unaffected. */
 function updateToastOffset(){
   const h=$('handBar').getBoundingClientRect().height;
   document.documentElement.style.setProperty('--handH',h+'px');
+  const bandBottom=innerHeight-h-8;
+  const boardBottom=$('boardScale').getBoundingClientRect().bottom;
+  document.documentElement.style.setProperty('--toastBandTop',Math.min(boardBottom,bandBottom)+'px');
 }
 
 /* ============================= § ANIM ============================= */
