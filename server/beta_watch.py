@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=d60ff928-4073-4107-b72a-e4827efdf873&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=c0349fa2-a985-43f6-89d8-def42660640c&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -61,7 +61,7 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 9 reached the family</h1>
+<h1 style="color:#1a5c38">🎉 Build 10 reached the family</h1>
 <p>Apple approved the beta — the family can install the real app right now.</p>
 <h3>📱 The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -76,7 +76,7 @@ try:
 <p>— Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 9 is live for the family 🎉', body], check=True)
+                    'NASTY: build 10 is live for the family 🎉', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED — email sent, watcher done')
 except Exception as e:
