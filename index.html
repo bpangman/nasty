@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY - the Pangman family board game, digitized. v0.12.
+  NASTY - the Pangman family board game, digitized. v0.12.1.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation - the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -240,6 +240,24 @@
       resume, online reconnect/rejoin catch-up, and the reunion lobby, since they all rebuild
       `LAY` through the same three call sites (bootGameFromNetwork/startGame/resumeOfflineGame),
       all three now passing computeViewSeat()'s result.
+
+  v0.12.1 (2026-07-15 - stale toast bubble fix, see HANDOFF.md/PLANNING.md for the full readout):
+    - Blake: an update bubble ("welcome back," "you're out of cards this hand," a kick message,
+      etc.) could hang around well past its relevance - "multiple turns in and it's still
+      welcoming us back," or a bow-out message still showing 2 hands later. Root cause: toast()
+      (§ TURNS) silently no-ops whenever SKIP||INSTANT is true, and every previous session
+      assumed the NEXT DEAL's own toast() call was an unconditional replacement for whatever was
+      showing - but that call is itself subject to the same suppression, most visibly across an
+      entire reconnect's INSTANT catch-up, where every deal in the replayed backlog is
+      suppressed, so a bubble from before the disconnect could survive several hands of silent
+      replay untouched. Fix: doDeal() (§ TURNS) - the single entry point every deal goes through
+      already (normal rounds, reshuffles, post-skip, online lockstep, and catch-up replay all
+      funnel through this one function) - now calls clearToasts() unconditionally as its very
+      first action, before its own (possibly-suppressed) toast() call. Result: no bubble ever
+      survives into a new hand, regardless of SKIP/INSTANT state; the deal's own message still
+      shows normally on top of the cleared band whenever it isn't suppressed. Nothing else about
+      the v0.11.2/v0.11.3 toast design changed (latest-replaces-oldest, menu-transition clears,
+      skip's own toast suppression, band geometry).
 -->
 </head>
 <body>
@@ -682,7 +700,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.12</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.12.1</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -1927,12 +1945,17 @@ let uiResolve=null;
 // else replaces it (`ms` is kept in the signature purely so every existing call site with a
 // custom duration doesn't need touching; it's accepted and ignored, a toast never times out on
 // its own anymore). Suppression during fast-forward/catch-up and the replace-not-stack behavior
-// are both unchanged. "Stale message when a hand/game ends" is handled for free by the game's
-// own flow rather than any special-cased clearing: every new deal - the normal way a hand ends,
-// reshuffle or not - always calls toast() itself (see doDeal()) before the next real turn, which
-// replaces whatever was showing; and when the GAME ends, showWin() throws up the full-screen win
-// overlay a beat later, burying the band entirely. So a stale toast is never visible for longer
-// than that one short gap, and never past a deal/win boundary.
+// are both unchanged. "Stale message when a hand/game ends" used to be handled for free by
+// doDeal() always calling toast() itself before the next real turn - but that's only true when
+// toast() doesn't hit its own SKIP||INSTANT suppression below, which it routinely does (every
+// deal during a reconnect's INSTANT catch-up, for one) - so a bubble could survive well past the
+// hand it belonged to (Blake, 2026-07-15: a bow-out/welcome-back bubble sitting there hands
+// later). Fix (v0.12.1): doDeal() now calls clearToasts() unconditionally as its very first
+// action, BEFORE its own (possibly-suppressed) toast() call - so the band is guaranteed empty at
+// every deal boundary regardless of SKIP/INSTANT, and the deal's own message still shows right
+// on top of that whenever it isn't suppressed. When the GAME ends, showWin() throws up the
+// full-screen win overlay a beat later, burying the band entirely. So a stale toast is never
+// visible past the next deal or the game's end, whichever comes first.
 function toast(msg,ms=3000){
   if(SKIP||INSTANT)return;   // no toast spam while fast-forwarding or during reconnect catch-up
   $('toasts').replaceChildren();   // one message at a time - newest replaces the old, never stacks into the cards
@@ -2213,6 +2236,19 @@ async function syncOfflineSaveFromIdb(){
 
 async function doDeal(){
   const myGen=NETGEN;   // see NETGEN comment above
+  // v0.12.1 fix (Blake): a stale toast (e.g. a bow-out message, or "Welcome back") could
+  // survive PAST the next deal - the comment above toast() assumed "every doDeal() call
+  // always calls toast() itself, which replaces whatever's showing" was an unconditional
+  // guarantee, but toast() silently no-ops whenever SKIP||INSTANT is true (see toast()) - most
+  // visibly during a reconnect's INSTANT catch-up, where EVERY deal in the replayed backlog is
+  // suppressed, so a bubble set before the disconnect could still be sitting there hands later
+  // once catch-up ends and live play resumes. Blake's rule: a bubble that hasn't been replaced
+  // by the time the next deal completes gets cleared then, no exceptions - so clear the band
+  // HERE, unconditionally, before anything else in this deal (including the reshuffle branch's
+  // own toast below) has a chance to run. When the deal's own toast() call isn't suppressed, it
+  // still shows normally right after - this only removes what would otherwise be a stale
+  // leftover from a previous hand.
+  clearToasts();
   G.dealSeq++;
   G.bowedOut=G.seats.map(()=>false);   // fresh hand - everyone's back in (RULES.md 2026-07-08)
   if(G.schedRound>=G.schedule.length){
