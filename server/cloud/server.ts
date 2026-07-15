@@ -175,6 +175,81 @@ async function deleteLeaderboardEntry(name: string) {
 }
 
 /* ---------------------------------------------------------------------------------------
+ * § LEADERBOARD EPOCH — v0.13, mirrors server.js's matching section (see that file for the
+ * full "new season" rationale). One KV key holds the current epoch; starts at 1 if never set.
+ * ------------------------------------------------------------------------------------- */
+const EPOCH_KEY: Deno.KvKey = ["leaderboardEpoch"];
+async function getEpoch(): Promise<number> {
+  const e = await kv.get<number>(EPOCH_KEY);
+  return typeof e.value === "number" ? e.value : 1;
+}
+async function resetLeaderboard(): Promise<number> {
+  for await (const e of kv.list({ prefix: ["leaderboard"] })) await kv.delete(e.key);
+  const epoch = (await getEpoch()) + 1;
+  await kv.set(EPOCH_KEY, epoch);
+  return epoch;
+}
+// Sent with EVERY response that touches the leaderboard - public /leaderboard reads, the
+// admin equivalent, and every /solo-result reply - so any device that talks to the server for
+// ANY of those reasons picks up a reset promptly. Header, not body shape, so old clients that
+// don't know about epochs are completely unaffected (see server.js's matching comment).
+async function jsonLeaderboard(status: number): Promise<Response> {
+  const [board, epoch] = await Promise.all([getLeaderboard(), getEpoch()]);
+  return new Response(JSON.stringify(board), {
+    status,
+    headers: { "content-type": "application/json", "x-leaderboard-epoch": String(epoch), ...CORS_HEADERS },
+  });
+}
+
+/* ---------------------------------------------------------------------------------------
+ * § SOLO RESULTS — v0.13, mirrors server.js's matching section (see that file for the full
+ * design rationale). Solo (vs-CPU) and pass-and-play OFFLINE games have no room to ride
+ * recordResult through, so this is an unauthenticated HTTP POST sibling (POST /solo-result)
+ * with its own idempotency + rate limit. Idempotency is even simpler here than server.js's
+ * on-disk Map: KV entries carry a native TTL, so a seen gameId just expires on its own after
+ * SOLO_ID_TTL_MS with no manual pruning loop needed.
+ * ------------------------------------------------------------------------------------- */
+const SOLO_ID_TTL_MS = 180 * 24 * 60 * 60 * 1000; // plenty to catch any realistic retry/replay
+function soloSeenKey(gameId: string): Deno.KvKey { return ["soloseen", gameId]; }
+const SOLO_RATE_LIMIT = 20;             // max solo-result submits...
+const SOLO_RATE_WINDOW_MS = 60 * 1000;  // ...per IP, per rolling minute
+const soloRateMap = new Map<string, number[]>();
+function underSoloRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const kept = (soloRateMap.get(ip) || []).filter((t) => now - t < SOLO_RATE_WINDOW_MS);
+  if (kept.length >= SOLO_RATE_LIMIT) { soloRateMap.set(ip, kept); return false; }
+  kept.push(now);
+  soloRateMap.set(ip, kept);
+  return true;
+}
+async function handleSoloResult(req: Request, ip: string): Promise<Response> {
+  if (!underSoloRateLimit(ip)) return json(429, { error: "slow down", epoch: await getEpoch() });
+  const body = await req.json().catch(() => ({} as Record<string, unknown>));
+  const gameId = typeof (body as Record<string, unknown>).gameId === "string"
+    ? ((body as Record<string, unknown>).gameId as string).trim().slice(0, 64) : "";
+  if (!gameId) return json(400, { error: "missing gameId", epoch: await getEpoch() });
+  const existing = await kv.get(soloSeenKey(gameId));
+  const epoch = await getEpoch();
+  if (existing.value) return json(200, { ok: true, duplicate: true, epoch });
+  // v0.13: reject a result recorded under an OLDER season (see "§ LEADERBOARD EPOCH" above) —
+  // the board's been reset since this game finished, so applying it would resurrect
+  // pre-reset numbers. Still mark the gameId seen so a client that keeps retrying doesn't loop.
+  const rawEpoch = (body as Record<string, unknown>).epoch;
+  const reqEpoch = typeof rawEpoch === "number" && Number.isFinite(rawEpoch) ? rawEpoch : 1;
+  if (reqEpoch < epoch) {
+    await kv.set(soloSeenKey(gameId), true, { expireIn: SOLO_ID_TTL_MS });
+    log("solo result rejected (stale epoch)", gameId, "req=" + reqEpoch, "current=" + epoch);
+    return json(409, { error: "stale epoch", epoch });
+  }
+  const rawEntries = (body as Record<string, unknown>).entries;
+  const entries = Array.isArray(rawEntries) ? (rawEntries as Record<string, unknown>[]).slice(0, 6) : [];
+  for (const e of entries) { if (e && e.name) await applyLeaderboardEntry(e.name, e.delta); }
+  await kv.set(soloSeenKey(gameId), true, { expireIn: SOLO_ID_TTL_MS });
+  log("solo result recorded", gameId, entries.map((e) => e && (e.name as string)).filter(Boolean).join(","));
+  return json(200, { ok: true, epoch });
+}
+
+/* ---------------------------------------------------------------------------------------
  * § ROOMS — KV-backed room state, see file header points 1-2.
  * ------------------------------------------------------------------------------------- */
 type Seat = { name: string; type: "human" | "cpu"; diff: string; claimedBy: number | null };
@@ -418,6 +493,7 @@ const CORS_HEADERS: Record<string, string> = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
   "access-control-allow-headers": "content-type, x-admin-token",
+  "access-control-expose-headers": "x-leaderboard-epoch",
 };
 function json(status: number, obj: unknown): Response {
   return new Response(JSON.stringify(obj), {
@@ -480,7 +556,15 @@ async function handleAdminRoute(req: Request, url: URL): Promise<Response> {
     return json(200, { ok: true });
   }
   if (parts.length === 2 && parts[1] === "leaderboard" && req.method === "GET") {
-    return json(200, await getLeaderboard());
+    return await jsonLeaderboard(200);
+  }
+  if (parts.length === 3 && parts[1] === "leaderboard" && parts[2] === "reset" && req.method === "POST") {
+    // v0.13: "new season" god-mode action — wipes every entry AND bumps the epoch in the same
+    // breath (see "§ LEADERBOARD EPOCH" above), so every device that talks to the server after
+    // this clears its own local cache too, not just the shared board.
+    const epoch = await resetLeaderboard();
+    log("admin reset the leaderboard - new epoch", epoch);
+    return json(200, { ok: true, epoch });
   }
   if (parts.length === 3 && parts[1] === "leaderboard" && req.method === "PATCH") {
     const name = decodeURIComponent(parts[2]);
@@ -926,14 +1010,21 @@ async function handler(req: Request, info: Deno.ServeHandlerInfo): Promise<Respo
   if (url.pathname === "/health") {
     let rooms = 0;
     for await (const _e of kv.list({ prefix: ["room"] })) rooms++;
-    return json(200, { ok: true, rooms, uptime: Math.round(performance.now() / 1000) });
+    return json(200, { ok: true, rooms, uptime: Math.round(performance.now() / 1000), epoch: await getEpoch() });
   }
   if (url.pathname === "/leaderboard") {
-    return json(200, await getLeaderboard());
+    // v0.13: also reports the current leaderboard epoch via header, see "§ LEADERBOARD EPOCH".
+    return await jsonLeaderboard(200);
   }
   if (url.pathname.startsWith("/admin/")) {
     try { return await handleAdminRoute(req, url); }
     catch (e) { log("admin route error", e); return json(500, { error: "server error" }); }
+  }
+  if (url.pathname === "/solo-result" && req.method === "POST") {
+    // v0.13: solo/pass-and-play offline games sync to the shared board through here — see
+    // "§ SOLO RESULTS" above.
+    try { return await handleSoloResult(req, ip); }
+    catch (e) { log("solo-result route error", e); return json(500, { error: "server error" }); }
   }
   return new Response("nasty relay — see /health", { status: 404, headers: { "content-type": "text/plain", ...CORS_HEADERS } });
 }

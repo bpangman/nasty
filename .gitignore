@@ -6,6 +6,8 @@ server/node_modules/
 server/rooms/
 server/admin-token.txt
 server/leaderboard.json
+server/leaderboard-epoch.json
+server/solo-ids.json
 *.log
 
 # --- iOS app wrapper (app/) — see app/APPSTORE.md ---

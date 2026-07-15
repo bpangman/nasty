@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY - the Pangman family board game, digitized. v0.12.1.
+  NASTY - the Pangman family board game, digitized. v0.13.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation - the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -258,6 +258,53 @@
       shows normally on top of the cleared band whenever it isn't suppressed. Nothing else about
       the v0.11.2/v0.11.3 toast design changed (latest-replaces-oldest, menu-transition clears,
       skip's own toast suppression, band geometry).
+
+  v0.13 (2026-07-15 - truly global leaderboard, "new season" reset, boot slam + new app icon,
+  see HANDOFF.md/PLANNING.md for the full readout):
+    - Blake: a friend played solo (vs-CPU) on their own phone and nothing showed up on the
+      family board - correct per the old design (solo was device-local only) but not what the
+      family expects: ONE board, every game counts, from any phone. A finished OFFLINE game
+      (solo OR pass-and-play) now syncs its human-only result to the SAME shared server board
+      online games already use - keyed by name exactly like an online result. See
+      buildResultEntries()/recordWin() and the § LEADERBOARD-EPOCH-ADJACENT solo-sync block
+      (submitOrQueueSoloResult/queueSoloResult/drainSoloQueue) below. If the server's
+      unreachable right now the result queues in localStorage and retries on the next app open
+      or the browser's 'online' transition - idempotent via a random per-game G.gameId, deduped
+      server-side (server.js "§ SOLO RESULTS") so a retry can never double-count.
+      #autotest/#autotest6 are all-CPU, so nothing is ever queued/submitted for a soak test, by
+      construction. History doesn't back-fill - it starts counting from here.
+    - "New season" reset (Blake, added mid-build): god mode can now wipe the WHOLE family board
+      and bump a leaderboardEpoch counter the server reports on every leaderboard-touching
+      response; this device (and every other one, the next time it talks to the server) clears
+      its own local leaderboard cache the moment it sees a newer epoch than it last stored - see
+      adoptEpoch()/LB_EPOCH_KEY below and server.js "§ LEADERBOARD EPOCH". A solo result queued
+      under an older epoch is rejected (409) rather than resurrecting pre-reset numbers.
+    - Boot slam (Blake, added mid-build, iOS app only): cold-launching the app now SLAMS the
+      NASTY sign onto the felt background before landing on the menu - same takeout-stamp feel
+      as the in-game NASTY! blast, tilted to match the new app icon. See § CAPACITOR's
+      BOOT_SLAM_TILT/bootSign.animate() block. Only ever plays on a genuine cold open (a real
+      page load) - quickly switching apps and back never reloads the page, so it never replays
+      for that case; an iOS-evicted background WILL naturally replay it on the next open, same
+      as any other cold load. The native pre-WebView launch image is felt-only now (no sign
+      baked in) - the slam is what introduces the sign, on purpose.
+    - New app icon (Blake: "the NASTY! takeout-stamp look"): app/assets/icon.png regenerated at
+      a crisp native 1024x1024, tilted -13deg (more than the in-game stamp's -8deg, per Blake's
+      ask) - see HANDOFF.md "App icon" for the exact render recipe. Root website icon.png,
+      manifest.json, and every in-game visual are completely untouched - this only affects the
+      native iOS app icon.
+    - 6-player name plates moved off the shared-corner design (Blake, added mid-build: "each
+      name plate at the edge of the board behind where their 5 safe spots align... on the edge
+      of the board near each of those pillars," overlapping the wood now explicitly fine).
+      buildLayout()'s plaqueAnchor (§ LAYOUT) now branches by n: 4P is COMPLETELY UNTOUCHED
+      (still the v0.10.2 shared-corner design, Blake only asked about 6P); 6P plates now sit on
+      each seat's OWN safe-row axis (arms[s].d, the same line the 5 home holes and the porch
+      hole sit on), pushed out past the porch hole to PLAQUE6_R - a hole-safe floor found by a
+      real getBoundingClientRect() radius sweep (see HANDOFF.md "v0.13 six-player name
+      plates"), with a small extra PLAQUE_SLIDE[6] positionPlaques() (§ RENDER) can add on a
+      spacious screen, same two-tier mechanism v0.10 used pre-corners. Rotation is a continuous
+      formula (not the corner design's fixed +-45 checkerboard) clamped to +-90 deg so text is
+      never upside-down at any of the 6 fixed slot angles this board ever uses, regardless of
+      viewer/rotation (v0.12).
 -->
 </head>
 <body>
@@ -663,6 +710,15 @@ button{font:inherit;cursor:pointer}
    it - is completely unaffected. */
 #bootCover{position:fixed;inset:0;z-index:999;display:flex;align-items:center;justify-content:center;
   background:radial-gradient(120% 95% at 50% 28%,var(--felt1),var(--felt2) 78%)}
+/* v0.13 (iOS app only, Blake's ask): the boot cover's sign now SLAMS in - same felt-in-the-
+   background/tilted-road-sign-lands look as the new app icon and the in-game NASTY! takeout
+   stamp - instead of just appearing. Driven entirely via Web Animations API in § CAPACITOR
+   (bootSign.animate(...)), not a CSS @keyframes rule, so the boot sequence can await its
+   .finished promise before ever hiding #bootCover - the animation is guaranteed to actually
+   play out, never get cut short by a fast-settling menu. See § CAPACITOR for the tilt constant
+   (matches the new icon's tilt exactly) and the hideSplash() gating. The native LaunchScreen
+   image behind this (app/assets/splash.png) is felt-only now, no sign baked in - the slam is
+   what introduces the sign, on purpose. */
 </style>
 
 <!-- ================= MENU ================= -->
@@ -700,7 +756,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.12.1</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.13</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -964,6 +1020,11 @@ button{font:inherit;cursor:pointer}
       <div id="adminRooms" style="font-size:13.5px"></div>
       <h4>Global leaderboard</h4>
       <div id="adminLb" style="font-size:13.5px"></div>
+      <div id="adminLbEpoch" style="font-size:12px;color:var(--cream2);margin:4px 0"></div>
+      <!-- v0.13: "new season" - wipes the shared board AND bumps the epoch, which clears
+           every device's own local leaderboard cache the next time it talks to the server
+           (see index.html § LEADERBOARD EPOCH / server.js "§ LEADERBOARD EPOCH"). -->
+      <button class="btn ghost" id="btnAdminResetLb" style="margin-bottom:8px">🔄 Reset leaderboard (new season)</button>
       <div class="bigBtns"><button class="btn ghost" id="btnAdminRefresh">Refresh</button>
         <button class="btn ghost" id="btnAdminClose2">Close</button></div>
     </div>
@@ -1012,6 +1073,33 @@ if(IS_APP){
      block uses document.getElementById directly, not `$`, which would throw/temporal-dead-zone)
      and hidden only once #menu is CONFIRMED actually settled - see menuSettled() below. */
   document.getElementById('bootCover').classList.remove('hidden');
+  /* v0.13 boot slam (Blake's ask): the sign SLAMS onto the felt instead of just appearing -
+     same tilted-road-sign-lands feel as the in-game NASTY! takeout stamp (nastyBlast(), §
+     ANIM), tilted to match the new app icon exactly. Runs via the Web Animations API (not a
+     CSS @keyframes class) specifically so `bootSlamDone` below is a real Promise this boot
+     sequence can wait on - the animation is guaranteed to finish playing, never truncated by a
+     menu that happens to settle faster than the slam. Only ever runs on a genuine COLD open
+     (a fresh page load - this whole IS_APP block executes exactly once per load, and quickly
+     switching apps and back never reloads the page at all, so there's nothing here that could
+     replay on a simple app-switch - only a real force-quit + relaunch reloads the page).
+     BOOT_SLAM_TILT matches the new app icon's road-sign tilt (app/assets/icon.png) - keep the
+     two in sync if the icon's tilt is ever revisited. */
+  const BOOT_SLAM_TILT='-13deg';
+  const bootSign=document.querySelector('#bootCover .sign');
+  let bootSlamDone=Promise.resolve();
+  if(bootSign&&bootSign.animate){
+    bootSlamDone=bootSign.animate([
+      {opacity:0,transform:`rotate(${BOOT_SLAM_TILT}) scale(2.6)`},
+      {opacity:1,transform:`rotate(${BOOT_SLAM_TILT}) scale(.93)`,offset:.7},
+      {opacity:1,transform:`rotate(${BOOT_SLAM_TILT}) scale(1)`},
+    ],{duration:420,easing:'cubic-bezier(.18,.9,.32,1)',fill:'forwards'}).finished.catch(()=>{});
+    // Tasteful, small screen-shake right as it lands - optional per the brief, kept subtle.
+    try{
+      document.getElementById('bootCover').animate([
+        {translate:'0 0'},{translate:'4px -3px'},{translate:'-3px 2px'},{translate:'0 0'},
+      ],{duration:160,delay:280});
+    }catch(e){/* .animate() with `translate` needs a reasonably modern WebKit - purely cosmetic, skip silently if unsupported */}
+  }
   let splashHidden=false;
   const hideSplash=()=>{
     if(splashHidden)return; splashHidden=true;
@@ -1024,7 +1112,14 @@ if(IS_APP){
     const sr=sign.getBoundingClientRect(), tr=tag.getBoundingClientRect();
     return sr.top>0 && sr.top<innerHeight*0.3 && tr.height>0;
   };
-  const pollMenuSettled=()=>{ if(menuSettled())hideSplash(); else requestAnimationFrame(pollMenuSettled); };
+  // Waits for the slam to actually finish before ever hiding #bootCover, even if the menu
+  // itself settles sooner - see the bootSlamDone comment above. A short 150ms HOLD after the
+  // sign visibly lands (scale 1, fully opaque) before revealing the menu underneath - without
+  // this the reveal happened in the same tick the animation finished, which read as "lands and
+  // instantly vanishes" rather than an actual landing beat, and left no perceptible frame for
+  // this to even be verified against a screenshot. Total slam+hold is still ~570ms - well under
+  // a second, still snappy.
+  const pollMenuSettled=()=>{ if(menuSettled())bootSlamDone.then(()=>new Promise(r=>setTimeout(r,150))).then(hideSplash); else requestAnimationFrame(pollMenuSettled); };
   addEventListener('load',()=>requestAnimationFrame(pollMenuSettled));
   setTimeout(hideSplash,2500);   // hard fallback - hide() is idempotent either way
 }
@@ -1042,6 +1137,11 @@ let INSTANT=false;
 const D=(floor,base)=>INSTANT?0:Math.max(floor,base/SPEED);   // every animation duration goes through this
 const wait=ms=>new Promise(r=>setTimeout(r,INSTANT?0:ms/SPEED));
 const rand=a=>a[Math.floor(Math.random()*a.length)];
+// v0.13: one random id per logical game - see newGame()'s G.gameId comment.
+function genGameId(){
+  if(typeof crypto!=='undefined'&&crypto.randomUUID)return crypto.randomUUID();
+  return Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
+}
 /* game speed = user setting × skip boost */
 const REDUCED=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const SPEED_OPTS=[[0.6,'Slow'],[1,'Normal'],[1.7,'Fast'],[2.6,'Turbo']];
@@ -1221,19 +1321,59 @@ function buildLayout(n,viewSeat){
     cornerGroups[best].push(s);
   }
   const plaqueAnchor=new Array(n);
-  for(let c=0;c<4;c++){
-    const ang=CORNER_ANGLES[c];
-    const cu={x:Math.cos(ang),y:Math.sin(ang)};
-    const tangent={x:-cu.y,y:cu.x};
-    const rot=cu.x*cu.y>0?-45:45;
-    const seats=cornerGroups[c];
-    seats.forEach((s,i)=>{
-      // 1 seat at this corner: dead center on it. 2 seats: offset apart along the tangent,
-      // symmetric around the corner's own anchor point (more than 2 never happens - 4 corners,
-      // at most 6 seats, pigeonhole caps any one corner at 2 in this layout).
-      const off=seats.length===1?0:(i===0?-1:1)*CORNER_TANGENT_GAP/2;
-      plaqueAnchor[s]={x:500+cu.x*CORNER_R+tangent.x*off,y:500+cu.y*CORNER_R+tangent.y*off,rot};
-    });
+  if(n===4){
+    for(let c=0;c<4;c++){
+      const ang=CORNER_ANGLES[c];
+      const cu={x:Math.cos(ang),y:Math.sin(ang)};
+      const tangent={x:-cu.y,y:cu.x};
+      const rot=cu.x*cu.y>0?-45:45;
+      const seats=cornerGroups[c];
+      seats.forEach((s,i)=>{
+        // 1 seat at this corner: dead center on it. 2 seats: offset apart along the tangent,
+        // symmetric around the corner's own anchor point (more than 2 never happens - 4 corners,
+        // at most 6 seats, pigeonhole caps any one corner at 2 in this layout).
+        const off=seats.length===1?0:(i===0?-1:1)*CORNER_TANGENT_GAP/2;
+        plaqueAnchor[s]={x:500+cu.x*CORNER_R+tangent.x*off,y:500+cu.y*CORNER_R+tangent.y*off,rot};
+      });
+    }
+  }else{
+    /* v0.13 (Blake, 6P ONLY - 4P's corner design above is untouched, he only asked about 6P):
+       "each name plate at the edge of the board behind where their 5 safe spots align... on the
+       edge of the board near each of those pillars." The shared-corner design above forces 2 of
+       6P's seats to split one corner (CORNER_TANGENT_GAP) - Blake's new ask replaces that with
+       each seat getting its OWN plate, on its OWN safe-row axis (arms[s].d, offset 0 - the exact
+       line the 5 home holes AND the porch hole already sit on, see home[] below and the porch
+       loop-push above), pushed out past the porch hole to PLAQUE6_R - at/overlapping the board's
+       outer wood edge on purpose (Blake: "you can have the plates overlap into the board...
+       overlapping is explicitly fine now", a reversal of the old "never touch the wood" rule -
+       just never covering an actual hole/tee/base spot/deck pocket, which PLAQUE6_R was picked
+       to guarantee, same real-getBoundingClientRect()-sweep methodology as every other plaque
+       constant in this file, not eyeballed - see HANDOFF.md "v0.13 six-player name plates").
+       Rotation: readable at every one of the 6 fixed slot angles this board ever uses (30/90/
+       150/210/270/330 - always the same SET regardless of viewSeat, only which seat occupies
+       which slot changes, per v0.12) - tilts to follow the local radial direction like the 4P
+       corner plates do, but clamped to +-90 deg so text is never upside-down at any position
+       (unlike the fixed +-45 checkerboard the corner design uses, this needs a continuous
+       formula since there are 6 distinct angles, not 4 shared corners). */
+    const PLAQUE6_R=555;   // the HOLE-SAFE FLOOR - empirically swept (see HANDOFF.md) against
+                            // the worst-case (10-char) name: 545 was the first fully-clear
+                            // radius found across every seat/rotation, 555 keeps a real margin
+                            // above it. positionPlaques() (§ RENDER) can push a little FURTHER
+                            // out from here when a screen has room to spare (PLAQUE_SLIDE[6]),
+                            // but never pulls in below this floor (PLAQUE_SLIDE_MIN[6]=0, i.e.
+                            // "no less than the anchor itself") - same two-tier mechanism v0.10
+                            // used before the corner redesign, revived here because a plate this
+                            // wide, this far out on 6 non-cardinal axes, needs the same variable-
+                            // letterbox pullback the corner design never needed at its smaller,
+                            // corner-shared radius.
+    for(let s=0;s<n;s++){
+      const a=arms[s];
+      const thDeg=a.th*180/Math.PI;
+      let rot=((thDeg-90)%360+360)%360;         // 0..360, 0 = upright (this seat's arm points straight down)
+      if(rot>180)rot-=360;                       // -180..180
+      if(rot>90)rot-=180; else if(rot<-90)rot+=180; // clamp to -90..90 - never upside-down
+      plaqueAnchor[s]={x:500+a.d.x*PLAQUE6_R,y:500+a.d.y*PLAQUE6_R,rot};
+    }
   }
   for(let s=0;s<n;s++){
     const a=arms[s];
@@ -1318,7 +1458,20 @@ function newGame(cfg,seed){
                   // a FINER-grained checkpoint than dealSeq for the integrity guard, so a
                   // silent drift gets caught within a few moves instead of up to a whole hand
                   // later (see the kick/swap stateCheck trigger in performMove(), § TURNS).
-     paused:false};   // v0.8: pause/resume - see setPaused()/pauseGate() in § TURNS
+     paused:false,     // v0.8: pause/resume - see setPaused()/pauseGate() in § TURNS
+     // v0.13: one random id per logical game, rides along inside the saved G object (survives
+     // save/resume/reload) - the idempotency key for offline solo-result submission (see
+     // submitOrQueueSoloResult below). ONLY generated for a genuine offline start (no `seed` -
+     // see the two call sites: startGame() passes none, bootGameFromNetwork()'s 'start' handler
+     // always passes {deck,dealer}). Deliberately left undefined for an online game: G is
+     // deterministic-lockstep state that every phone must build byte-identically (see the
+     // per-deal integrity digest, gDigest() below, and this project's own online-testing
+     // convention of asserting JSON-stringify(G) equality across contexts) - a client-generated
+     // random value here would make every phone's G differ from every other phone's for no
+     // reason (harmless for the app itself, since gDigest() and recordWin()'s online branch
+     // never read gameId - but a real footgun for exactly that byte-equality testing
+     // convention, caught by this session's own online e2e regression test).
+     gameId:seed?undefined:genGameId()};
   G.turn=(G.dealer+1)%G.n;
   G.humanCount=cfg.seats.filter(s=>s.type==='human').length;
 }
@@ -1724,13 +1877,24 @@ addEventListener('resize',fitBoard);
    boardWrap/plaque rects every time fitBoard() runs (every resize/orientation change) - this is
    the "measure the real clip boundary first" empirical approach, done continuously instead of
    baked in for one screen size. */
-/* v0.10.2: with plaques now anchored directly at the board's corner chamfers (see
-   buildLayout's plaqueAnchor, § LAYOUT) the anchor itself is already the target position - no
-   outward slide needed to clear a hole the way the old bisector-based placement did. Left at 0
-   (rather than deleted) so positionPlaques()'s existing real-clip-boundary pull-back stays
-   available as a safety net for an aspect ratio nobody's tested yet, same "measure first, don't
-   hand-tune" spirit as before - see that function. */
-const PLAQUE_SLIDE     ={4:0, 6:0};
+/* v0.10.2: with 4P plaques anchored directly at the board's corner chamfers (see buildLayout's
+   plaqueAnchor, § LAYOUT) the anchor itself is already the target position - no outward slide
+   needed to clear a hole the way the old bisector-based placement did. Left at 0 (rather than
+   deleted) so positionPlaques()'s existing real-clip-boundary pull-back stays available as a
+   safety net for an aspect ratio nobody's tested yet, same "measure first, don't hand-tune"
+   spirit as before - see that function.
+   v0.13: 6P is back to a nonzero slide, for a different reason than v0.10's original one - its
+   NEW safe-row-axis anchor (PLAQUE6_R, § LAYOUT) already sits at the hole-safe FLOOR, and a
+   plate this wide, this far out on 6 distinct (mostly non-cardinal) axes, genuinely needs the
+   same variable-letterbox pullback v0.10 built this mechanism for in the first place: on a
+   portrait phone (zero horizontal margin) some of the 6 anchors sit close enough to the screen
+   edge that the plate's own half-width pokes past the real viewport at slide=0 - measured
+   directly (real getBoundingClientRect() sweeps, all 6 seats as every possible viewer, at the
+   full matrix of tested viewports incl. 320x568/744x1133 - see HANDOFF.md "v0.13 six-player
+   name plates"), not assumed. target=15 is the extra reach on a spacious screen; min=0 means
+   "never pull in below the anchor's own hole-safe floor," which the same sweep confirmed is
+   always viewport-safe on its own even where 15 of extra slide isn't. */
+const PLAQUE_SLIDE     ={4:0, 6:15};
 const PLAQUE_SLIDE_MIN ={4:0, 6:0};
 function positionPlaques(){
   if(!G||!LAY||!LAY.plaqueDir)return;
@@ -3572,8 +3736,21 @@ $('btnRoomText').onclick=()=>{
    never touched or destroyed, but the leaderboard display only ever reads the new human-only
    keys, so any old CPU-tainted entries are naturally filtered out of view. Online games are
    recorded to the SHARED SERVER leaderboard instead of this device's local storage (see
-   sendOnlineResult below) - otherwise a family game would get double-counted (once locally
-   per phone, once globally). Offline games still record locally exactly like before. */
+   recordWin below) - otherwise a family game would get double-counted (once locally per
+   phone, once globally).
+   v0.13: OFFLINE games (solo vs-CPU, and pass-and-play) now sync the same way - the family
+   expects ONE board that counts every game from any phone, not "online only." A finished
+   offline game still writes to this device's own local "nasty-stats" (unchanged, instant,
+   works with no network) AND fires the exact same human-only deltas at the shared server's
+   POST /solo-result (see submitOrQueueSoloResult/drainSoloQueue below) - keyed by player NAME
+   exactly like an online result, so it lands in the same globalBoard bucket. If the server's
+   unreachable right now, the result is queued in localStorage and retried on the next app
+   open or network-online transition; the server dedupes by G.gameId so a retry (or a repeat
+   submit after a reload) can never double-count. #autotest/#autotest6 are all-CPU, so
+   G.seats.forEach below never adds an entry for them - nothing is ever submitted anywhere for
+   a soak test, by construction (see the entries.length guard). History doesn't back-fill for
+   games already finished on other devices before this shipped - it just starts counting from
+   here on. */
 const DIFF_POINTS={easy:1,medium:2,hard:3};
 function loadStats(){ try{return JSON.parse(localStorage.getItem('nasty-stats')||'{}');}catch(e){return{};} }
 function pointsForWin(winSet){
@@ -3581,43 +3758,117 @@ function pointsForWin(winSet){
   G.seats.forEach((opp,j)=>{ if(winSet.has(j))return; pts+=opp.type==='human'?3:(DIFF_POINTS[opp.diff]||0); });
   return pts;
 }
+// Human-only per-seat deltas for this finished game, same shape whether it ends up going to
+// the online recordResult message or the offline solo-result HTTP POST - factored out so
+// both paths (and the offline local-stats write) compute identical numbers from one place.
+function buildResultEntries(mode,winSet){
+  const entries=[];
+  G.seats.forEach((seat,i)=>{
+    if(seat.type!=='human')return;
+    const delta={}; delta['hg'+mode]=1;
+    if(winSet.has(i)){ delta['hw'+mode]=1; delta.hpts=pointsForWin(winSet); }
+    entries.push({name:seat.name,delta});
+  });
+  return entries;
+}
 function recordWin(){
   if(G.recorded)return; G.recorded=true;
   const mode=(G.n===4?'4':'6')+(G.teams?'t':'s');
   const winSet=new Set(G.winners);
+  const entries=buildResultEntries(mode,winSet);
   if(NET.online){
     // Shared server-side board - only the host submits, so a game is recorded exactly once
     // no matter how many phones are at the table (see server.js "recordResult").
-    if(NET.isHost){
-      const entries=[];
-      G.seats.forEach((seat,i)=>{
-        if(seat.type!=='human')return;
-        const delta={}; delta['hg'+mode]=1;
-        if(winSet.has(i)){ delta['hw'+mode]=1; delta.hpts=pointsForWin(winSet); }
-        entries.push({name:seat.name,delta});
-      });
-      if(entries.length)netSend({type:'recordResult',entries});
-    }
+    if(NET.isHost&&entries.length)netSend({type:'recordResult',entries});
     return;
   }
+  if(!entries.length)return;   // #autotest/#autotest6 (all-CPU) or a 0-human edge case - nothing to record anywhere
   const st=loadStats();
-  G.seats.forEach((seat,i)=>{
-    if(seat.type!=='human')return;               // v0.9: CPUs never appear on the leaderboard
-    const r=st[seat.name]=st[seat.name]||{};
-    r['hg'+mode]=(r['hg'+mode]||0)+1;
-    if(winSet.has(i)){
-      r['hw'+mode]=(r['hw'+mode]||0)+1;
-      r.hpts=(r.hpts||0)+pointsForWin(winSet);
-    }
+  entries.forEach(({name,delta})=>{
+    const r=st[name]=st[name]||{};
+    for(const k of Object.keys(delta))r[k]=(r[k]||0)+delta[k];
   });
   localStorage.setItem('nasty-stats',JSON.stringify(st));
+  submitOrQueueSoloResult(G.gameId,entries,getLocalEpoch());   // v0.13: also sync this offline result to the shared global board
 }
 function wsToHttp(u){ return u.replace(/^wss:/,'https:').replace(/^ws:/,'http:'); }
+/* ---- v0.13 § LEADERBOARD EPOCH ----
+   Blake's ask: when he resets the family board ("only new wins/games count from here"), every
+   device needs to find out - there's no way to remotely wipe another phone's localStorage, so
+   the SERVER is authoritative for a season counter, and this client adopts it the moment it
+   sees a newer one than it last stored. Every leaderboard-touching server response reports the
+   current epoch (a response header on /leaderboard, a body field on /solo-result - see
+   server.js "§ LEADERBOARD EPOCH") - adoptEpoch() is the one place that reacts to it. */
+const LB_EPOCH_KEY='nasty-lb-epoch';
+function getLocalEpoch(){ const v=parseInt(localStorage.getItem(LB_EPOCH_KEY),10); return Number.isFinite(v)?v:1; }
+function adoptEpoch(serverEpoch){
+  if(!Number.isFinite(serverEpoch))return;
+  const local=getLocalEpoch();
+  if(serverEpoch>local){
+    // A newer season started - wipe THIS device's local leaderboard cache so the merged
+    // display stops showing pre-reset numbers (the shared server side is already wiped; this
+    // just catches up the local half of mergeStats()). A fresh install has local===1 already
+    // and an empty/no nasty-stats, so this is a harmless no-op for a new install adopting
+    // whatever epoch the server's already on.
+    localStorage.setItem('nasty-stats','{}');
+    // Also drop any still-queued solo results stamped with an OLDER epoch - the server would
+    // just reject them anyway (see submitSoloResult's 409 handling below), no point holding on.
+    saveSoloQueue(loadSoloQueue().filter(item=>(item.epoch||1)>=serverEpoch));
+  }
+  if(serverEpoch!==local)localStorage.setItem(LB_EPOCH_KEY,String(serverEpoch));
+}
+/* ---- v0.13: offline (solo/pass-and-play) result sync + retry queue ----
+   submitOrQueueSoloResult() tries the direct POST first; on ANY failure (unreachable server,
+   offline device, DNS hiccup, whatever) it falls back to queueSoloResult(), which persists to
+   localStorage so it isn't lost. drainSoloQueue() is called on boot and on the browser's
+   'online' transition/foreground to retry whatever's still queued - see the boot sequence and
+   the visibilitychange handler near the bottom of this file. Idempotency is keyed by
+   G.gameId (one random id per logical game, see newGame()); the SERVER is the actual source
+   of truth for "already recorded" (see server.js "§ SOLO RESULTS") - the local queue's own
+   dedupe-by-gameId is just belt-and-suspenders against queuing the same game twice. Each
+   queued entry also carries the epoch it was RECORDED under (not the epoch at drain/retry
+   time) - see adoptEpoch() above and submitSoloResult's 409 handling below. */
+const SOLO_QUEUE_KEY='nasty-solo-queue';
+function loadSoloQueue(){ try{return JSON.parse(localStorage.getItem(SOLO_QUEUE_KEY)||'[]');}catch(e){return[];} }
+function saveSoloQueue(q){ try{localStorage.setItem(SOLO_QUEUE_KEY,JSON.stringify(q));}catch(e){} }
+function queueSoloResult(gameId,entries,epoch){
+  const q=loadSoloQueue();
+  if(q.some(item=>item.gameId===gameId))return;   // already queued - don't duplicate
+  q.push({gameId,entries,epoch,ts:Date.now()});
+  saveSoloQueue(q);
+}
+async function submitSoloResult(gameId,entries,epoch){
+  const wsUrl=await resolveWsUrl();
+  const r=await fetch(wsToHttp(wsUrl)+'/solo-result',{
+    method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({gameId,entries,epoch}),
+  });
+  let j=null; try{ j=await r.json(); }catch(e){}
+  if(j&&Number.isFinite(j.epoch))adoptEpoch(j.epoch);
+  if(r.status===409)return;   // stale epoch - server already rejected it for good, nothing to retry
+  if(!r.ok)throw new Error('solo-result submit failed: '+r.status);
+}
+async function submitOrQueueSoloResult(gameId,entries,epoch){
+  try{ await submitSoloResult(gameId,entries,epoch); }
+  catch(e){ queueSoloResult(gameId,entries,epoch); }
+}
+async function drainSoloQueue(){
+  const q=loadSoloQueue();
+  if(!q.length)return;
+  const remaining=[];
+  for(const item of q){
+    try{ await submitSoloResult(item.gameId,item.entries,item.epoch); }
+    catch(e){ remaining.push(item); }
+  }
+  saveSoloQueue(remaining);
+}
 async function fetchGlobalLeaderboard(){
   try{
     const wsUrl=await resolveWsUrl();
     const r=await fetch(wsToHttp(wsUrl)+'/leaderboard',{cache:'no-store'});
     if(!r.ok)return null;
+    const epoch=parseInt(r.headers.get('x-leaderboard-epoch'),10);
+    if(Number.isFinite(epoch))adoptEpoch(epoch);
     return await r.json();
   }catch(e){ return null; }
 }
@@ -3792,14 +4043,18 @@ function onForeground(){
   if(G&&!NET.isHost)netSend({type:'requestStateCheck'});   // see server.js/handleNetMessage
 }
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='visible')onForeground();
+  if(document.visibilityState==='visible'){ onForeground(); drainSoloQueue(); }
   else flushPendingOfflineSave();   // v0.10.3: see flushPendingOfflineSave() - going hidden
   // (backgrounding, or the OS about to suspend/kill the tab) is exactly the moment a pending
   // debounced offline save needs to land NOW, not in up to 250ms.
 });
-addEventListener('pageshow',onForeground);
+addEventListener('pageshow',()=>{ onForeground(); drainSoloQueue(); });
 addEventListener('pagehide',flushPendingOfflineSave);   // v0.10.3: belt-and-suspenders - some
 // browsers fire pagehide without a preceding 'hidden' visibilitychange on an outright tab close.
+// v0.13: retry any offline-queued solo/pass-and-play results the moment the browser reports
+// real connectivity back - don't wait for the next foreground/visibility event, which might
+// be a while if the app's just sitting open on the main menu.
+addEventListener('online',drainSoloQueue);
 
 /* ============================= § ADMIN (god mode, v0.9 item 9) =============================
    Blake's own admin tool - tap the version number 7 times on the main menu to reveal it. The
@@ -3872,7 +4127,10 @@ async function refreshAdminPanel(){
         body:JSON.stringify({playerId:parseInt(b.dataset.pid,10),name})});
       refreshAdminPanel();
     });
-    const lb=await(await adminFetch('/admin/leaderboard')).json();
+    const lbRes=await adminFetch('/admin/leaderboard');
+    const lb=await lbRes.json();
+    const epoch=lbRes.headers.get('x-leaderboard-epoch');
+    $('adminLbEpoch').textContent=epoch?`Season ${epoch}`:'';
     const names=Object.keys(lb);
     $('adminLb').innerHTML=names.length?names.map(n=>{
       const r=lb[n];
@@ -3899,6 +4157,17 @@ $('btnAdminUnlock').onclick=tryAdminUnlock;
 $('btnAdminClose').onclick=()=>$('adminOverlay').classList.add('hidden');
 $('btnAdminClose2').onclick=()=>$('adminOverlay').classList.add('hidden');
 $('btnAdminRefresh').onclick=refreshAdminPanel;
+$('btnAdminResetLb').onclick=async()=>{
+  // v0.13: wipes the shared board AND bumps the epoch - every device (including this one)
+  // clears its own local leaderboard cache the next time it talks to the server.
+  if(!confirm('Reset the WHOLE family leaderboard? Every game/win so far will be cleared - only new games count from here. This cannot be undone.'))return;
+  try{
+    const r=await adminFetch('/admin/leaderboard/reset',{method:'POST'});
+    const j=await r.json();
+    if(j&&Number.isFinite(j.epoch))adoptEpoch(j.epoch);   // clears THIS device's own cache too
+    refreshAdminPanel();
+  }catch(e){ $('adminErr').textContent='Lost the admin connection - try again.'; }
+};
 
 /* ---- autotest: #autotest = 4p FFA all-CPU, #autotest6 = 6p teams all-CPU ---- */
 function autotest(n,teams){
@@ -3914,6 +4183,7 @@ syncOfflineSaveFromIdb();   // v0.10.3: async self-heal - see "IndexedDB mirror"
 if(location.hash==='#autotest')autotest(4,false);
 else if(location.hash==='#autotest6')autotest(6,true);
 else{
+  drainSoloQueue();   // v0.13: retry any offline-queued solo/pass-and-play results on app open
   const qs=new URLSearchParams(location.search);
   const joinCode=qs.get('join');
   if(joinCode){

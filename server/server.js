@@ -152,6 +152,120 @@ function applyLeaderboardEntry(name, delta) {
 }
 
 /* ---------------------------------------------------------------------------------------
+ * v0.13 § LEADERBOARD EPOCH — Blake's ask: "reset every leaderboard - only new wins/games for
+ * everyone going forward." A device can't be reached to wipe its own localStorage, so this is
+ * a season counter the SERVER is authoritative for: every response that touches the
+ * leaderboard reports the current epoch, and index.html clears its own local "nasty-stats"
+ * cache the moment it sees a NEWER epoch than the one it last stored (see index.html's
+ * adoptEpoch()). Starts at 1; god mode can bump it any time via POST
+ * /admin/leaderboard/reset (wipes the board too - a "new season" is both at once by design).
+ * ------------------------------------------------------------------------------------- */
+const LEADERBOARD_EPOCH_FILE = process.env.NASTY_LEADERBOARD_EPOCH_FILE
+  ? path.resolve(process.env.NASTY_LEADERBOARD_EPOCH_FILE)
+  : path.join(__dirname, "leaderboard-epoch.json");
+let leaderboardEpoch = 1;
+function loadLeaderboardEpoch() {
+  try {
+    const obj = JSON.parse(fs.readFileSync(LEADERBOARD_EPOCH_FILE, "utf8"));
+    if (obj && Number.isFinite(obj.epoch)) leaderboardEpoch = obj.epoch;
+  } catch (e) { leaderboardEpoch = 1; }
+}
+function persistLeaderboardEpoch() {
+  try { fs.writeFileSync(LEADERBOARD_EPOCH_FILE, JSON.stringify({ epoch: leaderboardEpoch })); }
+  catch (e) { log("leaderboard-epoch persist failed", e.message); }
+}
+// Sent with EVERY response that touches the leaderboard - public /leaderboard reads, the
+// admin equivalent, and every /solo-result reply (success, duplicate, or stale-epoch reject) -
+// so any device that talks to the server for ANY of those reasons picks up a reset promptly.
+function sendLeaderboard(res, status) {
+  res.writeHead(status, Object.assign(
+    { "content-type": "application/json", "x-leaderboard-epoch": String(leaderboardEpoch) },
+    CORS_HEADERS,
+  ));
+  res.end(JSON.stringify(globalBoard));
+}
+
+/* ---------------------------------------------------------------------------------------
+ * v0.13 § SOLO RESULTS — solo (vs-CPU) and pass-and-play OFFLINE games have no room, so they
+ * can't ride the "only the host sends recordResult" path above. This is a lightweight,
+ * unauthenticated HTTP POST sibling (POST /solo-result) that does the exact same thing (apply
+ * human-only deltas to the shared globalBoard via applyLeaderboardEntry), with its own
+ * idempotency + rate limit since there's no room/host to lean on for either:
+ *   - Idempotency: the client generates one random `gameId` per logical game (assigned once,
+ *     survives save/resume/reload since it just rides along inside the saved G object) and
+ *     sends it with every submit attempt — including offline-queued retries. Seen ids are
+ *     remembered (persisted to disk, same debounced-write pattern as the leaderboard file
+ *     above) so a duplicate submit (queue drained twice, a retry racing a slow response,
+ *     whatever) is a safe no-op instead of double-counting.
+ *   - Rate limit: same shape as underHostRateLimit above, generous for a real family.
+ * See HANDOFF.md "v0.13" for the full design; the client-side queueing lives in index.html's
+ * § LEADERBOARD-ish solo-sync helpers (submitOrQueueSoloResult/drainSoloQueue).
+ * ------------------------------------------------------------------------------------- */
+const SOLO_IDS_FILE = process.env.NASTY_SOLO_IDS_FILE
+  ? path.resolve(process.env.NASTY_SOLO_IDS_FILE)
+  : path.join(__dirname, "solo-ids.json");
+const SOLO_ID_MAX_AGE_MS = 180 * 24 * 60 * 60 * 1000; // plenty to catch any realistic retry/replay
+let soloSeen = new Map(); // gameId -> firstSeenAt
+function loadSoloSeen() {
+  try {
+    const obj = JSON.parse(fs.readFileSync(SOLO_IDS_FILE, "utf8"));
+    if (obj && typeof obj === "object") soloSeen = new Map(Object.entries(obj));
+  } catch (e) { soloSeen = new Map(); }
+}
+let soloSeenPersistTimer = null;
+function scheduleSoloSeenPersist() {
+  if (soloSeenPersistTimer) return;
+  soloSeenPersistTimer = setTimeout(() => { soloSeenPersistTimer = null; persistSoloSeenNow(); }, PERSIST_DEBOUNCE_MS);
+}
+function persistSoloSeenNow() {
+  try { fs.writeFileSync(SOLO_IDS_FILE, JSON.stringify(Object.fromEntries(soloSeen))); }
+  catch (e) { log("solo-ids persist failed", e.message); }
+}
+setInterval(() => { // prune ancient ids so this file/map never grows unbounded
+  const now = Date.now();
+  let pruned = false;
+  for (const [id, ts] of soloSeen) { if (now - ts > SOLO_ID_MAX_AGE_MS) { soloSeen.delete(id); pruned = true; } }
+  if (pruned) scheduleSoloSeenPersist();
+}, 24 * 60 * 60 * 1000);
+
+const SOLO_RATE_LIMIT = 20;             // max solo-result submits...
+const SOLO_RATE_WINDOW_MS = 60 * 1000;  // ...per IP, per rolling minute — generous for real humans
+const soloRateMap = new Map();
+function underSoloRateLimit(ip) {
+  const now = Date.now();
+  const kept = (soloRateMap.get(ip) || []).filter(t => now - t < SOLO_RATE_WINDOW_MS);
+  if (kept.length >= SOLO_RATE_LIMIT) { soloRateMap.set(ip, kept); return false; }
+  kept.push(now);
+  soloRateMap.set(ip, kept);
+  return true;
+}
+async function handleSoloResult(req, res) {
+  const ip = remoteIp(req);
+  if (!underSoloRateLimit(ip)) { sendJson(res, 429, { error: "slow down", epoch: leaderboardEpoch }); return; }
+  const body = await readJsonBody(req);
+  const gameId = typeof body.gameId === "string" ? body.gameId.trim().slice(0, 64) : "";
+  if (!gameId) { sendJson(res, 400, { error: "missing gameId", epoch: leaderboardEpoch }); return; }
+  if (soloSeen.has(gameId)) { sendJson(res, 200, { ok: true, duplicate: true, epoch: leaderboardEpoch }); return; } // idempotent no-op
+  // v0.13: reject a result recorded under an OLDER season (see "§ LEADERBOARD EPOCH" above) —
+  // the board's been reset since this game finished, so applying it would resurrect pre-reset
+  // numbers. Still mark the gameId seen so a client that keeps retrying doesn't loop forever.
+  const reqEpoch = Number.isFinite(body.epoch) ? body.epoch : 1;
+  if (reqEpoch < leaderboardEpoch) {
+    soloSeen.set(gameId, Date.now());
+    scheduleSoloSeenPersist();
+    log("solo result rejected (stale epoch)", gameId, "req=" + reqEpoch, "current=" + leaderboardEpoch);
+    sendJson(res, 409, { error: "stale epoch", epoch: leaderboardEpoch });
+    return;
+  }
+  const entries = Array.isArray(body.entries) ? body.entries.slice(0, 6) : []; // sanity cap - max seats is 6
+  for (const e of entries) { if (e && e.name) applyLeaderboardEntry(e.name, e.delta); }
+  soloSeen.set(gameId, Date.now());
+  scheduleSoloSeenPersist();
+  log("solo result recorded", gameId, entries.map(e => e && e.name).filter(Boolean).join(","));
+  sendJson(res, 200, { ok: true, epoch: leaderboardEpoch });
+}
+
+/* ---------------------------------------------------------------------------------------
  * v0.8: on-disk persistence. Only the essentials survive a restart — room code, lobby
  * config, the action log (so a rejoining client can replay/catch up exactly like it
  * already does after a live reconnect), and each player's stable id+token (so an old
@@ -345,7 +459,7 @@ function readJsonBody(req) {
 // enforcement outside a browser) kept passing while the actual in-page fetch() failed. Public
 // endpoints, no cookies/credentials involved, so `*` is fine — the admin routes are already
 // protected by the token, not by origin.
-const CORS_HEADERS = { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS", "access-control-allow-headers": "content-type, x-admin-token" };
+const CORS_HEADERS = { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS", "access-control-allow-headers": "content-type, x-admin-token", "access-control-expose-headers": "x-leaderboard-epoch" };
 function sendJson(res, status, obj) {
   res.writeHead(status, Object.assign({ "content-type": "application/json" }, CORS_HEADERS));
   res.end(JSON.stringify(obj));
@@ -401,7 +515,19 @@ async function handleAdminRoute(req, res, url) {
     return true;
   }
   if (parts.length === 2 && parts[1] === "leaderboard" && req.method === "GET") {
-    sendJson(res, 200, globalBoard);
+    sendLeaderboard(res, 200);
+    return true;
+  }
+  if (parts.length === 3 && parts[1] === "leaderboard" && parts[2] === "reset" && req.method === "POST") {
+    // v0.13: "new season" god-mode action — wipes every entry AND bumps the epoch in the same
+    // breath (see "§ LEADERBOARD EPOCH" above), so every device that talks to the server after
+    // this clears its own local cache too, not just the shared board.
+    globalBoard = {};
+    leaderboardEpoch += 1;
+    persistLeaderboardNow();
+    persistLeaderboardEpoch();
+    log("admin reset the leaderboard - new epoch", leaderboardEpoch);
+    sendJson(res, 200, { ok: true, epoch: leaderboardEpoch });
     return true;
   }
   if (parts.length === 3 && parts[1] === "leaderboard" && req.method === "PATCH") {
@@ -440,16 +566,23 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === "/health") {
     res.writeHead(200, Object.assign({ "content-type": "application/json" }, CORS_HEADERS));
-    res.end(JSON.stringify({ ok: true, rooms: rooms.size, uptime: process.uptime() }));
+    res.end(JSON.stringify({ ok: true, rooms: rooms.size, uptime: process.uptime(), epoch: leaderboardEpoch }));
     return;
   }
   if (url.pathname === "/leaderboard") {
     // v0.9: public, read-only — powers the in-game leaderboard's "merged local+global" view.
-    sendJson(res, 200, globalBoard);
+    // v0.13: also reports the current leaderboardEpoch via header, see "§ LEADERBOARD EPOCH".
+    sendLeaderboard(res, 200);
     return;
   }
   if (url.pathname.startsWith("/admin/")) {
     handleAdminRoute(req, res, url).catch((e) => { log("admin route error", e); sendJson(res, 500, { error: "server error" }); });
+    return;
+  }
+  if (url.pathname === "/solo-result" && req.method === "POST") {
+    // v0.13: solo/pass-and-play offline games sync to the shared board through here — see
+    // "§ SOLO RESULTS" above.
+    handleSoloResult(req, res).catch((e) => { log("solo-result route error", e); sendJson(res, 500, { error: "server error" }); });
     return;
   }
   res.writeHead(404, Object.assign({ "content-type": "text/plain" }, CORS_HEADERS));
@@ -853,6 +986,8 @@ const reclaimSweepTimer = setInterval(() => {
 
 loadRoomsFromDisk(); // v0.8: bring back rooms that existed before this process started
 loadLeaderboard();   // v0.9: bring back the shared global leaderboard, same idea
+loadSoloSeen();       // v0.13: bring back the solo-result dedupe set, same idea
+loadLeaderboardEpoch(); // v0.13: bring back the current leaderboard season/epoch, same idea
 log(`admin token file: ${ADMIN_TOKEN_FILE}`);
 
 server.listen(PORT, () => log(`nasty relay listening on :${PORT}`));
@@ -862,6 +997,9 @@ function shutdown() {
   flushAllPersists(); // make sure every debounced write actually lands before we exit
   if (lbPersistTimer) { clearTimeout(lbPersistTimer); lbPersistTimer = null; }
   persistLeaderboardNow();
+  if (soloSeenPersistTimer) { clearTimeout(soloSeenPersistTimer); soloSeenPersistTimer = null; }
+  persistSoloSeenNow();
+  persistLeaderboardEpoch();
   // v0.8 fix: `server.close()` only stops ACCEPTING new connections — it does NOT touch
   // sockets that are already open, and its callback doesn't fire until every existing
   // connection closes on its own. If any phone is still connected at restart time (the
