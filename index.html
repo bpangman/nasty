@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY - the Pangman family board game, digitized. v0.13.
+  NASTY - the Pangman family board game, digitized. v0.13.1.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation - the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -183,7 +183,7 @@
       natively before any app code runs - pure system compositing, nothing to glitch), then
       #bootCover (§ STYLE/§ CAPACITOR) - a minimal flexbox-centered stand-in inside the page
       itself, with no native KVO tracking to race against, shown the instant this script runs and
-      hidden only once #menu is confirmed actually settled (menuSettled(), polled every rAF, 2.5s
+      hidden only once #menu is confirmed actually settled (menuSettled(), polled every rAF, 4s
       hard fallback) - so nothing wrong is ever on screen, regardless of how long a given device
       takes to get there.
     - Toast vertical centering: toasts in the band between the board and the hand used to only
@@ -305,6 +305,25 @@
       formula (not the corner design's fixed +-45 checkerboard) clamped to +-90 deg so text is
       never upside-down at any of the 6 fixed slot angles this board ever uses, regardless of
       viewer/rotation (v0.12).
+
+  v0.13.1 (2026-07-15 - boot slam polish, app only, see HANDOFF.md/PLANNING.md for the full
+  readout):
+    - Blake's feedback on the v0.13 boot slam: "needs to last much longer," "come from the edge
+      of the screen," "land in the center of the screen" (was landing visibly lower than true
+      center), "make it bigger." All four addressed: the sign now sweeps in from off-screen (top-
+      right corner, rotating from a big swing down to its final -13deg tilt while decelerating),
+      punches into a slam (a brief scale overshoot), then settles - ~1.75s total fly-in+slam+hold,
+      still reads as deliberate, not sluggish. Landed-center bug root-caused: capacitor.config.json
+      ships `StatusBar.overlaysWebView:false`, which shrinks the native WKWebView's frame to start
+      below the status bar but still run to the real screen bottom - so this page's own viewport is
+      shorter than the true screen by the status bar's height, entirely off the TOP only, which
+      made flexbox-centering land everything `statusBarHeight/2` below true center. Corrected with
+      a measured (not guessed) `translateY` baked into the sign's OWN animation keyframes (moving
+      #bootCover's full-screen cover itself, tried first, turned out to open a gap at the opposite
+      edge exposing the menu underneath - caught on-device, not guessed). Landed size increased (device-
+      responsive, measured off the sign's own real box, not a guessed constant) - bigger on a big
+      phone, modest growth on a small one so it never risks a corner running past the edge. See §
+      CAPACITOR's boot-slam block and HANDOFF.md "v0.13.1 boot slam" for the full investigation.
 -->
 </head>
 <body>
@@ -718,7 +737,15 @@ button{font:inherit;cursor:pointer}
    play out, never get cut short by a fast-settling menu. See § CAPACITOR for the tilt constant
    (matches the new icon's tilt exactly) and the hideSplash() gating. The native LaunchScreen
    image behind this (app/assets/splash.png) is felt-only now, no sign baked in - the slam is
-   what introduces the sign, on purpose. */
+   what introduces the sign, on purpose.
+   v0.13.1 (Blake: longer/more cinematic, enters off-screen, lands dead-center, bigger): the
+   .sign's own animate() keyframes in § CAPACITOR (fly-in from off-screen, punch-slam, settle) now
+   carry a measured `- bootTopComp px` term baked into every translateY, correcting for iOS's
+   `overlaysWebView:false` frame-shift (see § CAPACITOR's `bootTopComp` comment for the full
+   investigation into why the sign was landing visibly lower than true screen center) - applied to
+   the SIGN, not #bootCover itself (a static transform on the full-screen cover was tried first and
+   opens a gap at the opposite edge exposing the menu underneath - caught on-device). Landed scale
+   is otherwise unchanged from here, just bigger/retimed, see § CAPACITOR. */
 </style>
 
 <!-- ================= MENU ================= -->
@@ -756,7 +783,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.13</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.13.1</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -1073,31 +1100,89 @@ if(IS_APP){
      block uses document.getElementById directly, not `$`, which would throw/temporal-dead-zone)
      and hidden only once #menu is CONFIRMED actually settled - see menuSettled() below. */
   document.getElementById('bootCover').classList.remove('hidden');
-  /* v0.13 boot slam (Blake's ask): the sign SLAMS onto the felt instead of just appearing -
-     same tilted-road-sign-lands feel as the in-game NASTY! takeout stamp (nastyBlast(), §
-     ANIM), tilted to match the new app icon exactly. Runs via the Web Animations API (not a
-     CSS @keyframes class) specifically so `bootSlamDone` below is a real Promise this boot
-     sequence can wait on - the animation is guaranteed to finish playing, never truncated by a
-     menu that happens to settle faster than the slam. Only ever runs on a genuine COLD open
-     (a fresh page load - this whole IS_APP block executes exactly once per load, and quickly
-     switching apps and back never reloads the page at all, so there's nothing here that could
-     replay on a simple app-switch - only a real force-quit + relaunch reloads the page).
-     BOOT_SLAM_TILT matches the new app icon's road-sign tilt (app/assets/icon.png) - keep the
-     two in sync if the icon's tilt is ever revisited. */
+  /* v0.13.1 (Blake, polish pass on the v0.13 slam - see HANDOFF.md "v0.13.1 boot slam" for the
+     full investigation): "needs to last much longer," "come from the edge of the screen," "land
+     in the center," "make it bigger." The sign now SWEEPS IN from off-screen (top-right corner,
+     rotating from a big +42deg swing down to its final -13deg tilt while decelerating) instead
+     of just zooming up in place, then punches into a slam (a scale overshoot past its landed
+     size) before settling - same tilted-road-sign-lands feel as the in-game NASTY! takeout stamp
+     (nastyBlast(), § ANIM), just a proper cinematic entrance now instead of a quick pop. Still
+     runs via the Web Animations API (not a CSS @keyframes class) specifically so `bootSlamDone`
+     below is a real Promise this boot sequence can wait on - the animation is guaranteed to
+     finish playing, never truncated by a menu that happens to settle faster than the slam. Only
+     ever runs on a genuine COLD open (a fresh page load - this whole IS_APP block executes
+     exactly once per load, and quickly switching apps and back never reloads the page at all, so
+     there's nothing here that could replay on a simple app-switch - only a real force-quit +
+     relaunch reloads the page). BOOT_SLAM_TILT matches the new app icon's road-sign tilt
+     (app/assets/icon.png) - keep the two in sync if the icon's tilt is ever revisited.
+
+     Two numbers below are MEASURED LIVE off the real device, on purpose, not guessed constants:
+     - `bootTopComp`: Blake reported the landed sign sits visibly LOWER than the screen's true
+       center. Root cause, confirmed by reading capacitor.config.json + the StatusBar plugin's
+       own native source (`@capacitor/status-bar`'s `resizeWebView()`): this app ships
+       `StatusBar.overlaysWebView:false`, which makes iOS shrink the WKWebView's frame to start
+       BELOW the status bar but still run all the way to the real screen's bottom edge - so this
+       page's own viewport (`innerHeight`) is shorter than the true screen by exactly the status
+       bar's height, missing entirely off the TOP only (the bottom is untouched, which is exactly
+       why #handBar's existing `env(safe-area-inset-bottom)` padding was always fine). Flexbox-
+       centering #bootCover inside that shrunk viewport therefore lands its content
+       `statusBarHeight/2` BELOW the real screen's center - exactly Blake's report, and exactly
+       the ~3%-off measurement the original v0.13 writeup already noted and wrongly called
+       "reads as centered." `screen.height` (the real, un-shrunk device screen) minus
+       `innerHeight` (this page's actual shrunk viewport) recovers that missing strip without any
+       native plugin round-trip - baked as a `- bootTopComp px` term into every translateY in the
+       SIGN's own keyframes below (NOT a transform on #bootCover itself - that was tried first and
+       turned out to shift the cover's whole painted box without resizing it, opening a
+       bootTopComp-tall gap at the opposite edge where #menu showed through underneath, caught by
+       an on-device screenshot during this fix). (Purely vertical, on purpose: the webview's
+       LEFT/RIGHT edges are never touched by this, matching that Blake only ever reported the
+       vertical offset.)
+     - `landedScale`: "make it bigger." Measured off the sign's own real, pre-transform box
+       (`offsetWidth`/`offsetHeight` - unaffected by any transform, and correct for whatever font
+       in the `.sign b` stack actually won on this device, not a guessed pixel width) and scaled
+       to target ~94% of THIS device's real width, clamped to [1.05, 1.35] so it still visibly
+       "owns the screen" on a big phone without ever risking a rotated corner running past the
+       edge on a small one ("keep margins sane on small phones" - the current scale of 1 already
+       sits at ~90% of an iPhone SE's width, so growth room there is deliberately modest; a bigger
+       phone gets proportionally more). */
   const BOOT_SLAM_TILT='-13deg';
-  const bootSign=document.querySelector('#bootCover .sign');
+  const bootCover=document.getElementById('bootCover');
+  const bootSign=bootCover.querySelector('.sign');
   let bootSlamDone=Promise.resolve();
   if(bootSign&&bootSign.animate){
-    bootSlamDone=bootSign.animate([
-      {opacity:0,transform:`rotate(${BOOT_SLAM_TILT}) scale(2.6)`},
-      {opacity:1,transform:`rotate(${BOOT_SLAM_TILT}) scale(.93)`,offset:.7},
-      {opacity:1,transform:`rotate(${BOOT_SLAM_TILT}) scale(1)`},
-    ],{duration:420,easing:'cubic-bezier(.18,.9,.32,1)',fill:'forwards'}).finished.catch(()=>{});
-    // Tasteful, small screen-shake right as it lands - optional per the brief, kept subtle.
+    const bootTopComp=Math.max(0,Math.min(60,(screen.height-innerHeight)/2));
+    // NOTE: the compensation is baked into the SIGN's own keyframes below (a `- ${bootTopComp}px`
+    // term in every translateY), NOT applied to #bootCover itself - #bootCover must stay
+    // untouched at exactly inset:0 (a real transform on the full-screen cover shifts its painted
+    // box without resizing it, opening a bootTopComp-tall gap at the opposite edge where #menu
+    // shows through underneath - caught by an on-device screenshot during this fix, not guessed).
+    const natW=bootSign.offsetWidth, natH=bootSign.offsetHeight;
+    const rad=13*Math.PI/180;
+    const naturalBBoxW=Math.abs(natW*Math.cos(rad))+Math.abs(natH*Math.sin(rad));
+    const landedScale=Math.max(1.05,Math.min(1.35,(innerWidth*0.94)/naturalBBoxW));
+    const cy=(vh)=>`calc(${vh}vh - ${bootTopComp}px)`;
+    // Unhurried fly-in (off-screen -> ~60% of the way there, decelerating) -> punchy slam
+    // (a scale overshoot past the landed size, offset .6 -> .78) -> brief settle back down to
+    // the true landed scale/tilt (offset .78 -> 1). ~1.45s total, well inside Blake's "1.5-2s,
+    // deliberate not sluggish" ask. Wrapped in try/catch (unlike the old v0.13 version) so an
+    // unsupported keyframe feature on some future WebKit can never take down the rest of this
+    // script - bootSlamDone just stays its already-resolved default and the menu reveals on
+    // schedule instead of the boot slam simply never being visible.
     try{
-      document.getElementById('bootCover').animate([
+    bootSlamDone=bootSign.animate([
+      {opacity:0,transform:`translate(60vw,${cy(-65)}) rotate(42deg) scale(${landedScale*.55})`,offset:0},
+      {opacity:1,transform:`translate(60vw,${cy(-65)}) rotate(42deg) scale(${landedScale*.55})`,offset:.06,easing:'ease-out'},
+      {opacity:1,transform:`translate(6vw,${cy(-4)}) rotate(-6deg) scale(${landedScale*1.02})`,offset:.6,easing:'cubic-bezier(.13,.9,.24,1)'},
+      {opacity:1,transform:`translate(0,${cy(0)}) rotate(-17deg) scale(${landedScale*1.12})`,offset:.78,easing:'cubic-bezier(.55,0,1,.45)'},
+      {opacity:1,transform:`translate(0,${cy(0)}) rotate(${BOOT_SLAM_TILT}) scale(${landedScale})`,offset:1,easing:'cubic-bezier(.33,1.4,.55,1)'},
+    ],{duration:1450,fill:'forwards'}).finished.catch(()=>{});
+    }catch(e){}
+    // Tasteful, small screen-shake right as it lands - retimed to the new ~1.13s impact moment
+    // (was 280ms into the old, much shorter slam). Optional per the brief, kept subtle.
+    try{
+      bootCover.animate([
         {translate:'0 0'},{translate:'4px -3px'},{translate:'-3px 2px'},{translate:'0 0'},
-      ],{duration:160,delay:280});
+      ],{duration:170,delay:1080});
     }catch(e){/* .animate() with `translate` needs a reasonably modern WebKit - purely cosmetic, skip silently if unsupported */}
   }
   let splashHidden=false;
@@ -1113,15 +1198,14 @@ if(IS_APP){
     return sr.top>0 && sr.top<innerHeight*0.3 && tr.height>0;
   };
   // Waits for the slam to actually finish before ever hiding #bootCover, even if the menu
-  // itself settles sooner - see the bootSlamDone comment above. A short 150ms HOLD after the
-  // sign visibly lands (scale 1, fully opaque) before revealing the menu underneath - without
-  // this the reveal happened in the same tick the animation finished, which read as "lands and
-  // instantly vanishes" rather than an actual landing beat, and left no perceptible frame for
-  // this to even be verified against a screenshot. Total slam+hold is still ~570ms - well under
-  // a second, still snappy.
-  const pollMenuSettled=()=>{ if(menuSettled())bootSlamDone.then(()=>new Promise(r=>setTimeout(r,150))).then(hideSplash); else requestAnimationFrame(pollMenuSettled); };
+  // itself settles sooner - see the bootSlamDone comment above. A 300ms HOLD after the sign
+  // visibly lands (scale/tilt settled, fully opaque) before revealing the menu underneath - a
+  // genuine "landed" beat, then the menu reveals right after, per Blake's ask. Total slam+hold
+  // is ~1.75s - inside the "1.5-2s, deliberate not sluggish" target.
+  const pollMenuSettled=()=>{ if(menuSettled())bootSlamDone.then(()=>new Promise(r=>setTimeout(r,300))).then(hideSplash); else requestAnimationFrame(pollMenuSettled); };
   addEventListener('load',()=>requestAnimationFrame(pollMenuSettled));
-  setTimeout(hideSplash,2500);   // hard fallback - hide() is idempotent either way
+  setTimeout(hideSplash,4000);   // hard fallback (was 2.5s pre-v0.13.1 - bumped since the
+                                  // intentional animation itself now runs ~1.75s) - hide() is idempotent either way
 }
 /* ============================= § UTIL ============================= */
 const $=id=>document.getElementById(id);
