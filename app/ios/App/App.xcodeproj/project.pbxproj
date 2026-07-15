@@ -348,7 +348,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
@@ -368,13 +368,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Manual;
-				CODE_SIGN_IDENTITY = "Apple Distribution";
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Distribution";
+				CODE_SIGN_IDENTITY = CE6D6E0EE784A14C7433C8CC7022B32580623C33;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = CE6D6E0EE784A14C7433C8CC7022B32580623C33;
 				DEVELOPMENT_TEAM = YJU5U6VX8V;
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = YJU5U6VX8V;
 				PROVISIONING_PROFILE_SPECIFIER = "Nasty App Store";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "Nasty App Store";
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";

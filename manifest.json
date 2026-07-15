@@ -6,5 +6,5 @@
   "orientation": "portrait",
   "background_color": "#0e3421",
   "theme_color": "#135c2e",
-  "icons": [{ "src": "icon.png", "sizes": "360x360", "type": "image/png" }]
+  "icons": [{ "src": "icon.png", "sizes": "1024x1024", "type": "image/png" }]
 }

@@ -126,10 +126,9 @@ days; a rejection just means answering a question and resubmitting, not starting
   "Enter code" screen covers the same need (a guest just types the 4-letter code by hand) —
   see HANDOFF.md's "iOS app" section. Add Universal Links once the account exists, then the
   "Text an invite" link can open the app directly on a guest's phone instead of the website.
-- **App icon source is low-res.** `icon.png` (the only master that exists) is 360×360, not the
-  1024×1024 Apple wants for a crisp App Store icon — it was upscaled to 1024 to generate the
-  icon set. It looks fine (it's a simple sign graphic) but if a true 1024 master ever gets
-  made, regenerate with `cd app && npm run assets`.
+- ~~**App icon source is low-res.**~~ RESOLVED 2026-07-14: the icon master is now a true
+  1024×1024, rendered natively from the game's own road-sign CSS (no upscaling) and shipped
+  in build 2 — see HANDOFF.md's "Icons/splash" note for the regeneration recipe.
 - **Free vs. paid** — Blake's decision, flagged in the original planning email: ship free
   forever, or free now with the option to add a price/IAP later? (Recommendation from that
   email: keep it free — easier to add a price later than to walk one back after people already
