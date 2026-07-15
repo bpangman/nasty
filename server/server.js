@@ -249,8 +249,13 @@ async function handleSoloResult(req, res) {
   // v0.13: reject a result recorded under an OLDER season (see "§ LEADERBOARD EPOCH" above) —
   // the board's been reset since this game finished, so applying it would resurrect pre-reset
   // numbers. Still mark the gameId seen so a client that keeps retrying doesn't loop forever.
-  const reqEpoch = Number.isFinite(body.epoch) ? body.epoch : 1;
-  if (reqEpoch < leaderboardEpoch) {
+  // A MISSING epoch (client has never talked to the server before, see index.html's
+  // getKnownLocalEpoch()) is treated as "always current" — never rejected — rather than
+  // assumed-stale; a bug in an earlier version of this code defaulted a missing epoch to 1,
+  // which wrongly rejected every brand-new device's very first solo win after any reset had
+  // ever happened (caught by this session's own live production smoke test).
+  const reqEpoch = Number.isFinite(body.epoch) ? body.epoch : null;
+  if (reqEpoch !== null && reqEpoch < leaderboardEpoch) {
     soloSeen.set(gameId, Date.now());
     scheduleSoloSeenPersist();
     log("solo result rejected (stale epoch)", gameId, "req=" + reqEpoch, "current=" + leaderboardEpoch);

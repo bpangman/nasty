@@ -3789,7 +3789,7 @@ function recordWin(){
     for(const k of Object.keys(delta))r[k]=(r[k]||0)+delta[k];
   });
   localStorage.setItem('nasty-stats',JSON.stringify(st));
-  submitOrQueueSoloResult(G.gameId,entries,getLocalEpoch());   // v0.13: also sync this offline result to the shared global board
+  submitOrQueueSoloResult(G.gameId,entries,getKnownLocalEpoch());   // v0.13: also sync this offline result to the shared global board
 }
 function wsToHttp(u){ return u.replace(/^wss:/,'https:').replace(/^ws:/,'http:'); }
 /* ---- v0.13 § LEADERBOARD EPOCH ----
@@ -3801,6 +3801,17 @@ function wsToHttp(u){ return u.replace(/^wss:/,'https:').replace(/^ws:/,'http:')
    server.js "§ LEADERBOARD EPOCH") - adoptEpoch() is the one place that reacts to it. */
 const LB_EPOCH_KEY='nasty-lb-epoch';
 function getLocalEpoch(){ const v=parseInt(localStorage.getItem(LB_EPOCH_KEY),10); return Number.isFinite(v)?v:1; }
+// v0.13 fix (found by this session's OWN live production smoke test): a genuinely fresh
+// device - one that has NEVER talked to the server before - has no way to know the real
+// current epoch yet. getLocalEpoch() above defaults that case to 1 for DISPLAY purposes
+// (harmless), but using that same default when SUBMITTING a solo result is wrong: after even
+// one "new season" reset, the real epoch is >1, so a brand-new device's very first solo win
+// would get wrongly rejected as "stale" (reqEpoch=1 < current=2) even though it's an
+// obviously-brand-new game that just finished seconds ago. Returns null (not 1) when nothing
+// has ever been stored, so the submit path can tell the server "I don't know my epoch yet"
+// instead of falsely claiming an old one - see submitSoloResult()/handleSoloResult() below,
+// which treat a missing epoch as "always current, just apply it" rather than rejecting it.
+function getKnownLocalEpoch(){ const v=parseInt(localStorage.getItem(LB_EPOCH_KEY),10); return Number.isFinite(v)?v:null; }
 function adoptEpoch(serverEpoch){
   if(!Number.isFinite(serverEpoch))return;
   const local=getLocalEpoch();
