@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY - the Pangman family board game, digitized. v0.11.3.
+  NASTY - the Pangman family board game, digitized. v0.12.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation - the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -215,6 +215,31 @@
       48px instead of shrinking Pause down, so the row's own total height - and the board below
       it - doesn't move (v0.7.1 rule); Pause/Save keeps its extra WIDTH (flex-grow), just not
       extra height. Confirmed with a pixel measurement in a screenshot.
+
+  v0.12 (2026-07-15 - per-viewer board rotation, see HANDOFF.md/PLANNING.md for the full readout):
+    - Blake: "whatever player you choose you're always on the bottom - your home zone where
+      pieces get snug is always on the bottom... rotate the board so that you're in that slot
+      always." Every phone can now show a DIFFERENT rotation of the same shared board, like
+      sitting around a real table - colors/seats/turn order are completely untouched, this is
+      purely which way each screen faces. Implemented at the coordinate level: buildLayout(n,
+      viewSeat) (§ LAYOUT) takes a new second argument and rotates every computed position
+      (holes, home rows, bases, plaques, deck/discard pockets) so that seat's arm lands at the
+      bottom of the screen, instead of the fixed seat-0-at-top/clockwise formula it always used
+      before. Since n is even and viewSeat is an integer seat index, the rotation is always an
+      exact multiple of the seats' own angular spacing - it only relabels which seat sits in
+      which of the n already-existing slots, so the fixed wood-octagon polygon (drawBoard()),
+      the corner-anchor angles the plaques pick from, and the uniform-spacing invariant all stay
+      correct with ZERO changes - see buildLayout()'s th= comment for the derivation.
+      computeViewSeat(n,seats) (§ LAYOUT, right after buildLayout) decides WHO each screen
+      rotates to: online, always NET.mySeat (every phone shows itself at the bottom); offline
+      solo (exactly one human seat), that human's seat; offline pass-and-play (2+ human seats
+      sharing one device) and autotest (0 human seats) deliberately do NOT rotate - a real table
+      doesn't spin when the phone gets handed to the next player, so those return the same n/2
+      seat that always sat at the bottom before this feature existed. § ENGINE is completely
+      untouched (steps were already seat-relative). Rotation holds across game start, offline
+      resume, online reconnect/rejoin catch-up, and the reunion lobby, since they all rebuild
+      `LAY` through the same three call sites (bootGameFromNetwork/startGame/resumeOfflineGame),
+      all three now passing computeViewSeat()'s result.
 -->
 </head>
 <body>
@@ -657,7 +682,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.11.3</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.12</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -1083,7 +1108,14 @@ let LAY=null;
    little ring of holes around the board center (like the real board). Your own porch
    (steps L-1) is your last shared hole; from it you branch inward to the safe row
    (steps L..L+4). */
-function buildLayout(n){
+function buildLayout(n,viewSeat){
+  // v0.12 (per-viewer board rotation - see HANDOFF.md "Per-viewer board rotation"): `viewSeat`
+  // is whichever seat this SCREEN should treat as "home," always drawn at the bottom, like
+  // sitting at a real table. Defaults to n/2 - the seat that ALREADY sat at the bottom under
+  // the pre-v0.12 fixed formula below (see the th= line's comment) - so calling buildLayout(n)
+  // with no second argument (old call sites, test scripts) reproduces the exact pre-v0.12
+  // board with zero behavior change.
+  if(viewSeat==null)viewSeat=Math.floor(n/2);
   const cfg=n===4
     ?{r0:430,holeR:13,baseR:470,spread:34}
     :{r0:400,holeR:10.5,baseR:440,spread:26};
@@ -1095,7 +1127,18 @@ function buildLayout(n){
   const tc=g/Math.tan(Math.PI/n), hs=g;
   const arms=[];
   for(let s=0;s<n;s++){
-    const th=(-90+s*(360/n))*Math.PI/180;
+    // Pre-v0.12 this was simply -90+s*(360/n) (seat 0 at top, clockwise, n/2 lands at the
+    // bottom/90deg - screen y grows downward, so 90deg IS "down"). v0.12 adds a `viewSeat`
+    // offset so THAT seat's arm lands on 90deg instead: th=90+(s-viewSeat)*(360/n) reduces to
+    // the exact old formula when viewSeat=n/2 (algebraically identical - see HANDOFF.md's
+    // derivation). Because n is always even and viewSeat is always an integer seat index, the
+    // rotation is always an exact multiple of the seats' own angular spacing (360/n) - it only
+    // PERMUTES which seat occupies which of the n evenly-spaced slots, it never invents a new
+    // angle. That's why nothing downstream (the fixed wood-octagon polygon in drawBoard(), the
+    // corner-anchor angles below, the uniform-spacing invariant) needs to change: the same set
+    // of slot angles is reused, just relabeled - see the plaqueAnchor comment below for why the
+    // corner selection stays correct too.
+    const th=(90+(s-viewSeat)*(360/n))*Math.PI/180;
     const d={x:Math.cos(th),y:Math.sin(th)};
     arms.push({th,d,p:{x:-d.y,y:d.x}});                 // p = clockwise-side perpendicular
   }
@@ -1199,7 +1242,22 @@ function buildLayout(n){
     discardPockets.push({x:dx+perp.x*discOff,y:dy+perp.y*discOff,w:cardW,h:cardH});
   }
   const discard={x:500,y:500,w:cardW,h:cardH};          // unused visually now - kept for shape stability
-  return {n,L:12*n,loop,home,base,plaque,plaqueDir,holeR:cfg.holeR,deckPockets,discardPockets,discard};
+  return {n,L:12*n,loop,home,base,plaque,plaqueDir,holeR:cfg.holeR,deckPockets,discardPockets,discard,viewSeat};
+}
+// v0.12: which seat should this SCREEN treat as "home" (bottom of the board)? Online: always
+// YOUR OWN seat (NET.mySeat) - the core promise, every phone shows itself at the bottom.
+// Offline solo (exactly one human seat, e.g. vs-CPU): that human's seat, so a vs-CPU game
+// always seats you at the bottom no matter which color you picked. Offline pass-and-play (2+
+// human seats sharing one device) and autotest/all-CPU (0 human seats): explicitly NO rotation
+// - a real table doesn't spin when the phone gets handed to the next player, so this returns
+// the same seat (n/2) that always rendered at the bottom before this feature existed. `seats`
+// is a plain array of {type,...} seat descriptors - callers pass whatever they already have on
+// hand (CFG's local `seats`, `action.seats`, or a loaded G.seats) since this can run BEFORE `G`
+// exists (game start / boot from network).
+function computeViewSeat(n,seats){
+  if(NET.online)return NET.mySeat;
+  const humanIdx=seats.reduce((acc,s,i)=>{if(s.type==='human')acc.push(i);return acc;},[]);
+  return humanIdx.length===1?humanIdx[0]:Math.floor(n/2);
 }
 const entryIdx=s=>s*12;
 const loopIdx=(s,steps)=>(entryIdx(s)+steps)%LAY.L;
@@ -2859,7 +2917,9 @@ function bootGameFromNetwork(action,isReconnect){
   CUR_MOVES=[]; CUR_SEAT=-1; SEL=null;
   const cols=action.n===4?COLORS4:COLORS6;
   const seats=action.seats.map((s,i)=>({name:s.name,type:s.type,diff:s.diff,color:cols[i]}));
-  LAY=buildLayout(action.n);
+  LAY=buildLayout(action.n,computeViewSeat(action.n,seats));   // v0.12: NET.mySeat is already
+  // set by the time this runs (onSync()/the 'gameAction' handler both set it before calling
+  // bootGameFromNetwork - see the two call sites), so computeViewSeat() picks it up via NET.online.
   newGame({n:action.n,teams:action.teams,seats},{deck:action.deck,dealer:action.dealer});
   saveLastRoom(NET.code,true);   // v0.8: remember this is a STARTED game - see boot()'s silent auto-rejoin
   resetNetUiFlow();
@@ -3334,7 +3394,10 @@ function startGame(){
   NET.online=false; NET.isHost=false; NET.wantConnection=false; updateNetChip();
   const cols=CFG.n===4?COLORS4:COLORS6;
   const seats=CFG.seatMeta[CFG.n].map((s,i)=>({name:s.name||cols[i].name,type:s.type,diff:s.diff,color:cols[i]}));
-  LAY=buildLayout(CFG.n);
+  // v0.12: solo vs-CPU always rotates to put you at the bottom; pass-and-play (2+ human
+  // seats) and autotest (0 human seats, see below) deliberately do NOT rotate - see
+  // computeViewSeat()'s comment, § LAYOUT.
+  LAY=buildLayout(CFG.n,computeViewSeat(CFG.n,seats));
   newGame({n:CFG.n,teams:CFG.teams,seats});
   $('menu').classList.add('hidden');
   $('game').classList.remove('hidden');
@@ -3638,8 +3701,11 @@ function resumeOfflineGame(){
   // resume, so it always unpauses. (Online resumes are different on purpose - see the new
   // reunion lobby below, which pauses deliberately until the humans are back at the table.)
   G.paused=false;
-  LAY=buildLayout(G.n);
   NET.online=false; NET.isHost=false; NET.wantConnection=false; updateNetChip();
+  // v0.12: NET.online must be false BEFORE this call (moved the online-teardown line above up
+  // a few lines for this) so computeViewSeat() can't mistake a resumed OFFLINE save for an
+  // online game off stale NET state - see computeViewSeat()'s comment, § LAYOUT.
+  LAY=buildLayout(G.n,computeViewSeat(G.n,G.seats));
   $('menu').classList.add('hidden');
   $('game').classList.remove('hidden');
   $('winOverlay').classList.add('hidden');
