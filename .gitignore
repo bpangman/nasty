@@ -20,3 +20,4 @@ app/ios/App/Pods/
 app/ios/App/App/public/
 server/deno-deploy-token.txt
 server/deno-deploy-org-token.txt
+server/AuthKey_*.p8
