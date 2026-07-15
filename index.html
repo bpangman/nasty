@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY - the Pangman family board game, digitized. v0.11.1.
+  NASTY - the Pangman family board game, digitized. v0.11.2.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation - the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -193,6 +193,28 @@
       `justify-content:center`, same distance to the board above and the hand below regardless of
       line count. The bottom edge (handH+8px) is unchanged, so the existing no-collision math
       against the pinned-right #btnSkip doesn't move.
+
+  v0.11.2 (2026-07-15 - three more UI refinements, see HANDOFF.md/PLANNING.md for the full readout):
+    - Menu tagline: "Land on somebody… and send them packing." now starts on an explicit second
+      line (a real <br>, not an incidental wrap) - checked it doesn't itself re-wrap down to 320px.
+    - Skip + toast band redesign. Skip's spot never empties anymore: it used to fully hide
+      (`.hidden`) whenever it wasn't a CPU's turn, which read as the band randomly popping in/out;
+      now it's always rendered at the same size/position and syncAll() toggles the real `disabled`
+      attribute instead, so it just dims and stops accepting taps (`#btnSkip:disabled`, § STYLE).
+      Toasts no longer auto-fade - the latest message stays up until the next one replaces it
+      (`toast()`, § TURNS); a stale message is bounded by the next deal (doDeal() always toasts)
+      or the win overlay burying the band entirely, so nothing lingers past those. The toast
+      bubble and #btnSkip now share one fixed-height row (`--bandH`, § STYLE) instead of the
+      v0.11.1 tall centered band - a 1-line message centers vertically with real spare room, a
+      2-line message wraps within the same fixed height, and the bubble stays horizontally
+      centered in the space left of Skip's reserved lane. Verified across both boards and all
+      four matrix viewports (320x568/390x844/430x932/844x390): 1-line, 2-line, Skip-lit, and
+      Skip-dimmed states, no overlap anywhere, nothing shifts when a message changes.
+    - Topbar buttons: Pause/Save measured 4px taller than its neighbors (it alone carried
+      min-height:48px while the rest sat at 44px). Brought every OTHER topbar button up to match
+      48px instead of shrinking Pause down, so the row's own total height - and the board below
+      it - doesn't move (v0.7.1 rule); Pause/Save keeps its extra WIDTH (flex-grow), just not
+      extra height. Confirmed with a pixel measurement in a screenshot.
 -->
 </head>
 <body>
@@ -202,6 +224,9 @@
   --wood1:#eed6a7; --wood2:#dcbb82; --wood3:#b3894e;
   --ink:#2b2118; --cream:#fbf7ee; --gold:#f4c542;
   --sign1:#1f7d40; --sign2:#135c2e; --red:#b3352c;
+  /* v0.11.2 item 2: shared fixed height for #btnSkip and .toast, so the two sit flush on the
+     same row - tall enough for a wrapped 2-line toast plus real padding. */
+  --bandH:60px;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%}
@@ -276,7 +301,13 @@ button{font:inherit;cursor:pointer}
    it's never truly stuck off-screen. */
 #topbar .chip{font-size:12.5px;color:#d7ecdc;background:rgba(0,0,0,.28);border-radius:99px;padding:6px 12px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-#topbar .iconBtn{flex:none}
+/* v0.11.2 item 3 (Blake): Pause/Save measured 4px taller than the other topbar buttons - it
+   alone had min-height:48px (see #btnPause below) while the rest sat at the generic .iconBtn
+   min-height:44px. Bumping every OTHER topbar button up to match 48px (not shrinking Pause
+   down to 44px) keeps the topbar's own total height exactly where it already was - Pause/Save
+   was already the tallest button driving that height, so this only makes the shorter ones
+   catch up to it, never changes the row's own height (v0.7.1 rule: the board must not move). */
+#topbar .iconBtn{flex:none;min-height:48px}
 /* flex:1 0 auto (grow yes, SHRINK NO) - a flex-shrink of 1 (the default, and what a plain
    flex:1 would give it) let this button collapse below its own nowrap text's width once the
    row got tight, and since the collapsed box no longer overflowed the ROW itself, overflow-x
@@ -343,17 +374,23 @@ button{font:inherit;cursor:pointer}
 /* v0.11 item 4 (Blake: "it's kinda hidden up top right now"): Skip moved OUT of the topbar
    entirely and now lives fixed below the board, pinned to the right, in the same vertical band
    where toast notifications already appear (anchored off the same measured --handH as #toasts,
-   see that rule below) - "the empty band above the hand cards." It's genuinely empty space when
-   Skip isn't showing (fixed-position, not part of any flex row), so nothing else ever moves or
-   gets covered when it appears/disappears - the fixed-height topbar rule (v0.7.1) stays intact
-   because Skip was the ONLY thing ever popping in/out of that row; now nothing does. Sized well
-   above the old 44px iconBtn floor and given its own gold outline so it reads as obviously
-   tappable, not a stray label. */
+   see that rule below) - "the empty band above the hand cards." Sized well above the old 44px
+   iconBtn floor and given its own gold outline so it reads as obviously tappable, not a stray
+   label.
+   v0.11.2 item 2 (Blake): Skip's SPOT never empties now - it used to fully hide (.hidden) when
+   it wasn't a CPU's turn, which read as the band randomly popping in/out. Now the button is
+   ALWAYS rendered at this exact position/size; syncAll() toggles the real `disabled` attribute
+   instead of `.hidden` (see § RENDER), so it only visually dims/stops-tapping (see :disabled
+   below) - same size, same position, always. Height switched from min-height to a fixed
+   `height:var(--bandH)` shared with .toast below, so the two sit flush on the same row. */
 #btnSkip{position:fixed;right:14px;bottom:calc(var(--handH,148px) + 8px);z-index:67;
-  min-height:52px;padding:10px 20px;font-size:15px;font-weight:800;border-radius:26px;
+  height:var(--bandH);padding:0 20px;font-size:15px;font-weight:800;
+  border-radius:calc(var(--bandH) / 2);
   background:rgba(244,197,66,.22);border:2px solid var(--gold);color:var(--gold);
-  box-shadow:0 6px 18px rgba(0,0,0,.45)}
+  box-shadow:0 6px 18px rgba(0,0,0,.45);transition:opacity .2s,background .2s,color .2s}
 #btnSkip.active{background:var(--gold);color:#3a2c05;border-color:var(--gold)}
+#btnSkip:disabled{opacity:.35;background:rgba(0,0,0,.28);border-color:rgba(255,255,255,.18);
+  color:rgba(255,255,255,.45);box-shadow:none;cursor:default}
 
 /* ---------- Plaques ---------- */
 /* v0.9: placards show ONLY the player's name (item 1) - bigger text, no pips/card-count/type
@@ -492,27 +529,33 @@ button{font:inherit;cursor:pointer}
    v0.10: --handH is the REAL, measured #handBar height (updateToastOffset(), § RENDER/ANIM) -
    replaces a flat 148px that was only correct for the old fixed-size hand card. --handH already
    includes the safe-area inset (handBar's own padding adds it), so it isn't added again here.
-   v0.11: this band now also holds the relocated #btnSkip, pinned right (see its own rule above).
+   v0.11: this band also holds the relocated #btnSkip, pinned right (see its own rule above).
    Toasts reserve a right-hand lane (124px - #btnSkip's own ~100px width + its 14px right inset
    + a real 10px clearance gap, checked against actual rendered geometry at 320/390/430/844
-   logical widths, not just eyeballed) so a long toast's text can never run under Skip - the
-   offset approach, not just a narrower max-width, so the two truly can't collide regardless of
-   toast text length.
-   v0.11.1 (Blake: bottom-anchoring made a 1-line toast sit visibly lower than a 2-line one -
-   he wants it centered in the band instead, same distance to the board above and the hand
-   below no matter how many lines). #toasts now has a real TOP edge too - `--toastBandTop`,
-   the board's actual measured bottom edge (updateToastOffset(), § RENDER/ANIM), set the same
-   way --handH already was. `bottom` is unchanged (still handH+8px, so the no-collision math
-   against #btnSkip - which anchors off that exact same value - doesn't move), so the fix is
-   purely "give the flex column a top AND bottom and center within them" instead of "just grow
-   upward from the bottom." */
-#toasts{position:fixed;top:var(--toastBandTop,40vh);bottom:calc(var(--handH,148px) + 8px);
+   logical widths, not just eyeballed) so a toast's text can never run under Skip - the offset
+   approach, not just a narrower max-width, so the two truly can't collide regardless of text
+   length.
+   v0.11.2 item 2 (Blake): superseded v0.11.1's "center across the whole board-to-hand band" -
+   the bubble and Skip now share ONE fixed-height row (--bandH, same var as #btnSkip above),
+   flush with Skip's bottom edge, instead of floating somewhere up in a tall gap. `top` is gone;
+   `bottom`+`height` alone define the row, so it can never drift relative to Skip. Within that
+   row, #toasts centers its content BOTH ways (justify-content + align-items) so the bubble sits
+   horizontally centered in the remaining space left of Skip's reserved lane, and - since the
+   bubble itself is also height:var(--bandH) - vertically flush with Skip regardless of message
+   length. */
+#toasts{position:fixed;bottom:calc(var(--handH,148px) + 8px);height:var(--bandH);
   left:12px;right:124px;z-index:65;
-  display:flex;flex-direction:column;justify-content:center;gap:6px;align-items:center;
+  display:flex;justify-content:center;align-items:center;
   pointer-events:none;padding:0}
-.toast{background:rgba(15,10,6,.88);border:1px solid rgba(255,255,255,.2);border-radius:99px;
-  padding:8px 18px;font-size:14.5px;font-weight:700;box-shadow:0 6px 18px rgba(0,0,0,.4);
-  animation:toastIn .25s ease-out;max-width:100%;text-align:center}
+/* Fixed height (matches #btnSkip's --bandH exactly) instead of growing with content: a 1-line
+   message is vertically centered by the flex rules above with real space left over top/bottom
+   (reads as "extra padding"); a 2-line message wraps and fills the same box instead of growing
+   it. overflow:hidden is a safety clip only - normal toast copy never approaches 2 lines' worth
+   of height at this width, this just guarantees the box itself never grows past --bandH. */
+.toast{height:var(--bandH);display:flex;align-items:center;justify-content:center;
+  background:rgba(15,10,6,.88);border:1px solid rgba(255,255,255,.2);border-radius:calc(var(--bandH) / 2);
+  padding:4px 18px;font-size:14.5px;font-weight:700;line-height:1.22;box-shadow:0 6px 18px rgba(0,0,0,.4);
+  animation:toastIn .25s ease-out;max-width:100%;text-align:center;overflow:hidden}
 @keyframes toastIn{from{opacity:0;transform:translateY(12px)}}
 .overlay{position:fixed;inset:0;background:rgba(5,15,9,.9);z-index:80;display:flex;flex-direction:column;
   align-items:center;justify-content:center;padding:22px;text-align:center}
@@ -575,7 +618,12 @@ button{font:inherit;cursor:pointer}
 <div id="menu">
   <div class="sign"><b>NASTY</b></div>
   <div class="estTop">Est. 1993</div>
-  <p class="tag">Race your five golf tees around the board and home. Land on somebody… and send them packing.</p>
+  <!-- v0.11.2 item 1 (Blake): force "Land on somebody…" onto its own line, not just an
+       incidental wrap - an explicit <br> before it, unconditionally. Checked at 320px (the
+       narrowest matrix width) that the SECOND line itself doesn't also wrap awkwardly - it
+       doesn't, "Land on somebody… and send them packing." fits on one line at .tag's 15px/
+       max-width:420px even inside a 320px-wide #menu (288px available after padding). -->
+  <p class="tag">Race your five golf tees around the board and home.<br>Land on somebody… and send them packing.</p>
   <div class="panel">
     <button class="savedTile hidden" id="btnSavedGame">
       <div class="t1">▶ Resume Saved Game</div>
@@ -599,7 +647,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.11.1</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.11.2</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -636,8 +684,11 @@ button{font:inherit;cursor:pointer}
   </div>
   <!-- v0.11 item 4: fixed-position, not part of the topbar flex row anymore - see #btnSkip's
        CSS rule for why (Blake: "it's kinda hidden up top right now"). Lives in the same band as
-       #toasts, just pinned right instead of centered. -->
-  <button class="iconBtn hidden" id="btnSkip">⏩ Skip</button>
+       #toasts, just pinned right instead of centered.
+       v0.11.2 item 2: no more `.hidden` - the button is ALWAYS in the DOM at this exact spot;
+       starts `disabled` (dimmed, non-interactive) until the first syncAll() decides whether a
+       CPU turn actually makes it tappable. -->
+  <button class="iconBtn" id="btnSkip" disabled>⏩ Skip</button>
   <div id="handBar">
     <div id="handInfo"></div>
     <div id="handRow"></div>
@@ -1479,7 +1530,10 @@ function syncAll(){
     $(`plaque-${s}`).classList.toggle('turn',s===G.turn&&!G.over);
   }
   $('deckCount').textContent=G.deck.length;
-  $('btnSkip').classList.toggle('hidden',G.over||G.seats[G.turn].type!=='cpu');
+  // v0.11.2 item 2: Skip's spot never empties anymore - toggle the real `disabled` attribute
+  // (dims it + makes it non-interactive, see #btnSkip:disabled in § STYLE) instead of `.hidden`
+  // (which used to remove it from the row entirely). Same enablement rule as before, unchanged.
+  $('btnSkip').disabled=G.over||G.seats[G.turn].type!=='cpu';
 }
 function cardHTML(card){
   const red=card.s==='♥'||card.s==='♦';
@@ -1599,26 +1653,14 @@ function positionPlaques(){
    #handBar instead of assumed. Called after every hand render (renderHandFor) and on resize
    (fitBoard) - cheap (one getBoundingClientRect + one CSS var write), and keeps toasts sitting
    snugly just above the hand on every screen instead of a gap that's only correct at one size.
-   v0.11.1: also measures the board's real bottom edge (--toastBandTop) so #toasts's CSS can
-   give the toast band both a top AND a bottom and vertically CENTER within it (see #toasts,
-   § STYLE) instead of only growing upward from the hand - fixes a 1-line toast sitting lower
-   than a 2-line one. #boardScale is present (if empty) even on the menu screen, and its rect
-   collapses to 0 while #game is display:none, same non-issue --handH already had - both vars
-   only matter once a toast can actually show, which is gameplay-only. Clamped against
-   `bandBottom` (the same point #toasts's own `bottom:calc(handH+8px)` resolves to): on the one
-   pathological aspect ratio in the matrix (very short landscape, e.g. 844x390 - see the
-   max-height:480px landscape media query above), the board's measured bottom edge can sit AT
-   or slightly past the hand's top edge (near-zero letterbox margin at that size), which would
-   invert top past bottom and pin the band to one collapsed point instead of centering it -
-   confirmed by testing that exact size. Clamping bandTop to never exceed bandBottom collapses
-   that one edge case back to the pre-fix hand-hugging spot instead of an inverted box; every
-   normal portrait size has real room above the hand and is unaffected. */
+   v0.11.1 added a second var, --toastBandTop (the board's measured bottom edge), so #toasts
+   could center itself across the whole board-to-hand gap. v0.11.2 item 2 superseded that
+   design - the toast bubble now lives in a fixed-height row flush with #btnSkip (see #toasts,
+   § STYLE), defined purely by `bottom`+`height`, so a top-edge measurement isn't needed
+   anymore; --toastBandTop was removed along with it. */
 function updateToastOffset(){
   const h=$('handBar').getBoundingClientRect().height;
   document.documentElement.style.setProperty('--handH',h+'px');
-  const bandBottom=innerHeight-h-8;
-  const boardBottom=$('boardScale').getBoundingClientRect().bottom;
-  document.documentElement.style.setProperty('--toastBandTop',Math.min(boardBottom,bandBottom)+'px');
 }
 
 /* ============================= § ANIM ============================= */
@@ -1790,13 +1832,21 @@ function confettiBurst(){
 
 /* ============================= § TURNS ============================= */
 let uiResolve=null;
+// v0.11.2 item 2 (Blake): no more auto-fade - the latest message now STAYS up until something
+// else replaces it (`ms` is kept in the signature purely so every existing call site with a
+// custom duration doesn't need touching; it's accepted and ignored, a toast never times out on
+// its own anymore). Suppression during fast-forward/catch-up and the replace-not-stack behavior
+// are both unchanged. "Stale message when a hand/game ends" is handled for free by the game's
+// own flow rather than any special-cased clearing: every new deal - the normal way a hand ends,
+// reshuffle or not - always calls toast() itself (see doDeal()) before the next real turn, which
+// replaces whatever was showing; and when the GAME ends, showWin() throws up the full-screen win
+// overlay a beat later, burying the band entirely. So a stale toast is never visible for longer
+// than that one short gap, and never past a deal/win boundary.
 function toast(msg,ms=3000){
   if(SKIP||INSTANT)return;   // no toast spam while fast-forwarding or during reconnect catch-up
   $('toasts').replaceChildren();   // one message at a time - newest replaces the old, never stacks into the cards
   const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
   $('toasts').appendChild(t);
-  setTimeout(()=>{t.style.transition='opacity .4s';t.style.opacity='0';
-    setTimeout(()=>t.remove(),450);},Math.max(600,ms/Math.min(SPEED,3)));
 }
 /* ---- CPU fast-forward ---- */
 function startSkip(){
