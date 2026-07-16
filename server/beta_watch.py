@@ -61,13 +61,12 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 18 reached the family</h1>
+<h1 style="color:#1a5c38">🎉 Build 19 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>This build makes online games smoother. If you need to step away from a game for good, you can
-now hand your seat to a computer player so nobody has to wait on you. Before an online game
-starts, everyone taps ready so play begins only once the whole table is set. Switching to another
-app and coming back works better - your game picks up right where you left off. And you will only
-see a connection warning when something is actually wrong, not as a routine status light.</p>
+<p>This build gives the computer players a big upgrade. Each difficulty now feels truly
+different: Easy is friendly, Tricky puts up a real fight, and Nasty plays to win with blocks,
+trades, and takeouts. You can also keep two saved games now, so starting a new game never
+means losing the one you already have going.</p>
 <h3>📱 The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
 <a href="https://testflight.apple.com/join/d79YpZea">https://testflight.apple.com/join/d79YpZea</a></p>
@@ -81,8 +80,8 @@ see a connection warning when something is actually wrong, not as a routine stat
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 18 is live for the family 🎉', body], check=True)
+                    'NASTY: build 19 is live for the family 🎉', body], check=True)
     open(DONE, 'w').write('approved\n')
-    log('APPROVED — email sent, watcher done')
+    log('APPROVED - email sent, watcher done')
 except Exception as e:
     log(f'error: {e}')
