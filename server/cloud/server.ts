@@ -79,6 +79,7 @@
 // its API is documented in the generated file's own header).
 // deno-lint-ignore-file no-explicit-any
 import { createEngine } from "./engine.js";
+import { sendTurnPush } from "./apns.ts";
 
 const PORT = Number(Deno.env.get("NASTY_PORT") ?? 8484);
 const KV_PATH = Deno.env.get("NASTY_KV_PATH") || undefined; // undefined = Deploy's managed KV / local default
@@ -346,7 +347,12 @@ async function handleSoloResult(req: Request, ip: string): Promise<Response> {
  * § ROOMS — KV-backed room state, see file header points 1-2.
  * ------------------------------------------------------------------------------------- */
 type Seat = { name: string; type: "human" | "cpu"; diff: string; claimedBy: number | null };
-type Player = { id: number; token: string; name: string; isHost: boolean; connected: boolean; leftForGood?: boolean };
+type Player = {
+  id: number; token: string; name: string; isHost: boolean; connected: boolean; leftForGood?: boolean;
+  // v0.16 item 5: a registered APNs device token, tied to this SAME player identity a rejoin
+  // token/reclaim-by-name already key off - see maybeSendTurnPush() below.
+  pushToken?: string | null; pushPlatform?: string | null;
+};
 type RoomMeta = {
   code: string; createdAt: number; lastActivity: number;
   hostPlayerId: number | null; nextPlayerId: number;
@@ -610,6 +616,34 @@ async function commitAndBroadcast(code: string, E: any, out: Broadcastable[], fi
 }
 
 /* ---------------------------------------------------------------------------------------
+ * v0.16 item 5 § PUSH — twin of server.js's maybeSendTurnPush(). "It's your turn in NASTY."
+ * Fires exactly once per genuine turn-start event: this is only ever CALLED (from the three
+ * call sites below, always right after a successful commitAndBroadcast()) after a real
+ * mutation, and driveTurnLoopCollect() only reaches its "stop, waiting on a human" return
+ * point fresh on each such call - no extra dedupe bookkeeping needed. Fire-and-forget (never
+ * awaited by its callers) - a push failure/misconfiguration must never slow down or affect
+ * anyone's turn. See server/cloud/apns.ts for the no-op-until-key-exists design.
+ * ------------------------------------------------------------------------------------- */
+async function maybeSendTurnPush(code: string, E: any, finished: boolean): Promise<void> {
+  if (finished) return; // game over - nobody's turn is pending
+  const G = E.getG();
+  if (!G) return;
+  const seat = G.turn;
+  if (!G.seats[seat] || G.seats[seat].type !== "human") return; // defensive - the loop only stops here for a human seat
+  const cur = await kv.get<RoomMeta>(roomKey(code));
+  if (!cur.value || !cur.value.seatOwners) return;
+  const ownerId = cur.value.seatOwners[seat];
+  if (ownerId == null) return;
+  const player = cur.value.players.find((p) => p.id === ownerId);
+  if (!player || player.connected) return;   // they're right there - no need to buzz their phone
+  if (!player.pushToken) return;             // never registered (web player, or app player before granting permission)
+  await sendTurnPush({
+    token: player.pushToken, playerName: G.seats[seat].name,
+    title: "NASTY", body: "It's your turn in NASTY",
+  });
+}
+
+/* ---------------------------------------------------------------------------------------
  * v0.16 item 4 § READY CHECK — twin of server.js's startReadyCheck()/maybeAdvanceReadyCheck()/
  * actuallyStartGame(). The host tapping Start now only opens this gate; the real deal happens
  * once every HUMAN seat has confirmed ready (or immediately for an all-CPU table). Always
@@ -652,7 +686,8 @@ async function actuallyStartGame(code: string, pre: RoomMeta): Promise<void> {
   // Drive the opening stretch (first deal + any leading CPU turns) immediately.
   const metaForLoop = r.meta; // nextSeq=1, the loop advances it as it appends
   const { out, finished } = driveTurnLoopCollect(engine, metaForLoop);
-  await commitAndBroadcast(code, engine, out, finished);
+  const ok = await commitAndBroadcast(code, engine, out, finished);
+  if (ok) maybeSendTurnPush(code, engine, finished).catch((e) => log("push check failed", code, (e as Error).message));
 }
 
 // v0.15 snapshot fields for sync/reclaimed — twin of server.js's gameSnapshotFields().
@@ -1398,7 +1433,8 @@ function handleWsUpgrade(req: Request, ip: string): Response {
             out.push({ payload: { type: "stateCheck", afterSeq: moveSeq, digest: gDigestServer(E.getG()) } });
           }
           const cont = driveTurnLoopCollect(E, meta);
-          await commitAndBroadcast(code, E, out.concat(cont.out), cont.finished);
+          const ok = await commitAndBroadcast(code, E, out.concat(cont.out), cont.finished);
+          if (ok) maybeSendTurnPush(code, E, cont.finished).catch((e) => log("push check failed", code, (e as Error).message));
         });
         return;
       }
@@ -1429,7 +1465,8 @@ function handleWsUpgrade(req: Request, ip: string): Response {
             // The seat may be sitting mid-turn waiting on exactly this human's move right now -
             // drive it forward immediately instead of stalling the table.
             const cont = driveTurnLoopCollect(E, meta);
-            await commitAndBroadcast(code, E, out.concat(cont.out), cont.finished);
+            const ok = await commitAndBroadcast(code, E, out.concat(cont.out), cont.finished);
+            if (ok) maybeSendTurnPush(code, E, cont.finished).catch((e) => log("push check failed", code, (e as Error).message));
           } else {
             seat = -1; // nothing converted - don't touch seatOwners below
           }
@@ -1506,6 +1543,26 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         return;
       }
 
+      case "registerPush": {
+        // v0.16 item 5: {type:'registerPush', token, platform} — twin of server.js's case. The
+        // iOS app registers (or RE-registers, after every reconnect) its APNs device token
+        // here, tied to the SAME per-connection identity (this playerId's player record) that
+        // a rejoin token/reclaim-by-name already key off - see maybeSendTurnPush() above.
+        if (!ctx) return;
+        const { code, playerId } = ctx;
+        const token = typeof msg.token === "string" ? (msg.token as string).trim().slice(0, 512) : "";
+        if (!token) return;
+        const r = await touchRoom(code, (meta) => {
+          const p = meta.players.find((pp) => pp.id === playerId);
+          if (!p) return false;
+          p.pushToken = token;
+          p.pushPlatform = msg.platform === "ios" ? "ios" : "ios"; // only iOS ships right now - kept explicit for a future platform
+          return {};
+        });
+        if (r.ok) log("push token registered", code, "playerId=" + playerId);
+        return;
+      }
+
       default:
         return;
     }
@@ -1562,6 +1619,20 @@ function handleWsUpgrade(req: Request, ip: string): Response {
       if (r.ok) {
         broadcastRoom(code, { type: "presence", playerId, connected: false });
         if (playerId === r.meta.hostPlayerId) broadcastRoom(code, { type: "hostStatus", connected: false });
+        // v0.16 item 5: twin of server.js's matching close-handler addition - covers a player
+        // who was connected when their turn started but backgrounds/drops mid-turn (nothing
+        // else mutates the game to re-enter driveTurnLoopCollect on its own in that case).
+        // Mutually exclusive with the turn-start check in maybeSendTurnPush()'s other call
+        // sites - never a double push for the same turn.
+        if (r.meta.started && r.meta.seatOwners) {
+          const E = getEngine(code, r.meta);
+          if (E) {
+            const G = E.getG();
+            if (G && !G.over && r.meta.seatOwners[G.turn] === playerId) {
+              maybeSendTurnPush(code, E, false).catch((e) => log("push check failed", code, (e as Error).message));
+            }
+          }
+        }
       }
     })();
   };

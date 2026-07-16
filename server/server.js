@@ -30,6 +30,7 @@ const fs = require("fs");
 const path = require("path");
 const { WebSocketServer } = require("ws");
 const { createEngine } = require("./engine.js");
+const { sendTurnPush } = require("./apns.js");
 
 const PORT = process.env.NASTY_PORT ? parseInt(process.env.NASTY_PORT, 10) : 8484;
 // v0.8: two different prune windows. A lobby that never started is cheap to lose (nothing
@@ -401,7 +402,13 @@ function roomToDisk(room) {
   return {
     code: room.code, createdAt: room.createdAt, lastActivity: room.lastActivity,
     hostPlayerId: room.hostPlayerId, nextPlayerId: room.nextPlayerId,
-    players: Array.from(room.players.values()).map(p => ({ id: p.id, token: p.token, name: p.name, isHost: p.isHost, leftForGood: !!p.leftForGood })),
+    players: Array.from(room.players.values()).map(p => ({
+      id: p.id, token: p.token, name: p.name, isHost: p.isHost, leftForGood: !!p.leftForGood,
+      // v0.16 item 5: a registered APNs device token, tied to this player identity (the same
+      // one rejoin tokens/reclaim-by-name already key off) - persisted so a server restart
+      // doesn't lose it. See "registerPush" below.
+      pushToken: p.pushToken || null, pushPlatform: p.pushPlatform || null,
+    })),
     lobby: room.lobby, started: room.started, seatOwners: room.seatOwners, log: room.log,
     // v0.16 item 4: Sets aren't JSON-serializable directly - flatten readyPlayerIds to an array.
     readyCheck: room.readyCheck ? { requiredPlayerIds: room.readyCheck.requiredPlayerIds, readyPlayerIds: Array.from(room.readyCheck.ready) } : null,
@@ -421,7 +428,10 @@ function roomFromDisk(obj) {
     recorded: !!obj.recorded, nextSeq: obj.nextSeq || 0,
   };
   for (const p of (obj.players || []))
-    room.players.set(p.id, { id: p.id, token: p.token, name: p.name, ws: null, connected: false, isHost: !!p.isHost, leftForGood: !!p.leftForGood });
+    room.players.set(p.id, {
+      id: p.id, token: p.token, name: p.name, ws: null, connected: false, isHost: !!p.isHost, leftForGood: !!p.leftForGood,
+      pushToken: p.pushToken || null, pushPlatform: p.pushPlatform || null,
+    });
   if (obj.G) {
     try {
       const engine = createEngine();
@@ -638,6 +648,31 @@ function sameMove(legal, submitted) {
   return true;
 }
 
+/* ---------------------------------------------------------------------------------------
+ * v0.16 item 5 § PUSH — "It's your turn in NASTY." Fires exactly once per genuine turn-start
+ * event: driveTurnLoop() is only ever CALLED (from the three call sites below) right after a
+ * real mutation (a fresh game start, a validated human move, a "leaveForGood" conversion), so
+ * the single "stop and wait for a human" return point inside it is reached fresh every call -
+ * no extra dedupe bookkeeping needed to satisfy "one push per turn-start, not per loop tick."
+ * A player who's still connected (their own phone is right there) never gets buzzed - this
+ * only ever fires for a seat whose socket is dead AND who has a registered push token.
+ * Fire-and-forget (never awaited by the caller) - a push failure/misconfiguration must never
+ * slow down or affect anyone's turn. See server/apns.js for the no-op-until-key-exists design.
+ * ------------------------------------------------------------------------------------- */
+function maybeSendTurnPush(room, seat) {
+  const G = room.engine.getG();
+  if (!G || !G.seats[seat] || G.seats[seat].type !== "human") return; // defensive - driveTurnLoop only stops here for a human seat
+  const ownerId = room.seatOwners ? room.seatOwners[seat] : null;
+  if (ownerId == null) return;
+  const player = room.players.get(ownerId);
+  if (!player || player.connected) return;   // they're right there - no need to buzz their phone
+  if (!player.pushToken) return;             // never registered (web player, or app player before granting permission)
+  sendTurnPush({
+    token: player.pushToken, playerName: G.seats[seat].name,
+    title: "NASTY", body: "It's your turn in NASTY",
+  }).catch(e => log("push send threw", room.code, e.message));
+}
+
 function driveTurnLoop(room) {
   const E = room.engine;
   for (let guard = 0; guard < TURN_LOOP_GUARD; guard++) {
@@ -704,6 +739,7 @@ function driveTurnLoop(room) {
     // Human seat with cards and at least one legal move: stop here and wait for their
     // validated `action` message (see the "action" case below) — this is the ONLY external
     // input the authoritative loop ever waits on.
+    maybeSendTurnPush(room, seat);   // v0.16 item 5: "it's your turn" push if they're not connected
     return;
   }
   log("driveTurnLoop guard tripped (possible infinite loop) — room", room.code);
@@ -970,6 +1006,20 @@ wss.on("connection", (ws, req) => {
       touch(room);
       broadcast(room, { type: "presence", playerId, connected: false });
       if (playerId === room.hostPlayerId) broadcast(room, { type: "hostStatus", connected: false });
+      // v0.16 item 5: covers the OTHER real trigger shape beyond driveTurnLoop's own turn-start
+      // check (maybeSendTurnPush() above) - a player who was connected when their turn started
+      // but then backgrounds/drops mid-turn (the common real case: they were already looking at
+      // their phone when it became their turn, then put it down) never re-enters driveTurnLoop
+      // on its own (nothing mutated the game), so without this the push would never fire for
+      // that shape. Fires at most once for the SAME turn as the turn-start check (mutually
+      // exclusive: that check only pushes if ALREADY disconnected at turn-start; this one only
+      // pushes on a connect->close transition while already on-turn) - never a double push.
+      if (room.started && room.engine) {
+        const G = room.engine.getG();
+        if (G && !G.over && room.seatOwners && room.seatOwners[G.turn] === playerId) {
+          maybeSendTurnPush(room, G.turn);
+        }
+      }
     }
   });
 
@@ -1376,6 +1426,27 @@ wss.on("connection", (ws, req) => {
         const target = room.players.get(msg.targetPlayerId);
         const sender = room.players.get(playerId);
         if (target && target.ws) send(target.ws, { type: "nudged", fromPlayerId: playerId, fromName: sender ? sender.name : "Someone" });
+        return;
+      }
+
+      case "registerPush": {
+        // v0.16 item 5: {type:'registerPush', token, platform} — the iOS app registers (or
+        // RE-registers, after every reconnect - see index.html's onSync()/bootGameFromNetwork())
+        // its APNs device token here. Tied to the SAME per-connection identity (this playerId's
+        // player record) that a rejoin token/reclaim-by-name already key off - see
+        // maybeSendTurnPush() above. Never logs the token value itself (not a secret, but no
+        // reason to put a device identifier in plain logs either — same restraint as the rest
+        // of this file's logging).
+        if (!ctx) return;
+        const { room, playerId } = ctx;
+        const p = room.players.get(playerId);
+        if (!p) return;
+        const token = typeof msg.token === "string" ? msg.token.trim().slice(0, 512) : "";
+        if (!token) return;
+        p.pushToken = token;
+        p.pushPlatform = msg.platform === "ios" ? "ios" : "ios"; // only iOS ships right now - kept explicit for a future platform
+        touch(room);
+        log("push token registered", room.code, "playerId=" + playerId);
         return;
       }
 
