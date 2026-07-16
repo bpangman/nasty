@@ -67,6 +67,53 @@ function protocolOk(msg) {
   return typeof msg.protocolVersion === "number" && msg.protocolVersion >= PROTOCOL_VERSION;
 }
 
+/* ---------------------------------------------------------------------------------------
+ * v0.15.1 hotfix (2026-07-16, Blake's report: hosting bounces to the menu with no
+ * explanation; a "Resume" tile that does nothing). A pre-v0.15 client (v0.14 and earlier —
+ * everything through iOS TestFlight build 15) does not understand ANY of the wire's v0.15
+ * message types, INCLUDING 'protocolMismatch' itself (it's new in this same breaking
+ * change) — so the plain-language rejection above never actually reaches the user on an old
+ * app; its message switch silently falls through to `default: return`. Fix: alongside the
+ * modern 'protocolMismatch' reply (kept as-is, for hygiene and any future client that only
+ * understands wire-level types), ALSO send a second reply shaped exactly like an error type
+ * the OLD client's own (pre-v0.15) switch already renders for that specific flow — confirmed
+ * by reading index.html as it existed at commit 8a186ab (iOS build 15's client):
+ *   - host:    no case shows an arbitrary message mid-host-flow (the online overlay already
+ *              closes to the bare menu the instant "Host a game" is tapped, before any
+ *              server reply can arrive) — 'kicked' is the one generic case that both toasts
+ *              a message AND resets to a clean menu regardless of what's on screen, so it
+ *              doubles as the host-error display here even though nothing was kicked.
+ *   - join:    'joinError' renders inline in the join screen's visible error text.
+ *   - rejoin:  'rejoinError' toasts the message (this is the exact path a stale "Resume"
+ *              tile's tap takes — the fix for Blake's dead-tile report).
+ *   - reclaim: 'reclaimError' renders inline, same spot as joinError.
+ * ------------------------------------------------------------------------------------- */
+const LEGACY_CLIENT_MESSAGE =
+  "This game needs the newest version of NASTY - please update the app in TestFlight, or refresh the website, then try again.";
+function sendLegacyMismatch(ws, kind) {
+  const type = kind === "host" ? "kicked" : kind === "join" ? "joinError" : kind === "rejoin" ? "rejoinError" : "reclaimError";
+  send(ws, { type, message: LEGACY_CLIENT_MESSAGE });
+}
+
+/* v0.15.1 hotfix, part 2: rooms persisted by a pre-v0.15 server (or a v0.15 room that was
+ * started before this session's rebuild) have no `G` field at all, so roomFromDisk() above
+ * leaves `room.engine` null even though `room.started` is true — this server has no rules
+ * engine state to drive that room with. Live examples on prod at the time of this fix: HWRK,
+ * MNDW, XKTH. A rejoin/reclaim against one of these used to silently send `G: null` inside a
+ * 'sync'/'reclaimed' message, which the client can't boot a game from — a second silent-
+ * failure shape, same user-visible symptom as the dead resume tile above. Detected the same
+ * way in both entry points: `room.started && !room.engine`. */
+const OLD_ROOM_MESSAGE =
+  "That game was from the old version and can't be continued - please start a fresh one.";
+function isUnmigratableRoom(room) {
+  return !!(room && room.started && !room.engine);
+}
+function pruneUnmigratableRoom(room) {
+  rooms.delete(room.code);
+  deleteRoomFile(room.code);
+  log("pruned unmigratable pre-v0.15 room", room.code);
+}
+
 /** @type {Map<string, Room>} */
 const rooms = new Map();
 // v0.10.3: token-less recovery — {reqId -> {code, targetPlayerId, ws, expires}}. A contested
@@ -850,7 +897,7 @@ wss.on("connection", (ws, req) => {
 
       case "host": {
         // v0.15: {type:'host', protocolVersion, name, n, teams, seats:[{name,type,diff}]}
-        if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
+        if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); sendLegacyMismatch(ws, "host"); return; }
         if (!underHostRateLimit(ip)) {
           send(ws, { type: "error", message: "Too many rooms created from here — wait a minute and try again." });
           log("rate-limited host attempt", "ip="+ip);
@@ -879,7 +926,7 @@ wss.on("connection", (ws, req) => {
 
       case "join": {
         // v0.15: {type:'join', protocolVersion, code, name}
-        if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
+        if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); sendLegacyMismatch(ws, "join"); return; }
         const code = String(msg.code || "").toUpperCase();
         const room = rooms.get(code);
         if (!room) { send(ws, { type: "joinError", message: "That room code doesn't exist. Double check it with the host." }); return; }
@@ -901,12 +948,13 @@ wss.on("connection", (ws, req) => {
         // protocolVersion) get the plain-language mismatch message instead of a confusing
         // silent failure — this matters here specifically because `rejoin` is also the path a
         // long-lived tab that never explicitly re-hosted/joined takes after a server deploy.
-        if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
+        if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); sendLegacyMismatch(ws, "rejoin"); return; }
         const code = String(msg.code || "").toUpperCase();
         const room = rooms.get(code);
         const playerId = msg.playerId;
         const p = room && room.players.get(playerId);
         if (!room || !p || p.token !== msg.token) { send(ws, { type: "rejoinError", message: "Couldn't reconnect you to that room — it may have ended." }); return; }
+        if (isUnmigratableRoom(room)) { send(ws, { type: "rejoinError", message: OLD_ROOM_MESSAGE }); pruneUnmigratableRoom(room); return; }
         p.connected = true; p.ws = ws;
         identify(room, playerId);
         touch(room);
@@ -924,11 +972,12 @@ wss.on("connection", (ws, req) => {
 
       case "reclaim": {
         // v0.10.3, protocol-versioned in v0.15: {type:'reclaim', protocolVersion, code, name}
-        if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
+        if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); sendLegacyMismatch(ws, "reclaim"); return; }
         const code = String(msg.code || "").toUpperCase();
         const room = rooms.get(code);
         if (!room) { send(ws, { type: "reclaimError", message: "That room code doesn't exist or has expired." }); return; }
         if (!room.started) { send(ws, { type: "reclaimError", message: "That game hasn't started yet — use Join a game instead.", reason: "notStarted" }); return; }
+        if (isUnmigratableRoom(room)) { send(ws, { type: "reclaimError", message: OLD_ROOM_MESSAGE }); pruneUnmigratableRoom(room); return; }
         if (isBadName(msg.name)) { send(ws, { type: "reclaimError", message: "Pick a nicer name." }); return; }
         const wantName = String(msg.name || "").trim().toLowerCase();
         const candidates = Array.from(room.players.values()).filter(p => p.name.trim().toLowerCase() === wantName);

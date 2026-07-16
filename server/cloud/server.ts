@@ -93,6 +93,37 @@ function protocolOk(msg: Record<string, unknown>): boolean {
   return typeof msg.protocolVersion === "number" && (msg.protocolVersion as number) >= PROTOCOL_VERSION;
 }
 
+/* v0.15.1 hotfix (2026-07-16), twin of server.js's matching block — see that file's comment
+   for the full derivation. Short version: a pre-v0.15 client understands NONE of the v0.15
+   wire types, including 'protocolMismatch' itself, so the plain-language rejection above
+   never reaches the user on an old app — it silently falls through that client's message
+   switch to `default: return`. Send a SECOND reply, alongside the modern one, shaped like an
+   error type the OLD client's own switch already renders for that flow. */
+const LEGACY_CLIENT_MESSAGE =
+  "This game needs the newest version of NASTY - please update the app in TestFlight, or refresh the website, then try again.";
+function sendLegacyMismatch(ws: WebSocket | null | undefined, kind: "host" | "join" | "rejoin" | "reclaim") {
+  const type = kind === "host" ? "kicked" : kind === "join" ? "joinError" : kind === "rejoin" ? "rejoinError" : "reclaimError";
+  send(ws, { type, message: LEGACY_CLIENT_MESSAGE });
+}
+
+/* v0.15.1 hotfix, part 2 — old-format (pre-v0.15) rooms have no `meta.G` even though
+   `meta.started` is true, so this server has no rules engine state to drive them with (live
+   examples on prod at the time of this fix: HWRK, MNDW, XKTH). A rejoin/reclaim against one
+   used to silently send `G: null` inside a 'sync'/'reclaimed' message — a second silent-
+   failure shape. Twin of server.js's isUnmigratableRoom/pruneUnmigratableRoom. */
+const OLD_ROOM_MESSAGE =
+  "That game was from the old version and can't be continued - please start a fresh one.";
+function isUnmigratableRoom(meta: RoomMeta | null | undefined): boolean {
+  return !!(meta && meta.started && !meta.G);
+}
+async function pruneUnmigratableRoom(code: string) {
+  forceCloseRoomSockets(code);
+  dropEngine(code);
+  await kv.delete(roomKey(code));
+  for await (const e of kv.list({ prefix: ["roomlog", code] })) await kv.delete(e.key);
+  log("pruned unmigratable pre-v0.15 room", code);
+}
+
 const ROOM_TTL_MS = 30 * 60 * 1000; // never-started lobby, fully disconnected
 const STARTED_ROOM_TTL_MS = 7 * 24 * 60 * 60 * 1000; // started-but-unfinished game
 const LOG_TTL_MS = STARTED_ROOM_TTL_MS + 24 * 60 * 60 * 1000; // backstop: always outlives the meta key
@@ -880,7 +911,7 @@ function handleWsUpgrade(req: Request, ip: string): Response {
 
       case "host": {
         // v0.15: {type:'host', protocolVersion, name, n, teams, seats}
-        if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
+        if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); sendLegacyMismatch(socket, "host"); return; }
         if (!underHostRateLimit(ip)) {
           send(socket, { type: "error", message: "Too many rooms created from here — wait a minute and try again." });
           log("rate-limited host attempt", "ip=" + ip);
@@ -914,7 +945,7 @@ function handleWsUpgrade(req: Request, ip: string): Response {
 
       case "join": {
         // v0.15: {type:'join', protocolVersion, code, name}
-        if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
+        if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); sendLegacyMismatch(socket, "join"); return; }
         const code = String(msg.code || "").toUpperCase();
         const preCheck = await kv.get<RoomMeta>(roomKey(code));
         if (!preCheck.value) { send(socket, { type: "joinError", message: "That room code doesn't exist. Double check it with the host." }); return; }
@@ -941,13 +972,18 @@ function handleWsUpgrade(req: Request, ip: string): Response {
       case "rejoin": {
         // v0.15: {type:'rejoin', protocolVersion, code, playerId, token} — snapshot-based sync
         // (no log replay), twin of server.js's rejoin case.
-        if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
+        if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); sendLegacyMismatch(socket, "rejoin"); return; }
         const code = String(msg.code || "").toUpperCase();
         const pre = await kv.get<RoomMeta>(roomKey(code));
         const playerId = Number(msg.playerId);
         const preP = pre.value && pre.value.players.find((p) => p.id === playerId);
         if (!pre.value || !preP || preP.token !== msg.token) {
           send(socket, { type: "rejoinError", message: "Couldn't reconnect you to that room — it may have ended." });
+          return;
+        }
+        if (isUnmigratableRoom(pre.value)) {
+          send(socket, { type: "rejoinError", message: OLD_ROOM_MESSAGE });
+          await pruneUnmigratableRoom(code);
           return;
         }
         const r = await touchRoom(code, (meta) => {
@@ -978,11 +1014,16 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         // — token-less recovery, mirrors server.js's "reclaim" case. See the PendingReclaim
         // comment near the top of this file for the known same-isolate caveat on the
         // contested branch.
-        if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
+        if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); sendLegacyMismatch(socket, "reclaim"); return; }
         const code = String(msg.code || "").toUpperCase();
         const pre = await kv.get<RoomMeta>(roomKey(code));
         if (!pre.value) { send(socket, { type: "reclaimError", message: "That room code doesn't exist or has expired." }); return; }
         if (!pre.value.started) { send(socket, { type: "reclaimError", message: "That game hasn't started yet — use Join a game instead.", reason: "notStarted" }); return; }
+        if (isUnmigratableRoom(pre.value)) {
+          send(socket, { type: "reclaimError", message: OLD_ROOM_MESSAGE });
+          await pruneUnmigratableRoom(code);
+          return;
+        }
         if (isBadName(msg.name)) { send(socket, { type: "reclaimError", message: "Pick a nicer name." }); return; }
         const wantName = String(msg.name || "").trim().toLowerCase();
         const candidates = pre.value.players.filter((p) => p.name.trim().toLowerCase() === wantName);
