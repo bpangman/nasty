@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY - the Pangman family board game, digitized. v0.13.2.
+  NASTY - the Pangman family board game, digitized. v0.13.3.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation - the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -676,6 +676,14 @@ button{font:inherit;cursor:pointer}
   padding:4px 18px;font-size:14.5px;font-weight:700;line-height:1.22;box-shadow:0 6px 18px rgba(0,0,0,.4);
   animation:toastIn .25s ease-out;max-width:100%;text-align:center;overflow:hidden}
 @keyframes toastIn{from{opacity:0;transform:translateY(12px)}}
+/* v0.13.3 (Blake): turn prompts ("Your turn - tap a card", "Pick a tee to move", ...) moved out
+   of #handInfo and INTO this same bubble (turnPrompt(), § UI) - one message surface instead of
+   two. When the prompt is for THIS screen's own action (.myTurn), the bubble pulses the exact
+   same gold glow #btnSkip.active uses (same skipGlow keyframes - deliberately shared, "combines
+   2 assets") so your turn is unmissable; passive prompts ("Waiting for Geri...") stay the plain
+   bubble. .turnPrompt itself is just a marker class (see clearTurnPrompt(), § TURNS). */
+.toast.myTurn{border-color:var(--gold);color:#ffe9a8;
+  animation:toastIn .25s ease-out,skipGlow .9s ease-in-out infinite}
 .overlay{position:fixed;inset:0;background:rgba(5,15,9,.9);z-index:80;display:flex;flex-direction:column;
   align-items:center;justify-content:center;padding:22px;text-align:center}
 .overlay h2{margin:16px 0 6px;font-size:26px}
@@ -693,7 +701,7 @@ button{font:inherit;cursor:pointer}
 .lbTable td{text-align:right;color:#e9f4ec}
 .lbTable th:first-child,.lbTable td:first-child{text-align:left}
 .lbTable td:last-child{font-weight:800;color:var(--gold)}
-@media (prefers-reduced-motion: reduce){ .plaque.turn,.tee.selectable,.tee.targetable,#btnSkip.active{animation:none} }
+@media (prefers-reduced-motion: reduce){ .plaque.turn,.tee.selectable,.tee.targetable,#btnSkip.active,.toast.myTurn{animation:none} }
 
 /* v0.10: a phone rotated into landscape (short viewport height - the web version has no
    orientation lock, unlike the native iOS app) squeezes the board hard: topbar + hand bar are
@@ -749,7 +757,12 @@ button{font:inherit;cursor:pointer}
    v0.13.2 (Blake: the v0.13.1 landed size read as too big - "make it slightly smaller (maybe
    25%)"): `landedScale`'s target width dropped ~94%->~70% of screen width (see § CAPACITOR's
    `landedScale` comment) - a pure scale-number change, nothing about the entry trajectory,
-   timing, overshoot, or dead-center landing correction above was touched. */
+   timing, overshoot, or dead-center landing correction above was touched.
+   v0.13.3 (Blake, supersedes the v0.13.1 fly-in trajectory): the sign now STAMPS straight down
+   into place like the in-game NASTY! takeout stamp (huge/close and translucent -> punches down
+   to the same v0.13.2 landed size, dead center), with a dust burst off its bottom edge at the
+   impact frame and a longer landed hold before the menu reveals - all in § CAPACITOR (keyframes
+   + inline-styled dust divs, zero CSS here, so the website stays bit-identical). */
 </style>
 
 <!-- ================= MENU ================= -->
@@ -787,7 +800,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.13.2</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.13.3</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -1169,29 +1182,72 @@ if(IS_APP){
     const naturalBBoxW=Math.abs(natW*Math.cos(rad))+Math.abs(natH*Math.sin(rad));
     const landedScale=Math.max(0.78,Math.min(1.0,(innerWidth*0.70)/naturalBBoxW));
     const cy=(vh)=>`calc(${vh}vh - ${bootTopComp}px)`;
-    // Unhurried fly-in (off-screen -> ~60% of the way there, decelerating) -> punchy slam
-    // (a scale overshoot past the landed size, offset .6 -> .78) -> brief settle back down to
-    // the true landed scale/tilt (offset .78 -> 1). ~1.45s total, well inside Blake's "1.5-2s,
-    // deliberate not sluggish" ask. Wrapped in try/catch (unlike the old v0.13 version) so an
-    // unsupported keyframe feature on some future WebKit can never take down the rest of this
-    // script - bootSlamDone just stays its already-resolved default and the menu reveals on
-    // schedule instead of the boot slam simply never being visible.
+    /* v0.13.3 (Blake, supersedes v0.13.1's corner fly-in): the sign now slams DOWN into place
+       exactly like the in-game NASTY! takeout stamp (nastyBlast()'s .nastyStamp keyframes,
+       § ANIM: appears huge/close and low-opacity as if hovering above the viewer, punches down
+       to its landed size) instead of traveling in from off-screen. Landed size (landedScale,
+       the v0.13.2 ~70%-width target) and the dead-center landing (cy(0), bootTopComp) are
+       UNCHANGED - only the entrance trajectory changed. The impact frame is offset .5 of the
+       800ms slam (=BOOT_IMPACT_MS below) - the moment it overshoots slightly PAST landed scale
+       (x.95, tilt a hair beyond final) before the bouncy settle - and the screen shake + the
+       new dust burst below are both timed to exactly that frame, not the settle. Total slam is
+       deliberately shorter than the fly-in version (~.8s vs ~1.45s) - the drama now comes from
+       the stamp + dust + the longer landed hold (see the 750ms hold at pollMenuSettled below),
+       not travel time. Wrapped in try/catch (as ever) so an unsupported keyframe feature can
+       never take down the rest of this script. */
+    const BOOT_SLAM_MS=800, BOOT_IMPACT_MS=BOOT_SLAM_MS*.5;
     try{
     bootSlamDone=bootSign.animate([
-      {opacity:0,transform:`translate(60vw,${cy(-65)}) rotate(42deg) scale(${landedScale*.55})`,offset:0},
-      {opacity:1,transform:`translate(60vw,${cy(-65)}) rotate(42deg) scale(${landedScale*.55})`,offset:.06,easing:'ease-out'},
-      {opacity:1,transform:`translate(6vw,${cy(-4)}) rotate(-6deg) scale(${landedScale*1.02})`,offset:.6,easing:'cubic-bezier(.13,.9,.24,1)'},
-      {opacity:1,transform:`translate(0,${cy(0)}) rotate(-17deg) scale(${landedScale*1.12})`,offset:.78,easing:'cubic-bezier(.55,0,1,.45)'},
-      {opacity:1,transform:`translate(0,${cy(0)}) rotate(${BOOT_SLAM_TILT}) scale(${landedScale})`,offset:1,easing:'cubic-bezier(.33,1.4,.55,1)'},
-    ],{duration:1450,fill:'forwards'}).finished.catch(()=>{});
+      {opacity:0,transform:`translate(0,${cy(0)}) rotate(-8deg) scale(${landedScale*2.9})`,offset:0,easing:'cubic-bezier(.55,0,1,.45)'},
+      {opacity:1,transform:`translate(0,${cy(0)}) rotate(-10deg) scale(${landedScale*2.1})`,offset:.22,easing:'cubic-bezier(.55,0,1,.45)'},
+      {opacity:1,transform:`translate(0,${cy(0)}) rotate(-16deg) scale(${landedScale*.95})`,offset:.5,easing:'cubic-bezier(.33,1.4,.55,1)'},
+      {opacity:1,transform:`translate(0,${cy(0)}) rotate(${BOOT_SLAM_TILT}) scale(${landedScale})`,offset:1},
+    ],{duration:BOOT_SLAM_MS,fill:'forwards'}).finished.catch(()=>{});
     }catch(e){}
-    // Tasteful, small screen-shake right as it lands - retimed to the new ~1.13s impact moment
-    // (was 280ms into the old, much shorter slam). Optional per the brief, kept subtle.
+    // Screen shake, synced to the impact frame (was 1080ms into the old fly-in).
     try{
       bootCover.animate([
         {translate:'0 0'},{translate:'4px -3px'},{translate:'-3px 2px'},{translate:'0 0'},
-      ],{duration:170,delay:1080});
+      ],{duration:170,delay:BOOT_IMPACT_MS});
     }catch(e){/* .animate() with `translate` needs a reasonably modern WebKit - purely cosmetic, skip silently if unsupported */}
+    /* Impact dust (v0.13.3, Blake): soft, dusty translucent puffs blast outward+up low around
+       the sign's BOTTOM edge at the moment of impact, expanding and fading fast - reads as the
+       sign displacing dust off the felt, not fog. Pure inline-styled divs + WAAPI (no CSS
+       additions - keeps this whole effect inside the IS_APP block; the website never sees any
+       of it), spawned in a clipped full-screen layer inside #bootCover so hiding the cover can
+       never leave a stray puff behind. Geometry from the same measured numbers the slam itself
+       uses (landedScale/natW/natH/bootTopComp), so the puffs hug the real landed sign on every
+       device size rather than a guessed box. */
+    setTimeout(()=>{
+      try{
+        if(splashHidden)return;   // boot already over (hard-fallback path) - never dust the menu
+        const lay=document.createElement('div');
+        lay.style.cssText='position:absolute;inset:0;overflow:hidden;pointer-events:none';
+        bootCover.appendChild(lay);
+        const cx=innerWidth/2, by=innerHeight/2-bootTopComp+natH*landedScale/2;
+        const spread=naturalBBoxW*landedScale*.5;
+        // 14 jittered, overlapping puffs (not an even row - even spacing read as a beaded
+        // string of dots in the first screenshot pass, not a cloud): random positions along
+        // the bottom edge, big size variance, all drifting outward-and-up from the center.
+        for(let i=0;i<14;i++){
+          const t=(Math.random()*2-1)*.9;                       // -0.9..0.9 across the bottom edge, jittered
+          const sz=30+Math.random()*46;
+          const p=document.createElement('div');
+          p.style.cssText=`position:absolute;width:${sz}px;height:${sz}px;border-radius:50%;`+
+            `left:${cx+t*spread}px;top:${by-8+Math.random()*16}px;`+
+            'background:radial-gradient(circle,rgba(203,214,196,.55),rgba(203,214,196,0) 70%);'+
+            'filter:blur(5px);transform:translate(-50%,-50%) scale(.35);opacity:0';
+          lay.appendChild(p);
+          const dx=t*(55+Math.random()*55)+(Math.random()*16-8);  // outward, away from center
+          const dy=-(12+Math.random()*34);                        // and a little up
+          p.animate([
+            {opacity:.8,transform:'translate(-50%,-50%) scale(.35)'},
+            {opacity:0,transform:`translate(calc(-50% + ${dx}px),calc(-50% + ${dy}px)) scale(${1.5+Math.random()*.8})`},
+          ],{duration:480+Math.random()*170,easing:'ease-out',fill:'forwards'});
+        }
+        setTimeout(()=>lay.remove(),800);                       // all puffs are done well before this
+      }catch(e){/* cosmetic only */}
+    },BOOT_IMPACT_MS);
   }
   let splashHidden=false;
   const hideSplash=()=>{
@@ -1206,11 +1262,12 @@ if(IS_APP){
     return sr.top>0 && sr.top<innerHeight*0.3 && tr.height>0;
   };
   // Waits for the slam to actually finish before ever hiding #bootCover, even if the menu
-  // itself settles sooner - see the bootSlamDone comment above. A 300ms HOLD after the sign
-  // visibly lands (scale/tilt settled, fully opaque) before revealing the menu underneath - a
-  // genuine "landed" beat, then the menu reveals right after, per Blake's ask. Total slam+hold
-  // is ~1.75s - inside the "1.5-2s, deliberate not sluggish" target.
-  const pollMenuSettled=()=>{ if(menuSettled())bootSlamDone.then(()=>new Promise(r=>setTimeout(r,300))).then(hideSplash); else requestAnimationFrame(pollMenuSettled); };
+  // itself settles sooner - see the bootSlamDone comment above. v0.13.3: the HOLD after the
+  // sign visibly lands grew 300ms -> 750ms (Blake: the landed sign should get its moment) -
+  // and since the stamp-down slam itself is now much shorter than the old fly-in (~.8s vs
+  // ~1.45s), total slam+hold is ~1.55s - still comfortably under the 2.6s ceiling and a bit
+  // SHORTER overall than the fly-in version, with the drama shifted to impact+hold.
+  const pollMenuSettled=()=>{ if(menuSettled())bootSlamDone.then(()=>new Promise(r=>setTimeout(r,750))).then(hideSplash); else requestAnimationFrame(pollMenuSettled); };
   addEventListener('load',()=>requestAnimationFrame(pollMenuSettled));
   setTimeout(hideSplash,4000);   // hard fallback (was 2.5s pre-v0.13.1 - bumped since the
                                   // intentional animation itself now runs ~1.75s) - hide() is idempotent either way
@@ -1318,6 +1375,28 @@ let LAY=null;
    little ring of holes around the board center (like the real board). Your own porch
    (steps L-1) is your last shared hole; from it you branch inward to the safe row
    (steps L..L+4). */
+// v0.13.3: ray-cast the wood octagon (SAME point list as drawBoard()'s `oct` polygon, § RENDER -
+// this is the single source of truth so the two can never drift apart) from the board center
+// (500,500) outward at angle thRad, returning the exact distance to the real rim in that
+// direction. See buildLayout()'s 6P plaqueAnchor branch below for why this exists: the octagon's
+// true edge distance varies by angle (a flat-edge value straight up/down vs a farther, near-
+// corner value on the 4 oblique axes) and a single flat radius can't sit flush against both.
+function octRimR(thRad){
+  const c=150;  // MUST match drawBoard()'s `oct` polygon chamfer constant, § RENDER
+  const pts=[[c,8],[1000-c,8],[992,c],[992,1000-c],[1000-c,992],[c,992],[8,1000-c],[8,c]];
+  const dx=Math.cos(thRad), dy=Math.sin(thRad);
+  let best=Infinity;
+  for(let i=0;i<pts.length;i++){
+    const p1=pts[i], p2=pts[(i+1)%pts.length];
+    const ex=p2[0]-p1[0], ey=p2[1]-p1[1];
+    const denom=dx*ey-dy*ex;
+    if(Math.abs(denom)<1e-9)continue;             // ray parallel to this edge - skip
+    const t=((p1[0]-500)*ey-(p1[1]-500)*ex)/denom; // distance along the ray
+    const u=((p1[0]-500)*dy-(p1[1]-500)*dx)/denom; // position along the edge segment, 0..1
+    if(t>1e-6 && u>=-1e-6 && u<=1+1e-6 && t<best)best=t;
+  }
+  return best;
+}
 function buildLayout(n,viewSeat){
   // v0.12 (per-viewer board rotation - see HANDOFF.md "Per-viewer board rotation"): `viewSeat`
   // is whichever seat this SCREEN should treat as "home," always drawn at the bottom, like
@@ -1447,24 +1526,45 @@ function buildLayout(n,viewSeat){
        corner plates do, but clamped to +-90 deg so text is never upside-down at any position
        (unlike the fixed +-45 checkerboard the corner design uses, this needs a continuous
        formula since there are 6 distinct angles, not 4 shared corners). */
-    const PLAQUE6_R=555;   // the HOLE-SAFE FLOOR - empirically swept (see HANDOFF.md) against
-                            // the worst-case (10-char) name: 545 was the first fully-clear
-                            // radius found across every seat/rotation, 555 keeps a real margin
-                            // above it. positionPlaques() (§ RENDER) can push a little FURTHER
-                            // out from here when a screen has room to spare (PLAQUE_SLIDE[6]),
-                            // but never pulls in below this floor (PLAQUE_SLIDE_MIN[6]=0, i.e.
-                            // "no less than the anchor itself") - same two-tier mechanism v0.10
-                            // used before the corner redesign, revived here because a plate this
-                            // wide, this far out on 6 non-cardinal axes, needs the same variable-
-                            // letterbox pullback the corner design never needed at its smaller,
-                            // corner-shared radius.
+    /* v0.13.3 (Blake: "on 6 person make the name plates on the top and bottom actually semi
+       touch the board like you did with the others"). Root cause: PLAQUE6_R below was a single
+       FLAT radius applied to all 6 axes, but the wood's actual edge distance from center isn't
+       uniform - it's the chamfered-square octagon drawBoard() renders (`oct`, § RENDER, chamfer
+       constant c=150), which sits at exactly 492 board-units straight up/down (a flat edge) but
+       ~568 on the other 4 (oblique) axes (near a corner chamfer, farther from center). A flat
+       555 anchor landed OUTSIDE the wood at the 2 vertical axes (492 rim - a ~63-unit floating
+       gap, confirmed both by direct measurement and by a screenshot of live v0.13.2) while
+       sitting correctly INSIDE it at the other four (568 rim - a ~13-unit overlap, the exact
+       "semi-touch" look Blake approved). Fix: octRimR() (just above buildLayout, § LAYOUT) ray-
+       casts the SAME polygon drawBoard() renders to get the TRUE rim distance for any angle -
+       one source of truth, so this can never silently drift out of sync with the physical board
+       shape again - and every seat now anchors that same ~13-unit depth past ITS OWN true rim,
+       instead of a single shared number. This reproduces the 4 oblique anchors byte-for-byte
+       (568.1-13.1=555, today's PLAQUE6_R - zero change there) while pulling the 2 vertical ones
+       in from 555 to ~479. Verified (HANDOFF.md "v0.13.3"): real getBoundingClientRect() sweeps
+       (worst-case 10-char name) confirm ~479 makes the vertical plates straddle the rim exactly
+       like the other four (2 of the plate's 4 corners land inside the wood, 2 outside - the same
+       signature the approved look already has), and stays comfortably clear of every hole (the
+       empirical hole-safe crossover there is ~440; PLAQUE6_HOLE_FLOOR below is a padded,
+       never-expected-to-bind defensive floor, not the load-bearing constant PLAQUE6_R used to
+       be). */
+    const PLAQUE6_R=555;   // v0.13's original flat anchor radius - kept ONLY as the calibration
+                            // reference the per-angle formula below reproduces exactly at the 4
+                            // oblique axes (30/150/210/330deg); no longer applied directly.
+    const PLAQUE6_OVERLAP=octRimR(Math.PI/6)-PLAQUE6_R; // ~13.1 - the semi-touch overlap depth
+                            // already established/approved at the oblique axes (30deg is one),
+                            // now applied to every axis via ITS OWN true rim distance below.
+    const PLAQUE6_HOLE_FLOOR=460;  // defensive floor only - real sweeps (HANDOFF.md) found the
+                            // vertical axes' true hole-safe crossover at ~440; the formula below
+                            // lands them at ~479, comfortably above both.
     for(let s=0;s<n;s++){
       const a=arms[s];
       const thDeg=a.th*180/Math.PI;
       let rot=((thDeg-90)%360+360)%360;         // 0..360, 0 = upright (this seat's arm points straight down)
       if(rot>180)rot-=360;                       // -180..180
       if(rot>90)rot-=180; else if(rot<-90)rot+=180; // clamp to -90..90 - never upside-down
-      plaqueAnchor[s]={x:500+a.d.x*PLAQUE6_R,y:500+a.d.y*PLAQUE6_R,rot};
+      const r=Math.max(PLAQUE6_HOLE_FLOOR, octRimR(a.th)-PLAQUE6_OVERLAP);
+      plaqueAnchor[s]={x:500+a.d.x*r,y:500+a.d.y*r,rot};
     }
   }
   for(let s=0;s<n;s++){
@@ -1775,7 +1875,7 @@ function drawBoard(){
       <feComposite operator="in" in2="SourceGraphic"/></filter>
     <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
       <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000" flood-opacity="0.5"/></filter>`;
-  const c=150;
+  const c=150;  // if this ever changes, also update octRimR()'s copy (§ LAYOUT, above buildLayout) - v0.13.3's 6P plaque anchoring rim-casts against that copy of this exact shape
   const oct=`${c},8 ${1000-c},8 992,${c} 992,${1000-c} ${1000-c},992 ${c},992 8,${1000-c} 8,${c}`;
   el('polygon',{points:oct,fill:'url(#wood)',stroke:'#8a6435','stroke-width':7,filter:'url(#soft)'},svg);
   el('polygon',{points:oct,fill:'#7a5a2e',filter:'url(#grain)',opacity:.8},svg);
@@ -2226,6 +2326,29 @@ function toast(msg,ms=3000){
 // on every game->menu transition AND on every game-start/resume, instead of relying on some later
 // toast() call to happen to paper over it. Cheap and total - #toasts has no other consumer.
 function clearToasts(){ $('toasts').replaceChildren(); }
+/* v0.13.3 (Blake): turn prompts now live in the update bubble too (was #handInfo, the little
+   line above the cards - kept in the DOM as an empty spacer on purpose: its min-height feeds
+   #handBar's measured height, which positions this very band via --handH/updateToastOffset(),
+   so blanking it instead of removing it keeps the board/hand geometry byte-identical -
+   stability over reclaimed pixels, the deliberate call). Same latest-wins surface as toast():
+   a prompt replaces whatever update was showing and the next update replaces the prompt.
+   `mine` = this prompt asks THIS screen to act -> the bubble pulses the skip-style gold glow
+   (.myTurn, § STYLE); passive prompts (Waiting for X / Catching up) render plain. Unlike
+   toast(), no SKIP/INSTANT suppression: a prompt is standing STATE, not a transient event -
+   the moment one fires, either the skip already ended (endSkip() runs before any local hand
+   arms, see runTurn) or it's a passive waiting notice that's still true during fast-forward. */
+function turnPrompt(msg,mine){
+  $('toasts').replaceChildren();
+  const t=document.createElement('div'); t.className='toast turnPrompt'+(mine?' myTurn':'');
+  t.textContent=msg;
+  $('toasts').appendChild(t);
+}
+// The acted-on prompt clears the moment its move actually starts (performMove's first line) -
+// clears ONLY a prompt, never a genuine update toast that happens to be showing instead.
+function clearTurnPrompt(){
+  const t=$('toasts').firstElementChild;
+  if(t&&t.classList.contains('turnPrompt'))$('toasts').replaceChildren();
+}
 /* ---- CPU fast-forward ---- */
 // v0.11.3 fix (Blake): the label used to switch to "⏩ Skipping…" while a skip ran, which is
 // WIDER than "⏩ Skip" and bled into the toast bubble sitting immediately to its left. Fix: the
@@ -2603,6 +2726,8 @@ async function performMove(seat,m,cardEl){
 }
 async function performMoveInner(seat,m,cardEl){
   const myGen=NETGEN;   // see NETGEN comment above - a reconnect replay can land mid-animation
+  clearTurnPrompt();    // v0.13.3: the prompt this move answers ("Your turn..."/"Waiting for X...")
+                        // comes down the moment the move starts - never clears a real update toast
   clearSelection();
   const owner=m.owner;
   const preFrom=m.type==='swap'?null:G.pieces[owner][m.pi].steps;
@@ -2790,8 +2915,10 @@ async function runTurnInner(){
   if(!NET.online){
     if(G.humanCount>1)await passDeviceGate(seat);
     renderHandFor(seat);
-    if(assist)toast(`${seatCfg.name}: you're home - these cards move ${G.seats[actingOwner(seat)].name}'s tees!`,3000);
-    $('handInfo').textContent=assist?`Play a card for your partner, ${seatCfg.name}`:`Your turn, ${seatCfg.name} - tap a card`;
+    // v0.13.3: the old separate assist TOAST ("you're home - these cards move X's tees!") is
+    // gone - prompts and updates share one bubble now, so it would've been replaced before it
+    // was ever readable. The assist prompt itself carries the message instead.
+    turnPrompt(assist?`You're home - play a card for ${G.seats[actingOwner(seat)].name}, ${seatCfg.name}`:`Your turn, ${seatCfg.name} - tap a card`,true);
     enableSelection(seat,moves);
     return;
   }
@@ -2821,12 +2948,12 @@ async function runTurnInner(){
   const waitP=armMoveWait(seat);
   if(NET.mySeat===seat&&!alreadyQueued){
     renderHandFor(seat);
-    if(assist)toast(`${seatCfg.name}: you're home - these cards move ${G.seats[actingOwner(seat)].name}'s tees!`,3000);
-    $('handInfo').textContent=assist?`Play a card for your partner, ${seatCfg.name}`:`Your turn, ${seatCfg.name} - tap a card`;
+    // v0.13.3: same one-bubble fold as the offline branch above - see that comment.
+    turnPrompt(assist?`You're home - play a card for ${G.seats[actingOwner(seat)].name}, ${seatCfg.name}`:`Your turn, ${seatCfg.name} - tap a card`,true);
     enableSelection(seat,moves);
   }else{
     renderHandFor(visibleHandSeat());
-    $('handInfo').textContent=NET.mySeat===seat?'Catching up…':`Waiting for ${seatCfg.name}…`;
+    turnPrompt(NET.mySeat===seat?'Catching up…':`Waiting for ${seatCfg.name}…`,false);
   }
   const m=await waitP;
   if(myGen!==NETGEN)return;
@@ -2852,7 +2979,11 @@ window.getSelState=()=>SEL;
 window.getCurGen=()=>CUR_GEN;   // debug/test hook, same pattern as getSelState above
 window.getCurSeat=()=>CUR_SEAT; // debug/test hook
 function renderHandFor(seat){
-  const row=$('handRow'); row.innerHTML=''; $('handInfo').textContent='';
+  // v0.13.3: #handInfo is a permanently-empty SPACER now (turn prompts moved to the bubble,
+  // turnPrompt() § TURNS) - the element + its min-height CSS stay, because #handBar's measured
+  // height feeds --handH (updateToastOffset()), which positions the toast band and #btnSkip;
+  // removing it would shift that whole geometry. Stability over pixels, documented choice.
+  const row=$('handRow'); row.innerHTML='';
   if(seat<0){ return; }
   const hand=G.hands[seat];
   hand.forEach((card,ci)=>{
@@ -2962,7 +3093,7 @@ function selectCard(ci,cardEl){
   picks.forEach(it=>$(`tee-${it.s}-${it.pi}`).classList.add('selectable'));
   showBubbles(picks,'');
   showPaths(mine);
-  $('handInfo').textContent=mine[0].type==='swap'?'Pick your tee to trade':'Pick a tee to move';
+  turnPrompt(mine[0].type==='swap'?'Pick your tee to trade':'Pick a tee to move',true);   // mid-turn sub-prompt: same bubble, keeps glowing
 }
 function onTeeClick(s,pi){
   if(!SEL||CUR_SEAT<0||G.over)return;
@@ -2980,7 +3111,7 @@ function onTeeClick(s,pi){
       targets.forEach(t=>$(`tee-${t.s}-${t.pi}`).classList.add('targetable'));
       showBubbles(targets,'tgt');
       showPaths(cand);   // Jack stage 2: red landing-hole fill at each candidate target (clearHighlights above wiped stage 1's)
-      $('handInfo').textContent='Now pick who to trade places with';
+      turnPrompt('Now pick who to trade places with',true);   // Jack stage 2: same bubble, keeps glowing
       return;
     }
     return commitMove(CUR_SEAT,cand[0],SEL.cardEl);
@@ -2999,7 +3130,7 @@ function clearSelection(keepTurn){
   clearHighlights();
   document.querySelectorAll('#handRow .card.selCard').forEach(c=>c.classList.remove('selCard'));
   SEL=null;
-  if(keepTurn)$('handInfo').textContent=`Your turn - tap a card`;
+  if(keepTurn)turnPrompt(`Your turn - tap a card`,true);
 }
 
 /* ============================= § NET (online multiplayer) =============================
