@@ -577,13 +577,93 @@ function createEngine(){
     }
     return sc;
   }
+  // v0.17: how many of `s`'s tees are already home - the shared stakes proxy used by the
+  // strategic core below for both "rush my last few tees in" and "deny them, they're about to win."
+  const piecesHome=s=>G.pieces[s].filter(p=>p.state==='home').length;
+  /* v0.17 (AI difficulty overhaul): ONE shared strategic scoring core for every tier. Every CPU
+     seat scores every legal move (always a move legalMoves() already produced - no extra rules
+     knowledge) as
+         scoreMove(m) + P.strat*strategyBonus(m,P) + uniform(-P.jitter,+P.jitter)
+     and plays the max. The three tiers differ ONLY in the AI_TIERS parameters below, never in
+     policy code:
+       - jitter: decision noise. Easy is noisy enough to frequently override its own judgment
+         (clearly the most beatable tier, but never senseless - the same strategic core still
+         steers it, so it enters, advances, kicks, and blocks like a real if unfocused player).
+         Tricky is the scored-with-moderate-noise middle. Nasty is deterministic: it EXECUTES
+         the strategy's top choice every single turn, which is empirically a big share of the
+         tier gap all on its own.
+       - strat: how strongly the strategic layer weighs in on top of scoreMove's tactical base.
+       - deny: endgame denial aggressiveness - specifically scales the "they're about to win,
+         take them out NOW" terms, so Nasty guards the finish line hardest.
+     strategyBonus is deliberately SMALL relative to scoreMove's own scale (kicks ~22-40, home
+     entry +20, a card of progress ~1-5): it tie-breaks among moves scoreMove already considers
+     close rather than overriding a clearly better play - large versions of these bonuses were
+     tried and measurably LOWERED win rate in harness testing. What it scores:
+       - defensive Jacks: a swap's bonus scales with how far back it yanks an OPPONENT tee that
+         was deep into ITS OWN lap (close to ITS OWN home entry).
+       - blocking awareness: a bonus for ending a move on a physical hole that sits on an
+         opponent's start hole, or in their final home stretch (their own last 6 steps before
+         their porch) - a standing threat against whatever they need to pass through to finish.
+       - stakes-aware: the get-home bonus grows with how many of the owner's tees are already
+         home (rush the last few in); a kick against a tee close to, or already in, an opponent's
+         home row is worth more - deny the opponent who's about to win (scaled by P.deny).
+       - kick-hungry: extra weight on top of the kick value scoreMove already counts.
+       - `closing`: once the owner has 4 tees home, the purely positional/defensive terms
+         (blocking, defensive swaps) get discounted - "must still win itself," defense never
+         outweighs finishing the game. */
+  function strategyBonus(m,P){
+    let v=0;
+    const owner=m.owner, closing=piecesHome(owner)>=4?0.3:1;
+    if(m.type==='move'||m.type==='enter'||m.type==='back'){
+      if(m.to>=LAY.L)v+=2.5+piecesHome(owner)*1.5;                 // rush the last tees home
+      if(m.to<LAY.L){
+        const phys=loopIdx(owner,m.to);
+        for(let o=0;o<G.n;o++){ if(sameTeam(o,owner))continue;
+          let block=0;
+          if(phys===entryIdx(o))block+=0.3;                       // camped on their start hole
+          const rel=(phys-entryIdx(o)+LAY.L)%LAY.L;
+          if(rel>=LAY.L-6)block+=0.6+piecesHome(o)*0.3*P.deny;     // sitting in their final home stretch
+          v+=block*closing;
+        }
+      }
+    }
+    if(m.kick&&!sameTeam(m.kick.seat,m.owner)){
+      const vic=G.pieces[m.kick.seat][m.kick.pi];                 // pre-kick steps - still intact here
+      v+=kickVal(m.owner,m.kick)*0.55;                             // kick-hungry: extra weight on top of kickVal
+      v+=piecesHome(m.kick.seat)*3*P.deny;                         // they're close to winning - deny it
+      if(vic.steps>=LAY.L-6&&vic.steps<LAY.L)v+=5*P.deny;          // stripped right before their porch
+      if(vic.steps>=LAY.L)v+=4*P.deny;                             // forced a non-snug home tee back out
+    }
+    if(m.type==='swap'&&!sameTeam(m.ts,m.owner)){
+      const a=G.pieces[m.owner][m.pi],b=G.pieces[m.ts][m.tpi];
+      const bn=(loopIdx(m.owner,a.steps)-entryIdx(m.ts)+LAY.L)%LAY.L;
+      const pulledBack=b.steps-bn;                                 // positive = yanked them backward
+      if(pulledBack>0)v+=(pulledBack*0.3+(b.steps>=LAY.L-12?3:0)+piecesHome(m.ts)*0.8*P.deny)*closing;
+    }
+    return v;
+  }
+  /* Tier ladder, tuned via a headless many-game harness against server/engine.js (v0.17):
+     each rung beats the one below it in roughly 3 out of 4 games (Nasty 94.8% vs Easy, 76.8% vs
+     Tricky; Tricky 76.4% vs Easy; Easy 76.2% vs a harness-only pure-random baseline; N=500 per
+     matchup, 4P FFA 2-and-2 seating). The jitter values look large next to scoreMove's scale on
+     purpose - that is the knob that separates the rungs. */
+  const AI_TIERS={
+    easy:  {strat:0.15,jitter:95, deny:0.5},   // strategic but very noisy - the beatable one
+    medium:{strat:0.5, jitter:35, deny:1},     // "Tricky": the middle strategist
+    hard:  {strat:1,   jitter:0,  deny:1.6},   // "Nasty": full strategy, zero noise, hardest denial
+  };
   function chooseAI(seat,moves){
-    const d=G.seats[seat].diff;
-    if(d==='easy')return rand(moves);
-    const jitter=d==='medium'?9:2;
+    const P=AI_TIERS[G.seats[seat].diff]||AI_TIERS.medium;
+    // Shared sanity rule, every tier: never kick your own tee (or your partner's) when any other
+    // move exists (RULES.md: landing on your own or partner's tee sends it back to base). If every
+    // legal move is a self/partner kick, it's forced - play it. Without this, Easy's large jitter
+    // could occasionally override even kickVal's heavy penalty.
+    const safe=moves.filter(m=>!(m.kick&&(m.kick.seat===m.owner||sameTeam(m.kick.seat,m.owner))));
+    const pool=safe.length?safe:moves;
     let best=null,bs=-1e9;
-    for(const m of moves){
-      const s=scoreMove(seat,m)+(Math.random()*2-1)*jitter;
+    for(const m of pool){
+      const s=scoreMove(seat,m)+P.strat*strategyBonus(m,P)
+        +(P.jitter?(Math.random()*2-1)*P.jitter:0);
       if(s>bs){bs=s;best=m;}
     }
     return best;

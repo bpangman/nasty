@@ -814,9 +814,21 @@ button{font:inherit;cursor:pointer}
        max-width:420px even inside a 320px-wide #menu (288px available after padding). -->
   <p class="tag">Race your five golf tees around the board and home.<br>Land on somebody… and send them packing.</p>
   <div class="panel">
+    <!-- v0.17: up to TWO offline saved games (slots) plus a rejoinable online room can exist
+         at once, so the single tile grew into up to three, newest first - each labeled with
+         who/what it is (see updateMenuResumeButtons()). With one save it looks exactly like
+         the single tile always did. -->
     <button class="savedTile hidden" id="btnSavedGame">
       <div class="t1">▶ Resume Saved Game</div>
       <div class="t2" id="savedGameDetail"></div>
+    </button>
+    <button class="savedTile hidden" id="btnSavedGame2">
+      <div class="t1">▶ Resume Saved Game</div>
+      <div class="t2" id="savedGameDetail2"></div>
+    </button>
+    <button class="savedTile hidden" id="btnSavedGame3">
+      <div class="t1">▶ Resume Saved Game</div>
+      <div class="t2" id="savedGameDetail3"></div>
     </button>
     <div class="optRow"><label>Players</label>
       <div class="segs"><button class="seg" id="p4">4 players</button><button class="seg" id="p6">6 players</button></div>
@@ -1109,15 +1121,29 @@ button{font:inherit;cursor:pointer}
   </div>
 </div>
 
-<!-- v0.11 item 3: starting a new game, or hosting/joining a different online game, both claim
-     the same "resume" slot on the main menu (see updateMenuResumeButtons()) - warn first if
-     doing so would bump an existing saved game out of reach. -->
+<!-- v0.11 item 3, reworked v0.17: offline games now have TWO save spots of their own (see
+     slotReplaceOverlay below), so this warning is only about ONLINE games - hosting or joining
+     a different online game replaces the one online room you can still get back into. -->
 <div id="overwriteWarnOverlay" class="overlay hidden">
-  <div class="sign"><b>REPLACE SAVE?</b></div>
-  <p>You have a saved game - starting a new one will replace it. Start anyway?</p>
+  <div class="sign"><b>REPLACE GAME?</b></div>
+  <p>You have an online game you can still get back into - starting another online game will replace it. Go ahead?</p>
   <div class="bigBtns">
-    <button class="btn primary" id="btnOverwriteConfirm">Start anyway</button>
+    <button class="btn primary" id="btnOverwriteConfirm">Go ahead</button>
     <button class="btn ghost" id="btnOverwriteCancel">Cancel</button>
+  </div>
+</div>
+
+<!-- v0.17: two offline save spots. Starting a new offline game when BOTH spots hold a saved
+     game means one of them has to go - this modal asks which, with the same explicit warning
+     style as the overwrite modal above. Picking one clears that spot and the new game saves
+     there from then on; Cancel keeps both saves untouched. -->
+<div id="slotReplaceOverlay" class="overlay hidden">
+  <div class="sign"><b>REPLACE A SAVE?</b></div>
+  <p>Both save spots are full. Starting a new game will replace one of your saved games for good - pick which one to give up, or cancel to keep both.</p>
+  <div class="bigBtns">
+    <button class="btn primary" id="btnReplaceSlot1"></button>
+    <button class="btn primary" id="btnReplaceSlot2"></button>
+    <button class="btn ghost" id="btnReplaceCancel">Cancel</button>
   </div>
 </div>
 
@@ -2071,13 +2097,93 @@ function scoreMove(seat,m){
   }
   return sc;
 }
+// v0.17: how many of `s`'s tees are already home - the shared stakes proxy used by the
+// strategic core below for both "rush my last few tees in" and "deny them, they're about to win."
+const piecesHome=s=>G.pieces[s].filter(p=>p.state==='home').length;
+/* v0.17 (AI difficulty overhaul): ONE shared strategic scoring core for every tier. Every CPU
+   seat scores every legal move (always a move legalMoves() already produced - no extra rules
+   knowledge) as
+       scoreMove(m) + P.strat*strategyBonus(m,P) + uniform(-P.jitter,+P.jitter)
+   and plays the max. The three tiers differ ONLY in the AI_TIERS parameters below, never in
+   policy code:
+     - jitter: decision noise. Easy is noisy enough to frequently override its own judgment
+       (clearly the most beatable tier, but never senseless - the same strategic core still
+       steers it, so it enters, advances, kicks, and blocks like a real if unfocused player).
+       Tricky is the scored-with-moderate-noise middle. Nasty is deterministic: it EXECUTES
+       the strategy's top choice every single turn, which is empirically a big share of the
+       tier gap all on its own.
+     - strat: how strongly the strategic layer weighs in on top of scoreMove's tactical base.
+     - deny: endgame denial aggressiveness - specifically scales the "they're about to win,
+       take them out NOW" terms, so Nasty guards the finish line hardest.
+   strategyBonus is deliberately SMALL relative to scoreMove's own scale (kicks ~22-40, home
+   entry +20, a card of progress ~1-5): it tie-breaks among moves scoreMove already considers
+   close rather than overriding a clearly better play - large versions of these bonuses were
+   tried and measurably LOWERED win rate in harness testing. What it scores:
+     - defensive Jacks: a swap's bonus scales with how far back it yanks an OPPONENT tee that
+       was deep into ITS OWN lap (close to ITS OWN home entry).
+     - blocking awareness: a bonus for ending a move on a physical hole that sits on an
+       opponent's start hole, or in their final home stretch (their own last 6 steps before
+       their porch) - a standing threat against whatever they need to pass through to finish.
+     - stakes-aware: the get-home bonus grows with how many of the owner's tees are already
+       home (rush the last few in); a kick against a tee close to, or already in, an opponent's
+       home row is worth more - deny the opponent who's about to win (scaled by P.deny).
+     - kick-hungry: extra weight on top of the kick value scoreMove already counts.
+     - `closing`: once the owner has 4 tees home, the purely positional/defensive terms
+       (blocking, defensive swaps) get discounted - "must still win itself," defense never
+       outweighs finishing the game. */
+function strategyBonus(m,P){
+  let v=0;
+  const owner=m.owner, closing=piecesHome(owner)>=4?0.3:1;
+  if(m.type==='move'||m.type==='enter'||m.type==='back'){
+    if(m.to>=LAY.L)v+=2.5+piecesHome(owner)*1.5;                 // rush the last tees home
+    if(m.to<LAY.L){
+      const phys=loopIdx(owner,m.to);
+      for(let o=0;o<G.n;o++){ if(sameTeam(o,owner))continue;
+        let block=0;
+        if(phys===entryIdx(o))block+=0.3;                       // camped on their start hole
+        const rel=(phys-entryIdx(o)+LAY.L)%LAY.L;
+        if(rel>=LAY.L-6)block+=0.6+piecesHome(o)*0.3*P.deny;     // sitting in their final home stretch
+        v+=block*closing;
+      }
+    }
+  }
+  if(m.kick&&!sameTeam(m.kick.seat,m.owner)){
+    const vic=G.pieces[m.kick.seat][m.kick.pi];                 // pre-kick steps - still intact here
+    v+=kickVal(m.owner,m.kick)*0.55;                             // kick-hungry: extra weight on top of kickVal
+    v+=piecesHome(m.kick.seat)*3*P.deny;                         // they're close to winning - deny it
+    if(vic.steps>=LAY.L-6&&vic.steps<LAY.L)v+=5*P.deny;          // stripped right before their porch
+    if(vic.steps>=LAY.L)v+=4*P.deny;                             // forced a non-snug home tee back out
+  }
+  if(m.type==='swap'&&!sameTeam(m.ts,m.owner)){
+    const a=G.pieces[m.owner][m.pi],b=G.pieces[m.ts][m.tpi];
+    const bn=(loopIdx(m.owner,a.steps)-entryIdx(m.ts)+LAY.L)%LAY.L;
+    const pulledBack=b.steps-bn;                                 // positive = yanked them backward
+    if(pulledBack>0)v+=(pulledBack*0.3+(b.steps>=LAY.L-12?3:0)+piecesHome(m.ts)*0.8*P.deny)*closing;
+  }
+  return v;
+}
+/* Tier ladder, tuned via a headless many-game harness against server/engine.js (v0.17):
+   each rung beats the one below it in roughly 3 out of 4 games (Nasty 94.8% vs Easy, 76.8% vs
+   Tricky; Tricky 76.4% vs Easy; Easy 76.2% vs a harness-only pure-random baseline; N=500 per
+   matchup, 4P FFA 2-and-2 seating). The jitter values look large next to scoreMove's scale on
+   purpose - that is the knob that separates the rungs. */
+const AI_TIERS={
+  easy:  {strat:0.15,jitter:95, deny:0.5},   // strategic but very noisy - the beatable one
+  medium:{strat:0.5, jitter:35, deny:1},     // "Tricky": the middle strategist
+  hard:  {strat:1,   jitter:0,  deny:1.6},   // "Nasty": full strategy, zero noise, hardest denial
+};
 function chooseAI(seat,moves){
-  const d=G.seats[seat].diff;
-  if(d==='easy')return rand(moves);
-  const jitter=d==='medium'?9:2;
+  const P=AI_TIERS[G.seats[seat].diff]||AI_TIERS.medium;
+  // Shared sanity rule, every tier: never kick your own tee (or your partner's) when any other
+  // move exists (RULES.md: landing on your own or partner's tee sends it back to base). If every
+  // legal move is a self/partner kick, it's forced - play it. Without this, Easy's large jitter
+  // could occasionally override even kickVal's heavy penalty.
+  const safe=moves.filter(m=>!(m.kick&&(m.kick.seat===m.owner||sameTeam(m.kick.seat,m.owner))));
+  const pool=safe.length?safe:moves;
   let best=null,bs=-1e9;
-  for(const m of moves){
-    const s=scoreMove(seat,m)+(Math.random()*2-1)*jitter;
+  for(const m of pool){
+    const s=scoreMove(seat,m)+P.strat*strategyBonus(m,P)
+      +(P.jitter?(Math.random()*2-1)*P.jitter:0);
     if(s>bs){bs=s;best=m;}
   }
   return best;
@@ -2755,14 +2861,55 @@ function requestPause(v){
   else setPaused(v);
 }
 
-/* ---- Offline save state (v0.8) ----
+/* ---- Offline save state (v0.8; TWO SAVE SLOTS since v0.17) ----
    G is fully JSON-serializable (plain objects/arrays/numbers/strings/booleans - even
    G.seats[].color is just a plain {name,c,dark} object), so the WHOLE thing is the save -
    no separate "save format" to keep in sync with the engine. Debounced so a burst of
    mutations (a deal animating in, a quick sequence of turns) doesn't hammer localStorage.
    Skipped for online games (those persist server-side, see server/server.js) and for the
-   autotest harness (no reason to pollute localStorage with throwaway CPU-only test games). */
+   autotest harness (no reason to pollute localStorage with throwaway CPU-only test games).
+
+   v0.17 slots: up to TWO saved offline games can exist at once, in localStorage keys
+   'nasty-save-offline-1' / 'nasty-save-offline-2' (each the same {G,ts} shape as the old
+   single 'nasty-save-offline' key - migrateLegacySaves() below moves an old-format save into
+   slot 1 at boot, so nobody loses a save across the update). SAVE_SLOT tracks which slot the
+   CURRENT game writes to, so playing/saving game B can never silently overwrite saved game A:
+   a brand-new game binds to a free slot when it starts (or to the slot the player explicitly
+   chose to replace - see startOfflineGameGate(), § MENU) and stays there; a resumed game
+   rebinds to the slot it was loaded from. */
 let saveOfflineTimer=null;
+let SAVE_SLOT=null;   // 1|2 - the CURRENT offline game's save spot; null = no offline game bound
+const slotKey=k=>'nasty-save-offline-'+k;
+// One-time, synchronous, boot-time migration: an old single-key save becomes slot 1 (slot 2 if
+// slot 1 is somehow already taken - can't happen on a genuine old install, defensive anyway).
+function migrateLegacySaves(){
+  try{
+    const legacy=localStorage.getItem('nasty-save-offline');
+    if(!legacy)return;
+    if(!localStorage.getItem(slotKey(1)))localStorage.setItem(slotKey(1),legacy);
+    else if(!localStorage.getItem(slotKey(2)))localStorage.setItem(slotKey(2),legacy);
+    localStorage.removeItem('nasty-save-offline');
+  }catch(e){}
+}
+function loadOfflineSlot(k){
+  try{
+    const s=JSON.parse(localStorage.getItem(slotKey(k))||'null');
+    if(s&&s.G&&!s.G.over)return s;
+  }catch(e){}
+  return null;
+}
+function freeSaveSlot(){ return !loadOfflineSlot(1)?1:!loadOfflineSlot(2)?2:null; }
+// Which slot does the CURRENT game belong to? Normally SAVE_SLOT is already bound (game start /
+// resume both bind it) - the fallbacks (match by gameId, else a free slot) exist so an unbound
+// autosave can never land on top of a DIFFERENT game's save.
+function slotForCurrentGame(){
+  if(SAVE_SLOT)return SAVE_SLOT;
+  for(const k of [1,2]){
+    const s=loadOfflineSlot(k);
+    if(s&&G&&G.gameId&&s.G.gameId===G.gameId)return k;
+  }
+  return freeSaveSlot();
+}
 function scheduleSaveOffline(){
   if(!G||NET.online)return;
   if(location.hash.indexOf('autotest')>=0)return;
@@ -2772,25 +2919,29 @@ function scheduleSaveOffline(){
 function doSaveOffline(){
   if(!G||NET.online||G.over)return;   // never save a finished game (see clearOfflineSave below)
   if(location.hash.indexOf('autotest')>=0)return;
+  SAVE_SLOT=slotForCurrentGame();
+  if(!SAVE_SLOT)return;   // both slots hold OTHER games and this one was never bound - never clobber
   const obj={G,ts:Date.now()};
-  try{ localStorage.setItem('nasty-save-offline',JSON.stringify(obj)); }catch(e){}
-  idbPutSave(obj);   // v0.10.3: best-effort IndexedDB mirror, see "IndexedDB mirror" below
-}
-function loadOfflineSave(){
-  try{
-    const s=JSON.parse(localStorage.getItem('nasty-save-offline')||'null');
-    if(s&&s.G&&!s.G.over)return s;
-  }catch(e){}
-  return null;
+  try{ localStorage.setItem(slotKey(SAVE_SLOT),JSON.stringify(obj)); }catch(e){}
+  idbPutSave(obj,'offline-'+SAVE_SLOT);   // v0.10.3: best-effort IndexedDB mirror, see below
 }
 // Cancels any pending debounced write too, not just the stored value - otherwise a save
 // scheduled just before the game ended (the debounce is a flat 250ms of WALL-CLOCK time,
 // not scaled by game speed like everything else) could still land moments after the clear,
-// quietly resurrecting a save for a finished/abandoned game.
+// quietly resurrecting a save for a finished/abandoned game. v0.17: clears the CURRENT game's
+// slot only - the other slot's saved game is somebody else's and stays put.
 function clearOfflineSave(){
   if(saveOfflineTimer){ clearTimeout(saveOfflineTimer); saveOfflineTimer=null; }
-  try{localStorage.removeItem('nasty-save-offline');}catch(e){}
-  idbDeleteSave();
+  const k=SAVE_SLOT||slotForCurrentGame();
+  if(!k)return;
+  clearOfflineSlot(k);
+}
+// Clears ONE slot's stored save (localStorage + IndexedDB mirror) without touching the debounce
+// timer or SAVE_SLOT - used directly by the replace-a-save chooser (§ MENU), where no game is
+// running yet.
+function clearOfflineSlot(k){
+  try{localStorage.removeItem(slotKey(k));}catch(e){}
+  idbDeleteSave('offline-'+k);
 }
 // v0.10.3 hardening: flush any still-PENDING debounced save immediately if the page is about
 // to go away or become hidden - belt and suspenders against the 250ms debounce theoretically
@@ -2813,7 +2964,7 @@ function flushPendingOfflineSave(){
    updateMenuResumeButtons) picks it up completely unchanged - IndexedDB itself has no
    synchronous API, so this self-heal is necessarily async and runs once at boot, after the
    normal (synchronous, localStorage-only) first paint. */
-const IDB_NAME='nasty-saves', IDB_STORE='saves', IDB_KEY='offline';
+const IDB_NAME='nasty-saves', IDB_STORE='saves';
 let idbOpenPromise=null;
 function openIdb(){
   if(idbOpenPromise)return idbOpenPromise;
@@ -2828,32 +2979,34 @@ function openIdb(){
   });
   return idbOpenPromise;
 }
-async function idbPutSave(obj){
+// v0.17: every IndexedDB save helper takes the record key now - one per slot ('offline-1' /
+// 'offline-2'), plus the legacy pre-slots key 'offline' that syncOfflineSaveFromIdb() migrates.
+async function idbPutSave(obj,key){
   try{
     const db=await openIdb(); if(!db)return;
     await new Promise(res=>{
       const tx=db.transaction(IDB_STORE,'readwrite');
-      tx.objectStore(IDB_STORE).put(obj,IDB_KEY);
+      tx.objectStore(IDB_STORE).put(obj,key);
       tx.oncomplete=res; tx.onerror=()=>res(); tx.onabort=()=>res();
     });
   }catch(e){ /* best-effort only - localStorage stays the primary, synchronous copy */ }
 }
-async function idbDeleteSave(){
+async function idbDeleteSave(key){
   try{
     const db=await openIdb(); if(!db)return;
     await new Promise(res=>{
       const tx=db.transaction(IDB_STORE,'readwrite');
-      tx.objectStore(IDB_STORE).delete(IDB_KEY);
+      tx.objectStore(IDB_STORE).delete(key);
       tx.oncomplete=res; tx.onerror=()=>res(); tx.onabort=()=>res();
     });
   }catch(e){}
 }
-async function idbGetSave(){
+async function idbGetSave(key){
   try{
     const db=await openIdb(); if(!db)return null;
     return await new Promise(res=>{
       const tx=db.transaction(IDB_STORE,'readonly');
-      const rq=tx.objectStore(IDB_STORE).get(IDB_KEY);
+      const rq=tx.objectStore(IDB_STORE).get(key);
       rq.onsuccess=()=>res(rq.result||null);
       rq.onerror=()=>res(null);
     });
@@ -2861,14 +3014,27 @@ async function idbGetSave(){
 }
 async function syncOfflineSaveFromIdb(){
   try{
-    const idb=await idbGetSave();
-    if(!idb||!idb.G||idb.G.over)return;
-    let local=null;
-    try{ local=JSON.parse(localStorage.getItem('nasty-save-offline')||'null'); }catch(e){}
-    if(!local||!local.ts||idb.ts>local.ts){
-      try{ localStorage.setItem('nasty-save-offline',JSON.stringify(idb)); }catch(e){}
-      updateMenuResumeButtons();   // re-render - the earlier synchronous boot call may have shown nothing
+    // Legacy IndexedDB record ('offline', pre-slots) first: same treatment the localStorage
+    // migration gives the old key - it becomes slot 1's mirror (slot 2 if 1 is taken by a
+    // DIFFERENT save), then the legacy record is deleted so this only ever runs once.
+    const legacy=await idbGetSave('offline');
+    if(legacy&&legacy.G&&!legacy.G.over){
+      const s1=await idbGetSave('offline-1');
+      if(!s1)await idbPutSave(legacy,'offline-1');
+      else if(!(await idbGetSave('offline-2')))await idbPutSave(legacy,'offline-2');
+      await idbDeleteSave('offline');
     }
+    let changed=false;
+    for(const k of [1,2]){
+      const idb=await idbGetSave('offline-'+k);
+      if(!idb||!idb.G||idb.G.over)continue;
+      let local=null;
+      try{ local=JSON.parse(localStorage.getItem(slotKey(k))||'null'); }catch(e){}
+      if(!local||!local.ts||idb.ts>local.ts){
+        try{ localStorage.setItem(slotKey(k),JSON.stringify(idb)); changed=true; }catch(e){}
+      }
+    }
+    if(changed)updateMenuResumeButtons();   // re-render - the earlier synchronous boot call may have shown less
   }catch(e){}
 }
 
@@ -4550,15 +4716,18 @@ function startGame(){
   runTurn();
   window.G=G; window.LAY=LAY; // for testing / debugging
 }
-// v0.11 item 3: starting a new game, or hosting/joining a different online game, both claim
-// the same single "resume" slot the main menu shows (see updateMenuResumeButtons() /
-// SAVED_GAME below) - warn first so a saved game in progress doesn't quietly become
-// unreachable. Confirming just runs the action normally; the actual "replace" happens the
-// same way it always has (the new game's own autosave/saveLastRoom naturally overwrites the
-// slot moments later) - this only gates whether that's allowed to proceed silently.
+// v0.11 item 3, reworked v0.17: hosting/joining a different online game claims the one
+// 'nasty-last-room' record (the online game you can still get back into) - warn first so it
+// doesn't quietly become unreachable. Confirming just runs the action normally; the actual
+// "replace" happens the same way it always has (the new room's own saveLastRoom naturally
+// overwrites the record moments later) - this only gates whether that proceeds silently.
+// Offline saves are NOT involved anymore - they have their own two slots and their own gate
+// (startOfflineGameGate below).
 let PENDING_OVERWRITE_ACTION=null;
 function confirmOverwriteThenRun(action){
-  if(SAVED_GAME){ PENDING_OVERWRITE_ACTION=action; $('overwriteWarnOverlay').classList.remove('hidden'); }
+  const last=loadLastRoom();
+  const canRejoin=!!(last&&loadNetSession(last.code));
+  if(canRejoin){ PENDING_OVERWRITE_ACTION=action; $('overwriteWarnOverlay').classList.remove('hidden'); }
   else action();
 }
 $('btnOverwriteConfirm').onclick=()=>{
@@ -4567,12 +4736,39 @@ $('btnOverwriteConfirm').onclick=()=>{
   if(action)action();
 };
 $('btnOverwriteCancel').onclick=()=>{ $('overwriteWarnOverlay').classList.add('hidden'); PENDING_OVERWRITE_ACTION=null; };
-$('btnStart').onclick=()=>confirmOverwriteThenRun(startGame);
+/* v0.17: starting a NEW offline game binds it to a save spot up front (SAVE_SLOT, § TURNS'
+   offline-save block) so its autosave always has a home that is provably not another game's.
+   Free spot available: bind it and go, zero extra taps - the common case. Both spots full:
+   ask which saved game to give up (slotReplaceOverlay), clear that spot, bind, go. Cancel
+   keeps both saves and stays on the menu. */
+let PENDING_SLOT_ACTION=null;
+function startOfflineGameGate(action){
+  const free=freeSaveSlot();
+  if(free){ SAVE_SLOT=free; action(); return; }
+  PENDING_SLOT_ACTION=action;
+  for(const k of [1,2]){
+    const s=loadOfflineSlot(k);
+    $('btnReplaceSlot'+k).textContent='Replace: '+(s?saveSlotLabel(s):'(empty)');
+  }
+  $('slotReplaceOverlay').classList.remove('hidden');
+}
+function chooseReplaceSlot(k){
+  $('slotReplaceOverlay').classList.add('hidden');
+  const action=PENDING_SLOT_ACTION; PENDING_SLOT_ACTION=null;
+  if(!action)return;
+  clearOfflineSlot(k);
+  SAVE_SLOT=k;
+  action();
+}
+$('btnReplaceSlot1').onclick=()=>chooseReplaceSlot(1);
+$('btnReplaceSlot2').onclick=()=>chooseReplaceSlot(2);
+$('btnReplaceCancel').onclick=()=>{ $('slotReplaceOverlay').classList.add('hidden'); PENDING_SLOT_ACTION=null; };
+$('btnStart').onclick=()=>startOfflineGameGate(startGame);
 $('btnAgain').onclick=()=>{$('winOverlay').classList.add('hidden');
   if(NET.online)leaveOnlineToMenu(); else{clearOfflineSave();startGame();}};
 $('btnWinMenu').onclick=()=>{location.hash='';G=null;$('winOverlay').classList.add('hidden');
   if(NET.online)leaveOnlineToMenu();
-  else{clearOfflineSave();$('game').classList.add('hidden');$('menu').classList.remove('hidden');clearToasts();updateMenuResumeButtons();}};
+  else{clearOfflineSave();SAVE_SLOT=null;$('game').classList.add('hidden');$('menu').classList.remove('hidden');clearToasts();updateMenuResumeButtons();}};
 // v0.10.3 FIX (real bug, Blake's 2026-07-13 report): this used to be a SILENT, PERMANENT
 // delete of your progress (clearOfflineSave() / leaveOnlineToMenu() with no keepRoom) - and
 // its confirm() only ever said "leave", never "your save will be lost." The topbar "‹ Menu"
@@ -4606,6 +4802,7 @@ function doLeaveGame(saveIt){
     if(saveIt)doSaveOffline();   // flush the CURRENT state first - must run before G is cleared
     else clearOfflineSave();     // "Leave without saving" - actually clears the slot, not just abandons the tab
     G=null;
+    SAVE_SLOT=null;              // v0.17: back on the menu, no offline game is bound to a save spot
     $('game').classList.add('hidden');$('menu').classList.remove('hidden');clearToasts();updateMenuResumeButtons();
   }
 }
@@ -4949,7 +5146,10 @@ $('btnSaveQuit').addEventListener('pointerdown',e=>e.stopPropagation());
 $('btnSaveQuit').onclick=openLeaveConfirm;
 function showWin(){
   recordWin();
-  clearOfflineSave();   // v0.8: finished games don't offer a resume
+  // v0.8: finished games don't offer a resume. v0.17: offline finishes only - an ONLINE game
+  // finishing must never clear an offline save spot that belongs to a different, still-alive
+  // offline game (SAVE_SLOT could still be bound to one from earlier this session).
+  if(!NET.online)clearOfflineSave();
   sWin(); confettiBurst();
   const names=G.winners.map(w=>G.seats[w].name);
   const cols=G.winners.map(w=>G.seats[w].color.name);
@@ -4961,45 +5161,69 @@ function showWin(){
   $('winOverlay').classList.remove('hidden');
 }
 
-/* ---- "Resume Saved Game" tile, main menu (v0.9 item 4, refined after Blake's preview) ----
-   Absorbs what used to be two separate buttons ("Resume your game" + "Rejoin last online
-   game") into a single full-width tile sitting ABOVE Start game/Online play, only shown when
-   a save exists. If both an offline save and a rejoinable online room happen to exist,
-   whichever was touched more recently wins (both records carry a timestamp already). */
-let SAVED_GAME=null;   // {kind:'offline'|'online', ...} - set by updateMenuResumeButtons, read by its click handler
-function updateMenuResumeButtons(){
-  const offline=loadOfflineSave();
-  const last=loadLastRoom();
-  const canRejoin=!!(last&&loadNetSession(last.code));
-  SAVED_GAME=null;
-  if(offline&&canRejoin) SAVED_GAME=offline.ts>=last.ts?{kind:'offline',offline}:{kind:'online',last};
-  else if(offline) SAVED_GAME={kind:'offline',offline};
-  else if(canRejoin) SAVED_GAME={kind:'online',last};
-  const btn=$('btnSavedGame');
-  btn.classList.toggle('hidden',!SAVED_GAME);
-  if(!SAVED_GAME)return;
-  if(SAVED_GAME.kind==='offline'){
-    const g=SAVED_GAME.offline.G;
-    $('savedGameDetail').textContent=`${g.n===4?'4':'6'} players${g.teams?' · teams':''} · `+
-      `Deal ${Math.min(g.schedRound,g.schedule.length)}/${g.schedule.length}`;
-  }else{
-    $('savedGameDetail').textContent=`Room ${SAVED_GAME.last.code} · online`;
-  }
+/* ---- "Resume Saved Game" tiles, main menu (v0.9 item 4; up to three since v0.17) ----
+   v0.17: up to TWO offline save slots plus one rejoinable online room can exist at once, so
+   the single tile grew into up to three, sorted newest-first (every record carries a
+   timestamp already). With exactly one saved game this looks identical to the old single
+   tile. Each tile's second line says whose game it is in plain language: the human players'
+   names (or "All computer"), 4/6 players, teams or not, and how long ago it was saved. */
+let SAVED_GAMES=[];   // [{kind:'offline',slot,data,ts}|{kind:'online',last,ts}, ...] newest first
+let SAVED_GAME=null;  // the newest entry (or null) - kept for the older single-save call sites
+function timeAgo(ts){
+  if(!ts)return '';
+  const m=Math.round((Date.now()-ts)/60000);
+  if(m<1)return 'just now';
+  if(m<60)return m+(m===1?' minute ago':' minutes ago');
+  const h=Math.round(m/60);
+  if(h<24)return h+(h===1?' hour ago':' hours ago');
+  const d=Math.round(h/24);
+  return d+(d===1?' day ago':' days ago');
 }
-$('btnSavedGame').onclick=()=>{
-  if(!SAVED_GAME)return;
-  if(SAVED_GAME.kind==='offline')resumeOfflineGame();
+// Plain-language one-liner for an offline save {G,ts} - shared by the resume tiles and the
+// replace-a-save chooser (startOfflineGameGate, § MENU).
+function saveSlotLabel(s){
+  const g=s.G;
+  const humans=g.seats.filter(x=>x.type==='human').map(x=>x.name).filter(Boolean);
+  const who=humans.length?humans.join(' & '):'All computer';
+  return `${who} · ${g.n} players${g.teams?' · teams':''} · saved ${timeAgo(s.ts)}`;
+}
+function updateMenuResumeButtons(){
+  const entries=[];
+  for(const k of [1,2]){
+    const s=loadOfflineSlot(k);
+    if(s)entries.push({kind:'offline',slot:k,data:s,ts:s.ts||0});
+  }
+  const last=loadLastRoom();
+  if(last&&loadNetSession(last.code))entries.push({kind:'online',last,ts:last.ts||0});
+  entries.sort((a,b)=>b.ts-a.ts);
+  SAVED_GAMES=entries;
+  SAVED_GAME=entries[0]||null;
+  [['btnSavedGame','savedGameDetail'],['btnSavedGame2','savedGameDetail2'],['btnSavedGame3','savedGameDetail3']]
+    .forEach(([b,d],i)=>{
+      const e=entries[i];
+      $(b).classList.toggle('hidden',!e);
+      if(e)$(d).textContent=e.kind==='offline'?saveSlotLabel(e.data):`Room ${e.last.code} · online`;
+    });
+}
+function onSavedTileClick(i){
+  const e=SAVED_GAMES[i];
+  if(!e)return;
+  if(e.kind==='offline')resumeOfflineGame(e.slot);
   else{
     // v0.9 refinement: an online resume goes through the "getting the table back together"
     // reunion lobby (see § REUNION below) instead of dropping straight onto the board -
     // onSync() checks this flag once, then clears it.
     NET.enteringViaResume=true;
-    tryJoinOrRejoin(SAVED_GAME.last.code,false);
+    tryJoinOrRejoin(e.last.code,false);
   }
-};
-function resumeOfflineGame(){
-  const saved=loadOfflineSave();
+}
+$('btnSavedGame').onclick=()=>onSavedTileClick(0);
+$('btnSavedGame2').onclick=()=>onSavedTileClick(1);
+$('btnSavedGame3').onclick=()=>onSavedTileClick(2);
+function resumeOfflineGame(slot){
+  const saved=loadOfflineSlot(slot);
   if(!saved)return;
+  SAVE_SLOT=slot;   // v0.17: a resumed game keeps writing to the slot it came from
   // Unlike an online reconnect, there's no history to replay here - the save IS the exact
   // current state, so re-rendering it is inherently instant (drawBoard/buildTable/syncAll
   // just position tees directly, no animation involved either way; nothing to snap FROM).
@@ -5201,10 +5425,12 @@ function autotest(n,teams){
   CFG.seatMeta[n]=CFG.seatMeta[n].map((s,i)=>({name:s.name,type:'cpu',diff:i%2?'hard':'medium'}));
   startGame();
 }
+migrateLegacySaves();   // v0.17: old single-key offline save becomes save slot 1 - must run
+// before anything reads the slots (updateMenuResumeButtons below / syncOfflineSaveFromIdb).
 renderMenu();
 syncOfflineSaveFromIdb();   // v0.10.3: async self-heal - see "IndexedDB mirror" above. Runs
-// after the synchronous first paint below; re-renders the resume tile itself if it finds
-// something localStorage didn't have.
+// after the synchronous first paint below; re-renders the resume tiles if it finds
+// something localStorage didn't have. v0.17: also migrates a legacy IndexedDB save record.
 if(location.hash==='#autotest')autotest(4,false);
 else if(location.hash==='#autotest6')autotest(6,true);
 else{
