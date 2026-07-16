@@ -1,0 +1,26 @@
+# v0.15 test suites (server-authoritative online rebuild)
+
+Every script here launches its OWN private server instance (random port, scratch
+`NASTY_ROOMS_DIR`/`NASTY_KV_PATH`, throwaway admin token) - none of them ever touch the
+production LaunchAgent, the real rooms dir, `server/leaderboard.json`, or the default KV.
+Playwright is loaded from `/Users/jarvis/clawd/node_modules/playwright` (this machine's
+existing install, same as every prior release's test tooling).
+
+Run everything from this directory with plain `node <script>`; scripts that support the Deno
+server take `SERVER=deno` as an env var.
+
+| Script | What it proves | How to run |
+|---|---|---|
+| `../test-engine-sync.js` | generated engine files match index.html (run via `npm test` in `server/`) | `cd .. && npm test` |
+| `../test-engine-headless.js` | full CPU-vs-CPU games straight against the engine module | (same `npm test`) |
+| `smoke_server.js` | raw wire-protocol basics vs the Node server (protocol handshake, unattended all-CPU game, illegal-move rejection, tableSpeed) | `node smoke_server.js` |
+| `smoke_deno.js` | same vs the Deno server + KV snapshot-size check | `node smoke_deno.js` |
+| `restart_deno.js` | SIGKILL the Deno server mid-game, restart on the same KV path, game continues from the KV snapshot | `node restart_deno.js` |
+| `protocol_checklist.js` | the FULL protocol surface, 48 checks (version handshake, lobby flows, reclaim incl. contested approve/deny, pause, presence, nudge, leaderboard/solo-result/epoch, admin god-mode, CORS, rate limit, AASA, /join redirect) | `node protocol_checklist.js node` / `node protocol_checklist.js deno` |
+| `chaos_v15.js` | Playwright chaos scenarios: `full` (clean game), `hostbg` (THE host-background repro of Blake's bug), `chaos N` (N full games with realistic random background/reconnect cycles + convergence after every cycle) | `node chaos_v15.js full` / `hostbg` / `chaos 3`; prefix `SERVER=deno` for the Deno server |
+| `reconnect_storm.js` | the v0.7.4/v0.9-era kick-harness recipe on the new architecture: 4 human seats, rotate dropping/reconnecting one per cycle mid-play, convergence after every cycle | `node reconnect_storm.js 18` / `SERVER=deno node reconnect_storm.js 18` |
+| `test_leaderboard_scenarios.js` | leaderboard exactly-once: solo w/ server reachable, solo w/ server down then queue drain, online game server-side recording + reconnect-no-double | `node test_leaderboard_scenarios.js` |
+| `soak_offline.js` | the standing offline soak recipe (`#autotest` 4P / `#autotest6` 6P), bit-identical-offline regression check | `node soak_offline.js both` |
+
+Expected results as of v0.15 (2026-07-16) are recorded in HANDOFF.md's v0.15 section - if a
+run here diverges from those numbers, treat it as a regression until proven otherwise.
