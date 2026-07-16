@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY - the Pangman family board game, digitized. v0.13.4.
+  NASTY - the Pangman family board game, digitized. v0.14.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation - the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -324,6 +324,20 @@
       responsive, measured off the sign's own real box, not a guessed constant) - bigger on a big
       phone, modest growth on a small one so it never risks a corner running past the edge. See §
       CAPACITOR's boot-slam block and HANDOFF.md "v0.13.1 boot slam" for the full investigation.
+
+  v0.14 (2026-07-16 - host lobby seat/name choice + Universal Links, see HANDOFF.md for the
+  full readout):
+    - Host lobby fix (Blake: "won't let me select my slot/player and doesn't let me change my
+      name"): renderRoomScreen() (§ NET) now lets the HOST tap any open seat to sit there
+      (claimSeat already supported this server-side - only the host's OWN click handler was
+      missing) and Rename their own seat inline (setSeat, also already server-side-ready). No
+      server changes needed - server.js/server.ts already protected only the host's CURRENT
+      seat from a GUEST's claim, never blocked the host from moving to a different open one.
+    - Universal Links: invite links are now https://play.nastyboardgame.com/join/CODE
+      (inviteLink()) instead of a plain ?join=CODE website URL. That domain (our own cloud
+      relay, server/cloud/server.ts + server.js twin) serves the apple-app-site-association
+      file plus a GET /join/:CODE redirect page for anyone without the app - see § CAPACITOR
+      for the client-side appUrlOpen/getLaunchUrl routing into the existing join flow.
 -->
 </head>
 <body>
@@ -806,7 +820,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.13.4</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.14</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -1094,9 +1108,58 @@ const IS_APP=!!(CAP&&CAP.isNativePlatform&&CAP.isNativePlatform());
 const PUBLIC_URL='https://nastyboardgame.com/';   // canonical link to put in invites when
   // running in-app - location.href there is capacitor://localhost/... or a local file URL,
   // not something a friend could ever open, so always point invites at the real website.
+/* v0.14: Universal Links. https://play.nastyboardgame.com/join/CODE is served by our own
+   cloud relay (server/cloud/server.ts + server/server.js twin) - it answers the
+   apple-app-site-association file for com.pangman.nasty, so tapping this link on a phone
+   with the app installed opens the APP straight into the join flow (via appUrlOpen/
+   getLaunchUrl below); a phone without the app gets a plain HTML redirect to
+   https://nastyboardgame.com/?join=CODE - the same website join flow that's always existed.
+   inviteLink() is now the ONE place both the app and the website build a shareable invite -
+   replaces the old IS_APP?PUBLIC_URL:location.origin... branching that used to live at each
+   call site. */
+function inviteLink(code){ return `https://play.nastyboardgame.com/join/${code}`; }
+/* parseJoinCodeFromUrl: pulls a 4-letter room code out of either a /join/CODE universal link
+   or a plain ?join=CODE query string (defensive - only the path form is ever actually sent,
+   but costs nothing to also accept the query form here too). Returns null if nothing matches. */
+function parseJoinCodeFromUrl(url){
+  if(!url)return null;
+  try{
+    const u=new URL(url);
+    const m=u.pathname.match(/\/join\/([A-Za-z0-9]{4})\/?$/);
+    if(m)return m[1].toUpperCase();
+    const j=new URLSearchParams(u.search).get('join');
+    return j?j.toUpperCase():null;
+  }catch(e){ return null; }
+}
+// Dedupe guard: on a cold launch, BOTH getLaunchUrl() (polled at boot, below) AND the
+// appUrlOpen listener (registered right after this) can end up delivering the SAME launch
+// URL - that's the documented, recommended belt-and-suspenders pattern (the event alone is
+// flaky for a cold start if native dispatches it before this listener's registered; a
+// getLaunchUrl()-only check misses a link tapped while already running) - but without this
+// guard a cold launch via a join link could call tryJoinOrRejoin() twice for the same code.
+let LAST_JOIN_LINK_CODE=null, LAST_JOIN_LINK_TS=0;
+function handleIncomingJoinLink(url,cold){
+  const code=parseJoinCodeFromUrl(url);
+  if(!code)return;
+  const now=Date.now();
+  if(code===LAST_JOIN_LINK_CODE&&now-LAST_JOIN_LINK_TS<4000)return;
+  LAST_JOIN_LINK_CODE=code; LAST_JOIN_LINK_TS=now;
+  // Cold start (app was launched BY this link): mirror the website's own ?join=CODE boot
+  // path exactly (see the bottom of this script) - straight into tryJoinOrRejoin, no
+  // overwrite gate, since a fresh launch has nothing running yet to protect.
+  // While already running (app was open, foregrounded by a NEW link tap): route through the
+  // same confirmOverwriteThenRun() guard the manual "Join a game" button uses, so an
+  // in-progress local save can't get silently clobbered by an accidental/stale link tap.
+  if(cold)tryJoinOrRejoin(code,false);
+  else confirmOverwriteThenRun(()=>tryJoinOrRejoin(code,false));
+}
 if(IS_APP){
   document.documentElement.classList.add('capacitor-app');
   try{ CAP.Plugins.StatusBar.setStyle({style:'LIGHT'}); }catch(e){}   // light icons/text on our dark felt background
+  // v0.14: Universal Links - while-running case. Cold-start is handled separately via
+  // getLaunchUrl() near the bottom of this script (after tryJoinOrRejoin/confirmOverwriteThenRun
+  // are defined and the normal boot sequence has run) - see handleIncomingJoinLink() above.
+  try{ CAP.Plugins.App.addListener('appUrlOpen', (data)=>{ handleIncomingJoinLink(data&&data.url,false); }); }catch(e){}
   /* v0.11.1 splash-centering fix (Blake: "isn't centered in the middle of the screen").
      ROOT CAUSE, tracked down by screenshotting every 100-150ms through real launches on 3
      simulator sizes: the static splash IMAGE itself was never the problem (measured dead-center
@@ -3442,7 +3505,7 @@ function closeReunionOverlay(){
 }
 function nudgePlayer(playerId,name){
   netSend({type:'nudge',targetPlayerId:playerId});
-  sendInvite(`We're starting NASTY back up - come rejoin! ${IS_APP?PUBLIC_URL:location.origin+location.pathname}?join=${NET.code}`);
+  sendInvite(`We're starting NASTY back up - come rejoin! ${inviteLink(NET.code)}`);
 }
 $('btnReunionClose').onclick=()=>{ closeReunionOverlay(); updatePauseUI(); };
 $('btnReunionResume').onclick=()=>{ requestPause(false); };
@@ -3638,20 +3701,80 @@ function hostCreateRoom(){
     netSend({type:'host',name:myName,n:CFG.n,teams:CFG.teams,seats});
   }).catch(err=>{ $('onlineErr').textContent=err.message; NET.wantConnection=false; });
 }
+// v0.14: host seat choice + rename (Blake: "won't let me select my slot/player and doesn't
+// let me change my name"). Root cause was purely client-side - the server's claimSeat (any
+// player may claim any seat not currently held by the host) and setSeat (host may patch any
+// seat's name, including their own) already supported this; renderRoomScreen() just never
+// wired up a click handler on the host's own seat list, unlike renderJoinSeatStep()'s guest
+// view. `mine` is derived the same way for host and guest (claimedBy===NET.playerId) - the
+// host is just a player whose id happens to equal room.hostPlayerId, so moving to a new seat
+// via claimSeat never changes who's authorized to start the game / generate CPU moves.
+// ROOM_EDIT_NAME holds a draft {draft} while the host is mid-rename. Kept as a module-level
+// var (not per-render state) so a 'lobby' broadcast that arrives mid-edit (e.g. a guest
+// joining while the host is typing) re-renders the row in EDIT mode with the draft text
+// preserved instead of losing it - the input's DOM node is still recreated on that rare
+// overlap, so the cursor can jump to the end, but no keystrokes are lost.
+let ROOM_EDIT_NAME=null;
+function hostMySeatName(){
+  const s=(NET.lobby.seats||[]).find(s=>s.claimedBy===NET.playerId);
+  return s?s.name:'Host';
+}
+function saveHostName(){
+  if(!ROOM_EDIT_NAME)return;
+  const name=cleanName(ROOM_EDIT_NAME.draft,'');
+  ROOM_EDIT_NAME=null;
+  if(!name){ renderRoomScreen(); return; }
+  if(isBadName(name)){ toast('Pick a nicer name.'); renderRoomScreen(); return; }
+  const mySeat=NET.lobby.seats.findIndex(s=>s.claimedBy===NET.playerId);
+  if(mySeat>=0)netSend({type:'setSeat',seatIndex:mySeat,patch:{name}});
+  // no renderRoomScreen() here - the server's 'lobby' echo (handleNetMessage's 'lobby' case)
+  // re-renders with the confirmed name, same wait-for-echo pattern used everywhere else in
+  // § NET rather than an optimistic local update.
+}
 function renderRoomScreen(){
   if(!NET.lobby)return;
   $('roomCode').textContent=NET.code||'----';
   const list=$('roomSeatList'); list.innerHTML='';
   const cols=NET.lobby.n===4?COLORS4:COLORS6;
   NET.lobby.seats.forEach((s,i)=>{
-    const row=document.createElement('div'); row.className='lobbySeat'+(s.claimedBy===NET.playerId?' mine':'');
-    const statusTxt=s.type==='cpu'?'CPU':(s.claimedBy!=null?(s.claimedBy===NET.playerId?'You':'Joined ✓'):'Open - waiting…');
-    row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(s.name)}</span><span class="st">${statusTxt}</span>`;
-    if(s.claimedBy==null){
-      const btn=document.createElement('button');
-      btn.textContent=s.type==='cpu'?'Make human':'Make CPU';
-      btn.onclick=()=>netSend({type:'setSeat',seatIndex:i,patch:{type:s.type==='cpu'?'human':'cpu'}});
-      row.appendChild(btn);
+    const mine=s.claimedBy===NET.playerId;
+    const open=!mine&&s.claimedBy==null;
+    const row=document.createElement('div'); row.className='lobbySeat'+(mine?' mine':'')+(open?' open':'');
+    if(mine&&ROOM_EDIT_NAME){
+      row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span>`;
+      const inp=document.createElement('input'); inp.maxLength=NAME_MAX; inp.value=ROOM_EDIT_NAME.draft;
+      inp.style.cssText='flex:1;min-width:0;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.3);'+
+        'border-radius:6px;color:var(--cream);padding:3px 6px;font-size:13.5px';
+      inp.oninput=()=>{ROOM_EDIT_NAME.draft=inp.value;};
+      inp.onkeydown=e=>{if(e.key==='Enter')saveHostName();};
+      row.appendChild(inp);
+      const save=document.createElement('button'); save.textContent='Save';
+      save.onclick=e=>{e.stopPropagation(); saveHostName();};
+      row.appendChild(save);
+      const cancel=document.createElement('button'); cancel.textContent='Cancel'; cancel.style.marginLeft='4px';
+      cancel.onclick=e=>{e.stopPropagation(); ROOM_EDIT_NAME=null; renderRoomScreen();};
+      row.appendChild(cancel);
+    }else{
+      const statusTxt=mine?'You'
+        :s.claimedBy!=null?'Joined ✓'
+        :s.type==='cpu'?'CPU - tap to join'
+        :'Tap to sit here';
+      row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(s.name)}</span><span class="st">${statusTxt}</span>`;
+      if(mine){
+        const btn=document.createElement('button'); btn.textContent='Rename';
+        btn.onclick=e=>{e.stopPropagation(); ROOM_EDIT_NAME={draft:s.name}; renderRoomScreen();};
+        row.appendChild(btn);
+      }else if(open){
+        // v0.14: host may claim ANY open seat (human or CPU-marked) exactly like a guest -
+        // see claimSeat on the server, which already allows this (only a seat the HOST
+        // currently holds is protected from a claim, so moving to a different open seat was
+        // always accepted server-side; this row click was the missing piece).
+        row.onclick=()=>netSend({type:'claimSeat',seatIndex:i,name:hostMySeatName()});
+        const btn=document.createElement('button');
+        btn.textContent=s.type==='cpu'?'Make human':'Make CPU';
+        btn.onclick=e=>{e.stopPropagation(); netSend({type:'setSeat',seatIndex:i,patch:{type:s.type==='cpu'?'human':'cpu'}});};
+        row.appendChild(btn);
+      }
     }
     list.appendChild(row);
   });
@@ -3660,7 +3783,7 @@ function renderRoomScreen(){
   // has to pre-flip a CPU seat to human before texting the invite - a guest can claim ANY
   // open seat, CPU-marked or not (see claimSeat handling on the server / renderJoinSeatStep).
   $('btnRoomStart').disabled=false;
-  $('roomNote').textContent='Open seats become computer players when you start.';
+  $('roomNote').textContent='Tap any open seat to sit there, or Rename to change your name. Open seats become computer players when you start.';
 }
 
 /* ---- Join a game ---- */
@@ -3951,7 +4074,7 @@ $('btnRoomStart').onclick=()=>{
   netSend({type:'start',action:{kind:'start',n:NET.lobby.n,teams:NET.lobby.teams,seats,dealer,deck}});
 };
 $('btnRoomText').onclick=()=>{
-  sendInvite(`${IS_APP?PUBLIC_URL:location.origin+location.pathname}?join=${NET.code}`);
+  sendInvite(inviteLink(NET.code));
 };
 
 /* ---- leaderboard v2 (v0.9 item 7) ----
@@ -4440,6 +4563,16 @@ else{
     // actually rejoins (and, for an online game, opens the reunion lobby).
     updateMenuResumeButtons();
   }
+}
+// v0.14: Universal Links, cold-start case - the app was launched (from cold, or from being
+// fully suspended) BY a tap on https://play.nastyboardgame.com/join/CODE. The native shell
+// never puts that URL in location.search (it loads the bundled www/index.html, not the real
+// URL), so this is the only way to recover it: @capacitor/app's getLaunchUrl() returns the
+// URL that started this launch, if any. Runs after the boot sequence above (same ordering as
+// syncOfflineSaveFromIdb()'s async self-heal) - if this finds a code, handleIncomingJoinLink()
+// (§ CAPACITOR, top of file) takes it from here exactly like a ?join=CODE boot would have.
+if(IS_APP&&CAP.Plugins.App&&CAP.Plugins.App.getLaunchUrl){
+  CAP.Plugins.App.getLaunchUrl().then(r=>handleIncomingJoinLink(r&&r.url,true)).catch(()=>{});
 }
 </script>
 </body>

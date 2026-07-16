@@ -507,6 +507,31 @@ function json(status: number, obj: unknown): Response {
   });
 }
 
+// v0.14 § UNIVERSAL LINKS — protocol twin of server.js's matching section (see its comment
+// for the full rationale). Invite links are now https://play.nastyboardgame.com/join/CODE —
+// this is the live production server for that domain, so THIS is the copy that actually
+// matters for the AASA file Apple's CDN fetches; server.js's copy exists so local dev/tests
+// against the Node server behave identically.
+const TEAM_APP_ID = "YJU5U6VX8V.com.pangman.nasty";
+const AASA_BODY = JSON.stringify({
+  applinks: {
+    apps: [],
+    details: [{ appID: TEAM_APP_ID, appIDs: [TEAM_APP_ID], paths: ["/join/*"] }],
+  },
+});
+const JOIN_CODE_RE = /^\/join\/([A-Za-z0-9]{1,8})\/?$/;
+function joinRedirectHtml(code: string): string {
+  const safe = String(code).replace(/[^A-Za-z0-9]/g, "").slice(0, 8);
+  const dest = `https://nastyboardgame.com/?join=${encodeURIComponent(safe)}`;
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="refresh" content="0;url=${dest}">
+<title>Joining NASTY…</title></head>
+<body style="font-family:sans-serif;background:#0e3421;color:#fff;text-align:center;padding-top:40px">
+<p>Taking you to the game…</p>
+<script>location.replace(${JSON.stringify(dest)});</script>
+</body></html>`;
+}
+
 async function handleAdminRoute(req: Request, url: URL): Promise<Response> {
   if (!checkAdminToken(req, url)) return json(401, { error: "unauthorized" });
   const parts = url.pathname.split("/").filter(Boolean); // ["admin", ...]
@@ -1016,6 +1041,20 @@ async function handler(req: Request, info: Deno.ServeHandlerInfo): Promise<Respo
     let rooms = 0;
     for await (const _e of kv.list({ prefix: ["room"] })) rooms++;
     return json(200, { ok: true, rooms, uptime: Math.round(performance.now() / 1000), epoch: await getEpoch() });
+  }
+  if (url.pathname === "/.well-known/apple-app-site-association") {
+    // No CORS headers (Apple's CDN fetches this directly, not a browser) — content-type MUST
+    // be application/json despite the extension-less path, and this must NOT redirect.
+    return new Response(AASA_BODY, { status: 200, headers: { "content-type": "application/json" } });
+  }
+  {
+    const jm = url.pathname.match(JOIN_CODE_RE);
+    if (jm) {
+      return new Response(joinRedirectHtml(jm[1].toUpperCase()), {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }
   }
   if (url.pathname === "/leaderboard") {
     // v0.13: also reports the current leaderboard epoch via header, see "§ LEADERBOARD EPOCH".

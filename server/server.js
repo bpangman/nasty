@@ -469,6 +469,42 @@ function sendJson(res, status, obj) {
   res.writeHead(status, Object.assign({ "content-type": "application/json" }, CORS_HEADERS));
   res.end(JSON.stringify(obj));
 }
+// v0.14 § UNIVERSAL LINKS — invite links are now https://play.nastyboardgame.com/join/CODE
+// (this server, both here and the server.ts twin) instead of a plain ?join=CODE website URL,
+// so a phone with the app installed opens the APP directly instead of the website. Two routes:
+//   1. GET /.well-known/apple-app-site-association — Apple's CDN fetches this (over HTTPS,
+//      no redirects followed, expects `application/json` even with no file extension) to
+//      verify this domain is allowed to open com.pangman.nasty via Associated Domains. Both
+//      the legacy `appID` (singular) and current `appIDs` (array) keys are included for
+//      maximum compatibility — Apple's docs say either is accepted, some older OS versions
+//      only ever looked for the singular form.
+//   2. GET /join/:CODE — a real browser (no app installed, or a long-press "Open in Safari")
+//      lands here; this just instantly bounces it to the exact same website join flow that's
+//      always existed (nastyboardgame.com/?join=CODE), completely unchanged for anyone who
+//      doesn't have the app. When the app IS installed, iOS resolves the Universal Link and
+//      opens the app WITHOUT ever making this HTTP request at all — this route only ever
+//      serves the no-app fallback case.
+const TEAM_APP_ID = "YJU5U6VX8V.com.pangman.nasty";
+const AASA_BODY = JSON.stringify({
+  applinks: {
+    apps: [],
+    details: [{ appID: TEAM_APP_ID, appIDs: [TEAM_APP_ID], paths: ["/join/*"] }],
+  },
+});
+const JOIN_CODE_RE = /^\/join\/([A-Za-z0-9]{1,8})\/?$/;
+function joinRedirectHtml(code) {
+  // Escaped defensively even though codes only ever come from the no-vowels alphabet
+  // (BCDFGHJKMNPQRSTVWXZ) — this still passes through a raw URL path, don't trust it blindly.
+  const safe = String(code).replace(/[^A-Za-z0-9]/g, "").slice(0, 8);
+  const dest = `https://nastyboardgame.com/?join=${encodeURIComponent(safe)}`;
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="refresh" content="0;url=${dest}">
+<title>Joining NASTY…</title></head>
+<body style="font-family:sans-serif;background:#0e3421;color:#fff;text-align:center;padding-top:40px">
+<p>Taking you to the game…</p>
+<script>location.replace(${JSON.stringify(dest)});</script>
+</body></html>`;
+}
 // v0.9 § ADMIN — HTTP endpoints for god mode (list/edit/delete the global leaderboard,
 // rename any player in any room, delete a room). All require the admin token (see
 // checkAdminToken above) via an `X-Admin-Token` header or a `?token=` query param.
@@ -573,6 +609,21 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, Object.assign({ "content-type": "application/json" }, CORS_HEADERS));
     res.end(JSON.stringify({ ok: true, rooms: rooms.size, uptime: process.uptime(), epoch: leaderboardEpoch }));
     return;
+  }
+  if (url.pathname === "/.well-known/apple-app-site-association") {
+    // No CORS headers needed (Apple's CDN, not a browser fetch) — content-type MUST be
+    // application/json even though the path has no extension, and this must NOT redirect.
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(AASA_BODY);
+    return;
+  }
+  {
+    const jm = url.pathname.match(JOIN_CODE_RE);
+    if (jm) {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(joinRedirectHtml(jm[1].toUpperCase()));
+      return;
+    }
   }
   if (url.pathname === "/leaderboard") {
     // v0.9: public, read-only — powers the in-game leaderboard's "merged local+global" view.
