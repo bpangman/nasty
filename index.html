@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
-  NASTY - the Pangman family board game, digitized. v0.13.3.
+  NASTY - the Pangman family board game, digitized. v0.13.4.
   Single self-contained page, deployed on GitHub Pages (no login needed).
   Board geometry (Blake-verified): X/plus formation - the track wraps around each arm's
   safe row. Per segment (12 loop holes): your start -> 5 up your exit flank, the 5th being
@@ -678,12 +678,18 @@ button{font:inherit;cursor:pointer}
 @keyframes toastIn{from{opacity:0;transform:translateY(12px)}}
 /* v0.13.3 (Blake): turn prompts ("Your turn - tap a card", "Pick a tee to move", ...) moved out
    of #handInfo and INTO this same bubble (turnPrompt(), § UI) - one message surface instead of
-   two. When the prompt is for THIS screen's own action (.myTurn), the bubble pulses the exact
-   same gold glow #btnSkip.active uses (same skipGlow keyframes - deliberately shared, "combines
-   2 assets") so your turn is unmissable; passive prompts ("Waiting for Geri...") stay the plain
-   bubble. .turnPrompt itself is just a marker class (see clearTurnPrompt(), § TURNS). */
-.toast.myTurn{border-color:var(--gold);color:#ffe9a8;
-  animation:toastIn .25s ease-out,skipGlow .9s ease-in-out infinite}
+   two. When the prompt is for THIS screen's own action (.myTurn), the bubble gets a gold
+   treatment so your turn is unmissable; passive prompts ("Waiting for Geri...") stay the plain
+   bubble. .turnPrompt itself is just a marker class (see clearTurnPrompt(), § TURNS).
+   v0.13.4 (Blake: "you have it flashing when it's my turn but the skip button just has a gold
+   outline - make it like that instead"): dropped the pulsing skipGlow animation entirely - it
+   read as flashing, not as a steady "your turn" cue. Now mirrors #btnSkip's own enabled-but-
+   idle look exactly (§ STYLE, #btnSkip base rule above): same 2px gold border, same translucent
+   gold fill, same plain (non-glowing) drop shadow, same gold text - a steady outline, no motion.
+   #btnSkip.active's pulsing glow is unchanged (still means "a skip is actively running"); this
+   bubble no longer shares that animation, only the at-rest gold-outline look. */
+.toast.myTurn{border:2px solid var(--gold);background:rgba(244,197,66,.22);color:var(--gold);
+  box-shadow:0 6px 18px rgba(0,0,0,.45);animation:toastIn .25s ease-out}
 .overlay{position:fixed;inset:0;background:rgba(5,15,9,.9);z-index:80;display:flex;flex-direction:column;
   align-items:center;justify-content:center;padding:22px;text-align:center}
 .overlay h2{margin:16px 0 6px;font-size:26px}
@@ -800,7 +806,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.13.3</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.13.4</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
