@@ -1444,7 +1444,7 @@ wss.on("connection", (ws, req) => {
         const token = typeof msg.token === "string" ? msg.token.trim().slice(0, 512) : "";
         if (!token) return;
         p.pushToken = token;
-        p.pushPlatform = msg.platform === "ios" ? "ios" : "ios"; // only iOS ships right now - kept explicit for a future platform
+        p.pushPlatform = "ios"; // only iOS ships right now - a real value once a second platform ever exists
         touch(room);
         log("push token registered", room.code, "playerId=" + playerId);
         return;
