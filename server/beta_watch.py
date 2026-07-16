@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=bec37c5e-122c-46a0-89ea-6d2cfaac96dc&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=ba356a0b-3dd8-495b-8193-f281ffce338b&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
