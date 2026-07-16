@@ -1367,8 +1367,17 @@ let USER_SPEED=parseFloat(localStorage.getItem('nasty-speed')||'1');
 if(!SPEED_OPTS.some(o=>o[0]===USER_SPEED))USER_SPEED=1;
 let SKIP=false, skipSnap=null;
 let SPEED=1;
-function applySpeed(){ SPEED=(REDUCED?Math.max(USER_SPEED,6):USER_SPEED)*(SKIP?30:1); }
-applySpeed();
+// v0.15: online, table pacing is the SHARED NET.tableSpeed (host-controlled - see the § NET
+// comment block) instead of this device's own USER_SPEED. `NET` (a `const`, § NET) isn't
+// declared until much later in the script - referencing it here is only safe because this
+// function's BODY doesn't evaluate until it's actually CALLED, and nothing calls it before
+// boot() runs at the very bottom of the script, well after NET exists. The bootstrap call
+// that used to sit right here (immediately after the old NET-independent version) now lives
+// right after `const NET=...` instead - see that one call site, § NET.
+function applySpeed(){
+  const base=NET.online?NET.tableSpeed:USER_SPEED;
+  SPEED=(REDUCED?Math.max(base,6):base)*(SKIP?30:1);
+}
 
 /* --- tiny sound synth --- */
 let AC=null, muted=localStorage.getItem('nasty-muted')==='1';
@@ -2137,8 +2146,12 @@ function syncAll(){
   $('deckCount').textContent=G.deck.length;
   // v0.11.2 item 2: Skip's spot never empties anymore - toggle the real `disabled` attribute
   // (dims it + makes it non-interactive, see #btnSkip:disabled in § STYLE) instead of `.hidden`
-  // (which used to remove it from the row entirely). Same enablement rule as before, unchanged.
-  $('btnSkip').disabled=G.over||G.seats[G.turn].type!=='cpu';
+  // (which used to remove it from the row entirely). Same enablement rule as before, unchanged
+  // offline. v0.15 (Blake, 2026-07-15): no Skip button in online games, period - always
+  // disabled/dimmed online, regardless of whose turn it is (see the big § NET comment and
+  // $('btnSkip').onclick above for the full reasoning; the interactive Skip button is
+  // unrelated to and doesn't affect the INSTANT reconnect catch-up mechanism).
+  $('btnSkip').disabled=NET.online||G.over||G.seats[G.turn].type!=='cpu';
 }
 function cardHTML(card){
   const red=card.s==='♥'||card.s==='♦';
@@ -2507,7 +2520,10 @@ function clearTurnPrompt(){
 // #btnSkip.active's box-shadow animation, § STYLE) so "a skip is running" is still obvious, just
 // without touching layout. Verified zero overlap with a 2-line toast at 320x568 and 390x844.
 function startSkip(){
-  if(SKIP||!G||G.over)return;
+  // v0.15 (Blake, 2026-07-15): no interactive Skip in online games - see the big § NET
+  // comment and $('btnSkip').onclick for the full reasoning. Belt-and-suspenders guard here
+  // too, in case anything else ever calls startSkip() directly.
+  if(NET.online||SKIP||!G||G.over)return;
   SKIP=true; applySpeed();
   skipSnap=G.pieces.map(ps=>ps.map(p=>({state:p.state,steps:p.steps})));
   $('btnSkip').classList.add('active');
@@ -2551,11 +2567,13 @@ function endCatchup(){
   INSTANT=false; endSkip();
   const ws=CATCHUP_WAITERS; CATCHUP_WAITERS=[]; ws.forEach(w=>w());
 }
-// v0.10.2: resolves once catch-up is GENUINELY done (INSTANT has actually cleared), not just
-// once bootGameFromNetwork()'s own synchronous setup has returned - the real replay runs
-// async across many runTurn() calls after that. Used by the reunion lobby (§ REUNION) so
-// "you're back!" / the green presence dot / the host's Resume button never appear before this
-// client has actually caught its OWN G up to the live board - see onSync()'s comment.
+// v0.10.2, narrowed in scope by v0.15's snapshot-based reconnect: resolves once catch-up is
+// GENUINELY done (INSTANT has actually cleared), not just once bootGameFromSnapshot()'s own
+// synchronous setup has returned - a small live-race window (see the big § NET comment) can
+// still take a moment to drain, async, across a few runOnlineTurnLoop() iterations after that.
+// Used by the reunion lobby (§ REUNION) so "you're back!" / the green presence dot / the
+// host's Resume button never appear before this client has actually caught its OWN G up to
+// the live board - see onSync()'s comment.
 function waitForCatchup(){
   return new Promise(res=>{ if(!INSTANT){ res(); return; } CATCHUP_WAITERS.push(res); });
 }
@@ -2764,38 +2782,30 @@ async function syncOfflineSaveFromIdb(){
   }catch(e){}
 }
 
+// v0.15: doDeal() is now OFFLINE-ONLY (pass-and-play / solo vs-CPU) - it's called exclusively
+// from runTurnInner()'s offline body, which is only ever reached when NET.online is false (see
+// runTurnInner()'s NET.online guard). The ONLINE equivalent is applyDealAction() (§ NET) -
+// applied from server-decided fields (dealer, reshuffled, the actual dealt cards, deckCount)
+// instead of shuffling/dealing locally. The old NET.online branch that used to live inside this
+// function (host generates+broadcasts a reshuffle, everyone else armReshuffleWait()s) is GONE -
+// under server authority there is no client-side reshuffle generation anywhere anymore, host or
+// otherwise. Every line below is the ORIGINAL offline logic, unchanged in behavior.
 async function doDeal(){
   const myGen=NETGEN;   // see NETGEN comment above
   // v0.12.1 fix (Blake): a stale toast (e.g. a bow-out message, or "Welcome back") could
   // survive PAST the next deal - the comment above toast() assumed "every doDeal() call
   // always calls toast() itself, which replaces whatever's showing" was an unconditional
-  // guarantee, but toast() silently no-ops whenever SKIP||INSTANT is true (see toast()) - most
-  // visibly during a reconnect's INSTANT catch-up, where EVERY deal in the replayed backlog is
-  // suppressed, so a bubble set before the disconnect could still be sitting there hands later
-  // once catch-up ends and live play resumes. Blake's rule: a bubble that hasn't been replaced
-  // by the time the next deal completes gets cleared then, no exceptions - so clear the band
-  // HERE, unconditionally, before anything else in this deal (including the reshuffle branch's
-  // own toast below) has a chance to run. When the deal's own toast() call isn't suppressed, it
-  // still shows normally right after - this only removes what would otherwise be a stale
-  // leftover from a previous hand.
+  // guarantee, but toast() silently no-ops whenever SKIP is true (see toast()) - Blake's rule:
+  // a bubble that hasn't been replaced by the time the next deal completes gets cleared then,
+  // no exceptions - so clear the band HERE, unconditionally, before anything else in this deal
+  // (including the reshuffle branch's own toast below) has a chance to run. When the deal's own
+  // toast() call isn't suppressed, it still shows normally right after - this only removes what
+  // would otherwise be a stale leftover from a previous hand.
   clearToasts();
   G.dealSeq++;
   G.bowedOut=G.seats.map(()=>false);   // fresh hand - everyone's back in (RULES.md 2026-07-08)
   if(G.schedRound>=G.schedule.length){
-    // reshuffling draws new randomness - online, only the HOST generates it and broadcasts
-    // the resulting deck order; every client (host included) applies the same array so
-    // hands stay identical everywhere. Offline this is just a local shuffle, unchanged.
-    let deckArr,newDealer;
-    if(!NET.online){
-      deckArr=freshDeck(); newDealer=(G.dealer+1)%G.n;
-    }else{
-      const waitP=armReshuffleWait();
-      if(NET.isHost){
-        const d=freshDeck(), nd=(G.dealer+1)%G.n;
-        netSend({type:'action',action:{kind:'reshuffle',deck:d,dealer:nd}});
-      }
-      const r=await waitP; if(myGen!==NETGEN)return; deckArr=r.deck; newDealer=r.dealer;
-    }
+    const deckArr=freshDeck(), newDealer=(G.dealer+1)%G.n;
     G.deck=deckArr; G.discard=[]; G.schedRound=0;
     G.dealer=newDealer; G.turn=(G.dealer+1)%G.n;
     positionDeck(G.dealer,true);                          // slide the deck over to the new dealer
@@ -2816,11 +2826,6 @@ async function doDeal(){
   await animateDeal(k);
   if(myGen!==NETGEN)return;
   syncAll(); renderHandFor(visibleHandSeat());
-  // Integrity guard: see runStateCheck(), § TURNS. Was per-deal only (dealSeq) until v0.10.2;
-  // now keyed off G.actionSeq (still just once here, at the deal boundary - the finer-grained
-  // per-kick/swap trigger lives in performMove()) so both triggers share one checkpoint slot
-  // with no wire-protocol change (the server only ever relays an opaque {seq,digest} pair).
-  if(NET.online)runStateCheck();
 }
 // v0.15: seatsWithCards()/handOver() moved verbatim into the extracted engine block (see
 // "§ TURN DECISIONS", right after § ENGINE) - same global functions, defined earlier in the
@@ -2852,7 +2857,7 @@ async function handleTurnLoopError(e){
     if(now-lastImpossibleStateResyncAt<2000)return;
     lastImpossibleStateResyncAt=now;
     if(NET.ws&&NET.ws.readyState===1)
-      netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token});
+      netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token,protocolVersion:PROTOCOL_VERSION});
     else scheduleReconnect();
   }else if(G&&!G.over){
     toast('Something went wrong with that move - try Menu → Resume, or reload the page.',5000);
@@ -2892,9 +2897,10 @@ async function performMoveInner(seat,m,cardEl){
   const kicked=m.kick?{seat:m.kick.seat,pi:m.kick.pi,pos:teePos(m.kick.seat,m.kick.pi)}:null;
   const preSnug=G.pieces[owner].map((_,i)=>isSnug(owner,i));
   applyMove(seat,m);   // may throw ImpossibleStateError (swap guard) - caught by the wrapper above
-  // Integrity guard, widened v0.10.2: check more often than once per deal for exactly the two
-  // action types most likely to expose a drifted piece (see runStateCheck()'s comment).
-  if(NET.online&&(kicked||m.type==='swap'))runStateCheck();
+  // v0.15: the server now originates the post-kick/swap integrity digest itself (see
+  // server.js's maybeStateCheck(), called right after applyMove() for exactly these two action
+  // types) - this client just waits for the resulting 'stateCheck' broadcast, same as always
+  // (see checkStateDigest()/maybeResolvePendingStateCheck(), § NET). Nothing to trigger here.
   const elm=$(`tee-${owner}-${m.pi}`);
   if(m.type==='enter'){
     sEnter();
@@ -2966,28 +2972,16 @@ async function runTurn(){
 // the loop gets its own fresh try/catch, not just the first one.
 async function runTurnInner(){
   if(!G||G.over)return;
-  const myGen=NETGEN;   // see NETGEN comment above - abort quietly if a reconnect replay supersedes us
-  // Root-cause fix, v0.10.2 (the save/quit/reload/resume desync+freeze Blake hit 2026-07-12):
-  // INSTANT catch-up must end the MOMENT there's no more real history left to replay - not
-  // just the next time armMoveWait()/armReshuffleWait() happen to find their backlog empty.
-  // Deterministic no-network-needed transitions (a bow-out chain: everyone-but-me already
-  // bowedOut, or reaching MY OWN seat's turn) never go through either of those functions, so
-  // without this check a reconnecting client could keep calling runTurn()->runTurn() under
-  // INSTANT indefinitely - sailing straight past a pause the room requested (e.g. the regroup
-  // lobby's force-pause on resume) because the pause gate right below is explicitly skipped
-  // while INSTANT is true. That's exactly how a returning player's client could silently race
-  // ahead of the live board: it marches through a string of bow-outs the OTHER (paused, holding)
-  // clients never got to, lands on "my own turn" at a turn NUMBER nobody else has reached yet,
-  // and arms its own hand for a tap against that phantom-future state - the seam a later Jack
-  // trade or any other action can then desync against. Ending catch-up here, before the pause
-  // gate and before any bow-out/hand-arming decision gets made, means the very next check of
-  // G.paused (right below, same call) correctly holds at exactly the same point every OTHER
-  // client is already holding at.
-  if(NET.online&&INSTANT&&NET.actionQueue.length===0)endCatchup();
-  // Pause gate (v0.8): holds here - between turns, never mid-move - until someone resumes.
-  // Skipped during INSTANT catch-up so a reconnecting phone can always finish its silent
-  // replay regardless of the room's current pause state (see pauseGate() comment above).
-  if(G.paused&&!INSTANT){ await pauseGate(); if(myGen!==NETGEN||!G||G.over)return; }
+  // v0.15: an ONLINE turn is now driven entirely by runOnlineTurnLoop() (§ NET) - the server
+  // is authoritative, decides every deal/bow-out/CPU-move itself, and pushes an action stream;
+  // this function (and doDeal()/passTurn(), which it calls) is OFFLINE/pass-and-play ONLY from
+  // here down. Every line below this guard is the ORIGINAL offline logic, byte-for-byte
+  // unchanged - see HANDOFF.md "v0.15" for the full before/after and why this split is safe
+  // (the offline soak-test recipe was re-run before and after to confirm bit-identical
+  // behavior).
+  if(NET.online)return;
+  const myGen=NETGEN;   // see NETGEN comment above
+  if(G.paused){ await pauseGate(); if(myGen!==NETGEN||!G||G.over)return; }
   NET.moveSentForTurn=false;   // fresh turn attempt - the double-tap guard re-arms (see commitMove)
   scheduleSaveOffline();   // v0.8: cheap debounced snapshot after every turn-loop entry
   fadeAllDiscards();                                                 // clear stale played-card visuals each turn
@@ -3013,16 +3007,11 @@ async function runTurnInner(){
   const moves=legalMoves(seat);
   const assist=actingOwner(seat)!==seat;
   if(SKIP&&seatCfg.type==='human'){
-    // Skip the WHOLE hand, not just one turn: a local seat (offline, or an online seat
-    // owned by this phone) only stops the fast-forward once it actually has a legal move
-    // to make - with no legal move it auto-passes below and skip rolls straight through,
-    // same as a CPU turn. A remote human's pending turn can never be skipped past (their
-    // move has to arrive over the network), so it always stops skip here, same as before -
-    // this also keeps the reconnect catch-up fast-forward (which reuses SKIP) unaffected.
-    // (A bowed-out seat's turn returns above before reaching here, so a bowed-out human -
-    // local or remote - never stops a skip; it needs no input either way.)
-    const localSeat=!NET.online||NET.mySeat===seat;
-    if(!localSeat||moves.length>0)endSkip();
+    // Skip the WHOLE hand, not just one turn: stops the fast-forward once THIS seat actually
+    // has a legal move to make - with no legal move it auto-passes below and skip rolls
+    // straight through, same as a CPU turn. (A bowed-out seat's turn returns above before
+    // reaching here, so a bowed-out human never stops a skip; it needs no input either way.)
+    if(moves.length>0)endSkip();
   }
   if(seatCfg.type==='cpu'){
     renderHandFor(visibleHandSeat());
@@ -3036,21 +3025,12 @@ async function runTurnInner(){
       if(myGen!==NETGEN)return;
       advance(); return runTurn();
     }
-    if(!NET.online){
-      const m=chooseAI(seat,moves);
-      return performMove(seat,m,null);
-    }
-    // online: only the HOST computes the CPU's move; every client (host included) waits
-    // for the broadcast so all boards apply the exact same move in the exact same order.
-    const waitP=armMoveWait(seat);
-    if(NET.isHost){ const m=chooseAI(seat,moves); netSend({type:'action',action:{kind:'move',seat,m}}); }
-    const m=await waitP;
-    if(myGen!==NETGEN)return;
+    const m=chooseAI(seat,moves);
     return performMove(seat,m,null);
   }
   // human with nothing to play: bows out for the rest of this hand, no clicking needed - this
-  // is deterministic (same hand everywhere), so every client reaches it independently, no
-  // network round-trip needed.
+  // is deterministic (same hand everywhere), so every LOCAL device reaches it independently -
+  // safe offline since there's only ever one device's clock to race against.
   if(moves.length===0){
     G.bowedOut[seat]=true;
     renderHandFor(visibleHandSeat());
@@ -3061,53 +3041,13 @@ async function runTurnInner(){
     if(myGen!==NETGEN)return;
     advance(); return runTurn();
   }
-  if(!NET.online){
-    if(G.humanCount>1)await passDeviceGate(seat);
-    renderHandFor(seat);
-    // v0.13.3: the old separate assist TOAST ("you're home - these cards move X's tees!") is
-    // gone - prompts and updates share one bubble now, so it would've been replaced before it
-    // was ever readable. The assist prompt itself carries the message instead.
-    turnPrompt(assist?`You're home - play a card for ${G.seats[actingOwner(seat)].name}, ${seatCfg.name}`:`Your turn, ${seatCfg.name} - tap a card`,true);
-    enableSelection(seat,moves);
-    return;
-  }
-  // online: no pass-the-phone - each seat is its own device. Only that seat's own phone
-  // shows/enables the hand; everyone else (including this same seat's other viewers, if
-  // any) just waits for the move to come over the network.
-  //
-  // Backlog race (fix, v0.9 - found during production-style reconnect/self-heal soak
-  // testing): armMoveWait(seat) has two very different ways to resolve - (a) it finds this
-  // seat's move ALREADY sitting in NET.actionQueue (arrived early, e.g. this phone's own
-  // earlier move whose echo was queued while several OTHER seats' turns played out first)
-  // and resolves practically instantly, or (b) nothing's queued yet, so it hands back a
-  // pending promise and genuinely waits live. For MY OWN seat specifically, the old code
-  // called enableSelection() (arming the hand for a NEW tap) unconditionally, in BOTH
-  // cases - so case (a) could arm a fresh tap target for a turn that was actually about to
-  // be completed by the ALREADY-QUEUED backlog action a moment later. If a tap (or, at test
-  // speed, this same seat's own driver) landed in that window, TWO actions went out for the
-  // same turn-arming cycle: the queued one and the fresh tap. Both are individually "valid"
-  // sends (same NETGEN, same not-yet-sent moveSentForTurn), so nothing in the existing
-  // double-tap/CUR_GEN guards catches it - but the SECOND one, once actually applied (after
-  // the first already spliced a card out of the hand), indexes into a hand that's already
-  // shifted, producing exactly the "cardHTML: Cannot read properties of undefined" crash
-  // that poisoned the shared action log for every phone at the table. Fixed: only arm the
-  // hand for a fresh tap when nothing for this seat is ALREADY sitting in the backlog -
-  // peek the queue before deciding, same information armMoveWait itself is about to use.
-  const alreadyQueued=NET.actionQueue.some(e=>e.action.kind==='move'&&e.action.seat===seat);
-  const waitP=armMoveWait(seat);
-  if(NET.mySeat===seat&&!alreadyQueued){
-    renderHandFor(seat);
-    // v0.13.3: same one-bubble fold as the offline branch above - see that comment.
-    turnPrompt(assist?`You're home - play a card for ${G.seats[actingOwner(seat)].name}, ${seatCfg.name}`:`Your turn, ${seatCfg.name} - tap a card`,true);
-    enableSelection(seat,moves);
-  }else{
-    renderHandFor(visibleHandSeat());
-    turnPrompt(NET.mySeat===seat?'Catching up…':`Waiting for ${seatCfg.name}…`,false);
-  }
-  const m=await waitP;
-  if(myGen!==NETGEN)return;
-  const ce=NET.mySeat===seat?NET.pendingCardEl:null; NET.pendingCardEl=null;
-  return performMove(seat,m,ce);
+  if(G.humanCount>1)await passDeviceGate(seat);
+  renderHandFor(seat);
+  // v0.13.3: the old separate assist TOAST ("you're home - these cards move X's tees!") is
+  // gone - prompts and updates share one bubble now, so it would've been replaced before it
+  // was ever readable. The assist prompt itself carries the message instead.
+  turnPrompt(assist?`You're home - play a card for ${G.seats[actingOwner(seat)].name}, ${seatCfg.name}`:`Your turn, ${seatCfg.name} - tap a card`,true);
+  enableSelection(seat,moves);
 }
 function passDeviceGate(seat){
   return new Promise(res=>{
@@ -3283,22 +3223,53 @@ function clearSelection(keepTurn){
 }
 
 /* ============================= § NET (online multiplayer) =============================
-   Deterministic lockstep over a dumb relay server (see /server/server.js). The server
-   never touches game rules - it just hands out room codes, relays every action to every
-   phone in the room in order, and remembers the log so a reconnecting phone can catch up.
-   Every phone runs the SAME §ENGINE/§TURNS code against its OWN copy of G; the only things
-   that ever cross the wire are: the game's starting seed (shuffled deck + dealer, chosen
-   once by the host), CPU move choices (host only), reshuffle decks (host only), and each
-   human seat's chosen move (captured only on the phone that owns that seat). Everyone else
-   just waits for those to arrive, then runs them through the normal applyMove/animation
-   path - so every animation works online exactly like it does offline. */
+   v0.15 SERVER-AUTHORITATIVE REBUILD - supersedes the v0.7-v0.14 "deterministic lockstep over
+   a dumb relay" design entirely. See HANDOFF.md's "v0.15" section for the full writeup,
+   including the bug report that forced this rebuild (a backgrounded HOST phone used to stall
+   CPU turns/reshuffles for the WHOLE ROOM, since only the host ever generated them) and the
+   exact wire-protocol diff. Short version:
+
+   The SERVER (server/server.js, mirrored in server/cloud/server.ts) now holds the one
+   authoritative copy of `G` per room, running the EXACT SAME rules code this file does (see
+   server/engine.js, mechanically extracted from the "NASTY ENGINE EXTRACT" markers above - one
+   authored copy of the rules, not two hand-maintained ones). It shuffles/deals, validates and
+   applies every human move, runs every CPU turn itself, decides every bow-out and the
+   whole-table-stuck throw-in, and pushes the resulting action stream (`deal`/`move`/`pass`) to
+   every phone in the room. NO client - host included - ever generates a CPU move, a reshuffle
+   deck, or a bow-out decision anymore; every phone is a pure RENDERER of the server's action
+   stream, applying each action through the EXISTING performMove()/animateDeal() pipeline (see
+   applyServerAction()/runOnlineTurnLoop() below) - the same pipeline offline/pass-and-play
+   already uses, so every animation looks identical online and off. A phone only ever
+   ORIGINATES one thing: its own seat's chosen move, submitted for server validation.
+
+   Reconnect (a locked phone, a dropped socket, a "Resume Saved Game" tile tap) hands back a
+   full snapshot of the server's `G` instead of a log to replay - the client just SETS G
+   directly (bootGameFromSnapshot() below), the same "no replay needed, this IS the current
+   state" idea resumeOfflineGame() already used for offline saves. This means reconnect cost
+   never grows with a game's length, and it retires almost all of the historical INSTANT/
+   NETGEN-race bug class (see HANDOFF.md v0.7.4/v0.9/v0.10.2) at the root, since there's no
+   longer a long replay for a stale call chain to race against - NETGEN is kept only for the
+   (now much smaller) live-race window between "a fresh snapshot just landed" and "the old
+   consumer loop notices and stops."
+
+   Table pacing is a SHARED setting now (NET.tableSpeed, host-controlled, synced via the
+   server - see "tableSpeed" in handleNetMessage) instead of each phone's own local SPEED
+   choice - Blake explicitly rejected per-viewer pacing (2026-07-15): everyone at an online
+   table sees the same action stream animated at the same speed. The offline/pass-and-play
+   local speed picker (§ UTIL's USER_SPEED/applySpeed) is completely unchanged. */
+const PROTOCOL_VERSION=2;
 const NET={
   ws:null, online:false, isHost:false, wantConnection:false,
   code:null, playerId:null, token:null, mySeat:-1,
   lobby:null, seatOwners:null, hostConnected:true,
   connected:false, reconnecting:false, backoff:1000,
-  actionQueue:[], waiters:{move:{},reshuffle:null}, pendingCardEl:null,
-  pendingStateCheck:null,   // {seq,digest} - see gDigest/runStateCheck's integrity guard
+  actionQueue:[], pendingActionResolvers:[], pendingCardEl:null,
+  pendingStateCheck:null,  // {afterSeq,digest} - see checkStateDigest()'s integrity guard
+  appliedSeq:-1,           // v0.15: broadcast seq of the last action this client has fully
+                           // applied (set in runOnlineTurnLoop) - the checkpoint key for the
+                           // integrity digest, NOT G.actionSeq (see checkStateDigest()'s
+                           // comment for why G.actionSeq is ambiguous for this purpose)
+  tableSpeed:1,            // v0.15: shared table pacing - see applySpeed(), § UTIL
   silentRejoin:false,   // v0.8: true only during boot()'s no-URL-param auto-rejoin attempt -
                         // see 'rejoinError' above and boot()/tryJoinOrRejoin() below
   moveSentForTurn:false,   // v0.8: double-tap guard - see commitMove()
@@ -3312,18 +3283,18 @@ const NET={
   reunionOpen:false,       // v0.9: true while the reunion lobby overlay is on screen.
 };
 window.NET=NET; // exposed for testing/debugging, same spirit as window.G/window.LAY
-/* Reconnect concurrency guard (fix, 2026-07-09): bootGameFromNetwork() fully replaces `G`
-   and restarts runTurn() on every rejoin/sync - including a brief reconnect on an otherwise-
-   live tab (phone locked a few seconds, wifi blip), NOT just a fresh page load. If an OLDER
-   runTurn()/performMove() call chain was suspended mid-await (mid-animation, or waiting on a
-   plain timer - network waiters are already safely orphaned by the fresh NET.waiters object)
-   when that happened, it used to resume later and mutate the NEW `G` with stale data (a move
-   or kick computed against the board as it looked BEFORE the replay) - and performMove() even
-   calls advance()+queueMicrotask(runTurn) at the end, so a stale chain could spawn a second
-   competing turn loop. That's exactly the shape of bug that produces a silent double-occupied
-   hole and a wrong/missing kick. Every live call captures NETGEN at entry and re-checks it
-   after each await; a mismatch means a newer replay has already superseded it, so it aborts
-   quietly instead of touching the new G. */
+applySpeed();   // v0.15: the real bootstrap call - deferred to here from § UTIL now that
+                // applySpeed() reads NET.online/NET.tableSpeed; NET.online is false at boot,
+                // so this produces the exact same initial SPEED value as before.
+/* Reconnect concurrency guard (fix, 2026-07-09; narrowed in scope by v0.15's snapshot-based
+   reconnect, see the big § NET comment above). bootGameFromSnapshot()/bootGameFromNetwork()
+   bump this on every (re)boot; every live async call chain (runOnlineTurnLoop, performMove,
+   the offline runTurnInner) captures NETGEN at entry and re-checks it after each await, aborting
+   quietly on a mismatch instead of touching a G a newer boot has already replaced. Before
+   v0.15 this guarded against a whole game's worth of history being replayed while a stale
+   chain from before the reconnect was still mid-await; now that reconnect is a direct
+   snapshot-set with no replay, the remaining race window is tiny (the moment between a fresh
+   snapshot landing and an old consumer loop noticing) but the guard costs nothing to keep. */
 let NETGEN=0;
 window.getNetGen=()=>NETGEN;   // debug/test hook, same pattern as getSelState/getCurGen
 function resolveWsUrl(){
@@ -3361,28 +3332,42 @@ function gDigest(){
   for(let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,0x01000193); }
   return (h>>>0).toString(36);
 }
-/* Integrity guard (fix, 2026-07-09; widened v0.10.2). Originally fired once per deal, keyed on
-   dealSeq - for an online game mid-hand, a silent drift could sit undetected for up to a whole
-   hand's worth of turns before the next checkpoint caught it. v0.10.2 re-keys the SAME
-   mechanism onto G.actionSeq (counts every real move/swap, game-lifetime - see applyMove()) and
-   calls it a second time, from performMove(), right after any kick or Jack swap - the two
-   action types most likely to touch a piece whose state might have quietly diverged (see the
-   ImpossibleStateError guard in applyMove() for the other half of this fix). One shared pending
-   slot, one wire message shape ({type:'stateCheck',seq,digest} - unchanged, no server update
-   needed): the host computes+broadcasts a digest tagged with ITS OWN current actionSeq;
-   every OTHER client compares its OWN digest once ITS OWN actionSeq reaches that same number
-   (not at message-arrival time - phones don't render at the same real-world speed), silently
-   re-syncing (the same rejoin path a real reconnect uses) on a mismatch. No popup, no
-   interruption - this is pure defense in depth: the save/quit/reload/resume desync's actual
-   root cause is fixed at the source (see the INSTANT/pause-catchup comment in runTurn()); this
-   is the backstop for anything else that might someday cause the same shape of drift. */
-function runStateCheck(){
-  if(!NET.online||!G)return;
-  if(NET.isHost)netSend({type:'stateCheck',seq:G.actionSeq,digest:gDigest()});
-  if(NET.pendingStateCheck&&NET.pendingStateCheck.seq===G.actionSeq){
-    if(NET.pendingStateCheck.digest!==gDigest())
-      netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token});
+/* Integrity guard (fix, 2026-07-09; widened v0.10.2; SERVER-ORIGINATED as of v0.15). The
+   server now computes+broadcasts this digest itself (see server.js's maybeStateCheck(), called
+   after every deal and after every kick/Jack-swap move) instead of relying on the host's
+   phone's opinion - there's no more "host" special case here at all, and the digest is now
+   unambiguously canonical (it's a straight read of the actual authoritative G, not one
+   client's best guess).
+   Checkpoint key, v0.15 bug fix (found via instrumented reproduction): this USED to key off
+   G.actionSeq - but actionSeq only increments on a real MOVE (see applyMove(), § ENGINE);
+   'pass' and 'deal' actions leave it unchanged. A client could reach the SAME actionSeq value
+   via an earlier move and compare immediately, before it had actually applied the LATER
+   same-actionSeq 'pass'/'deal' actions still sitting in NET.actionQueue - a deterministic
+   false-positive mismatch, not a rare race (this was most of the "frequent but self-healing
+   resyncs" observed in early testing). Fixed: the server now tags the digest with `afterSeq`,
+   the monotonic BROADCAST sequence number of the specific action it was computed right after
+   (unique per action of ANY kind - deal/move/pass all consume one). The client compares once
+   it's actually APPLIED that many broadcast actions (NET.appliedSeq, incremented in
+   runOnlineTurnLoop right after each action is applied - see § NET), not once some unrelated
+   field happens to numerically match. */
+function checkStateDigest(afterSeq,digest){
+  if(!G)return;
+  if(NET.appliedSeq===afterSeq){
+    if(gDigest()!==digest)netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token,protocolVersion:PROTOCOL_VERSION});
     NET.pendingStateCheck=null;
+  }else if(NET.appliedSeq<afterSeq){
+    NET.pendingStateCheck={afterSeq,digest};
+  }
+}
+// Called after every applied server action (see runOnlineTurnLoop) so a digest that arrived
+// slightly AHEAD of this client's own progress (NET.pendingStateCheck) gets compared the
+// moment this client's NET.appliedSeq actually catches up to it, not just at arrival time.
+function maybeResolvePendingStateCheck(){
+  if(!G||!NET.pendingStateCheck)return;
+  if(NET.appliedSeq>=NET.pendingStateCheck.afterSeq){
+    const {afterSeq,digest}=NET.pendingStateCheck;
+    NET.pendingStateCheck=null;
+    checkStateDigest(afterSeq,digest);
   }
 }
 function updateNetChip(){
@@ -3412,39 +3397,29 @@ function scheduleReconnect(){
   NET.reconnecting=true; updateNetChip();
   setTimeout(()=>{
     connectWs().then(()=>{
-      netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token});
+      netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token,protocolVersion:PROTOCOL_VERSION});
     }).catch(()=>{ NET.reconnecting=false; scheduleReconnect(); });
   },Math.min(NET.backoff,8000));
   NET.backoff=Math.min(NET.backoff*1.7,8000);
 }
-/* an incoming move/reshuffle either resolves someone who's already waiting for it (the
-   normal live-play case) or, if nobody's waiting yet (mid reconnect catch-up, or a rare
-   ordering race), gets queued so the next arm*Wait() call picks it straight up. */
+/* v0.15: a single generic FIFO queue replaces the old per-kind/per-seat armMoveWait()/
+   armReshuffleWait() waiters - the server now produces ONE strictly-ordered, fully
+   authoritative action stream (deal/move/pass), so the client's whole job is "consume the
+   next action, apply it, repeat" (see runOnlineTurnLoop() below), regardless of kind. An
+   incoming action either resolves whoever's already waiting for "the next one" or, if nobody's
+   waiting yet (a rare ordering race - the action arrived before the loop got back around to
+   asking for it), gets queued so the next nextAction() call picks it straight up. */
 function feedAction(entry){
-  const action=entry.action;
-  if(action.kind==='move'){
-    const w=NET.waiters.move[action.seat];
-    if(w){ delete NET.waiters.move[action.seat]; w(action.m); return; }
-  }else if(action.kind==='reshuffle'){
-    if(NET.waiters.reshuffle){ const w=NET.waiters.reshuffle; NET.waiters.reshuffle=null; w(action); return; }
-  }
   NET.actionQueue.push(entry);
-}
-function armMoveWait(seat){
-  for(let i=0;i<NET.actionQueue.length;i++){
-    const e=NET.actionQueue[i];
-    if(e.action.kind==='move'&&e.action.seat===seat){ NET.actionQueue.splice(i,1); return Promise.resolve(e.action.m); }
+  while(NET.actionQueue.length&&NET.pendingActionResolvers.length){
+    const res=NET.pendingActionResolvers.shift();
+    res(NET.actionQueue.shift());
   }
-  endCatchup(); // if we were fast-forwarding through reconnect history, we've now caught up to live
-  return new Promise(res=>{ NET.waiters.move[seat]=res; });
 }
-function armReshuffleWait(){
-  for(let i=0;i<NET.actionQueue.length;i++){
-    const e=NET.actionQueue[i];
-    if(e.action.kind==='reshuffle'){ NET.actionQueue.splice(i,1); return Promise.resolve(e.action); }
-  }
-  endCatchup();
-  return new Promise(res=>{ NET.waiters.reshuffle=res; });
+function nextAction(){
+  if(NET.actionQueue.length)return Promise.resolve(NET.actionQueue.shift());
+  endCatchup(); // if we were fast-forwarding through a small reconnect race, we've now caught up to live
+  return new Promise(res=>{ NET.pendingActionResolvers.push(res); });
 }
 /* Double-tap guard (fix, v0.8, 2026-07-09): online, commitMove() only SENDS the move - it
    doesn't apply until the server's echo comes back, and the hand UI stays armed (CUR_MOVES
@@ -3479,20 +3454,21 @@ function resetNetUiFlow(){
   $('roomOverlay').classList.add('hidden');
   $('joinOverlay').classList.add('hidden');
 }
-function bootGameFromNetwork(action,isReconnect){
-  NETGEN++;   // invalidate any runTurn()/performMove() chain left over from before this (re)boot
-  // Also immediately disarm any locally-armed hand from before this (re)boot (fix, v0.9 - see
-  // the CUR_GEN comment in enableSelection()/commitMove()): CUR_GEN!==NETGEN alone already
-  // blocks a stale commit from doing anything, but clearing CUR_MOVES/CUR_SEAT here too means
-  // the OLD hand isn't left looking tappable for the brief instant before runTurn() re-renders
-  // the new one - belt and suspenders, not just a silent no-op.
+// v0.15: LIVE game start only (the 'gameAction' handler's action.kind==='start' case, i.e.
+// this phone was already sitting in the room when the host tapped Start). A RECONNECT/rejoin/
+// reclaim now goes through bootGameFromSnapshot() below instead - see the big § NET comment
+// above for why a snapshot replaces log replay. `action.deck` is always `[]` (the server holds
+// the real deck now - see newGame()'s seed.deck handling, § STATE, which already treats an
+// empty array as "no local deck, don't call freshDeck()").
+function bootGameFromNetwork(action){
+  NETGEN++;   // invalidate any loop/animation chain left over from before this (re)boot
   CUR_MOVES=[]; CUR_SEAT=-1; SEL=null;
   const cols=action.n===4?COLORS4:COLORS6;
   const seats=action.seats.map((s,i)=>({name:s.name,type:s.type,diff:s.diff,color:cols[i]}));
-  LAY=buildLayout(action.n,computeViewSeat(action.n,seats));   // v0.12: NET.mySeat is already
-  // set by the time this runs (onSync()/the 'gameAction' handler both set it before calling
-  // bootGameFromNetwork - see the two call sites), so computeViewSeat() picks it up via NET.online.
+  LAY=buildLayout(action.n,computeViewSeat(action.n,seats));
   newGame({n:action.n,teams:action.teams,seats},{deck:action.deck,dealer:action.dealer});
+  NET.tableSpeed=action.tableSpeed||1;
+  NET.appliedSeq=0;   // v0.15: the 'start' action is always broadcast seq 0 - see checkStateDigest()'s comment
   saveLastRoom(NET.code,true);   // v0.8: remember this is a STARTED game - see boot()'s silent auto-rejoin
   resetNetUiFlow();
   $('menu').classList.add('hidden');
@@ -3502,44 +3478,210 @@ function bootGameFromNetwork(action,isReconnect){
   drawBoard(); buildTable(); fitBoard(); setTimeout(fitBoard,50);
   window.G=G; window.LAY=LAY;
   updateNetChip();
-  if(isReconnect&&NET.actionQueue.length){ startSkip(); INSTANT=true; }   // fix, 2026-07-09:
-  // catch-up must be INVISIBLE, not just fast - see INSTANT comment up top. startSkip() alone
-  // (the interactive ⏩ Skip button's mechanism) still plays every animation, just compressed;
-  // for a long reconnect history that's still a visible, audible replay of the whole game
-  // ("made me watch every move over again" - Blake, 2026-07-09). INSTANT snaps everything
-  // straight to its end state with no visual/audio at all; endSkip() (called automatically
-  // once the catch-up queue drains and we're back to live play) clears it.
-  if(!isReconnect)toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts`,2600);
-  runTurn();
+  toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts`,2600);
+  runOnlineTurnLoop();
+}
+// v0.15: RECONNECT/rejoin/reclaim path - installs the server's authoritative `G` snapshot
+// DIRECTLY, with no replay at all (this IS the current state, not a log to catch up through -
+// the same "inherently instant" idea resumeOfflineGame() already used for an offline save).
+// The only remaining "catch-up" concept is the tiny live race window between the snapshot
+// being taken server-side and this client's OWN next nextAction() call landing - if the queue
+// already has entries by the time the loop starts (a genuinely-live action arrived while this
+// response was in flight), INSTANT covers that narrow gap so it doesn't visibly replay.
+function bootGameFromSnapshot(snapshotG,paused,tableSpeed,appliedSeq){
+  NETGEN++;
+  CUR_MOVES=[]; CUR_SEAT=-1; SEL=null;
+  const cols=snapshotG.n===4?COLORS4:COLORS6;
+  snapshotG.seats.forEach((s,i)=>{ s.color=cols[i]; });   // engine data has no color field - see § STATE
+  G=snapshotG;
+  G.paused=!!paused;
+  NET.tableSpeed=tableSpeed||1;
+  // v0.15: baseline the integrity-digest checkpoint to what the server says is already
+  // reflected in this snapshot (see gameSnapshotFields()'s `appliedSeq` field, server.js) -
+  // see checkStateDigest()'s comment for why this matters.
+  NET.appliedSeq=typeof appliedSeq==='number'?appliedSeq:-1;
+  LAY=buildLayout(G.n,computeViewSeat(G.n,G.seats));
+  saveLastRoom(NET.code,true);
+  resetNetUiFlow();
+  $('menu').classList.add('hidden');
+  $('game').classList.remove('hidden');
+  $('winOverlay').classList.add('hidden');
+  clearToasts();
+  drawBoard(); buildTable(); fitBoard(); setTimeout(fitBoard,50);
+  window.G=G; window.LAY=LAY;
+  updateNetChip();
+  if(NET.actionQueue.length)INSTANT=true;   // see the function comment above - a tiny live race, not a replay
+  updatePauseUI();
+  runOnlineTurnLoop();
+}
+/* v0.15 § ONLINE TURN LOOP - the sole driver of an online game on this phone, replacing the
+   scattered NET.online branches that used to live inside runTurn()/doDeal()/passTurn(). One
+   loop: figure out what THIS screen should show while G.turn is what it currently is (a
+   tappable hand if it's my seat's turn and I have a legal move, a passive prompt otherwise),
+   then wait for the server's next action and apply it through the SAME rendering pipeline
+   (performMove()/animateDeal()/toast()) offline already uses - see applyServerAction() below.
+   No local decision-making of any kind: this phone never decides a CPU move, a reshuffle, or a
+   bow-out for itself or anyone else - it only ever OFFERS its own seat's legal moves for
+   tapping, and even then only actually commits after the server validates+echoes it back
+   (commitMove(), unchanged from v0.14). */
+async function runOnlineTurnLoop(){
+  const myGen=NETGEN;
+  while(true){
+    if(myGen!==NETGEN)return;
+    if(!G||G.over)return;
+    if(G.paused){ await pauseGate(); if(myGen!==NETGEN||!G||G.over)return; }
+    NET.moveSentForTurn=false;
+    fadeAllDiscards();
+    const seat=G.turn;
+    syncAll();
+    const seatCfg=G.seats[seat];
+    const assist=actingOwner(seat)!==seat;
+    if(NET.mySeat===seat){
+      // It's (at least visually) my seat's turn. The server will either broadcast MY
+      // validated move once I submit one, or - if it independently finds I have no legal
+      // move at all - just send a 'pass' with no input needed from me. Either way we only
+      // ever WAIT for the next action; the only choice made here is whether to show a
+      // tappable hand while waiting.
+      const moves=legalMoves(seat);
+      if(moves.length>0){
+        renderHandFor(seat);
+        turnPrompt(assist?`You're home - play a card for ${G.seats[actingOwner(seat)].name}, ${seatCfg.name}`:`Your turn, ${seatCfg.name} - tap a card`,true);
+        enableSelection(seat,moves);
+      }else{
+        renderHandFor(visibleHandSeat());
+        turnPrompt('Catching up…',false);
+      }
+    }else{
+      renderHandFor(visibleHandSeat());
+      turnPrompt(`Waiting for ${seatCfg.name}…`,false);
+    }
+    const entry=await nextAction();
+    if(myGen!==NETGEN)return;
+    await applyServerAction(entry.action,myGen);
+    if(myGen!==NETGEN)return;
+    NET.appliedSeq=entry.seq;   // v0.15: see checkStateDigest()'s comment for why this - not
+                                // G.actionSeq - is the correct checkpoint key
+    maybeResolvePendingStateCheck();
+  }
+}
+// Applies one server-decided action through the appropriate rendering helper. 'move' reuses
+// performMove() completely unchanged (the SAME pipeline offline/pass-and-play uses - it
+// already calls applyMove()+advance() internally, so this loop doesn't need to do either
+// itself for that case). 'deal'/'pass' are new v0.15 kinds - see applyDealAction()/
+// applyPassAction() below, which mutate G using the server's explicitly-decided fields (the
+// actual dealt cards, whether the hand threw in) rather than this client re-deriving anything.
+async function applyServerAction(action,myGen){
+  clearTurnPrompt();
+  if(action.kind==='deal')await applyDealAction(action);
+  else if(action.kind==='move'){
+    const cardEl=(NET.mySeat===action.seat)?NET.pendingCardEl:null; NET.pendingCardEl=null;
+    await performMove(action.seat,action.m,cardEl);
+    // v0.15 bug fix: performMove() (shared with offline) advances turn itself via its own
+    // advance() call - correctly NETGEN-guarded, but found via instrumented reproduction to
+    // still be vulnerable to a rare timing window elsewhere in this file (see
+    // applyPassAction()'s comment for the full root-cause writeup - the exact same class of
+    // bug, just via a different call path). Rather than keep chasing every possible stale-call
+    // interleaving individually, every action now carries the server's AUTHORITATIVE resulting
+    // turn number explicitly - this final assignment is idempotent (setting G.turn to what it
+    // already correctly is, in the normal case) and a hard backstop against any drift in the
+    // abnormal case. Guarded the same way as everything else here: only touches the CURRENT G.
+    if(myGen===NETGEN&&G&&!G.over&&typeof action.turn==='number')G.turn=action.turn;
+  }else if(action.kind==='pass')await applyPassAction(action);
+}
+// Mirrors doDeal()'s visible effects (toast/animateDeal/positionDeck), sourced from the
+// server's decided fields instead of a local shuffle/pop - see server/engine.js's
+// dealDecision(), which is what actually produced `action` server-side. G.deck is kept as a
+// same-LENGTH placeholder array (never real card identities - the client has no use for them,
+// see visibleHandSeat()) purely so anything that reads G.deck.length for display stays honest.
+async function applyDealAction(action){
+  const myGen=NETGEN;
+  clearToasts();
+  // Bug found via instrumented reproduction (v0.15): the SERVER sweeps any leftover hand cards
+  // (a bowed-out seat's unplayed cards, or - in principle - anyone's, matching the sweep this
+  // engine's own offline runTurnInner() has always done at the same point) into discard BEFORE
+  // dealing the next round (see driveTurnLoop()'s handOver() branch, server.js) - but that sweep
+  // is a local mutation, not a broadcast action, so it was never being mirrored here. Without
+  // it, old cards a seat never played just sat in G.hands[s] and the NEW deal's cards got
+  // pushed on top of them - hands grew every round instead of resetting, and G.discard fell
+  // behind the server's copy by exactly those swept cards. Confirmed by diffing a live
+  // server/client G side by side: pieces matched exactly (every actual MOVE was applied
+  // correctly), only hand/discard counts diverged, by exactly the size of the leftover hands at
+  // the previous hand's end - conclusive. Sweep here too, unconditionally, mirroring the
+  // server's own sweep exactly (every seat with leftover cards, not just bowed-out ones).
+  for(let s=0;s<G.n;s++){ if(G.hands[s].length){ G.discard.push(...G.hands[s]); G.hands[s].length=0; } }
+  G.dealSeq++;
+  G.bowedOut=G.seats.map(()=>false);
+  if(action.reshuffled){
+    G.deck=new Array(Math.max(0,action.deckCount)); G.discard=[]; G.schedRound=0;
+    G.dealer=action.dealer; G.turn=action.turn;   // v0.15: authoritative, not re-derived - see applyServerAction()'s comment
+    positionDeck(G.dealer,true);
+    toast(`Fresh shuffle - ${G.seats[G.dealer].name} deals`);
+    await wait(500);
+    if(myGen!==NETGEN)return;
+  }
+  G.schedRound++;
+  for(let s=0;s<G.n;s++)G.hands[s].push(...(action.hands[s]||action.hands[String(s)]||[]));
+  G.deck=new Array(Math.max(0,action.deckCount));
+  G.turn=action.turn;   // v0.15: authoritative, not re-derived - see applyServerAction()'s comment
+  toast(`${G.seats[G.dealer].name} deals ${action.k} cards`);
+  await animateDeal(action.k);
+  if(myGen!==NETGEN)return;
+  syncAll(); renderHandFor(visibleHandSeat());
+}
+// Mirrors the "no legal move" branches of the old runTurnInner()/passTurn() (toast/wait), but
+// every DECISION (was this a fresh bow-out? did the whole table just get stuck?) already
+// happened server-side (see server/engine.js's passDecision()) - this just applies the result.
+// G.turn is assigned directly from action.turn (the server's authoritative resulting turn
+// number), not re-derived via advanceTurn() - see applyServerAction()'s comment for why: this
+// USED to call advanceTurn() (the shared pure function from § TURN DECISIONS) here, and a rare
+// timing window (this function suspended mid wait() when a digest-mismatch resync landed,
+// resuming later and calling advanceTurn() against the FRESH post-reconnect G) silently
+// double-advanced the turn - found via instrumented reproduction: a single-client soak stalled
+// forever with the SERVER correctly waiting at turn=0 while this client's G sat stuck at
+// turn=1, one extra advance ahead of the fresh snapshot. NETGEN guard below still matters (it
+// gates the toast/wait side effects and the threwIn hand-clear), but turn itself can no longer
+// drift regardless, since it's now always just assigned the server's own number.
+async function applyPassAction(action){
+  const myGen=NETGEN;
+  const seat=action.seat;
+  if(action.newlyBowedOut){
+    G.bowedOut[seat]=true;
+    renderHandFor(visibleHandSeat());
+    sNo();
+    toast(`${G.seats[seat].name} can't move - out for the rest of this hand`,2400);
+    await wait(1400);
+    if(myGen!==NETGEN)return;
+  }
+  G.passStreak=action.passStreak;
+  if(action.threwIn){
+    for(const h of G.hands){G.discard.push(...h);h.length=0;}
+    toast('Nobody can play - throwing the hands in. New deal!');
+    await wait(600);
+    if(myGen!==NETGEN)return;
+  }
+  G.turn=action.turn;   // v0.15: authoritative, not re-derived via advanceTurn() - see applyServerAction()'s comment
 }
 function onSync(m){
   NET.online=true; NET.wantConnection=true; NET.isHost=!!m.isHost;
   NET.lobby=m.lobby; NET.seatOwners=m.seatOwners; NET.hostConnected=m.hostConnected!==false;
-  NET.actionQueue=[]; NET.waiters={move:{},reshuffle:null}; NET.pendingStateCheck=null;
+  NET.actionQueue=[]; NET.pendingActionResolvers=[]; NET.pendingStateCheck=null;
   NET.moveSentForTurn=false;
   NET.presence=m.presence||{};   // v0.9: playerId->connected snapshot, for the reunion lobby
-  const startEntry=m.log.find(e=>e.action.kind==='start');
-  m.log.forEach(e=>{ if(e!==startEntry)NET.actionQueue.push(e); });
-  NET.mySeat=NET.seatOwners.indexOf(NET.playerId);
+  NET.mySeat=NET.seatOwners?NET.seatOwners.indexOf(NET.playerId):-1;
   updateNetChip();
-  if(startEntry){
-    bootGameFromNetwork(startEntry.action,true);
-    G.paused=!!m.paused; updatePauseUI();   // v0.8: current pause state travels WITH sync,
-    // not through the replayed log - see server.js pauseToggle comment.
+  if(m.G){
+    bootGameFromSnapshot(m.G,m.paused,m.tableSpeed,m.appliedSeq);
     // v0.9 refinement: coming back via the menu's "Resume Saved Game" tile (as opposed to a
     // normal brief mid-session reconnect blip) shows the reunion lobby instead of dropping
     // straight onto a possibly-moving board - see § REUNION below.
     if(NET.enteringViaResume){
       NET.enteringViaResume=false;
       if(!G.paused)requestPause(true);
-      // v0.10.2: don't open the "you're back!" reunion lobby until THIS client's own catch-up
-      // replay has actually finished (waitForCatchup(), not just bootGameFromNetwork()'s own
-      // synchronous setup returning above) - the real replay runs async across many runTurn()
-      // calls after that point. Opening it early used to show a green "Here" dot and (for a
-      // host) an enabled Resume button while this phone's G could still be many turns behind
-      // where it's about to end up, which is the seam the save/quit/reload/resume desync came
-      // from (see the runTurn() catch-up-vs-pause comment, § TURNS). NETGEN-guarded in case a
-      // newer reconnect supersedes this one while we're waiting.
+      // v0.10.2 origin, narrowed by v0.15's snapshot reconnect: don't open the "you're back!"
+      // reunion lobby until THIS client's own (now much shorter) catch-up window has actually
+      // cleared (waitForCatchup(), not just bootGameFromSnapshot()'s own synchronous setup
+      // returning above). NETGEN-guarded in case a newer reconnect supersedes this one while
+      // we're waiting.
       const myGen=NETGEN;
       waitForCatchup().then(()=>{ if(myGen===NETGEN)openReunionOverlay(); });
     }
@@ -3640,7 +3782,7 @@ function leaveOnlineToMenu(msg,keepRoom){
   NET.wantConnection=false;
   if(NET.ws){ try{NET.ws.close();}catch(e){} }
   Object.assign(NET,{ws:null,online:false,isHost:false,code:null,playerId:null,token:null,mySeat:-1,
-    lobby:null,seatOwners:null,actionQueue:[],waiters:{move:{},reshuffle:null},pendingStateCheck:null});
+    lobby:null,seatOwners:null,actionQueue:[],pendingActionResolvers:[],pendingStateCheck:null,appliedSeq:-1});
   if(!keepRoom)clearLastRoom();   // v0.8: leaving is a deliberate choice - don't auto-rejoin this one later
   updateNetChip();
   resetNetUiFlow();
@@ -3671,7 +3813,7 @@ function handleNetMessage(m){
       // "reclaim"/"reclaimed" below and server.js/server.ts's matching `reason:"started"`).
       if(m.reason==='started'&&JOIN.code&&JOIN.name){
         $('joinErr').textContent='That game already started - trying to get you back into your seat…';
-        netSend({type:'reclaim',code:JOIN.code,name:JOIN.name});
+        netSend({type:'reclaim',code:JOIN.code,name:JOIN.name,protocolVersion:PROTOCOL_VERSION});
         return;
       }
       $('joinErr').textContent=m.message;
@@ -3738,28 +3880,37 @@ function handleNetMessage(m){
     case 'gameAction':
       if(m.action.kind==='start'){
         NET.seatOwners=m.seatOwners; NET.mySeat=NET.seatOwners.indexOf(NET.playerId);
-        bootGameFromNetwork(m.action,false);
+        bootGameFromNetwork(m.action);
       }else feedAction({seq:m.seq,action:m.action});
       return;
     case 'sync': onSync(m); return;
     case 'stateCheck':
-      // Host's digest, tagged with G.actionSeq (see runStateCheck/gDigest, § TURNS - widened
-      // v0.10.2 from per-deal-only to also fire after every kick/Jack swap). Compare now if
-      // we've already reached that same actionSeq ourselves; otherwise stash it -
-      // runStateCheck() checks this the next time IT runs, so the comparison always happens
-      // at a matching checkpoint instead of racing real-time animation speed differences.
-      if(NET.isHost||!G)return;
-      if(G.actionSeq===m.seq){
-        if(gDigest()!==m.digest)netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token});
-      }else if(G.actionSeq<m.seq){
-        NET.pendingStateCheck={seq:m.seq,digest:m.digest};
-      }
+      // v0.15: the SERVER's digest now (see server.js's maybeStateCheck()) - no more "only a
+      // non-host compares" special case, since there's no host-generated opinion to defer to
+      // anymore; every client just compares its own G against the one canonical source.
+      checkStateDigest(m.afterSeq,m.digest);
       return;
     case 'requestStateCheck':
-      // v0.8: another phone came back from the background and wants an immediate integrity
-      // check instead of waiting for the next checkpoint (see onForeground()). Only the host
-      // actually computes/broadcasts digests, same as the periodic one.
-      if(NET.isHost&&G)netSend({type:'stateCheck',seq:G.actionSeq,digest:gDigest()});
+      // v0.15: the server answers this directly now (see server.js's "requestStateCheck"
+      // case) - it no longer needs to relay through the host's phone to compute a digest,
+      // since the server itself holds the authoritative G. This case is effectively unused on
+      // the RECEIVING end now (a client never gets asked to compute anything) but the message
+      // NAME is kept for minimal wire-protocol churn; see onForeground() for the sender side.
+      return;
+    case 'tableSpeed':
+      // v0.15: shared table pacing, host-controlled (see § UTIL's applySpeed() and
+      // server.js's "setTableSpeed") - applies the SAME way on every phone, including
+      // whichever one (the host) requested it, same "wait for the echo" pattern as pause.
+      NET.tableSpeed=Number(m.speed)||1;
+      if(NET.online)applySpeed();
+      updateSpeedButtonLabel();
+      return;
+    case 'protocolMismatch':
+      // v0.15: this server doesn't understand something this client just sent, or vice versa
+      // - almost always means the app/website is out of date relative to the server (or, more
+      // rarely, an old server this app has cached a stale URL for). Plain-language, no jargon.
+      NET.online=false; NET.wantConnection=false;
+      toast(m.message||'This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.',6000);
       return;
     case 'paused':
       // v0.8: pause/resume broadcast - applies the SAME way on every phone, including
@@ -3778,7 +3929,7 @@ function hostCreateRoom(){
   const myName=(seats.find(s=>s.type==='human')||{}).name||'Host';
   NET.wantConnection=true;
   connectWs().then(()=>{
-    netSend({type:'host',name:myName,n:CFG.n,teams:CFG.teams,seats});
+    netSend({type:'host',protocolVersion:PROTOCOL_VERSION,name:myName,n:CFG.n,teams:CFG.teams,seats});
   }).catch(err=>{ $('onlineErr').textContent=err.message; NET.wantConnection=false; });
 }
 // v0.14: host seat choice + rename (Blake: "won't let me select my slot/player and doesn't
@@ -3891,7 +4042,7 @@ function joinSubmitName(){
   if(isBadName(name)){ $('joinErr').textContent='Pick a nicer name.'; return; }
   JOIN.name=name; $('joinErr').textContent='';
   NET.wantConnection=true;
-  connectWs().then(()=>{ netSend({type:'join',code:JOIN.code,name}); })
+  connectWs().then(()=>{ netSend({type:'join',protocolVersion:PROTOCOL_VERSION,code:JOIN.code,name}); })
     .catch(err=>{ $('joinErr').textContent=err.message; NET.wantConnection=false; });
 }
 function advanceJoinToSeatStep(){
@@ -4141,17 +4292,11 @@ $('btnJoinClose').onclick=()=>{
 };
 $('btnRoomCancel').onclick=()=>{ leaveOnlineToMenu(); };
 $('btnRoomStart').onclick=()=>{
-  // v0.8: Start is never disabled now (see renderRoomScreen) - any seat nobody claimed - CPU-marked or an unclaimed human seat - just plays as
-  // CPU from here (see renderRoomScreen's note + RULES). This is the only place that
-  // decision gets made; a claimed seat is always sent as 'human' regardless of what its
-  // `type` happened to say (claimSeat already sets type:'human' when claimed, but this is
-  // the authoritative source of truth at the moment the game actually starts).
-  const seats=NET.lobby.seats.map(s=>({
-    name:s.name, diff:s.diff||'medium',
-    type: s.claimedBy!=null ? 'human' : 'cpu',
-  }));
-  const deck=freshDeck(), dealer=Math.floor(Math.random()*NET.lobby.n);
-  netSend({type:'start',action:{kind:'start',n:NET.lobby.n,teams:NET.lobby.teams,seats,dealer,deck}});
+  // v0.15: the server now generates the game itself (deck, dealer, and the "unclaimed seat
+  // becomes CPU" rule - see server.js's "start" handler) from room.lobby, which it already
+  // has - Start is just a signal, no game-config payload needed anymore. Host-only on the
+  // server side; the button is only ever shown to the host client to begin with.
+  netSend({type:'start',protocolVersion:PROTOCOL_VERSION});
 };
 $('btnRoomText').onclick=()=>{
   sendInvite(inviteLink(NET.code));
@@ -4205,15 +4350,20 @@ function buildResultEntries(mode,winSet){
 }
 function recordWin(){
   if(G.recorded)return; G.recorded=true;
+  // v0.15: an ONLINE game's result is now recorded by the SERVER itself, directly, the
+  // instant its own applyMove() call sees G.over flip (see server.js's finishGame(), called
+  // from driveTurnLoop()/the "action" handler) - it no longer waits for any phone (host or
+  // otherwise) to notice the win screen and send a recordResult message. That message type is
+  // gone entirely; this function no longer sends anything for an online game. This was the
+  // actual root cause of the shared leaderboard "showing nobody else" - recordResult's OLD
+  // host-notices-the-win-screen path had literally never fired even once in production,
+  // because no online game had ever reached a completed win screen before this rebuild (see
+  // HANDOFF.md "v0.15" for the full diagnosis). Idempotent server-side per room, survives a
+  // restart - see server.js's `room.recorded` flag.
+  if(NET.online)return;
   const mode=(G.n===4?'4':'6')+(G.teams?'t':'s');
   const winSet=new Set(G.winners);
   const entries=buildResultEntries(mode,winSet);
-  if(NET.online){
-    // Shared server-side board - only the host submits, so a game is recorded exactly once
-    // no matter how many phones are at the table (see server.js "recordResult").
-    if(NET.isHost&&entries.length)netSend({type:'recordResult',entries});
-    return;
-  }
   if(!entries.length)return;   // #autotest/#autotest6 (all-CPU) or a 0-human edge case - nothing to record anywhere
   const st=loadStats();
   entries.forEach(({name,delta})=>{
@@ -4315,14 +4465,32 @@ async function fetchGlobalLeaderboard(){
     return await r.json();
   }catch(e){ return null; }
 }
-function mergeStats(local,global){
-  if(!global)return local;
-  const out={}, names=new Set([...Object.keys(local),...Object.keys(global)]);
-  names.forEach(n=>{
-    const a=local[n]||{}, b=global[n]||{}, keys=new Set([...Object.keys(a),...Object.keys(b)]);
-    const merged={}; keys.forEach(k=>merged[k]=(a[k]||0)+(b[k]||0));
-    out[n]=merged;
-  });
+/* v0.15 fix (Blake reported the shared leaderboard "still shows nobody else" - part of the
+   diagnosis was a genuine double-count bug in THIS merge, separate from the online-recording
+   gap fixed in recordWin()/server.js above). OLD behavior: `mergeStats(local,global)` summed
+   the device's ENTIRE local `nasty-stats` cache on top of the global board, unconditionally -
+   but a finished SOLO game already writes its own delta into local `nasty-stats` AND posts the
+   same delta to the shared server (see recordWin()'s offline branch) - so the device that
+   actually played it saw that one win counted TWICE the moment the global copy landed (once
+   from its own local write, once again from the global fetch, summed together). Blake's ask:
+   one board that looks identical on every device, not device-inflated numbers.
+   Fix: once the global fetch succeeds, the GLOBAL board is the sole source of truth for
+   anything already synced - only items still sitting in the offline retry QUEUE (not yet
+   confirmed by the server, see submitOrQueueSoloResult()/loadSoloQueue()) get layered on top,
+   since those genuinely haven't landed in `global` yet ("my win that hasn't hit the server yet
+   should still show up for me right now"). The moment a queued item successfully drains, it's
+   removed from the queue (see drainSoloQueue()) and stops being added here - so it's counted
+   exactly once throughout, never twice. Local-only fallback (the full `nasty-stats` cache)
+   is used ONLY when the global fetch genuinely fails/is unreachable - see $('btnLb').onclick. */
+function mergeQueuedIntoGlobal(global,queue){
+  const out={};
+  for(const n of Object.keys(global))out[n]=Object.assign({},global[n]);
+  for(const item of queue){
+    for(const e of (item.entries||[])){
+      const r=out[e.name]=out[e.name]||{};
+      for(const k of Object.keys(e.delta||{}))r[k]=(r[k]||0)+e.delta[k];
+    }
+  }
   return out;
 }
 function renderLb(st){
@@ -4342,23 +4510,53 @@ function renderLb(st){
 $('btnLb').onclick=()=>{
   $('lbOverlay').classList.remove('hidden');
   const local=loadStats();
-  renderLb(local);   // show local instantly, then upgrade to merged if the server answers
-  fetchGlobalLeaderboard().then(g=>{ if(g)renderLb(mergeStats(local,g)); });
+  renderLb(local);   // show local instantly, then upgrade to the real shared board if the server answers
+  fetchGlobalLeaderboard().then(g=>{
+    // v0.15: global (plus anything still queued/unsynced) is the source of truth once it's
+    // reachable - see mergeQueuedIntoGlobal()'s comment for why this replaced the old
+    // always-sum-local-and-global mergeStats(). Only fall back to local-only if the fetch
+    // genuinely failed (offline, unreachable server).
+    if(g)renderLb(mergeQueuedIntoGlobal(g,loadSoloQueue()));
+  });
 };
 $('btnLbClose').onclick=()=>$('lbOverlay').classList.add('hidden');
 $('btnMute').onclick=()=>{muted=!muted;localStorage.setItem('nasty-muted',muted?'1':'0');
   $('btnMute').textContent=muted?'🔇':'🔊';};
 $('btnMute').textContent=muted?'🔇':'🔊';
-function speedLabel(){ return 'Speed: '+SPEED_OPTS.find(o=>o[0]===USER_SPEED)[1]; }
-$('btnSpeed').textContent=speedLabel();
+// v0.15: online, this is a SHARED table setting (NET.tableSpeed, host-controlled - see the
+// big § NET comment above for why Blake rejected per-viewer pacing) instead of each phone's
+// own local choice. Offline/pass-and-play is completely unchanged (still USER_SPEED,
+// localStorage-backed, every phone free to pick its own).
+function speedLabel(){
+  const cur=NET.online?NET.tableSpeed:USER_SPEED;
+  const found=SPEED_OPTS.find(o=>o[0]===cur);
+  return 'Speed: '+(found?found[1]:cur);
+}
+function updateSpeedButtonLabel(){ $('btnSpeed').textContent=speedLabel(); }
+updateSpeedButtonLabel();
 $('btnSpeed').onclick=()=>{
+  if(NET.online){
+    if(!NET.isHost){ toast('Only the host can change the table speed.'); return; }
+    const i=SPEED_OPTS.findIndex(o=>o[0]===NET.tableSpeed);
+    const next=SPEED_OPTS[(i>=0?i+1:1)%SPEED_OPTS.length][0];
+    netSend({type:'setTableSpeed',speed:next});   // applies once the server echoes it back to everyone, same as pause
+    return;
+  }
   const i=SPEED_OPTS.findIndex(o=>o[0]===USER_SPEED);
   USER_SPEED=SPEED_OPTS[(i+1)%SPEED_OPTS.length][0];
   localStorage.setItem('nasty-speed',String(USER_SPEED));
   applySpeed();
-  $('btnSpeed').textContent=speedLabel();
+  updateSpeedButtonLabel();
 };
-$('btnSkip').onclick=startSkip;
+// v0.15 (Blake, 2026-07-15): NO Skip button in online games, period - Skip only ever made
+// sense as a personal "fast-forward MY OWN wait" tool for pass-and-play/solo; online, the
+// table already moves at a shared pace nobody's individually waiting alone through (see the
+// tableSpeed setting above), and per-viewer skip-ahead would just desync what everyone's
+// looking at. startSkip() itself is a no-op online (see § TURNS); this guard keeps the BUTTON
+// from even being tappable, and syncAll()/renderHandFor() (§ RENDER) hide #btnSkip entirely
+// whenever NET.online is true - see "online: hide Skip" there. The INSTANT reconnect
+// catch-up mechanism is completely unrelated and untouched - see the big § NET comment above.
+$('btnSkip').onclick=()=>{ if(!NET.online)startSkip(); };
 $('btnPause').onclick=()=>requestPause(true);
 $('pauseOverlay').addEventListener('pointerdown',()=>{ if(PAUSE_TAP_ALLOWED)requestPause(false); });
 // v0.11 item 3: the pause overlay's "Leave game" button now opens the same two-choice
@@ -4457,7 +4655,7 @@ function tryJoinOrRejoin(code,silent){
   if(saved){
     NET.silentRejoin=!!silent;
     NET.wantConnection=true; NET.code=code; NET.playerId=saved.playerId; NET.token=saved.token;
-    connectWs().then(()=>{ netSend({type:'rejoin',code,playerId:saved.playerId,token:saved.token}); })
+    connectWs().then(()=>{ netSend({type:'rejoin',code,playerId:saved.playerId,token:saved.token,protocolVersion:PROTOCOL_VERSION}); })
       .catch(()=>{
         NET.wantConnection=false; NET.silentRejoin=false;
         if(silent){ clearLastRoom(); updateMenuResumeButtons(); } else openJoinOverlay(code);
@@ -4483,7 +4681,9 @@ function onForeground(){
     return;
   }
   try{ netSend({type:'ping',t:Date.now()}); }catch(e){}
-  if(G&&!NET.isHost)netSend({type:'requestStateCheck'});   // see server.js/handleNetMessage
+  // v0.15: any client can ask now (the server answers directly, no host round-trip needed
+  // anymore - see server.js's "requestStateCheck" case), not just non-host clients.
+  if(G)netSend({type:'requestStateCheck'});
 }
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='visible'){ onForeground(); drainSoloQueue(); }

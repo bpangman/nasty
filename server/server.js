@@ -1,21 +1,35 @@
 "use strict";
 /*
- * NASTY relay server — dumb room registry + message relay for online multiplayer.
- * NO game rules live here. It only:
- *   - creates rooms (4-letter codes), tracks who's in them and which seat they hold
- *   - relays every game action to all sockets in the room, in the order it received them
- *   - keeps a log of the room's actions so a (re)joining client can catch up
- *   - persists rooms to disk (server/rooms/<CODE>.json) so a game survives a server
- *     restart or Mac reboot, and prunes rooms that have been fully abandoned for a while
+ * NASTY relay server — v0.15: SERVER-AUTHORITATIVE game state.
  *
- * See /Users/jarvis/nasty-game/HANDOFF.md ("Online multiplayer" section) for the wire
- * protocol this implements, how to run it, and how the client talks to it.
+ * Through v0.14 this was a dumb room registry + message relay: the server never touched game
+ * rules, every phone ran the identical rules code against its own copy of G, and the HOST'S
+ * phone was the sole source of CPU moves and reshuffle randomness. That design's fatal flaw:
+ * when the host's phone backgrounded (a text message, a lock), CPU turns and reshuffles
+ * stalled for the WHOLE ROOM — see HANDOFF.md's "v0.15" section for the full writeup and
+ * Blake's exact bug report that finally forced this rebuild.
+ *
+ * As of v0.15, the server holds the ONE authoritative copy of `G` per room (via a private
+ * server/engine.js instance — the SAME rules code index.html runs, mechanically extracted, not
+ * a hand-maintained second copy — see server/build-engine.js). The server shuffles/deals,
+ * validates and applies every human move, runs every CPU turn itself, decides bow-outs and the
+ * whole-table-stuck throw-in, and appends+broadcasts the resulting action stream. No host-phone
+ * specialness remains anywhere in this file — "host" now only ever means "may Start the room /
+ * may change the table speed," lobby-management things, never a gameplay-decision role.
+ *
+ * Everything else in this file that ISN'T game state is UNCHANGED from v0.14: room codes,
+ * rejoin tokens, token-less reclaim-by-name, room persistence to disk, the reunion/regroup
+ * lobby + presence + Nudge, the global leaderboard + admin god-mode + CORS + rate limits, the
+ * AASA well-known file + /join/:CODE redirect. See HANDOFF.md "v0.15" for the exact list of
+ * what changed vs. what was carried forward, and the wire-protocol diff (new action kinds,
+ * protocol version handshake, the snapshot-based reconnect shape, the table-speed setting).
  */
 const http = require("http");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { WebSocketServer } = require("ws");
+const { createEngine } = require("./engine.js");
 
 const PORT = process.env.NASTY_PORT ? parseInt(process.env.NASTY_PORT, 10) : 8484;
 // v0.8: two different prune windows. A lobby that never started is cheap to lose (nothing
@@ -36,6 +50,23 @@ const PERSIST_DEBOUNCE_MS = 800;
 // look like 0/O or 1/I/L
 const CODE_ALPHABET = "BCDFGHJKMNPQRSTVWXZ";
 
+/* ---------------------------------------------------------------------------------------
+ * v0.15 § PROTOCOL VERSION — this is a BREAKING wire-protocol change: a pre-v0.15 client (the
+ * old lockstep architecture, which generates its own CPU moves/reshuffles and expects a bare
+ * relay) cannot talk to this server, and this server cannot correctly serve a pre-v0.15 client
+ * (it would silently never receive the CPU moves/reshuffles it's waiting to generate itself,
+ * since this server now generates and pushes complete actions instead). `host`/`join`/
+ * `rejoin`/`reclaim` all now carry `protocolVersion` from the client; anything missing or below
+ * PROTOCOL_VERSION gets a plain-language, non-technical rejection instead of a confusing
+ * silent failure. See index.html's handling of `protocolMismatch` for the client side.
+ * ------------------------------------------------------------------------------------- */
+const PROTOCOL_VERSION = 2;
+const PROTOCOL_MISMATCH_MESSAGE =
+  "This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.";
+function protocolOk(msg) {
+  return typeof msg.protocolVersion === "number" && msg.protocolVersion >= PROTOCOL_VERSION;
+}
+
 /** @type {Map<string, Room>} */
 const rooms = new Map();
 // v0.10.3: token-less recovery — {reqId -> {code, targetPlayerId, ws, expires}}. A contested
@@ -51,10 +82,7 @@ function log(...a) { console.log(new Date().toISOString(), ...a); }
  * v0.9 § NAMES — same shared limit + modest profanity blocklist as index.html's § NAMES
  * section (duplicated, not imported: this is a standalone Node file with zero dependencies
  * beyond `ws`, on purpose, and index.html is a browser script — no shared module between
- * them). Keep these two copies in sync if the list/limit ever changes. This is the
- * server-side half of item 9's "enforced everywhere, including server-side" requirement —
- * the client already blocks bad names before sending, this is defense-in-depth (and the
- * only enforcement a non-browser client would ever see).
+ * them). Keep these two copies in sync if the list/limit ever changes.
  * ------------------------------------------------------------------------------------- */
 const NAME_MAX = 10;
 const NAME_BLOCKLIST = ["fuck","shit","bitch","asshole","bastard","dick","pussy","cunt",
@@ -70,22 +98,13 @@ function isBadName(raw) {
   const n = normalizeName(raw);
   return !!n && NAME_BLOCKLIST.some(w => n.includes(w));
 }
-// Cleans + length-caps a name; falls back to `fallback` if empty OR blocked (never returns
-// a profane name — callers that need to distinguish "was rejected" from "was empty" should
-// check isBadName() themselves first, as host/join/claimSeat/setSeat do below).
 function cleanName(raw, fallback) {
   const s = String(raw || "").trim().slice(0, NAME_MAX);
   return s || fallback || "";
 }
 
 /* ---------------------------------------------------------------------------------------
- * v0.9 § ADMIN — "god mode" for Blake. A single shared secret (the admin token) authenticates
- * HTTP calls to a handful of /admin/* endpoints (see the http.createServer handler below).
- * The token is generated once and written to admin-token.txt next to this file (gitignored,
- * chmod 600) — if that file is ever missing (fresh checkout, or the planned move to a cloud
- * host), a fresh token is generated and saved automatically, so this survives redeployment
- * without any manual setup. Override the path with NASTY_ADMIN_TOKEN_FILE for tests, so a
- * test server never reads/writes the real production token file.
+ * v0.9 § ADMIN — "god mode" for Blake. Unchanged from v0.14.
  * ------------------------------------------------------------------------------------- */
 const ADMIN_TOKEN_FILE = process.env.NASTY_ADMIN_TOKEN_FILE
   ? path.resolve(process.env.NASTY_ADMIN_TOKEN_FILE)
@@ -98,7 +117,7 @@ function loadOrCreateAdminToken() {
   const t = crypto.randomBytes(24).toString("hex");
   try {
     fs.writeFileSync(ADMIN_TOKEN_FILE, t + "\n", { mode: 0o600 });
-    fs.chmodSync(ADMIN_TOKEN_FILE, 0o600); // belt-and-suspenders: writeFileSync's mode can be masked by umask
+    fs.chmodSync(ADMIN_TOKEN_FILE, 0o600);
   } catch (e) { log("could not persist admin token", e.message); }
   return t;
 }
@@ -111,14 +130,12 @@ function checkAdminToken(req, url) {
 }
 
 /* ---------------------------------------------------------------------------------------
- * v0.9 § LEADERBOARD — the shared, all-time, human-only leaderboard for online games (see
- * HANDOFF.md / PLANNING.md "v0.9" for the points scheme). Keyed by player name, same schema
- * as index.html's local "h"-prefixed stats object (hg4s/hw4s/.../hpts) so merging local +
- * global on the client is a trivial per-key sum. Persisted next to rooms/ (sibling file, not
- * inside it — it isn't a room). Only the room HOST ever sends `recordResult` (see the ws
- * message handler below) so a game is recorded exactly once no matter how many phones are at
- * the table. Still "no game rules on the server" in spirit — this just adds numbers a client
- * computed into a bucket named after a string; the server never decides who won anything.
+ * v0.9 § LEADERBOARD — the shared, all-time, human-only leaderboard. Unchanged from v0.14
+ * except WHO calls applyLeaderboardEntry() for an ONLINE game: v0.14 waited for the host's
+ * phone to notice the win screen and send `recordResult`; v0.15's server already knows the
+ * instant a game ends (it's the one that ran applyMove() and saw G.over flip), so it records
+ * directly — see "§ v0.15 SERVER-SIDE WIN RECORDING" below. Solo/offline games are unaffected
+ * (still POST /solo-result, see "§ SOLO RESULTS").
  * ------------------------------------------------------------------------------------- */
 const LEADERBOARD_FILE = process.env.NASTY_LEADERBOARD_FILE
   ? path.resolve(process.env.NASTY_LEADERBOARD_FILE)
@@ -151,15 +168,7 @@ function applyLeaderboardEntry(name, delta) {
   scheduleLeaderboardPersist();
 }
 
-/* ---------------------------------------------------------------------------------------
- * v0.13 § LEADERBOARD EPOCH — Blake's ask: "reset every leaderboard - only new wins/games for
- * everyone going forward." A device can't be reached to wipe its own localStorage, so this is
- * a season counter the SERVER is authoritative for: every response that touches the
- * leaderboard reports the current epoch, and index.html clears its own local "nasty-stats"
- * cache the moment it sees a NEWER epoch than the one it last stored (see index.html's
- * adoptEpoch()). Starts at 1; god mode can bump it any time via POST
- * /admin/leaderboard/reset (wipes the board too - a "new season" is both at once by design).
- * ------------------------------------------------------------------------------------- */
+/* v0.13 § LEADERBOARD EPOCH — unchanged from v0.14. */
 const LEADERBOARD_EPOCH_FILE = process.env.NASTY_LEADERBOARD_EPOCH_FILE
   ? path.resolve(process.env.NASTY_LEADERBOARD_EPOCH_FILE)
   : path.join(__dirname, "leaderboard-epoch.json");
@@ -174,9 +183,6 @@ function persistLeaderboardEpoch() {
   try { fs.writeFileSync(LEADERBOARD_EPOCH_FILE, JSON.stringify({ epoch: leaderboardEpoch })); }
   catch (e) { log("leaderboard-epoch persist failed", e.message); }
 }
-// Sent with EVERY response that touches the leaderboard - public /leaderboard reads, the
-// admin equivalent, and every /solo-result reply (success, duplicate, or stale-epoch reject) -
-// so any device that talks to the server for ANY of those reasons picks up a reset promptly.
 function sendLeaderboard(res, status) {
   res.writeHead(status, Object.assign(
     { "content-type": "application/json", "x-leaderboard-epoch": String(leaderboardEpoch) },
@@ -186,26 +192,65 @@ function sendLeaderboard(res, status) {
 }
 
 /* ---------------------------------------------------------------------------------------
- * v0.13 § SOLO RESULTS — solo (vs-CPU) and pass-and-play OFFLINE games have no room, so they
- * can't ride the "only the host sends recordResult" path above. This is a lightweight,
- * unauthenticated HTTP POST sibling (POST /solo-result) that does the exact same thing (apply
- * human-only deltas to the shared globalBoard via applyLeaderboardEntry), with its own
- * idempotency + rate limit since there's no room/host to lean on for either:
- *   - Idempotency: the client generates one random `gameId` per logical game (assigned once,
- *     survives save/resume/reload since it just rides along inside the saved G object) and
- *     sends it with every submit attempt — including offline-queued retries. Seen ids are
- *     remembered (persisted to disk, same debounced-write pattern as the leaderboard file
- *     above) so a duplicate submit (queue drained twice, a retry racing a slow response,
- *     whatever) is a safe no-op instead of double-counting.
- *   - Rate limit: same shape as underHostRateLimit above, generous for a real family.
- * See HANDOFF.md "v0.13" for the full design; the client-side queueing lives in index.html's
- * § LEADERBOARD-ish solo-sync helpers (submitOrQueueSoloResult/drainSoloQueue).
+ * v0.15 § SERVER-SIDE WIN RECORDING (ONLINE games) — added per Blake's "the shared
+ * leaderboard still shows nobody else" report. Diagnosis: the global-board pipeline itself
+ * already worked, but (a) online games have literally never once completed (the whole reason
+ * this rebuild exists), so the OLD host-sends-recordResult path never fired even once in
+ * production, and (b) a device's own solo-game stats got double-counted in the MERGED display
+ * (that half of the fix is client-side — see index.html's mergeQueuedIntoGlobal(), replacing
+ * mergeStats()).
+ *
+ * The server now records an ONLINE game's result itself, directly, the instant its OWN
+ * applyMove() call sees G.over flip — see finishGame() below, called from driveTurnLoop() and
+ * from the human-move handler. This uses the EXACT SAME stat-key shape and points formula as
+ * index.html's buildResultEntries()/pointsForWin() (hand-ported here since server.js has no
+ * access to index.html's DOM-adjacent code, and this specific pair of functions is pure
+ * game-result arithmetic, not "the rules" in the § ENGINE sense — see HANDOFF.md "v0.15" for
+ * the reasoning on why these two small functions are duplicated rather than extracted).
+ *
+ * Idempotency: `room.recorded` (persisted to disk alongside everything else in roomToDisk/
+ * roomFromDisk) is set the FIRST time finishGame() runs for a room and checked before doing
+ * anything — a reconnect, a stray duplicate call, or a server restart mid-flush can never
+ * double-count the same finished game, because the flag survives restart via the room file.
+ * ------------------------------------------------------------------------------------- */
+const DIFF_POINTS = { easy: 1, medium: 2, hard: 3 };
+function pointsForWinServer(G, winSet) {
+  let pts = 0;
+  G.seats.forEach((opp, j) => { if (winSet.has(j)) return; pts += opp.type === "human" ? 3 : (DIFF_POINTS[opp.diff] || 0); });
+  return pts;
+}
+function buildResultEntriesServer(G, mode, winSet) {
+  const entries = [];
+  G.seats.forEach((seat, i) => {
+    if (seat.type !== "human") return;
+    const delta = {}; delta["hg" + mode] = 1;
+    if (winSet.has(i)) { delta["hw" + mode] = 1; delta.hpts = pointsForWinServer(G, winSet); }
+    entries.push({ name: seat.name, delta });
+  });
+  return entries;
+}
+function finishGame(room) {
+  if (room.recorded) return; // idempotent — see comment block above
+  room.recorded = true;
+  touch(room);
+  const G = room.engine.getG();
+  const mode = (G.n === 4 ? "4" : "6") + (G.teams ? "t" : "s");
+  const winSet = new Set(G.winners);
+  const entries = buildResultEntriesServer(G, mode, winSet);
+  for (const e of entries) applyLeaderboardEntry(e.name, e.delta);
+  log("online game finished, recorded to global leaderboard", room.code,
+    entries.map(e => e.name).join(",") || "(no human seats)");
+}
+
+/* ---------------------------------------------------------------------------------------
+ * v0.13 § SOLO RESULTS — unchanged from v0.14 (offline solo/pass-and-play games have no room,
+ * so they POST directly; see the client-side submitOrQueueSoloResult()).
  * ------------------------------------------------------------------------------------- */
 const SOLO_IDS_FILE = process.env.NASTY_SOLO_IDS_FILE
   ? path.resolve(process.env.NASTY_SOLO_IDS_FILE)
   : path.join(__dirname, "solo-ids.json");
-const SOLO_ID_MAX_AGE_MS = 180 * 24 * 60 * 60 * 1000; // plenty to catch any realistic retry/replay
-let soloSeen = new Map(); // gameId -> firstSeenAt
+const SOLO_ID_MAX_AGE_MS = 180 * 24 * 60 * 60 * 1000;
+let soloSeen = new Map();
 function loadSoloSeen() {
   try {
     const obj = JSON.parse(fs.readFileSync(SOLO_IDS_FILE, "utf8"));
@@ -221,15 +266,15 @@ function persistSoloSeenNow() {
   try { fs.writeFileSync(SOLO_IDS_FILE, JSON.stringify(Object.fromEntries(soloSeen))); }
   catch (e) { log("solo-ids persist failed", e.message); }
 }
-setInterval(() => { // prune ancient ids so this file/map never grows unbounded
+setInterval(() => {
   const now = Date.now();
   let pruned = false;
   for (const [id, ts] of soloSeen) { if (now - ts > SOLO_ID_MAX_AGE_MS) { soloSeen.delete(id); pruned = true; } }
   if (pruned) scheduleSoloSeenPersist();
 }, 24 * 60 * 60 * 1000);
 
-const SOLO_RATE_LIMIT = 20;             // max solo-result submits...
-const SOLO_RATE_WINDOW_MS = 60 * 1000;  // ...per IP, per rolling minute — generous for real humans
+const SOLO_RATE_LIMIT = 20;
+const SOLO_RATE_WINDOW_MS = 60 * 1000;
 const soloRateMap = new Map();
 function underSoloRateLimit(ip) {
   const now = Date.now();
@@ -245,15 +290,7 @@ async function handleSoloResult(req, res) {
   const body = await readJsonBody(req);
   const gameId = typeof body.gameId === "string" ? body.gameId.trim().slice(0, 64) : "";
   if (!gameId) { sendJson(res, 400, { error: "missing gameId", epoch: leaderboardEpoch }); return; }
-  if (soloSeen.has(gameId)) { sendJson(res, 200, { ok: true, duplicate: true, epoch: leaderboardEpoch }); return; } // idempotent no-op
-  // v0.13: reject a result recorded under an OLDER season (see "§ LEADERBOARD EPOCH" above) —
-  // the board's been reset since this game finished, so applying it would resurrect pre-reset
-  // numbers. Still mark the gameId seen so a client that keeps retrying doesn't loop forever.
-  // A MISSING epoch (client has never talked to the server before, see index.html's
-  // getKnownLocalEpoch()) is treated as "always current" — never rejected — rather than
-  // assumed-stale; a bug in an earlier version of this code defaulted a missing epoch to 1,
-  // which wrongly rejected every brand-new device's very first solo win after any reset had
-  // ever happened (caught by this session's own live production smoke test).
+  if (soloSeen.has(gameId)) { sendJson(res, 200, { ok: true, duplicate: true, epoch: leaderboardEpoch }); return; }
   const reqEpoch = Number.isFinite(body.epoch) ? body.epoch : null;
   if (reqEpoch !== null && reqEpoch < leaderboardEpoch) {
     soloSeen.set(gameId, Date.now());
@@ -262,7 +299,7 @@ async function handleSoloResult(req, res) {
     sendJson(res, 409, { error: "stale epoch", epoch: leaderboardEpoch });
     return;
   }
-  const entries = Array.isArray(body.entries) ? body.entries.slice(0, 6) : []; // sanity cap - max seats is 6
+  const entries = Array.isArray(body.entries) ? body.entries.slice(0, 6) : [];
   for (const e of entries) { if (e && e.name) applyLeaderboardEntry(e.name, e.delta); }
   soloSeen.set(gameId, Date.now());
   scheduleSoloSeenPersist();
@@ -271,14 +308,15 @@ async function handleSoloResult(req, res) {
 }
 
 /* ---------------------------------------------------------------------------------------
- * v0.8: on-disk persistence. Only the essentials survive a restart — room code, lobby
- * config, the action log (so a rejoining client can replay/catch up exactly like it
- * already does after a live reconnect), and each player's stable id+token (so an old
- * rejoin link/localStorage token still authenticates after the process restarts). Live
- * sockets and `connected` flags are NOT persisted — everyone comes back as "disconnected"
- * on load and has to actually reconnect, same as any other reconnect.
+ * v0.8: on-disk persistence. v0.15 adds the authoritative `G` snapshot + `tableSpeed` +
+ * `recorded` (leaderboard idempotency flag) + `nextSeq` alongside the existing fields. The
+ * action `log` is now just a short, capped tail (see LOG_TAIL_MAX) — reconnects hand back a
+ * full `G` snapshot instead of replaying history, so the log no longer needs to hold a whole
+ * game's worth of actions; it's kept short purely for live-debugging visibility, not replay.
  * ------------------------------------------------------------------------------------- */
 try { fs.mkdirSync(ROOMS_DIR, { recursive: true }); } catch (e) { log("could not create rooms dir", e.message); }
+
+const LOG_TAIL_MAX = 40;
 
 function roomFile(code) { return path.join(ROOMS_DIR, code + ".json"); }
 function roomToDisk(room) {
@@ -288,6 +326,8 @@ function roomToDisk(room) {
     players: Array.from(room.players.values()).map(p => ({ id: p.id, token: p.token, name: p.name, isHost: p.isHost })),
     lobby: room.lobby, started: room.started, seatOwners: room.seatOwners, log: room.log,
     paused: !!room.paused,
+    G: room.engine ? room.engine.getG() : null, tableSpeed: room.tableSpeed || 1,
+    recorded: !!room.recorded, nextSeq: room.nextSeq || 0,
   };
 }
 function roomFromDisk(obj) {
@@ -296,24 +336,26 @@ function roomFromDisk(obj) {
     hostPlayerId: obj.hostPlayerId, nextPlayerId: obj.nextPlayerId || 1,
     players: new Map(), lobby: obj.lobby || null, started: !!obj.started,
     seatOwners: obj.seatOwners || null, log: Array.isArray(obj.log) ? obj.log : [],
-    paused: !!obj.paused,
+    paused: !!obj.paused, engine: null, tableSpeed: obj.tableSpeed || 1,
+    recorded: !!obj.recorded, nextSeq: obj.nextSeq || 0,
   };
   for (const p of (obj.players || []))
     room.players.set(p.id, { id: p.id, token: p.token, name: p.name, ws: null, connected: false, isHost: !!p.isHost });
+  if (obj.G) {
+    try {
+      const engine = createEngine();
+      engine.setLAY(engine.buildLayout(obj.G.n));
+      engine.setG(obj.G);
+      room.engine = engine;
+    } catch (e) { log("failed to restore engine state for room", obj.code, e.message); }
+  }
   return room;
 }
-const persistTimers = new Map(); // code -> Timeout
+const persistTimers = new Map();
 function schedulePersist(room) {
   if (persistTimers.has(room.code)) return;
   persistTimers.set(room.code, setTimeout(() => {
     persistTimers.delete(room.code);
-    // Bug found + fixed during v0.9's production smoke test: a room's own `ws.on("close")`
-    // handler calls touch(room) (to persist the now-disconnected player) using its closure's
-    // `room` reference — which still fires even after an admin DELETE or the automatic
-    // prune has already removed the room from the `rooms` map and unlinked its file (socket
-    // close is asynchronous, so that handler can easily run AFTER the deletion completed).
-    // That resurrected a just-deleted room's rooms/<CODE>.json a moment later. Only persist a
-    // room that's STILL actually live in the `rooms` map at the moment this fires.
     if (rooms.get(room.code) !== room) return;
     persistRoomNow(room);
   }, PERSIST_DEBOUNCE_MS));
@@ -323,13 +365,6 @@ function persistRoomNow(room) {
   catch (e) { log("persist failed", room.code, e.message); }
 }
 function deleteRoomFile(code) {
-  // Bug found + fixed during v0.9's production smoke test: deleting a room (admin god-mode
-  // DELETE, or the normal 30-min/1-week prune) unlinked rooms/<CODE>.json but left any
-  // already-scheduled debounced persistRoomNow() timer (from the room's last touch() before
-  // deletion — schedulePersist()/persistTimers above) still pending. That timer firing
-  // ~800ms later resurrected the just-deleted room's file from its stale in-closure `room`
-  // object, even though the room was already gone from the `rooms` map. Always cancel any
-  // pending timer for this code FIRST, so nothing can write the file back after this point.
   const t = persistTimers.get(code);
   if (t) { clearTimeout(t); persistTimers.delete(code); }
   try { fs.unlinkSync(roomFile(code)); } catch (e) { /* already gone, fine */ }
@@ -355,20 +390,14 @@ function flushAllPersists() {
   for (const room of rooms.values()) persistRoomNow(room);
 }
 
-/* v0.8: remote-address logging + a light rate limit on room creation. This is still "no
- * game rules" — just an abuse guard. See HANDOFF.md "synthetic rooms" note for why this
- * was added: bursts of sub-second create->join->start plus periodic rejoins, source
- * previously unlogged. `x-forwarded-for`/`cf-connecting-ip` come from the cloudflared
- * tunnel; a direct localhost connection (dev/testing) has neither and falls back to the
- * raw socket address. */
 function remoteIp(req) {
   const h = req.headers || {};
   const raw = h["cf-connecting-ip"] || h["x-forwarded-for"] || (req.socket && req.socket.remoteAddress) || "unknown";
   return String(raw).split(",")[0].trim();
 }
-const HOST_RATE_LIMIT = 5;          // max room creates...
-const HOST_RATE_WINDOW_MS = 60 * 1000; // ...per IP, per rolling minute — generous for real humans
-const hostRateMap = new Map();      // ip -> [timestamps]
+const HOST_RATE_LIMIT = 5;
+const HOST_RATE_WINDOW_MS = 60 * 1000;
+const hostRateMap = new Map();
 function underHostRateLimit(ip) {
   const now = Date.now();
   const kept = (hostRateMap.get(ip) || []).filter(t => now - t < HOST_RATE_WINDOW_MS);
@@ -377,7 +406,7 @@ function underHostRateLimit(ip) {
   hostRateMap.set(ip, kept);
   return true;
 }
-setInterval(() => { // periodic cleanup so hostRateMap never grows unbounded
+setInterval(() => {
   const now = Date.now();
   for (const [ip, arr] of hostRateMap) {
     const kept = arr.filter(t => now - t < HOST_RATE_WINDOW_MS);
@@ -401,13 +430,16 @@ function makeRoom(code) {
     lastActivity: Date.now(),
     hostPlayerId: null,
     nextPlayerId: 1,
-    players: new Map(), // playerId -> {id,token,name,ws,connected,isHost}
-    lobby: null,        // {n,teams,seats:[{name,type,diff,claimedBy}]}
+    players: new Map(),
+    lobby: null,
     started: false,
-    seatOwners: null,   // frozen at start: seatIndex -> playerId|null
-    log: [],            // [{seq, action}]
-    paused: false,       // v0.8: pause/resume (see "pauseToggle" below) — not part of the
-                         // action log, just current state, included directly in sync/lobby
+    seatOwners: null,
+    log: [],
+    paused: false,
+    engine: null,        // v0.15: createEngine() instance, set at Start — the authoritative G
+    tableSpeed: 1,        // v0.15: shared table pacing, host-controlled
+    recorded: false,      // v0.15: leaderboard idempotency flag, see finishGame()
+    nextSeq: 0,           // v0.15: ever-increasing action seq, independent of log trimming
   };
   rooms.set(code, room);
   return room;
@@ -425,7 +457,6 @@ function broadcast(room, obj, exceptPlayerId) {
     send(p.ws, obj);
   }
 }
-// v0.9: playerId -> connected, for the client's reunion lobby (see index.html § REUNION).
 function presenceSnapshot(room) {
   const out = {};
   for (const p of room.players.values()) out[p.id] = !!p.connected;
@@ -434,14 +465,163 @@ function presenceSnapshot(room) {
 function lobbySnapshot(room) {
   if (!room.lobby) return null;
   const snap = JSON.parse(JSON.stringify(room.lobby));
-  // v0.8: tell clients which seat is the host's so they can show/protect it in the UI —
-  // still just a display hint, not a rule (claimSeat below enforces the actual protection).
   snap.hostSeatIndex = snap.seats.findIndex(s => s.claimedBy === room.hostPlayerId);
   return snap;
 }
 function roomIsFullyDisconnected(room) {
   for (const p of room.players.values()) if (p.connected) return false;
   return true;
+}
+
+/* ---------------------------------------------------------------------------------------
+ * v0.15 § AUTHORITATIVE TURN LOOP — the heart of the rebuild. Runs entirely synchronously
+ * (Node is single-threaded and every engine call here is sync — no awaits inside this
+ * function), so there is no interleaving hazard between rooms or between two calls for the
+ * SAME room. It deals, decides whose turn it is, resolves every CPU turn and every bow-out /
+ * whole-table-stuck throw-in ITSELF (using the exact same pure decision helpers index.html's
+ * offline path uses — see server/engine.js's dealDecision/passDecision/handOver/
+ * seatsWithCards), and stops the moment it reaches a seat that needs a HUMAN'S move — at which
+ * point it just returns; the next call is triggered by that human's validated `action` message
+ * arriving (see the "action" case in handleMessage below).
+ *
+ * No pacing/delay logic lives here on purpose — the server's job is correctness, not UX pacing;
+ * every phone at the table animates the resulting action stream at the shared table speed (see
+ * "tableSpeed" below), so identical action queues + identical speed = the same view on every
+ * screen, without the server needing to know or care about real-time animation timing.
+ * ------------------------------------------------------------------------------------- */
+const TURN_LOOP_GUARD = 200000; // sanity ceiling against a genuine infinite-loop bug — never hit in practice
+
+function appendAction(room, action) {
+  const seq = room.nextSeq++;
+  room.log.push({ seq, action });
+  if (room.log.length > LOG_TAIL_MAX) room.log.splice(0, room.log.length - LOG_TAIL_MAX);
+  touch(room);
+  if (process.env.NASTY_DEBUG_DIGEST) {
+    const G = room.engine.getG();
+    log('[DRIVE]', action.kind, 'seat=' + (action.seat != null ? action.seat : '-'), action.type ? action.type : (action.m ? action.m.type : ''), '-> turn=' + G.turn, 'over=' + G.over, 'bowedOut=' + JSON.stringify(G.bowedOut), 'handLens=' + JSON.stringify(G.hands.map(h => h.length)));
+  }
+  broadcast(room, { type: "gameAction", seq, action });
+  return seq;
+}
+
+/* Cheap FNV-1a-style digest of the parts of G that must be identical everywhere — mirrors
+ * index.html's client-side gDigest() (§ NET) byte-for-byte (same algorithm, same field order).
+ * Used only for the self-heal integrity check, never for game logic — see maybeStateCheck().
+ * Kept as an independent small copy rather than moved into the shared § ENGINE extract: this
+ * is a testing/self-heal utility, not a game RULE, so the single-source-of-truth requirement
+ * that applies to legalMoves()/applyMove()/etc doesn't apply here the same way — but if it's
+ * ever changed, change BOTH copies (this one and index.html's gDigest()) together. */
+function gDigestServer(G) {
+  const parts = [G.turn, G.dealer, G.schedRound, G.over ? 1 : 0];
+  for (let s = 0; s < G.n; s++) {
+    parts.push(G.hands[s].length, G.bowedOut[s] ? 1 : 0);
+    for (const p of G.pieces[s]) parts.push(p.state[0], p.steps);
+  }
+  parts.push(G.deck.length, G.discard.length);
+  if (process.env.NASTY_DEBUG_DIGEST) console.log('[SRV-PARTS]', JSON.stringify(parts));
+  const str = parts.join(",");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(36);
+}
+// v0.15 bug fix (found via instrumented reproduction): this used to tag the digest with
+// G.actionSeq — but actionSeq only increments on a real MOVE (see applyMove(), § ENGINE);
+// 'pass' and 'deal' actions leave it unchanged. A client could reach the SAME actionSeq value
+// via an earlier move and immediately compare, before it had actually processed the later
+// same-actionSeq 'pass'/'deal' actions still sitting in its own queue — a deterministic
+// false-positive mismatch, not a rare race (this was the actual cause of most of the
+// self-healing-but-frequent resyncs observed in testing, on top of the separate turn-tracking
+// fix above). Fixed by tagging with `afterSeq` — the monotonic BROADCAST sequence number
+// (room.nextSeq, already unique per action of any kind) of the specific action this digest was
+// computed right after — and having the client compare once it's actually APPLIED that many
+// broadcast actions (NET.appliedSeq, § NET), not once some unrelated field happens to match.
+function maybeStateCheck(room, afterSeq) {
+  const G = room.engine.getG();
+  const digest = gDigestServer(G);
+  if (process.env.NASTY_DEBUG_DIGEST) log('[SRV-FULLG]', afterSeq, JSON.stringify(G));
+  broadcast(room, { type: "stateCheck", afterSeq, digest });
+}
+
+function sameMove(legal, submitted) {
+  if (!legal || !submitted) return false;
+  if (legal.ci !== submitted.ci || legal.type !== submitted.type || legal.owner !== submitted.owner) return false;
+  if (legal.type === "swap") return legal.ts === submitted.ts && legal.tpi === submitted.tpi;
+  if (legal.pi !== submitted.pi || legal.to !== submitted.to) return false;
+  const a = legal.kick, b = submitted.kick;
+  if (!!a !== !!b) return false;
+  if (a && (a.seat !== b.seat || a.pi !== b.pi)) return false;
+  return true;
+}
+
+function driveTurnLoop(room) {
+  const E = room.engine;
+  for (let guard = 0; guard < TURN_LOOP_GUARD; guard++) {
+    const G = E.getG();
+    if (!G || G.over) { if (G && G.over) finishGame(room); return; }
+    if (E.handOver()) {
+      // sweep dead cards from bowed-out seats' leftover hands (mirrors runTurnInner()'s sweep)
+      for (let s = 0; s < G.n; s++) { if (G.hands[s].length) { G.discard.push(...G.hands[s]); G.hands[s].length = 0; } }
+      let seed = {};
+      if (E.needsReshuffle()) seed = { deck: E.freshDeck(), dealer: (G.dealer + 1) % G.n };
+      const r = E.dealDecision(seed);
+      const dealSeqNum = appendAction(room, { kind: "deal", dealer: r.dealer, reshuffled: r.reshuffled, k: r.k, hands: r.hands, deckCount: r.deckCount, turn: E.getG().turn });
+      maybeStateCheck(room, dealSeqNum);
+      continue;
+    }
+    const seat = G.turn;
+    if (G.hands[seat].length === 0) {
+      E.advanceTurn();
+      appendAction(room, { kind: "pass", seat, newlyBowedOut: false, threwIn: false, passStreak: G.passStreak, emptyHand: true, turn: E.getG().turn });
+      continue;
+    }
+    if (G.bowedOut[seat]) {
+      const r = E.passDecision(seat, false);
+      E.advanceTurn();
+      appendAction(room, { kind: "pass", seat, newlyBowedOut: false, threwIn: r.threwIn, passStreak: r.passStreak, turn: E.getG().turn });
+      continue;
+    }
+    const moves = E.legalMoves(seat);
+    if (moves.length === 0) {
+      const r = E.passDecision(seat, true);
+      E.advanceTurn();
+      appendAction(room, { kind: "pass", seat, newlyBowedOut: true, threwIn: r.threwIn, passStreak: r.passStreak, turn: E.getG().turn });
+      continue;
+    }
+    const seatCfg = G.seats[seat];
+    if (seatCfg.type === "cpu") {
+      const m = E.chooseAI(seat, moves);
+      E.applyMove(seat, m);
+      if (E.getG().over) { appendAction(room, { kind: "move", seat, m, turn: G.turn }); finishGame(room); return; }
+      E.advanceTurn();
+      // v0.15 bug fix: every action carries the RESULTING turn number explicitly (computed
+      // AFTER advanceTurn(), here and at every other appendAction call site in this function
+      // and in the "action" handler below) — found via instrumented reproduction: the client
+      // mirrors turn advancement by calling its own advanceTurn()/advance() rather than
+      // trusting a wire value, and a rare timing window (a stale in-flight animation call
+      // finishing after a fresh reconnect snapshot landed) could call it one extra time,
+      // silently drifting the turn number forward by one while every OTHER field (hands,
+      // pieces, actionSeq) stayed perfectly in sync — invisible until the next digest
+      // checkpoint caught it several actions later. Sending the authoritative number directly
+      // and having the client just ASSIGN it (idempotent) removes the whole class of drift
+      // instead of chasing the exact race. See index.html's applyServerAction()/
+      // applyPassAction()/applyDealAction() for the client-side assignment.
+      const cpuMoveSeqNum = appendAction(room, { kind: "move", seat, m, turn: E.getG().turn });
+      // v0.15 second bug fix, found the SAME way: maybeStateCheck() used to run BEFORE
+      // advanceTurn() - since G.actionSeq doesn't change when advanceTurn() runs, the digest
+      // it broadcast was tagged with an actionSeq that, on the CLIENT side, only gets reached
+      // once the WHOLE action (turn included) has finished applying - a guaranteed,
+      // deterministic mismatch on every single kick/swap move, not a rare race. Moved to AFTER
+      // advanceTurn() so the digest reflects the exact same fully-resolved checkpoint the
+      // client will have once it's done applying this action.
+      if (m.kick || m.type === "swap") maybeStateCheck(room, cpuMoveSeqNum);
+      continue;
+    }
+    // Human seat with cards and at least one legal move: stop here and wait for their
+    // validated `action` message (see the "action" case below) — this is the ONLY external
+    // input the authoritative loop ever waits on.
+    return;
+  }
+  log("driveTurnLoop guard tripped (possible infinite loop) — room", room.code);
 }
 
 /* ---- tiny HTTP helpers (no framework, matches the rest of this file's style) ---- */
@@ -453,37 +633,11 @@ function readJsonBody(req) {
     req.on("error", () => resolve({}));
   });
 }
-// CORS (fix, v0.9 — found via the production tunnel smoke test): the real website
-// (bpangman.github.io) and the tunnel server (*.trycloudflare.com) are different origins, and
-// none of these HTTP endpoints ever sent an Access-Control-Allow-Origin header — a browser
-// blocks a cross-origin fetch() without one. The core game itself never noticed (WebSocket
-// connections aren't subject to CORS the same way), but EVERY plain fetch() here — the global
-// leaderboard's merged display AND the entire admin/god-mode panel — was silently failing in
-// any real browser hitting the real website, always falling back to local-only / a spinner
-// that never resolves. Caught because the test harness's own Node-side fetch() checks (no CORS
-// enforcement outside a browser) kept passing while the actual in-page fetch() failed. Public
-// endpoints, no cookies/credentials involved, so `*` is fine — the admin routes are already
-// protected by the token, not by origin.
 const CORS_HEADERS = { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS", "access-control-allow-headers": "content-type, x-admin-token", "access-control-expose-headers": "x-leaderboard-epoch" };
 function sendJson(res, status, obj) {
   res.writeHead(status, Object.assign({ "content-type": "application/json" }, CORS_HEADERS));
   res.end(JSON.stringify(obj));
 }
-// v0.14 § UNIVERSAL LINKS — invite links are now https://play.nastyboardgame.com/join/CODE
-// (this server, both here and the server.ts twin) instead of a plain ?join=CODE website URL,
-// so a phone with the app installed opens the APP directly instead of the website. Two routes:
-//   1. GET /.well-known/apple-app-site-association — Apple's CDN fetches this (over HTTPS,
-//      no redirects followed, expects `application/json` even with no file extension) to
-//      verify this domain is allowed to open com.pangman.nasty via Associated Domains. Both
-//      the legacy `appID` (singular) and current `appIDs` (array) keys are included for
-//      maximum compatibility — Apple's docs say either is accepted, some older OS versions
-//      only ever looked for the singular form.
-//   2. GET /join/:CODE — a real browser (no app installed, or a long-press "Open in Safari")
-//      lands here; this just instantly bounces it to the exact same website join flow that's
-//      always existed (nastyboardgame.com/?join=CODE), completely unchanged for anyone who
-//      doesn't have the app. When the app IS installed, iOS resolves the Universal Link and
-//      opens the app WITHOUT ever making this HTTP request at all — this route only ever
-//      serves the no-app fallback case.
 const TEAM_APP_ID = "YJU5U6VX8V.com.pangman.nasty";
 const AASA_BODY = JSON.stringify({
   applinks: {
@@ -493,8 +647,6 @@ const AASA_BODY = JSON.stringify({
 });
 const JOIN_CODE_RE = /^\/join\/([A-Za-z0-9]{1,8})\/?$/;
 function joinRedirectHtml(code) {
-  // Escaped defensively even though codes only ever come from the no-vowels alphabet
-  // (BCDFGHJKMNPQRSTVWXZ) — this still passes through a raw URL path, don't trust it blindly.
   const safe = String(code).replace(/[^A-Za-z0-9]/g, "").slice(0, 8);
   const dest = `https://nastyboardgame.com/?join=${encodeURIComponent(safe)}`;
   return `<!doctype html><html><head><meta charset="utf-8">
@@ -505,12 +657,9 @@ function joinRedirectHtml(code) {
 <script>location.replace(${JSON.stringify(dest)});</script>
 </body></html>`;
 }
-// v0.9 § ADMIN — HTTP endpoints for god mode (list/edit/delete the global leaderboard,
-// rename any player in any room, delete a room). All require the admin token (see
-// checkAdminToken above) via an `X-Admin-Token` header or a `?token=` query param.
 async function handleAdminRoute(req, res, url) {
   if (!checkAdminToken(req, url)) { sendJson(res, 401, { error: "unauthorized" }); return true; }
-  const parts = url.pathname.split("/").filter(Boolean); // ["admin", ...]
+  const parts = url.pathname.split("/").filter(Boolean);
 
   if (parts.length === 2 && parts[1] === "rooms" && req.method === "GET") {
     const list = Array.from(rooms.values()).map(r => ({
@@ -560,9 +709,6 @@ async function handleAdminRoute(req, res, url) {
     return true;
   }
   if (parts.length === 3 && parts[1] === "leaderboard" && parts[2] === "reset" && req.method === "POST") {
-    // v0.13: "new season" god-mode action — wipes every entry AND bumps the epoch in the same
-    // breath (see "§ LEADERBOARD EPOCH" above), so every device that talks to the server after
-    // this clears its own local cache too, not just the shared board.
     globalBoard = {};
     leaderboardEpoch += 1;
     persistLeaderboardNow();
@@ -578,7 +724,7 @@ async function handleAdminRoute(req, res, url) {
     for (const k of Object.keys(body || {})) {
       if (!NUMERIC_STAT_KEY.test(k)) continue;
       const v = Number(body[k]);
-      if (Number.isFinite(v)) globalBoard[name][k] = v; // PATCH sets absolute values (edit), unlike recordResult's additive deltas
+      if (Number.isFinite(v)) globalBoard[name][k] = v;
     }
     scheduleLeaderboardPersist();
     log("admin edited leaderboard entry", name);
@@ -600,19 +746,16 @@ async function handleAdminRoute(req, res, url) {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://localhost");
   if (req.method === "OPTIONS") {
-    // CORS preflight — PATCH/DELETE and the custom X-Admin-Token header both trigger one.
     res.writeHead(204, CORS_HEADERS);
     res.end();
     return;
   }
   if (url.pathname === "/health") {
     res.writeHead(200, Object.assign({ "content-type": "application/json" }, CORS_HEADERS));
-    res.end(JSON.stringify({ ok: true, rooms: rooms.size, uptime: process.uptime(), epoch: leaderboardEpoch }));
+    res.end(JSON.stringify({ ok: true, rooms: rooms.size, uptime: process.uptime(), epoch: leaderboardEpoch, protocolVersion: PROTOCOL_VERSION }));
     return;
   }
   if (url.pathname === "/.well-known/apple-app-site-association") {
-    // No CORS headers needed (Apple's CDN, not a browser fetch) — content-type MUST be
-    // application/json even though the path has no extension, and this must NOT redirect.
     res.writeHead(200, { "content-type": "application/json" });
     res.end(AASA_BODY);
     return;
@@ -626,8 +769,6 @@ const server = http.createServer((req, res) => {
     }
   }
   if (url.pathname === "/leaderboard") {
-    // v0.9: public, read-only — powers the in-game leaderboard's "merged local+global" view.
-    // v0.13: also reports the current leaderboardEpoch via header, see "§ LEADERBOARD EPOCH".
     sendLeaderboard(res, 200);
     return;
   }
@@ -636,8 +777,6 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (url.pathname === "/solo-result" && req.method === "POST") {
-    // v0.13: solo/pass-and-play offline games sync to the shared board through here — see
-    // "§ SOLO RESULTS" above.
     handleSoloResult(req, res).catch((e) => { log("solo-result route error", e); sendJson(res, 500, { error: "server error" }); });
     return;
   }
@@ -647,12 +786,32 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server });
 
+// v0.15: a full authoritative snapshot for reconnect/rejoin/reclaim — replaces the old
+// "send the whole action log, let the client replay it" shape. The client just SETS G
+// directly (see index.html's bootGameFromSnapshot()) instead of replaying history, which is
+// both simpler and avoids the reconnect cost ever growing with a long game's history.
+function gameSnapshotFields(room, isHost) {
+  return {
+    G: room.engine ? room.engine.getG() : null,
+    // v0.15: the broadcast seq of the most recent action already reflected in this snapshot -
+    // the client sets NET.appliedSeq to this on install, so the NEXT integrity-digest
+    // checkpoint (see maybeStateCheck()/checkStateDigest()) compares from a known-consistent
+    // baseline instead of possibly-stale bookkeeping left over from before the snapshot.
+    appliedSeq: (room.nextSeq || 1) - 1,
+    isHost,
+    hostConnected: !!(room.players.get(room.hostPlayerId) || {}).connected,
+    paused: !!room.paused,
+    presence: presenceSnapshot(room),
+    tableSpeed: room.tableSpeed || 1,
+    protocolVersion: PROTOCOL_VERSION,
+  };
+}
+
 wss.on("connection", (ws, req) => {
-  const ip = remoteIp(req); // v0.8: logged on room create/join, see "synthetic rooms" note above
+  const ip = remoteIp(req);
   ws.isAlive = true;
   ws.on("pong", () => { ws.isAlive = true; });
-  // which room/player this socket represents, once it identifies itself
-  let ctx = null; // {room, playerId}
+  let ctx = null;
 
   ws.on("message", (raw) => {
     let msg;
@@ -671,12 +830,6 @@ wss.on("connection", (ws, req) => {
     if (!ctx) return;
     const { room, playerId } = ctx;
     const p = room.players.get(playerId);
-    // v0.10.3 fix (found via the reclaim wire-protocol test): a contested "reclaim" hands the
-    // SAME playerId over to a NEW socket and force-terminates the old one (see
-    // "reclaimApprove" above) — that old socket's "close" event fires AFTER the handover, and
-    // without this guard it would blow away the state the takeover just set (p.connected=true,
-    // p.ws=<new socket>) because both sockets share the same player record by design. Only
-    // apply a disconnect if THIS closing socket is still the one on record for that player.
     if (p && p.ws === ws) {
       p.connected = false;
       p.ws = null;
@@ -687,10 +840,7 @@ wss.on("connection", (ws, req) => {
   });
 
   function identify(room, playerId) { ctx = { room, playerId }; }
-  ws.identify = identify; // v0.10.3: lets a DIFFERENT connection's handler (the host,
-  // approving a contested "reclaim") identify THIS socket via its own closure — see
-  // "reclaimApprove" below, which can't reach into another connection's local `ctx` any
-  // other way.
+  ws.identify = identify;
 
   function handleMessage(msg) {
     switch (msg.type) {
@@ -699,7 +849,8 @@ wss.on("connection", (ws, req) => {
         return;
 
       case "host": {
-        // {type:'host', name, n, teams, seats:[{name,type,diff}]}
+        // v0.15: {type:'host', protocolVersion, name, n, teams, seats:[{name,type,diff}]}
+        if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
         if (!underHostRateLimit(ip)) {
           send(ws, { type: "error", message: "Too many rooms created from here — wait a minute and try again." });
           log("rate-limited host attempt", "ip="+ip);
@@ -721,20 +872,17 @@ wss.on("connection", (ws, req) => {
         room.lobby = { n: msg.n === 6 ? 6 : 4, teams: !!msg.teams, seats };
         identify(room, playerId);
         touch(room);
-        send(ws, { type: "created", code, playerId, token, lobby: lobbySnapshot(room) });
+        send(ws, { type: "created", code, playerId, token, lobby: lobbySnapshot(room), protocolVersion: PROTOCOL_VERSION });
         log("room created", code, "ip="+ip);
         return;
       }
 
       case "join": {
-        // {type:'join', code, name}
+        // v0.15: {type:'join', protocolVersion, code, name}
+        if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
         const code = String(msg.code || "").toUpperCase();
         const room = rooms.get(code);
         if (!room) { send(ws, { type: "joinError", message: "That room code doesn't exist. Double check it with the host." }); return; }
-        // v0.10.3: `reason:"started"` lets the client automatically fall back to the
-        // token-less "reclaim by name" path (see "reclaim" below) instead of just dead-ending
-        // here — the client already collected code+name for this very "join" attempt, so it
-        // can retry as a reclaim with zero extra typing.
         if (room.started) { send(ws, { type: "joinError", message: "That game already started. Ask the host to send a new code, or reconnect if you were already playing.", reason: "started" }); return; }
         if (isBadName(msg.name)) { send(ws, { type: "joinError", message: "Pick a nicer name." }); return; }
         const playerId = room.nextPlayerId++;
@@ -742,14 +890,18 @@ wss.on("connection", (ws, req) => {
         room.players.set(playerId, { id: playerId, token, name: cleanName(msg.name, "Player"), ws, connected: true, isHost: false });
         identify(room, playerId);
         touch(room);
-        send(ws, { type: "joined", code, playerId, token, lobby: lobbySnapshot(room) });
+        send(ws, { type: "joined", code, playerId, token, lobby: lobbySnapshot(room), protocolVersion: PROTOCOL_VERSION });
         broadcast(room, { type: "lobby", lobby: lobbySnapshot(room) }, playerId);
         log("player joined", code, playerId, "ip="+ip);
         return;
       }
 
       case "rejoin": {
-        // {type:'rejoin', code, playerId, token}
+        // v0.15: {type:'rejoin', protocolVersion, code, playerId, token}. Old clients (no/low
+        // protocolVersion) get the plain-language mismatch message instead of a confusing
+        // silent failure — this matters here specifically because `rejoin` is also the path a
+        // long-lived tab that never explicitly re-hosted/joined takes after a server deploy.
+        if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
         const code = String(msg.code || "").toUpperCase();
         const room = rooms.get(code);
         const playerId = msg.playerId;
@@ -760,9 +912,9 @@ wss.on("connection", (ws, req) => {
         touch(room);
         const isHost = playerId === room.hostPlayerId;
         if (room.started) {
-          send(ws, { type: "sync", lobby: lobbySnapshot(room), seatOwners: room.seatOwners, log: room.log, isHost, hostConnected: !!(room.players.get(room.hostPlayerId) || {}).connected, paused: !!room.paused, presence: presenceSnapshot(room) });
+          send(ws, Object.assign({ type: "sync", lobby: lobbySnapshot(room), seatOwners: room.seatOwners }, gameSnapshotFields(room, isHost)));
         } else {
-          send(ws, { type: "lobby", lobby: lobbySnapshot(room), isHost });
+          send(ws, { type: "lobby", lobby: lobbySnapshot(room), isHost, protocolVersion: PROTOCOL_VERSION });
         }
         broadcast(room, { type: "presence", playerId, connected: true }, playerId);
         if (playerId === room.hostPlayerId) broadcast(room, { type: "hostStatus", connected: true }, playerId);
@@ -771,14 +923,8 @@ wss.on("connection", (ws, req) => {
       }
 
       case "reclaim": {
-        // v0.10.3: {type:'reclaim', code, name} — token-less recovery. Blake lost a save when
-        // his device's local storage didn't survive (see HANDOFF.md "save/quit/reload"); the
-        // room + the seat's identity already live server-side for up to a week (STARTED_ROOM_TTL_MS),
-        // this just gives a phone with NO stored token (a different device, or one that lost
-        // localStorage) a way back in: the room code + the exact name they were seated under.
-        // Family game, low abuse risk by design — but if that name's seat looks like it's
-        // STILL connected right now, don't just silently hand it over; ask the host first
-        // (see the "contested" branch below / "reclaimApprove").
+        // v0.10.3, protocol-versioned in v0.15: {type:'reclaim', protocolVersion, code, name}
+        if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
         const code = String(msg.code || "").toUpperCase();
         const room = rooms.get(code);
         if (!room) { send(ws, { type: "reclaimError", message: "That room code doesn't exist or has expired." }); return; }
@@ -787,8 +933,6 @@ wss.on("connection", (ws, req) => {
         const wantName = String(msg.name || "").trim().toLowerCase();
         const candidates = Array.from(room.players.values()).filter(p => p.name.trim().toLowerCase() === wantName);
         if (candidates.length === 0) { send(ws, { type: "reclaimError", message: `No one named "${cleanName(msg.name,'that')}" is in that game.` }); return; }
-        // Prefer a currently-disconnected match (the normal case); if every match with that
-        // name is connected, the first one is the contested case below.
         const target = candidates.find(p => !p.connected) || candidates[0];
         if (target.connected) {
           const hostP = room.players.get(room.hostPlayerId);
@@ -808,7 +952,7 @@ wss.on("connection", (ws, req) => {
         identify(room, target.id);
         touch(room);
         const isHost = target.id === room.hostPlayerId;
-        send(ws, { type: "reclaimed", code, playerId: target.id, token: target.token, lobby: lobbySnapshot(room), seatOwners: room.seatOwners, log: room.log, isHost, hostConnected: !!(room.players.get(room.hostPlayerId) || {}).connected, paused: !!room.paused, presence: presenceSnapshot(room) });
+        send(ws, Object.assign({ type: "reclaimed", code, playerId: target.id, token: target.token, lobby: lobbySnapshot(room), seatOwners: room.seatOwners }, gameSnapshotFields(room, isHost)));
         broadcast(room, { type: "presence", playerId: target.id, connected: true }, target.id);
         if (isHost) broadcast(room, { type: "hostStatus", connected: true }, target.id);
         log("player reclaimed seat by name", code, target.id, "ip="+ip);
@@ -816,8 +960,6 @@ wss.on("connection", (ws, req) => {
       }
 
       case "reclaimApprove": {
-        // host-only: {type:'reclaimApprove', reqId, approve:true|false} — the host's answer to
-        // a "reclaimRequest" toast (contested reclaim, see "reclaim" above).
         if (!ctx) return;
         const { room, playerId } = ctx;
         if (playerId !== room.hostPlayerId) return;
@@ -829,36 +971,27 @@ wss.on("connection", (ws, req) => {
         const oldWs = target.ws;
         target.token = newToken();
         target.ws = pending.ws; target.connected = true;
-        // This is running inside the HOST's own connection handler, so it can't set the
-        // reclaiming socket's `ctx` directly — call that socket's OWN identify() (exposed as
-        // ws.identify, see wss.on("connection") above) so ITS future messages (moves, etc.)
-        // are recognized as coming from `target`.
         if (pending.ws.identify) pending.ws.identify(room, target.id);
         touch(room);
         if (oldWs && oldWs !== pending.ws) { try { send(oldWs, { type: "kicked", message: "Someone else took over your seat." }); oldWs.terminate(); } catch (e) {} }
         const isHost = target.id === room.hostPlayerId;
-        send(pending.ws, { type: "reclaimed", code: room.code, playerId: target.id, token: target.token, lobby: lobbySnapshot(room), seatOwners: room.seatOwners, log: room.log, isHost, hostConnected: true, paused: !!room.paused, presence: presenceSnapshot(room) });
+        send(pending.ws, Object.assign({ type: "reclaimed", code: room.code, playerId: target.id, token: target.token, lobby: lobbySnapshot(room), seatOwners: room.seatOwners }, gameSnapshotFields(room, isHost)));
         broadcast(room, { type: "presence", playerId: target.id, connected: true }, target.id);
         log("reclaim approved by host", room.code, target.id);
         return;
       }
 
       case "claimSeat": {
-        // {type:'claimSeat', seatIndex, name}
-        // v0.8: a guest may now claim ANY open seat, including one still marked CPU —
-        // claiming converts it to human (Blake got tripped up needing to pre-flip a CPU
-        // seat before texting an invite). The host's own seat is always protected.
         if (!ctx) return;
         const { room, playerId } = ctx;
         if (!room.lobby || room.started) return;
         const seat = room.lobby.seats[msg.seatIndex];
         if (!seat) return;
-        if (seat.claimedBy === room.hostPlayerId) return;                 // host seat protected
-        if (seat.claimedBy != null && seat.claimedBy !== playerId) return; // already taken by someone else
-        // free any seat this player previously held (can't be the host's — see check above)
+        if (seat.claimedBy === room.hostPlayerId) return;
+        if (seat.claimedBy != null && seat.claimedBy !== playerId) return;
         room.lobby.seats.forEach(s => { if (s.claimedBy === playerId) s.claimedBy = null; });
         seat.claimedBy = playerId;
-        seat.type = "human";   // claiming a CPU seat converts it to human
+        seat.type = "human";
         if (msg.name && !isBadName(msg.name)) seat.name = cleanName(msg.name, seat.name);
         touch(room);
         broadcast(room, { type: "lobby", lobby: lobbySnapshot(room) });
@@ -866,7 +999,6 @@ wss.on("connection", (ws, req) => {
       }
 
       case "setSeat": {
-        // host only: {type:'setSeat', seatIndex, patch:{type,diff,name}}
         if (!ctx) return;
         const { room, playerId } = ctx;
         if (playerId !== room.hostPlayerId || !room.lobby || room.started) return;
@@ -888,74 +1020,96 @@ wss.on("connection", (ws, req) => {
       }
 
       case "start": {
-        // host only: {type:'start', action:{kind:'start', n, teams, seats, dealer, deck}}
+        // v0.15: {type:'start'} — no game-config payload needed at all anymore. The server
+        // already knows n/teams/seats from room.lobby (established during the lobby phase);
+        // it generates the shuffled deck and picks the dealer itself (previously the HOST'S
+        // phone did this and broadcast the result — that "host generates the seed" step is
+        // exactly the kind of host-specialness this rebuild removes).
         if (!ctx) return;
         const { room, playerId } = ctx;
-        if (playerId !== room.hostPlayerId || room.started) return;
+        if (playerId !== room.hostPlayerId || room.started || !room.lobby) return;
         room.started = true;
         room.seatOwners = room.lobby.seats.map(s => s.claimedBy);
-        room.log.push({ seq: 0, action: msg.action });
+        const n = room.lobby.n === 6 ? 6 : 4;
+        // v0.8 rule, carried forward from the old client-side transformation at Start time
+        // ($('btnRoomStart').onclick used to compute this): any seat nobody claimed plays as
+        // CPU, regardless of what `type` said during lobby setup (a family's offline setup
+        // screen may have configured 2+ human seats for pass-and-play, but online, an
+        // unclaimed seat has nobody to hand the phone to — it has to be a CPU). A seat's
+        // `type` is normally already kept in sync with `claimedBy` by claimSeat/setSeat, EXCEPT
+        // exactly this "configured human, never claimed" case, so re-derive from claimedBy
+        // here rather than trusting the stored `type` blindly.
+        const seatsCfg = room.lobby.seats.map(s => ({ name: s.name, diff: s.diff || "medium", type: s.claimedBy != null ? "human" : "cpu" }));
+        const engine = createEngine();
+        engine.setLAY(engine.buildLayout(n));
+        engine.newGame({ n, teams: !!room.lobby.teams, seats: seatsCfg }, { deck: engine.freshDeck(), dealer: Math.floor(Math.random() * n) });
+        room.engine = engine;
+        room.recorded = false;
+        const G = engine.getG();
+        const startAction = { kind: "start", n: G.n, teams: G.teams, seats: seatsCfg, dealer: G.dealer, deck: [], tableSpeed: room.tableSpeed || 1 };
+        room.log = [{ seq: 0, action: startAction }];
+        room.nextSeq = 1;
         touch(room);
-        broadcast(room, { type: "gameAction", seq: 0, action: msg.action, seatOwners: room.seatOwners });
-        log("room started", room.code);
+        broadcast(room, { type: "gameAction", seq: 0, action: startAction, seatOwners: room.seatOwners });
+        log("room started", room.code, `n=${n}`, room.lobby.teams ? "teams" : "ffa");
+        driveTurnLoop(room);
         return;
       }
 
       case "action": {
-        // {type:'action', action:{kind:'move'|'reshuffle', ...}}
+        // v0.15: {type:'action', action:{kind:'move', seat, m}} — the ONLY action a client may
+        // ever originate now. CPU moves and reshuffles are no longer client-generated at all
+        // (see driveTurnLoop above) — any other kind is silently ignored (forward-compat safe
+        // default, matches this file's existing "no such case, do nothing" convention).
         if (!ctx) return;
         const { room, playerId } = ctx;
-        if (!room.started) return;
+        if (!room.started || !room.engine) return;
         const action = msg.action;
-        if (!action || typeof action.kind !== "string") return;
-        if (action.kind === "move") {
-          const owner = room.seatOwners[action.seat];
-          const authorized = owner == null ? playerId === room.hostPlayerId : owner === playerId;
-          if (!authorized) return;
-        } else if (action.kind === "reshuffle") {
-          if (playerId !== room.hostPlayerId) return;
-        } else {
+        if (!action || action.kind !== "move") return;
+        const E = room.engine, G = E.getG();
+        if (!G || G.over) return;
+        const owner = room.seatOwners[action.seat];
+        if (owner == null || owner !== playerId) return; // not authorized for this seat
+        if (action.seat !== G.turn) {
+          // Stale/out-of-turn submission (a race against a very recent server-side action this
+          // client hasn't seen yet) — don't crash the room, just resync this ONE client.
+          send(ws, Object.assign({ type: "sync", lobby: lobbySnapshot(room), seatOwners: room.seatOwners }, gameSnapshotFields(room, playerId === room.hostPlayerId)));
           return;
         }
-        const seq = room.log.length;
-        room.log.push({ seq, action });
-        touch(room);
-        broadcast(room, { type: "gameAction", seq, action });
-        return;
-      }
-
-      case "stateCheck": {
-        // {type:'stateCheck', seq, digest} — the host's periodic per-deal integrity digest
-        // (see index.html gDigest/doDeal). Not part of the action log and not authoritative
-        // here: this is still "no game rules on the server" — just a relay, like everything
-        // else. Clients compare digests themselves and silently rejoin on a mismatch.
-        if (!ctx) return;
-        const { room, playerId } = ctx;
-        if (!room.started || playerId !== room.hostPlayerId) return;
-        broadcast(room, { type: "stateCheck", seq: msg.seq, digest: msg.digest }, playerId);
+        const legal = E.legalMoves(action.seat);
+        const match = legal.find(lm => sameMove(lm, action.m));
+        if (!match) {
+          log("rejected illegal/stale move", room.code, "playerId="+playerId, "seat="+action.seat);
+          send(ws, Object.assign({ type: "sync", lobby: lobbySnapshot(room), seatOwners: room.seatOwners }, gameSnapshotFields(room, playerId === room.hostPlayerId)));
+          return;
+        }
+        E.applyMove(action.seat, match);
+        if (E.getG().over) { appendAction(room, { kind: "move", seat: action.seat, m: match, turn: G.turn }); finishGame(room); return; }
+        E.advanceTurn();
+        // v0.15 bug fix: send the resulting turn number explicitly - see driveTurnLoop()'s
+        // matching comment (CPU-move branch) for the full root-cause writeup. maybeStateCheck()
+        // moved to AFTER advanceTurn() too - see driveTurnLoop()'s second matching comment.
+        const humanMoveSeqNum = appendAction(room, { kind: "move", seat: action.seat, m: match, turn: E.getG().turn });
+        if (match.kick || match.type === "swap") maybeStateCheck(room, humanMoveSeqNum);
+        driveTurnLoop(room);
         return;
       }
 
       case "requestStateCheck": {
-        // v0.8: any non-host client can ask the host to run its per-deal integrity check
-        // RIGHT NOW instead of waiting for the next deal boundary — used when a phone comes
-        // back from the background (visibilitychange/pageshow) so a drift is caught within
-        // moments of returning, not whenever the next hand happens to be dealt. Still just a
-        // relay: the host decides how/whether to respond (see index.html "requestStateCheck").
+        // v0.15: simplified — the server IS the authority now, so it can just answer directly
+        // instead of relaying to the host (v0.14's design, back when only the host's phone
+        // could compute a digest). Still the same wire shape/name for minimal client churn.
+        // Tags with the most recent broadcast seq (room.nextSeq-1) - this is an ON-DEMAND
+        // check (someone's phone just came back from the background), not tied to any
+        // particular action, so "everything broadcast so far" is the right checkpoint.
         if (!ctx) return;
-        const { room, playerId } = ctx;
-        if (!room.started) return;
-        const hostP = room.players.get(room.hostPlayerId);
-        if (hostP) send(hostP.ws, { type: "requestStateCheck", from: playerId });
+        const { room } = ctx;
+        if (!room.started || !room.engine) return;
+        maybeStateCheck(room, room.nextSeq - 1);
         return;
       }
 
       case "pauseToggle": {
-        // v0.8: pause/resume. {type:'pauseToggle', paused:true|false} — ANY seated player
-        // can request it (family-friendly: whoever needs a break can call it, whoever's
-        // ready can un-pause), not just the host. Deliberately NOT part of the action log —
-        // it's current state, not a move — so it's broadcast immediately and also handed to
-        // anyone who (re)joins via sync/lobby above, instead of being replayed.
         if (!ctx) return;
         const { room } = ctx;
         if (!room.started) return;
@@ -965,29 +1119,23 @@ wss.on("connection", (ws, req) => {
         return;
       }
 
-      case "recordResult": {
-        // v0.9 item 7: {type:'recordResult', entries:[{name, delta:{...}}]} — the shared
-        // global leaderboard for online games. Only the HOST may send this (mirrors the
-        // reshuffle/CPU-move authorization pattern already used elsewhere) so a game is
-        // recorded exactly once no matter how many phones are seated at the table. An old
-        // server that doesn't know this message type would just hit its own default case —
-        // forward compatible by construction, nothing special needed for that direction.
+      case "setTableSpeed": {
+        // v0.15: {type:'setTableSpeed', speed} — host-only (mirrors the CPU-move/reshuffle
+        // authorization pattern this file has always used for "one player's phone is briefly
+        // special"), replacing each phone's own local speed choice while a table is online. See
+        // index.html § UTIL's applySpeed()/SPEED_OPTS for the offline-unchanged local version.
         if (!ctx) return;
         const { room, playerId } = ctx;
-        if (!room.started || playerId !== room.hostPlayerId) return;
-        if (Array.isArray(msg.entries)) {
-          for (const e of msg.entries) { if (e && e.name) applyLeaderboardEntry(e.name, e.delta); }
-        }
+        if (playerId !== room.hostPlayerId || !room.started) return;
+        const speed = Number(msg.speed);
+        if (!Number.isFinite(speed) || speed <= 0) return;
+        room.tableSpeed = speed;
+        touch(room);
+        broadcast(room, { type: "tableSpeed", speed: room.tableSpeed });
         return;
       }
 
       case "nudge": {
-        // v0.9 refinement: reunion lobby "Nudge" button — {type:'nudge', targetPlayerId}.
-        // Purely a best-effort relay (still "no game rules"): if that player has a live
-        // socket in THIS room right now, they get a 'nudged' toast; if they're fully
-        // disconnected there's nothing to relay to here (the client's own SMS/share-sheet
-        // half of the Nudge button covers that case separately). Anyone seated can nudge
-        // anyone else — no host-only restriction, this is just a friendly ping.
         if (!ctx) return;
         const { room, playerId } = ctx;
         if (!room.started) return;
@@ -1003,7 +1151,6 @@ wss.on("connection", (ws, req) => {
   }
 });
 
-// heartbeat: ping every socket, drop ones that didn't pong last round
 const hb = setInterval(() => {
   wss.clients.forEach(ws => {
     if (ws.isAlive === false) { try { ws.terminate(); } catch (e) {} return; }
@@ -1012,8 +1159,6 @@ const hb = setInterval(() => {
   });
 }, HEARTBEAT_MS);
 
-// prune abandoned rooms — started-but-unfinished games get a much longer runway (a week)
-// than lobbies that never even started (30 min is plenty — nothing to come back to).
 const pruneTimer = setInterval(() => {
   const now = Date.now();
   for (const [code, room] of rooms) {
@@ -1027,9 +1172,6 @@ const pruneTimer = setInterval(() => {
   }
 }, PRUNE_EVERY_MS);
 
-// v0.10.3: a contested reclaim (see "reclaim"/"reclaimApprove" above) the host never answered
-// — tell the requester rather than leaving them hanging forever. Runs far more often than the
-// room pruner above since RECLAIM_TIMEOUT_MS is only 30s.
 const reclaimSweepTimer = setInterval(() => {
   const now = Date.now();
   for (const [reqId, pending] of pendingReclaims) {
@@ -1040,35 +1182,32 @@ const reclaimSweepTimer = setInterval(() => {
   }
 }, 5000);
 
-loadRoomsFromDisk(); // v0.8: bring back rooms that existed before this process started
-loadLeaderboard();   // v0.9: bring back the shared global leaderboard, same idea
-loadSoloSeen();       // v0.13: bring back the solo-result dedupe set, same idea
-loadLeaderboardEpoch(); // v0.13: bring back the current leaderboard season/epoch, same idea
+if (process.env.NASTY_DEBUG_DIGEST) {
+  setInterval(() => {
+    for (const [code, room] of rooms) {
+      if (!room.engine) continue;
+      const G = room.engine.getG();
+      log('[HEARTBEAT]', code, 'turn=' + G.turn, 'actionSeq=' + G.actionSeq, 'dealSeq=' + G.dealSeq, 'over=' + G.over, 'hands=' + JSON.stringify(G.hands.map(h => h.length)), 'bowedOut=' + JSON.stringify(G.bowedOut), 'seats=' + JSON.stringify(G.seats.map(s => s.type)));
+    }
+  }, 2000);
+}
+loadRoomsFromDisk();
+loadLeaderboard();
+loadSoloSeen();
+loadLeaderboardEpoch();
 log(`admin token file: ${ADMIN_TOKEN_FILE}`);
+log(`protocol version: ${PROTOCOL_VERSION}`);
 
 server.listen(PORT, () => log(`nasty relay listening on :${PORT}`));
 
 function shutdown() {
   clearInterval(hb); clearInterval(pruneTimer); clearInterval(reclaimSweepTimer);
-  flushAllPersists(); // make sure every debounced write actually lands before we exit
+  flushAllPersists();
   if (lbPersistTimer) { clearTimeout(lbPersistTimer); lbPersistTimer = null; }
   persistLeaderboardNow();
   if (soloSeenPersistTimer) { clearTimeout(soloSeenPersistTimer); soloSeenPersistTimer = null; }
   persistSoloSeenNow();
   persistLeaderboardEpoch();
-  // v0.8 fix: `server.close()` only stops ACCEPTING new connections — it does NOT touch
-  // sockets that are already open, and its callback doesn't fire until every existing
-  // connection closes on its own. If any phone is still connected at restart time (the
-  // whole point of this restart-survives feature), this process would sit as a live
-  // zombie — still fully serving its already-open sockets against its now-stale in-memory
-  // room state — for as long as those sockets stay open, while a FRESH process binds the
-  // now-available port and starts from the last DISK snapshot. A phone that reconnects
-  // fresh (a real close+reopen, new socket) lands on the NEW process and gets the current
-  // disk snapshot; phones that never actually dropped stay on the OLD zombie and keep
-  // seeing/making progress that the new process never learns about — exactly the kind of
-  // split-brain that produces two different "truths" for the same room. Terminating every
-  // open socket here forces a real, clean handoff: every client sees an actual disconnect
-  // and reconnects fresh to whichever process is listening after this one is fully gone.
   for (const ws of wss.clients) { try { ws.terminate(); } catch (e) {} }
   server.close(() => process.exit(0));
 }
