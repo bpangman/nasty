@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=697b1072-515a-41df-89ab-9e7a9a9e092a&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=8c825c11-e930-4244-bf36-dd62b5523c6b&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -61,10 +61,12 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 16 reached the family</h1>
+<h1 style="color:#1a5c38">🎉 Build 17 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
 <p>Online games now run in the cloud, so your phone can lock or switch apps freely during a game.
-There is no Skip button in online games anymore. Everyone shares one family leaderboard.</p>
+There is no Skip button in online games anymore. Everyone shares one family leaderboard. This
+build also fixes starting a new online game after an old one ends, and clears stuck messages
+from the menu.</p>
 <h3>📱 The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
 <a href="https://testflight.apple.com/join/d79YpZea">https://testflight.apple.com/join/d79YpZea</a></p>
@@ -78,7 +80,7 @@ There is no Skip button in online games anymore. Everyone shares one family lead
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 16 is live for the family 🎉', body], check=True)
+                    'NASTY: build 17 is live for the family 🎉', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED — email sent, watcher done')
 except Exception as e:
