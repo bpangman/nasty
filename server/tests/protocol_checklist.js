@@ -134,8 +134,16 @@ async function main() {
   const lobby4 = await nextMsg(host, (m) => m.type === "lobby" && m.lobby.seats[3].type === "cpu");
   check(!!lobby4, "host CPU toggle round-trip");
 
-  // start: seat 0 (open human, unclaimed) must become CPU
+  // v0.16 item 4: Start now opens a ready-check gate first - seats 1 (host) and 2 (guest) are
+  // the only claimed/human seats, so both (and only both) must ready up before the deal.
   sendJ(host, { type: "start", protocolVersion: 2 });
+  const rc1 = await nextMsg(host, (m) => m.type === "readyCheck");
+  check(rc1.requiredPlayerIds.length === 2 && rc1.requiredPlayerIds.includes(created.playerId) && rc1.requiredPlayerIds.includes(joined.playerId), "readyCheck requires exactly the 2 claimed human seats");
+  check(rc1.readyPlayerIds.length === 0, "readyCheck starts with nobody ready");
+  sendJ(host, { type: "readyUp" });
+  const rc2 = await nextMsg(guest, (m) => m.type === "readyCheck" && m.readyPlayerIds.includes(created.playerId));
+  check(rc2.readyPlayerIds.length === 1, "readyCheck reflects host readying up, still waiting on guest");
+  sendJ(guest, { type: "readyUp" });
   const startMsg = await nextMsg(host, (m) => m.type === "gameAction" && m.action.kind === "start");
   check(startMsg.action.seats[0].type === "cpu", "unclaimed human seat became CPU at start");
   check(startMsg.action.seats[1].type === "human" && startMsg.action.seats[2].type === "human", "claimed seats stayed human");

@@ -95,7 +95,12 @@ async function main() {
     const joined = await nextMsg(guest, (m) => m.type === "joined");
     guest.send(JSON.stringify({ type: "claimSeat", seatIndex: 1, name: "G1" }));
     await new Promise((r) => setTimeout(r, 400));
+    // v0.16 item 4: both seats are human here (host + guest) - both must ready up before the
+    // ready-check gate clears and the server actually deals.
     host.send(JSON.stringify({ type: "start", protocolVersion: 2 }));
+    await nextMsg(host, (m) => m.type === "readyCheck");
+    host.send(JSON.stringify({ type: "readyUp" }));
+    guest.send(JSON.stringify({ type: "readyUp" }));
     await nextMsg(host, (m) => m.type === "gameAction" && m.action.kind === "start");
     // illegal move from host seat
     host.send(JSON.stringify({ type: "action", action: { kind: "move", seat: 0, m: { ci: 999, type: "move", owner: 0, pi: 0, to: 999, kick: null } } }));

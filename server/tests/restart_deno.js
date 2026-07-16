@@ -66,7 +66,11 @@ async function main() {
     const m = JSON.parse(raw.toString());
     if (m.type === "gameAction") { lastSeq = m.seq; if (typeof m.action.turn === "number") lastTurnFromAction = m.action.turn; if (m.action.kind === "move") moveCount++; }
   });
+  // v0.16 item 4: Start now opens a ready-check gate - the one human seat (this host) must
+  // confirm ready before the server actually deals.
   host.send(JSON.stringify({ type: "start", protocolVersion: 2 }));
+  await nextMsg(host, (m) => m.type === "readyCheck");
+  host.send(JSON.stringify({ type: "readyUp" }));
   await nextMsg(host, (m) => m.type === "gameAction" && m.action.kind === "start");
   await new Promise((r) => setTimeout(r, 2500));
   assert(lastSeq > 0, `game progressed before the kill (lastSeq=${lastSeq}, moves=${moveCount})`);

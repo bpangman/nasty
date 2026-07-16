@@ -122,7 +122,11 @@ async function main() {
     collectAll(host, (m) => {
       if (m.type === "gameAction" && m.action.kind === "start") sawStart = true;
     });
+    // v0.16 item 4: Start now opens a ready-check gate - the one human seat (the host here)
+    // must confirm ready before the server actually deals.
     host.send(JSON.stringify({ type: "start", protocolVersion: 2 }));
+    await nextMsg(host, (m) => m.type === "readyCheck");
+    host.send(JSON.stringify({ type: "readyUp" }));
     await nextMsg(host, (m) => m.type === "gameAction" && m.action.kind === "start");
     assert(sawStart, "start action broadcast");
 
@@ -146,7 +150,11 @@ async function main() {
     const created = await nextMsg(host, (m) => m.type === "created");
     guest.send(JSON.stringify({ type: "join", protocolVersion: 2, code: created.code, name: "Guest" }));
     await nextMsg(guest, (m) => m.type === "joined");
+    // v0.16 item 4: only the host claimed a seat here (the guest never did) - so only the host
+    // is required to ready up before the ready-check gate clears.
     host.send(JSON.stringify({ type: "start", protocolVersion: 2 }));
+    await nextMsg(host, (m) => m.type === "readyCheck");
+    host.send(JSON.stringify({ type: "readyUp" }));
     await nextMsg(host, (m) => m.type === "gameAction" && m.action.kind === "start");
 
     let guestSawSpeed = false;

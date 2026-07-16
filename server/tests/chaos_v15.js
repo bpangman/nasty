@@ -105,8 +105,15 @@ async function claimSeat(page, seatIndex, name) {
     window.netSend({ type: 'claimSeat', seatIndex, name });
   }, { seatIndex, name });
 }
-async function startGameOnline(hostPage) {
+// v0.16 item 4: Start now opens a ready-check gate instead of dealing immediately - every
+// HUMAN seat (not just the host) must send 'readyUp' before the server deals. `humanPages`
+// defaults to just the host (the common single-human-seat case); pass every human page for a
+// multi-human-seat scenario.
+async function startGameOnline(hostPage, humanPages) {
+  const pages = humanPages || [hostPage];
   await hostPage.evaluate(() => window.netSend({ type: 'start', protocolVersion: PROTOCOL_VERSION }));
+  await Promise.all(pages.map((p) => p.waitForFunction(() => window.NET && window.NET.readyCheck != null, { timeout: 10000 })));
+  await Promise.all(pages.map((p) => p.evaluate(() => window.netSend({ type: 'readyUp' }))));
 }
 
 // Drives ONE legal move for `seat` on `page`, if it's currently that seat's turn there and a
@@ -257,7 +264,7 @@ async function scenarioHostBg() {
   await joinRoom(g1, code, 'Guest1'); await claimSeat(g1, 1, 'Guest1');
   await joinRoom(g2, code, 'Guest2'); await claimSeat(g2, 2, 'Guest2');
   await new Promise((r) => setTimeout(r, 400));
-  await startGameOnline(hostPage);
+  await startGameOnline(hostPage, [hostPage, g1, g2]);
   await Promise.all([hostPage, g1, g2].map((p) => p.waitForFunction(() => window.G != null, { timeout: 10000 })));
   log('game started, code=', code);
 
@@ -327,7 +334,7 @@ async function scenarioChaos(runs) {
     await joinRoom(g1, code, 'Guest1'); await claimSeat(g1, 1, 'Guest1');
     await joinRoom(g2, code, 'Guest2'); await claimSeat(g2, 2, 'Guest2');
     await new Promise((r) => setTimeout(r, 300));
-    await startGameOnline(hostPage);
+    await startGameOnline(hostPage, [hostPage, g1, g2]);
     await Promise.all([hostPage, g1, g2].map((p) => p.waitForFunction(() => window.G != null, { timeout: 10000 })));
 
     const stop = { stop: false };

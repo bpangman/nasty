@@ -123,7 +123,11 @@ async function main() {
       });
     }), { code, name: 'H' + i, seat: i });
   }
+  // v0.16 item 4: Start now opens a ready-check gate - all 4 human seats must ready up before
+  // the server actually deals.
   await pages[0].evaluate(() => window.netSend({ type: 'start', protocolVersion: PROTOCOL_VERSION }));
+  await Promise.all(pages.map((p) => p.waitForFunction(() => window.NET && window.NET.readyCheck != null, { timeout: 10000 })));
+  await Promise.all(pages.map((p) => p.evaluate(() => window.netSend({ type: 'readyUp' }))));
   await Promise.all(pages.map((p) => p.waitForFunction(() => window.G != null, { timeout: 10000 })));
   log('game started, all 4 humans seated');
 

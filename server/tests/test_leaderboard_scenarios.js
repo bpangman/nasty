@@ -174,7 +174,11 @@ async function main() {
         window.hostCreateRoom();
       });
     });
+    // v0.16 item 4: Start now opens a ready-check gate - the one human seat (this page) must
+    // ready up before the server actually deals.
     await page.evaluate(() => window.netSend({ type: 'start', protocolVersion: PROTOCOL_VERSION }));
+    await page.waitForFunction(() => window.NET && window.NET.readyCheck != null, { timeout: 8000 });
+    await page.evaluate(() => window.netSend({ type: 'readyUp' }));
     await page.waitForFunction(() => window.G != null, { timeout: 8000 });
     const t0 = Date.now();
     let over = false;
