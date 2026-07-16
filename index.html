@@ -1222,6 +1222,18 @@ if(IS_APP){
   // shows any ONE of these signals can fail to fire on a given iOS build/WKWebView state, so
   // all three call the exact same onForeground()/drainSoloQueue() pair, harmless if redundant).
   try{ CAP.Plugins.App.addListener('resume', ()=>{ onForeground(); drainSoloQueue(); }); }catch(e){}
+  /* v0.16 item 5: push notification ("it's your turn") REGISTRATION plumbing lives here - the
+     listener has to be attached before requestPermissions()/register() are ever called (the
+     permission REQUEST itself only happens later, once - see maybeRequestPushPermission(),
+     § NET, called after the player's first online game starts, never at launch). onPushRegistered()/
+     PUSH_TOKEN are defined further down (§ NET) - safe to reference here even though this code
+     runs first, since this callback only ever fires later, asynchronously, once the whole
+     script (and therefore every top-level function/const it needs) has already run - the same
+     forward-reference pattern this file already uses for appUrlOpen/getLaunchUrl above. */
+  try{
+    CAP.Plugins.PushNotifications.addListener('registration',(t)=>{ onPushRegistered(t&&t.value); });
+    CAP.Plugins.PushNotifications.addListener('registrationError',(e)=>{ console.warn('push registration failed',e&&e.error); });
+  }catch(e){}
   /* v0.11.1 splash-centering fix (Blake: "isn't centered in the middle of the screen").
      ROOT CAUSE, tracked down by screenshotting every 100-150ms through real launches on 3
      simulator sizes: the static splash IMAGE itself was never the problem (measured dead-center
@@ -3406,6 +3418,50 @@ function resolveWsUrl(){
   });
 }
 function netSend(obj){ if(NET.ws&&NET.ws.readyState===1)NET.ws.send(JSON.stringify(obj)); }
+/* ============================= § PUSH (v0.16 item 5, iOS app only) =============================
+   "It's your turn in NASTY" - the server (server/server.js's maybeSendTurnPush(), server/cloud/
+   server.ts's twin) sends a real push when a human seat's turn starts (or that seat drops mid-
+   turn) while its socket is dead. Everything here is the CLIENT half: asking for permission at
+   the right moment, getting the APNs device token, and keeping the server's copy of it current
+   across reconnects. Completely inert in a plain browser - every entry point below either checks
+   IS_APP itself or is only ever called from somewhere that already did (onPushRegistered() is
+   only reachable via the § CAPACITOR listener above, which is itself inside `if(IS_APP)`). */
+let PUSH_TOKEN=null;
+function onPushRegistered(deviceToken){
+  if(!deviceToken)return;
+  PUSH_TOKEN=deviceToken;
+  sendPushToken();
+}
+/* Sends (or RE-sends) the current device token to the server, tied to this connection's own
+   playerId - the same per-room identity a rejoin token/reclaim-by-name already key off. Called
+   right after registration succeeds, and again from onSync()/bootGameFromNetwork() below so a
+   fresh server-side room/player record always has it after ANY (re)connect - a server restart,
+   a room the phone reconnected to on a different day, or simply the first game after granting
+   permission all land here the same way. No-op if we don't yet have both a token and an online
+   identity to attach it to - harmless, just means there's nothing to send yet. */
+function sendPushToken(){
+  if(!IS_APP||!PUSH_TOKEN||!NET.online||NET.playerId==null)return;
+  netSend({type:'registerPush',token:PUSH_TOKEN,platform:'ios'});
+}
+/* Requests notification permission - called from exactly ONE place (see $('btnOnlineRulesOk')'s
+   click handler, § UI/MENU below): right after a player dismisses the one-time online-rules
+   popup for the FIRST TIME EVER, i.e. right after their first online game actually starts. NOT
+   at app launch, and not on every subsequent online game (nasty-push-asked gates it to once -
+   iOS itself would just silently re-resolve the already-decided status on a repeat call anyway,
+   but there's no reason to make that round trip every game). Best-effort throughout: a denied
+   permission, an unsupported plugin, or any thrown error just means push never activates for
+   this player - never anything that could break or interrupt the game itself. */
+async function maybeRequestPushPermission(){
+  if(!IS_APP)return;
+  try{ if(localStorage.getItem('nasty-push-asked'))return; }catch(e){}
+  try{ localStorage.setItem('nasty-push-asked','1'); }catch(e){}
+  const PN=CAP&&CAP.Plugins&&CAP.Plugins.PushNotifications;
+  if(!PN)return;
+  try{
+    const perm=await PN.requestPermissions();
+    if(perm&&perm.receive==='granted')await PN.register();
+  }catch(e){ /* permission flow unsupported/denied - never let this affect the game */ }
+}
 /* Cheap FNV-1a-style digest of the parts of G that must be identical everywhere - used only
    for the integrity check below (see doDeal), never for game logic. Deliberately includes
    hand LENGTHS (not the cards) so it stays a privacy-safe number, not a data leak. */
@@ -3670,6 +3726,7 @@ function bootGameFromNetwork(action){
   drawBoard(); buildTable(); fitBoard(); setTimeout(fitBoard,50);
   window.G=G; window.LAY=LAY;
   updateConnIndicator();
+  sendPushToken();   // v0.16 item 5: in case permission was already granted from an earlier game this session - see § PUSH
   toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts`,2600);
   // v0.16 item 4: this is the ONE place a genuinely fresh online game boots for a client that
   // was already sitting in the lobby (a reconnect/rejoin/reclaim always uses
@@ -3881,6 +3938,7 @@ function onSync(m){
   NET.presence=m.presence||{};   // v0.9: playerId->connected snapshot, for the reunion lobby
   NET.mySeat=NET.seatOwners?NET.seatOwners.indexOf(NET.playerId):-1;
   updateConnIndicator();
+  sendPushToken();   // v0.16 item 5: re-register on every reconnect (rejoin/reclaim both land here) - see § PUSH
   if(m.G){
     bootGameFromSnapshot(m.G,m.paused,m.tableSpeed,m.appliedSeq);
     // v0.9 refinement: coming back via the menu's "Resume Saved Game" tile (as opposed to a
@@ -4572,7 +4630,10 @@ $('btnLeaveDiscard').onclick=()=>doLeaveGame(false);
 $('btnLeaveForGood').onclick=doLeaveForGood;
 $('btnLeaveCancel').onclick=()=>$('leaveConfirmOverlay').classList.add('hidden');
 $('btnMenu').onclick=openLeaveConfirm;
-$('btnOnlineRulesOk').onclick=()=>$('onlineRulesOverlay').classList.add('hidden');
+$('btnOnlineRulesOk').onclick=()=>{
+  $('onlineRulesOverlay').classList.add('hidden');
+  maybeRequestPushPermission();   // v0.16 item 5: right after the FIRST online game's rules popup is dismissed - see § PUSH
+};
 $('btnRules').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRules2').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRulesClose').onclick=()=>$('rulesOverlay').classList.add('hidden');

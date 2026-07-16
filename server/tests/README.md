@@ -21,6 +21,8 @@ server take `SERVER=deno` as an env var.
 | `reconnect_storm.js` | the v0.7.4/v0.9-era kick-harness recipe on the new architecture: 4 human seats, rotate dropping/reconnecting one per cycle mid-play, convergence after every cycle | `node reconnect_storm.js 18` / `SERVER=deno node reconnect_storm.js 18` |
 | `test_leaderboard_scenarios.js` | leaderboard exactly-once: solo w/ server reachable, solo w/ server down then queue drain, online game server-side recording + reconnect-no-double | `node test_leaderboard_scenarios.js` |
 | `soak_offline.js` | the standing offline soak recipe (`#autotest` 4P / `#autotest6` 6P), bit-identical-offline regression check | `node soak_offline.js both` |
+| `test_v16_features.js` | v0.16 items 2/4/6: ready-up gate, "Leave for good" CPU takeover + leaderboard exclusion, non-host pauseToggle reaching everyone | `node test_v16_features.js node` / `node test_v16_features.js deno` |
+| `test_push_notifications.js` | v0.16 item 5: `registerPush` accepted + persisted, no push while connected, exactly-once would-send-push log on disconnect (with the right token/name), no push for a seat with no registered token | `node test_push_notifications.js node` / `node test_push_notifications.js deno` |
 
 Expected results as of v0.15 (2026-07-16) are recorded in HANDOFF.md's v0.15 section - if a
 run here diverges from those numbers, treat it as a regression until proven otherwise.
