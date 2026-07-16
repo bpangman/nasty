@@ -3836,15 +3836,21 @@ function handleNetMessage(m){
     case 'reclaimRequest': handleReclaimRequest(m); return;
     case 'rejoinError':
       // v0.8: a SILENT auto-rejoin attempt (no URL param - see boot()'s iOS-eviction path)
-      // failing shouldn't pop the join overlay in someone's face out of nowhere; it should
-      // just quietly give up on that room and fall back to offering an offline resume.
-      if(NET.silentRejoin){
-        NET.silentRejoin=false; NET.online=false; NET.wantConnection=false;
-        clearLastRoom(); offerOfflineResumeIfAny();
-        return;
+      // failing shouldn't pop the join overlay in someone's face out of nowhere. v0.15.1
+      // hotfix (2026-07-16, Blake's report: a "Resume" tile that does nothing): ANY failed
+      // resume/rejoin - silent or the explicit "Resume Saved Game" tile tap, which is the
+      // non-silent path that actually reaches this case in practice today - must clear the
+      // stale nasty-last-room pointer and refresh the resume tile, so a dead game can never
+      // leave an unclickable tile behind. leaveOnlineToMenu() already does exactly that (plus
+      // resets NET, closes any open overlay, and lands on a clean usable menu) - if we're
+      // already mid-game (G exists - a live reconnect drop, not a resume attempt), just toast
+      // instead of ripping the board out from under an active game.
+      if(G){
+        toast(m.message||'Lost the room connection.');
+      }else{
+        leaveOnlineToMenu(NET.silentRejoin?null:(m.message||'Lost the room connection.'));
       }
-      toast(m.message||'Lost the room connection.');
-      if(!G){ NET.online=false; NET.wantConnection=false; openJoinOverlay(NET.code||''); }
+      NET.silentRejoin=false;
       return;
     case 'lobby':
       NET.lobby=m.lobby;
@@ -3909,7 +3915,12 @@ function handleNetMessage(m){
       // v0.15: this server doesn't understand something this client just sent, or vice versa
       // - almost always means the app/website is out of date relative to the server (or, more
       // rarely, an old server this app has cached a stale URL for). Plain-language, no jargon.
-      NET.online=false; NET.wantConnection=false;
+      // v0.15.1 hotfix (2026-07-16): must ALSO clear any stale online-resume state, exactly
+      // like a failed rejoin - a mismatch can arrive from the "Resume Saved Game" tile's
+      // rejoin attempt too (a dead room another way), so use the same leaveOnlineToMenu()
+      // path that guarantees a clean, usable menu - passing no message so it can be shown
+      // separately below with a longer duration (this one's worth reading, not a quick blip).
+      leaveOnlineToMenu(null);
       toast(m.message||'This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.',6000);
       return;
     case 'paused':
