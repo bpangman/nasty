@@ -56,10 +56,11 @@
 //    means cross-instance delivery silently doesn't happen instead of crashing the process,
 //    which is a non-issue given deploy runs the app pinned to a single region (see
 //    HANDOFF.md) where, at this app's traffic level, one instance serves everything anyway.
-//    New-platform addition: a § HEARTBEAT interval (below) sends periodic 'pong' frames over
+//    New-platform addition: a § HEARTBEAT interval (below) sends periodic 'ping' frames over
 //    every open socket so the platform's idle-instance teardown (as short as 5s of total
-//    silence, per its docs) never fires mid-game — old clients already silently ignore an
-//    unsolicited 'pong', so this is not a wire-protocol change.
+//    silence, per its docs) never fires mid-game, AND (v0.16) so a socket that never echoes
+//    one back gets detected as half-dead and force-closed server-side, same spirit as
+//    server.js's Node-`ws`-library ping/pong/terminate() heartbeat.
 //
 // Admin token: read from the NASTY_ADMIN_TOKEN env var (a Deno Deploy secret) instead of a
 // file — set it to the SAME value as server/admin-token.txt so Blake's existing token in the
@@ -627,6 +628,11 @@ function gameSnapshotFields(meta: RoomMeta, isHost: boolean) {
  * ------------------------------------------------------------------------------------- */
 const localSockets = new Map<string, Map<number, WebSocket>>();
 const channels = new Map<string, BroadcastChannel>();
+// v0.16: last time ANY message arrived on a given socket — the proof-of-life clock the §
+// HEARTBEAT loop below uses to find and close half-dead sockets (see that section for why this
+// platform needs an app-level substitute for real WS-frame ping/pong). WeakMap so a closed
+// socket's entry is GC'd on its own, no explicit cleanup needed alongside unregisterLocalSocket.
+const socketLastSeen = new WeakMap<WebSocket, number>();
 
 function send(ws: WebSocket | null | undefined, obj: unknown) {
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -747,24 +753,51 @@ setInterval(() => {
 }, HOST_RATE_WINDOW_MS);
 
 /* ---------------------------------------------------------------------------------------
- * § HEARTBEAT — new-platform adaptation, 2026-07-11. The new Deno Deploy platform tears an
- * instance down after "no new incoming requests ... or responses ... for a period of time"
- * as short as 5 SECONDS in the worst case (docs: "between 5 seconds and 10 minutes"), but
- * explicitly says WebSocket connections that actively transmit data — including ping/pong
- * frames — count as activity and keep the instance (and the socket) alive. Real games have
- * long idle gaps (someone's deciding a move, a phone's just sitting on the board), so without
- * this, a family member who steps away for a couple minutes could come back to a silently
- * dropped connection. This sends the SAME 'pong' message the protocol already uses (echoed
- * today only in response to a client 'ping', see the "ping" case above) to every socket this
- * isolate holds, often enough to stay comfortably under the platform's shortest possible idle
- * window. Old/unmodified clients already silently ignore an unsolicited 'pong' (no matching
- * switch case in handleNetMessage does anything with it) — zero wire-protocol change.
+ * § HEARTBEAT — new-platform adaptation, 2026-07-11; extended v0.16 to also detect and clean
+ * up half-dead client sockets. The new Deno Deploy platform tears an instance down after "no
+ * new incoming requests ... or responses ... for a period of time" as short as 5 SECONDS in
+ * the worst case (docs: "between 5 seconds and 10 minutes"), but explicitly says WebSocket
+ * connections that actively transmit data — including ping/pong frames — count as activity
+ * and keep the instance (and the socket) alive. Real games have long idle gaps (someone's
+ * deciding a move, a phone's just sitting on the board), so without this, a family member who
+ * steps away for a couple minutes could come back to a silently dropped connection.
+ *
+ * v0.16: this loop now sends 'ping' (not an unsolicited 'pong') and expects every live client
+ * to echo it straight back as 'pong' — see the client's own `case 'ping'` in handleNetMessage,
+ * index.html § NET. This platform's native `WebSocket` (from Deno.upgradeWebSocket) has no
+ * `.ping()`/'pong'-event pair the way server.js's Node `ws` library does (see that file's
+ * HEARTBEAT/isAlive/terminate()), so there's no protocol-frame-level way to detect a socket
+ * that reports OPEN but is actually dead (the exact real-device failure mode this whole v0.16
+ * pass exists to catch — see HANDOFF.md's "reconnect glitch" writeup). This app-level
+ * ping/pong round trip is the substitute: `socketLastSeen` (set on every inbound message, see
+ * `socket.onmessage` above) is checked before each ping; a socket that's gone SOCKET_STALE_MS
+ * without producing so much as one reply gets force-closed here, same spirit as server.js's
+ * `ws.terminate()` — this doesn't wait for the room's own rejoin flow to notice, it proactively
+ * frees the seat's connection slot so presence/hostConnected broadcasts stay accurate for
+ * everyone else at the table, and so a genuine reconnect from that same player isn't fighting
+ * a socket the server itself still thinks is fine. (Old/unmodified pre-v0.16 clients silently
+ * ignored an unsolicited 'pong' with no reply — this coupled client+server change is safe
+ * exactly because index.html and server.ts always deploy together, HANDOFF's standing rule.)
  * ------------------------------------------------------------------------------------- */
 const HEARTBEAT_MS = 4000;
+const SOCKET_STALE_MS = HEARTBEAT_MS * 3;   // ~1 missed reply is tolerated, 2 in a row is not -
+                                             // proportionally similar margin to server.js's own
+                                             // 2-missed-30s-pings-before-terminate pattern.
 setInterval(() => {
   const now = Date.now();
   for (const socks of localSockets.values()) {
-    for (const ws of socks.values()) send(ws, { type: "pong", t: now });
+    for (const ws of socks.values()) {
+      const lastSeen = socketLastSeen.get(ws) ?? now;
+      if (now - lastSeen > SOCKET_STALE_MS) {
+        // Half-dead: readyState may still read OPEN (this platform has no lower-level signal
+        // to check), but nothing — not even an app-level pong — has come back in a while.
+        // Force it closed; onclose (below) does the normal disconnect cleanup from there, and
+        // a real reconnect from this player just registers a fresh socket over it.
+        try { ws.close(); } catch (_e) { /* ignore */ }
+        continue;
+      }
+      send(ws, { type: "ping", t: now });
+    }
   }
   // v0.10.3: a contested reclaim (see PendingReclaim above) the host never answered — tell the
   // requester instead of leaving them hanging forever.
@@ -912,6 +945,7 @@ async function handleAdminRoute(req: Request, url: URL): Promise<Response> {
  * ------------------------------------------------------------------------------------- */
 function handleWsUpgrade(req: Request, ip: string): Response {
   const { socket, response } = Deno.upgradeWebSocket(req);
+  socketLastSeen.set(socket, Date.now());   // v0.16: starts the § HEARTBEAT stale-socket clock
   let ctx: { code: string; playerId: number } | null = null;
 
   function identify(code: string, playerId: number) {
@@ -1349,6 +1383,8 @@ function handleWsUpgrade(req: Request, ip: string): Response {
   // order was never guaranteed anyway — see touchRoom's optimistic-concurrency retry).
   let msgChain: Promise<void> = Promise.resolve();
   socket.onmessage = (ev) => {
+    socketLastSeen.set(socket, Date.now());   // v0.16: ANY inbound frame counts as proof of life,
+    // even one that fails to parse below - a garbled frame still proves the pipe is live.
     msgChain = msgChain.then(async () => {
       let msg: Record<string, unknown>;
       try { msg = JSON.parse(typeof ev.data === "string" ? ev.data : ""); } catch (_e) { return; }
