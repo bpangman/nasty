@@ -1,10 +1,12 @@
 {
   "name": "nasty-relay-server",
   "version": "1.0.0",
-  "description": "Dumb room registry + message relay for NASTY online multiplayer (no game rules).",
+  "description": "NASTY online multiplayer server (v0.15: server-authoritative game state).",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build-engine": "node build-engine.js",
+    "test": "node test-engine-sync.js && node test-engine-headless.js"
   },
   "license": "ISC",
   "type": "commonjs",

@@ -1,0 +1,629 @@
+/*
+ * GENERATED FILE — do not hand-edit. Produced by server/build-engine.js from the text between
+ * index.html's "NASTY ENGINE EXTRACT: BEGIN"/"END" markers (§ LAYOUT, § STATE, § ENGINE,
+ * § TURN DECISIONS, § AI). Edit the rules in index.html, then run:
+ *   cd server && npm run build-engine
+ * server/test-engine-sync.js fails if this file is stale relative to index.html — run it (or
+ * `npm test`) after any engine change, before deploying/testing server changes.
+ */
+const rand=a=>a[Math.floor(Math.random()*a.length)];
+
+function createEngine(){
+  /* ============================= § LAYOUT ============================= */
+  const COLORS4=[
+    {name:'Green', c:'#2f8f5b',dark:'#1b5637'},
+    {name:'Navy',  c:'#41598f',dark:'#273757'},
+    {name:'Pink',  c:'#e56aa5',dark:'#a53a72'},
+    {name:'Yellow',c:'#f0c419',dark:'#a37c0a'},
+  ];
+  // v0.9.1 (Blake): seat 5 ("Silver", #aeb6be) read as too close to Navy blue at a glance on the
+  // 6P board - a light blue-gray sitting next to a saturated blue. Replaced with Purple, a hue
+  // that doesn't sit near ANY of the other five (Green/Navy/Red/White/Yellow) or the card
+  // preview's red landing/kill fill (§ UTIL's showPaths CSS) - verified in a browser/sim
+  // screenshot of a real 6P game, see PLANNING.md.
+  const COLORS6=[
+    {name:'Green', c:'#2f8f5b',dark:'#1b5637'},
+    {name:'Navy',  c:'#41598f',dark:'#273757'},
+    {name:'Red',   c:'#c6444a',dark:'#7e2429'},
+    {name:'White', c:'#efe6d2',dark:'#b7a98a'},
+    {name:'Purple',c:'#8859c9',dark:'#4f3070'},
+    {name:'Yellow',c:'#f0c419',dark:'#a37c0a'},
+  ];
+  const SCHEDULES={4:[5,4,4],6:[4,4]};   // deal-round sizes; deck reshuffles after the last round
+  const HOME_N=5;
+  let LAY=null;
+
+  /* X/plus board. Each arm: safe row on the axis, track flanks on both sides.
+     Blake's exact walk-through (v0.4-final): from your start, 5 holes up your exit flank -
+     the 5th is a CORNER HOLE shared with the next leg (each of those two rows is 6 holes
+     counting the start / counting the shared corner) -> turn left, 5 more out the next
+     arm's entry flank, ending at tip level -> turn right, 2 holes: the porch (tip-row
+     center) then that player's start. The tip row has 3 holes: flank end, porch, start.
+     Starts are exactly 12 steps apart. The shared corners + innermost safe holes form the
+     little ring of holes around the board center (like the real board). Your own porch
+     (steps L-1) is your last shared hole; from it you branch inward to the safe row
+     (steps L..L+4). */
+  // v0.13.3: ray-cast the wood octagon (SAME point list as drawBoard()'s `oct` polygon, § RENDER -
+  // this is the single source of truth so the two can never drift apart) from the board center
+  // (500,500) outward at angle thRad, returning the exact distance to the real rim in that
+  // direction. See buildLayout()'s 6P plaqueAnchor branch below for why this exists: the octagon's
+  // true edge distance varies by angle (a flat-edge value straight up/down vs a farther, near-
+  // corner value on the 4 oblique axes) and a single flat radius can't sit flush against both.
+  function octRimR(thRad){
+    const c=150;  // MUST match drawBoard()'s `oct` polygon chamfer constant, § RENDER
+    const pts=[[c,8],[1000-c,8],[992,c],[992,1000-c],[1000-c,992],[c,992],[8,1000-c],[8,c]];
+    const dx=Math.cos(thRad), dy=Math.sin(thRad);
+    let best=Infinity;
+    for(let i=0;i<pts.length;i++){
+      const p1=pts[i], p2=pts[(i+1)%pts.length];
+      const ex=p2[0]-p1[0], ey=p2[1]-p1[1];
+      const denom=dx*ey-dy*ex;
+      if(Math.abs(denom)<1e-9)continue;             // ray parallel to this edge - skip
+      const t=((p1[0]-500)*ey-(p1[1]-500)*ex)/denom; // distance along the ray
+      const u=((p1[0]-500)*dy-(p1[1]-500)*dx)/denom; // position along the edge segment, 0..1
+      if(t>1e-6 && u>=-1e-6 && u<=1+1e-6 && t<best)best=t;
+    }
+    return best;
+  }
+  function buildLayout(n,viewSeat){
+    // v0.12 (per-viewer board rotation - see HANDOFF.md "Per-viewer board rotation"): `viewSeat`
+    // is whichever seat this SCREEN should treat as "home," always drawn at the bottom, like
+    // sitting at a real table. Defaults to n/2 - the seat that ALREADY sat at the bottom under
+    // the pre-v0.12 fixed formula below (see the th= line's comment) - so calling buildLayout(n)
+    // with no second argument (old call sites, test scripts) reproduces the exact pre-v0.12
+    // board with zero behavior change.
+    if(viewSeat==null)viewSeat=Math.floor(n/2);
+    const cfg=n===4
+      ?{r0:430,holeR:13,baseR:470,spread:34}
+      :{r0:400,holeR:10.5,baseR:440,spread:26};
+    /* Even spacing everywhere: solve g so that flank spacing == tip-row spacing == g.
+       tc = g/tan(pi/n) is where adjacent flank lines cross (the shared corner), and
+       (r0 - tc)/5 = g  =>  g = r0 / (5 + 1/tan(pi/n)). Every consecutive pair of loop
+       holes - flanks, corners, tip rows, porch->start - is then exactly g apart. */
+    const g=cfg.r0/(5+1/Math.tan(Math.PI/n));
+    const tc=g/Math.tan(Math.PI/n), hs=g;
+    const arms=[];
+    for(let s=0;s<n;s++){
+      // Pre-v0.12 this was simply -90+s*(360/n) (seat 0 at top, clockwise, n/2 lands at the
+      // bottom/90deg - screen y grows downward, so 90deg IS "down"). v0.12 adds a `viewSeat`
+      // offset so THAT seat's arm lands on 90deg instead: th=90+(s-viewSeat)*(360/n) reduces to
+      // the exact old formula when viewSeat=n/2 (algebraically identical - see HANDOFF.md's
+      // derivation). Because n is always even and viewSeat is always an integer seat index, the
+      // rotation is always an exact multiple of the seats' own angular spacing (360/n) - it only
+      // PERMUTES which seat occupies which of the n evenly-spaced slots, it never invents a new
+      // angle. That's why nothing downstream (the fixed wood-octagon polygon in drawBoard(), the
+      // corner-anchor angles below, the uniform-spacing invariant) needs to change: the same set
+      // of slot angles is reused, just relabeled - see the plaqueAnchor comment below for why the
+      // corner selection stays correct too.
+      const th=(90+(s-viewSeat)*(360/n))*Math.PI/180;
+      const d={x:Math.cos(th),y:Math.sin(th)};
+      arms.push({th,d,p:{x:-d.y,y:d.x}});                 // p = clockwise-side perpendicular
+    }
+    const P=(a,r,off)=>({x:500+a.d.x*r+a.p.x*off,y:500+a.d.y*r+a.p.y*off});
+    const loop=[],home=[],base=[],plaque=[],plaqueDir=[];
+    for(let s=0;s<n;s++){
+      const a=arms[s],b=arms[(s+1)%n];
+      loop.push({...P(a,cfg.r0,g),start:s});              // your start (tip row, exit side)
+      for(let k=1;k<=4;k++)loop.push(P(a,cfg.r0-k*hs,g)); // 4 up the exit flank...
+      loop.push(P(a,tc,g));                               // ...5th = the shared corner hole
+      for(let k=4;k>=0;k--)loop.push(P(b,cfg.r0-k*hs,-g));// 5 out the entry flank (last = tip level)
+      loop.push(P(b,cfg.r0,0));                           // porch: tip-row center, last before b's start
+    }
+    const deckPockets=[],discardPockets=[];
+    const cardW=n===4?76:60, cardH=n===4?106:84;
+    // v0.9.1 (Blake): 6P's deck used to sit at pocketR=225 - close enough to the center ring to
+    // cover some of the board's own holes ("make the deck of cards be on the outer rim of the
+    // dealer not the inside"). Moved out to 330 - right beside the 6P placard (radius 340, see
+    // below) and just inside the base cluster (baseR=440), i.e. genuinely "near that player's
+    // base/placard area" as asked. This was hand-verified against an exhaustive overlap search
+    // (radius AND angle swept) once the placard doubled in size (v0.9.1 item 3): no position
+    // exists on this board that clears the enlarged placard's full padded bounding box AND every
+    // hole AND stays on the wood at any angle - 330 is the radius that clears every actual HOLE
+    // (base/track/safe, the literal complaint) with only a small cosmetic corner-nick against the
+    // placard's padding, confirmed by a direct screenshot (nowhere near as bad as the box-overlap
+    // math alone suggested - the placard's real visible pill is smaller than its full hit-box).
+    // 4P's pocketR=310 was re-checked against the now-bigger 4P placards too and is still clean -
+    // untouched.
+    const pocketR=n===4?310:330;
+    const discOff=n===4?92:66;                            // sideways nudge - keeps a played card clear of the deck
+    // v0.10.2 (Blake: "have the name plates run along that short cut off corner on every side
+    // of the board"): the octagon's wood polygon (see drawBoard()'s `oct`, § RENDER) always has
+    // its 4 diagonal chamfers at exactly ±45°/±135° from center, regardless of n - that's a
+    // property of the physical board shape, not the seat layout. 4P's 4 bisectors land EXACTLY
+    // on those 4 corners (a happy coincidence of 90° spacing), so every 4P seat gets its own. 6P's
+    // 6 bisectors (60° apart) can't all get a private corner - every seat still finds whichever of
+    // the 4 corners is angularly closest (an exact tie, for the 2 seats pointing at the board's
+    // plain left/right edges, breaks toward the first corner checked - see CORNER_ANGLES' order),
+    // landing 2 corners with 2 seats and 2 with 1. A corner with 2 seats offsets them along its own
+    // tangent (perpendicular to its radial direction) so they sit side by side ALONG that corner,
+    // not stacked - CORNER_TANGENT_GAP is that offset, tuned (see HANDOFF.md) against real
+    // getBoundingClientRect() measurements the same way v0.10's PLAQUE_SLIDE was. rot alternates
+    // -45/45 per corner (checkerboard, same sign rule the original 4P-only code used: u.x*u.y>0 ?
+    // -45 : 45) so every plate lies flush and readable against its corner's actual diagonal cut.
+    const CORNER_ANGLES=[-3*Math.PI/4,-Math.PI/4,Math.PI/4,3*Math.PI/4];   // NW, NE, SE, SW
+    const CORNER_R=n===4?630:596;   // radius to just past the chamfer's midpoint (drawBoard's oct,
+                                     // c=150, puts the chamfer itself at ~radius 595) - 4P pushes a
+                                     // touch further since nothing shares its corners; both found
+                                     // empirically against real hole/pocket/viewport measurements.
+    const CORNER_TANGENT_GAP=120;   // board-space offset between two plates sharing one corner (6P only)
+    const cornerGroups=CORNER_ANGLES.map(()=>[]);
+    const seatBt=[];
+    for(let s=0;s<n;s++){
+      const bt=arms[s].th-Math.PI/n;                      // this seat's own bisector (still used for base/deck below)
+      seatBt.push(bt);
+      let best=0,bestDiff=Infinity;
+      for(let c=0;c<4;c++){
+        let diff=Math.abs(bt-CORNER_ANGLES[c])%(2*Math.PI);
+        if(diff>Math.PI)diff=2*Math.PI-diff;
+        if(diff<bestDiff){bestDiff=diff;best=c;}
+      }
+      cornerGroups[best].push(s);
+    }
+    const plaqueAnchor=new Array(n);
+    if(n===4){
+      for(let c=0;c<4;c++){
+        const ang=CORNER_ANGLES[c];
+        const cu={x:Math.cos(ang),y:Math.sin(ang)};
+        const tangent={x:-cu.y,y:cu.x};
+        const rot=cu.x*cu.y>0?-45:45;
+        const seats=cornerGroups[c];
+        seats.forEach((s,i)=>{
+          // 1 seat at this corner: dead center on it. 2 seats: offset apart along the tangent,
+          // symmetric around the corner's own anchor point (more than 2 never happens - 4 corners,
+          // at most 6 seats, pigeonhole caps any one corner at 2 in this layout).
+          const off=seats.length===1?0:(i===0?-1:1)*CORNER_TANGENT_GAP/2;
+          plaqueAnchor[s]={x:500+cu.x*CORNER_R+tangent.x*off,y:500+cu.y*CORNER_R+tangent.y*off,rot};
+        });
+      }
+    }else{
+      /* v0.13 (Blake, 6P ONLY - 4P's corner design above is untouched, he only asked about 6P):
+         "each name plate at the edge of the board behind where their 5 safe spots align... on the
+         edge of the board near each of those pillars." The shared-corner design above forces 2 of
+         6P's seats to split one corner (CORNER_TANGENT_GAP) - Blake's new ask replaces that with
+         each seat getting its OWN plate, on its OWN safe-row axis (arms[s].d, offset 0 - the exact
+         line the 5 home holes AND the porch hole already sit on, see home[] below and the porch
+         loop-push above), pushed out past the porch hole to PLAQUE6_R - at/overlapping the board's
+         outer wood edge on purpose (Blake: "you can have the plates overlap into the board...
+         overlapping is explicitly fine now", a reversal of the old "never touch the wood" rule -
+         just never covering an actual hole/tee/base spot/deck pocket, which PLAQUE6_R was picked
+         to guarantee, same real-getBoundingClientRect()-sweep methodology as every other plaque
+         constant in this file, not eyeballed - see HANDOFF.md "v0.13 six-player name plates").
+         Rotation: readable at every one of the 6 fixed slot angles this board ever uses (30/90/
+         150/210/270/330 - always the same SET regardless of viewSeat, only which seat occupies
+         which slot changes, per v0.12) - tilts to follow the local radial direction like the 4P
+         corner plates do, but clamped to +-90 deg so text is never upside-down at any position
+         (unlike the fixed +-45 checkerboard the corner design uses, this needs a continuous
+         formula since there are 6 distinct angles, not 4 shared corners). */
+      /* v0.13.3 (Blake: "on 6 person make the name plates on the top and bottom actually semi
+         touch the board like you did with the others"). Root cause: PLAQUE6_R below was a single
+         FLAT radius applied to all 6 axes, but the wood's actual edge distance from center isn't
+         uniform - it's the chamfered-square octagon drawBoard() renders (`oct`, § RENDER, chamfer
+         constant c=150), which sits at exactly 492 board-units straight up/down (a flat edge) but
+         ~568 on the other 4 (oblique) axes (near a corner chamfer, farther from center). A flat
+         555 anchor landed OUTSIDE the wood at the 2 vertical axes (492 rim - a ~63-unit floating
+         gap, confirmed both by direct measurement and by a screenshot of live v0.13.2) while
+         sitting correctly INSIDE it at the other four (568 rim - a ~13-unit overlap, the exact
+         "semi-touch" look Blake approved). Fix: octRimR() (just above buildLayout, § LAYOUT) ray-
+         casts the SAME polygon drawBoard() renders to get the TRUE rim distance for any angle -
+         one source of truth, so this can never silently drift out of sync with the physical board
+         shape again - and every seat now anchors that same ~13-unit depth past ITS OWN true rim,
+         instead of a single shared number. This reproduces the 4 oblique anchors byte-for-byte
+         (568.1-13.1=555, today's PLAQUE6_R - zero change there) while pulling the 2 vertical ones
+         in from 555 to ~479. Verified (HANDOFF.md "v0.13.3"): real getBoundingClientRect() sweeps
+         (worst-case 10-char name) confirm ~479 makes the vertical plates straddle the rim exactly
+         like the other four (2 of the plate's 4 corners land inside the wood, 2 outside - the same
+         signature the approved look already has), and stays comfortably clear of every hole (the
+         empirical hole-safe crossover there is ~440; PLAQUE6_HOLE_FLOOR below is a padded,
+         never-expected-to-bind defensive floor, not the load-bearing constant PLAQUE6_R used to
+         be). */
+      const PLAQUE6_R=555;   // v0.13's original flat anchor radius - kept ONLY as the calibration
+                              // reference the per-angle formula below reproduces exactly at the 4
+                              // oblique axes (30/150/210/330deg); no longer applied directly.
+      const PLAQUE6_OVERLAP=octRimR(Math.PI/6)-PLAQUE6_R; // ~13.1 - the semi-touch overlap depth
+                              // already established/approved at the oblique axes (30deg is one),
+                              // now applied to every axis via ITS OWN true rim distance below.
+      const PLAQUE6_HOLE_FLOOR=460;  // defensive floor only - real sweeps (HANDOFF.md) found the
+                              // vertical axes' true hole-safe crossover at ~440; the formula below
+                              // lands them at ~479, comfortably above both.
+      for(let s=0;s<n;s++){
+        const a=arms[s];
+        const thDeg=a.th*180/Math.PI;
+        let rot=((thDeg-90)%360+360)%360;         // 0..360, 0 = upright (this seat's arm points straight down)
+        if(rot>180)rot-=360;                       // -180..180
+        if(rot>90)rot-=180; else if(rot<-90)rot+=180; // clamp to -90..90 - never upside-down
+        const r=Math.max(PLAQUE6_HOLE_FLOOR, octRimR(a.th)-PLAQUE6_OVERLAP);
+        plaqueAnchor[s]={x:500+a.d.x*r,y:500+a.d.y*r,rot};
+      }
+    }
+    for(let s=0;s<n;s++){
+      const a=arms[s];
+      home.push([1,2,3,4,5].map(k=>P(a,cfg.r0-k*hs,0)));
+      const bt=seatBt[s];                                 // bisector toward the player's right
+      const u={x:Math.cos(bt),y:Math.sin(bt)};
+      const bc={x:500+u.x*cfg.baseR,y:500+u.y*cfg.baseR},sp2=cfg.spread;
+      base.push([{x:bc.x,y:bc.y},{x:bc.x-sp2,y:bc.y-sp2},{x:bc.x+sp2,y:bc.y-sp2},
+                 {x:bc.x-sp2,y:bc.y+sp2},{x:bc.x+sp2,y:bc.y+sp2}]);
+      plaque.push(plaqueAnchor[s]);
+      // v0.10: outward unit vector for this seat's plaque - positionPlaques() (§ RENDER) can
+      // still nudge the plaque a little further out along this line (now the CORNER's own radial
+      // direction, not necessarily this seat's bisector - see plaqueAnchor above) if a screen has
+      // room to spare; the anchor above is already the primary, corner-safe position.
+      const anchorAng=Math.atan2(plaqueAnchor[s].y-500,plaqueAnchor[s].x-500);
+      plaqueDir.push({x:Math.cos(anchorAng),y:Math.sin(anchorAng)});
+      // the deck sits in the DEALER's quarter and slides over when the deal passes - unrelated
+      // to the plaque redesign above, still keyed off this seat's OWN bisector as always.
+      const dx=500+u.x*pocketR,dy=500+u.y*pocketR;
+      deckPockets.push({x:dx,y:dy,w:cardW,h:cardH});
+      // each seat's played cards land just beside their OWN deck pocket, offset so it
+      // never sits on top of the deck (even when this seat is the current dealer)
+      const perp={x:-u.y,y:u.x};
+      discardPockets.push({x:dx+perp.x*discOff,y:dy+perp.y*discOff,w:cardW,h:cardH});
+    }
+    const discard={x:500,y:500,w:cardW,h:cardH};          // unused visually now - kept for shape stability
+    return {n,L:12*n,loop,home,base,plaque,plaqueDir,holeR:cfg.holeR,deckPockets,discardPockets,discard,viewSeat};
+  }
+  // v0.12: which seat should this SCREEN treat as "home" (bottom of the board)? Online: always
+  // YOUR OWN seat (NET.mySeat) - the core promise, every phone shows itself at the bottom.
+  // Offline solo (exactly one human seat, e.g. vs-CPU): that human's seat, so a vs-CPU game
+  // always seats you at the bottom no matter which color you picked. Offline pass-and-play (2+
+  // human seats sharing one device) and autotest/all-CPU (0 human seats): explicitly NO rotation
+  // - a real table doesn't spin when the phone gets handed to the next player, so this returns
+  // the same seat (n/2) that always rendered at the bottom before this feature existed. `seats`
+  // is a plain array of {type,...} seat descriptors - callers pass whatever they already have on
+  // hand (CFG's local `seats`, `action.seats`, or a loaded G.seats) since this can run BEFORE `G`
+  // exists (game start / boot from network).
+  function computeViewSeat(n,seats){
+    if(NET.online)return NET.mySeat;
+    const humanIdx=seats.reduce((acc,s,i)=>{if(s.type==='human')acc.push(i);return acc;},[]);
+    return humanIdx.length===1?humanIdx[0]:Math.floor(n/2);
+  }
+  const entryIdx=s=>s*12;
+  const loopIdx=(s,steps)=>(entryIdx(s)+steps)%LAY.L;
+  /* v0.11.1: HANDOFF.md's soak-testing recipe has long said loopIdx()/entryIdx() are "exposed on
+     window alongside G/LAY for exactly this kind of check" (converting a seat-relative `steps` to
+     a shared absolute board position before comparing pieces across seats) - that claim was
+     actually false (only G/LAY were ever assigned to window), caught for real this session when a
+     soak-test script following that exact recipe hit `window.loopIdx is not a function`. Actually
+     exposing them now so the documented recipe is true. */
+
+  function stepPos(s,steps){
+    return steps<LAY.L ? LAY.loop[loopIdx(s,steps)] : LAY.home[s][steps-LAY.L];
+  }
+
+  /* ============================= § STATE ============================= */
+  let G=null;
+  function freshDeck(){
+    const d=[]; let id=0;
+    for(const s of ['♠','♥','♦','♣'])
+      for(const r of ['A','2','3','4','5','6','7','8','9','10','J','Q','K'])
+        d.push({r,s,id:id++});
+    for(let i=d.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[d[i],d[j]]=[d[j],d[i]];}
+    return d;
+  }
+  function newGame(cfg,seed){
+    // seed (online multiplayer): {deck,dealer} generated once by the host and broadcast, so
+    // every client builds the identical starting state instead of shuffling independently.
+    G={n:cfg.n,teams:cfg.teams,seats:cfg.seats,
+       pieces:cfg.seats.map(()=>Array.from({length:5},()=>({state:'base',steps:-1}))),
+       hands:cfg.seats.map(()=>[]),
+       deck:(seed&&seed.deck)?seed.deck.slice():freshDeck(),discard:[],
+       schedule:SCHEDULES[cfg.n],schedRound:0,
+       dealer:(seed&&seed.dealer!=null)?seed.dealer:Math.floor(Math.random()*cfg.n),
+       turn:0,passStreak:0,over:false,winners:[],
+       bowedOut:cfg.seats.map(()=>false),   // per-seat "done for this hand" flag - see RULES.md 2026-07-08
+       dealSeq:0,   // counts doDeal() calls - lets the stateCheck integrity guard match up a
+                    // digest to the SAME logical checkpoint on every client, not just whoever's
+                    // rendering fastest right now (see doDeal/gDigest)
+       actionSeq:0, // v0.10.2: counts applyMove() calls (every real move/swap, game-lifetime) -
+                    // a FINER-grained checkpoint than dealSeq for the integrity guard, so a
+                    // silent drift gets caught within a few moves instead of up to a whole hand
+                    // later (see the kick/swap stateCheck trigger in performMove(), § TURNS).
+       paused:false,     // v0.8: pause/resume - see setPaused()/pauseGate() in § TURNS
+       // v0.13: one random id per logical game, rides along inside the saved G object (survives
+       // save/resume/reload) - the idempotency key for offline solo-result submission (see
+       // submitOrQueueSoloResult below). ONLY generated for a genuine offline start (no `seed` -
+       // see the two call sites: startGame() passes none, bootGameFromNetwork()'s 'start' handler
+       // always passes {deck,dealer}). Deliberately left undefined for an online game: G is
+       // deterministic-lockstep state that every phone must build byte-identically (see the
+       // per-deal integrity digest, gDigest() below, and this project's own online-testing
+       // convention of asserting JSON-stringify(G) equality across contexts) - a client-generated
+       // random value here would make every phone's G differ from every other phone's for no
+       // reason (harmless for the app itself, since gDigest() and recordWin()'s online branch
+       // never read gameId - but a real footgun for exactly that byte-equality testing
+       // convention, caught by this session's own online e2e regression test).
+       gameId:seed?undefined:genGameId()};
+    G.turn=(G.dealer+1)%G.n;
+    G.humanCount=cfg.seats.filter(s=>s.type==='human').length;
+  }
+  const partnerOf=s=>G.teams?(s+G.n/2)%G.n:-1;
+  const sameTeam=(a,b)=>a===b||(G.teams&&partnerOf(a)===b);
+  const allHome=s=>G.pieces[s].every(p=>p.state==='home');
+  function trackOccupant(idx){
+    for(let s=0;s<G.n;s++)for(let pi=0;pi<5;pi++){
+      const p=G.pieces[s][pi];
+      if(p.state==='track'&&loopIdx(s,p.steps)===idx)return{seat:s,pi};
+    } return null;
+  }
+  const homeOcc=(s,q)=>G.pieces[s].some(p=>p.state==='home'&&p.steps===q);
+  function isSnug(s,pi){
+    const p=G.pieces[s][pi]; if(p.state!=='home')return false;
+    for(let q=p.steps+1;q<=LAY.L+HOME_N-1;q++)if(!homeOcc(s,q))return false;
+    return true;
+  }
+
+  /* ============================= § ENGINE ============================= */
+  /* Rules assumptions & sources: see RULES.md. steps: 0=own start hole; loop is L=12n
+     holes so starts sit exactly 12 apart. Steps L-1 = your porch (the shared tip-center
+     hole right before your start - you CAN be kicked there). From the porch you branch
+     inward: steps L..L+4 = your safe row, which nobody else can touch. */
+  /* You can NEVER pass your own peg (or your partner's, in teams). Landing exactly on
+     ANY peg - even your own - takes it out; if that's your only move, it's forced. */
+  function pathForward(owner,p,n){
+    const t=p+n; if(t>LAY.L+HOME_N-1)return null;
+    let kick=null;
+    for(let q=p+1;q<=t;q++){
+      if(q>=LAY.L){ if(homeOcc(owner,q))return null; }
+      else{
+        const occ=trackOccupant(loopIdx(owner,q));
+        if(!occ)continue;
+        if(q<t){ if(occ.seat===owner||(G.teams&&sameTeam(occ.seat,owner)))return null; }
+        else kick=occ;
+      }
+    }
+    return{kick};
+  }
+  function pathBack(owner,p,n){
+    const t=p-n; if(t<0)return null;
+    let kick=null;
+    for(let q=p-1;q>=t;q--){
+      if(q>=LAY.L){ if(homeOcc(owner,q))return null; }
+      else{
+        const occ=trackOccupant(loopIdx(owner,q));
+        if(!occ)continue;
+        if(q>t){ if(occ.seat===owner||(G.teams&&sameTeam(occ.seat,owner)))return null; }
+        else kick=occ;
+      }
+    }
+    return{kick};
+  }
+  function actingOwner(seat){
+    if(G.teams&&allHome(seat)&&!allHome(partnerOf(seat)))return partnerOf(seat);
+    return seat;
+  }
+  function legalMoves(seat){
+    const owner=actingOwner(seat), ms=[];
+    G.hands[seat].forEach((card,ci)=>{
+      const r=card.r;
+      if(r==='K'||r==='A'){
+        const bi=G.pieces[owner].findIndex(p=>p.state==='base');
+        if(bi>=0){
+          const occ=trackOccupant(loopIdx(owner,0));   // whoever's on your start gets kicked - even your own tee
+          ms.push({ci,type:'enter',owner,pi:bi,to:0,kick:occ||null});
+        }
+      }
+      if(r==='J'){
+        G.pieces[owner].forEach((p,pi)=>{ if(p.state!=='track')return;
+          for(let ts=0;ts<G.n;ts++){ if(ts===owner)continue;
+            G.pieces[ts].forEach((tp,tpi)=>{ if(tp.state==='track')ms.push({ci,type:'swap',owner,pi,ts,tpi}); });
+          }
+        });
+      }
+      let fwd=null;
+      if(r==='A')fwd=1; else if(r==='Q')fwd=12;
+      else if(/^(2|4|5|6|7|8|9|10)$/.test(r))fwd=parseInt(r,10);
+      if(fwd!=null){
+        G.pieces[owner].forEach((p,pi)=>{
+          if(p.state==='base')return;
+          if(p.state==='home'&&isSnug(owner,pi))return;
+          const res=pathForward(owner,p.steps,fwd);
+          if(res)ms.push({ci,type:'move',owner,pi,to:p.steps+fwd,kick:res.kick});
+        });
+      }
+      if(r==='3'){
+        G.pieces[owner].forEach((p,pi)=>{
+          if(p.state==='base')return;
+          if(p.state==='home'&&isSnug(owner,pi))return;
+          const res=pathBack(owner,p.steps,3);
+          if(res)ms.push({ci,type:'back',owner,pi,to:p.steps-3,kick:res.kick});
+        });
+      }
+    });
+    return ms;
+  }
+  // v0.10.2: thrown by applyMove() when it's asked to do something the current G genuinely
+  // can't support (see the swap guard below) - a signal to the turn loop to resync instead of
+  // silently corrupting state or crashing uncaught. See handleTurnLoopError(), § TURNS.
+  class ImpossibleStateError extends Error{}
+  function applyMove(seat,m){
+    const card=G.hands[seat].splice(m.ci,1)[0];
+    G.discard.push(card); G.passStreak=0; G.actionSeq++;
+    if(m.type==='swap'){
+      const a=G.pieces[m.owner][m.pi], b=G.pieces[m.ts][m.tpi];
+      // Integrity guard (fix, v0.10.2 - the save/quit/reload/resume desync Blake hit
+      // 2026-07-12): a swap is only ever legal between two pieces that are BOTH still on the
+      // track (legalMoves() never offers one otherwise - see RULES.md, a Jack can never target
+      // a safe-row/home piece). If this client's own copy of either piece has already drifted to
+      // 'home' or 'base' - i.e. the action was computed against a DIFFERENT, no-longer-matching
+      // G on whichever client sent it - blindly feeding a home/base `steps` value into
+      // loopIdx() (which assumes a valid 0..L-1 loop position) produces a garbage, off-board
+      // position instead of an error: exactly how a piece ended up "one spot up but to the
+      // right, outside the safe zone" in Blake's report. Detect it and let the caller resync
+      // instead of corrupting G further.
+      if(a.state!=='track'||b.state!=='track'){
+        throw new ImpossibleStateError(`swap target off-track: owner=${m.owner}/${m.pi} state=${a.state}, ts=${m.ts}/${m.tpi} state=${b.state}`);
+      }
+      const ia=loopIdx(m.owner,a.steps), ib=loopIdx(m.ts,b.steps);
+      a.steps=(ib-entryIdx(m.owner)+LAY.L)%LAY.L;
+      b.steps=(ia-entryIdx(m.ts)+LAY.L)%LAY.L;
+    }else{
+      if(m.kick){const v=G.pieces[m.kick.seat][m.kick.pi];v.state='base';v.steps=-1;}
+      const p=G.pieces[m.owner][m.pi];
+      p.steps=m.to; p.state=m.to>=LAY.L?'home':'track';
+    }
+    if(!G.teams&&allHome(m.owner)){G.over=true;G.winners=[m.owner];}
+    if(G.teams&&allHome(m.owner)&&allHome(partnerOf(m.owner))){G.over=true;G.winners=[m.owner,partnerOf(m.owner)];}
+    return card;
+  }
+
+  /* ============================= § TURN DECISIONS =============================
+     v0.15: pure, deterministic turn-flow decision helpers - the dealing schedule, bow-out, and
+     whole-table-stuck throw-in are RULES (see RULES.md) exactly like legalMoves()/applyMove(),
+     so they get the same single-source-of-truth treatment, living in this same extracted block.
+     These are DECISION-ONLY: no toast()/wait()/animation/DOM - a caller (the server's headless
+     authoritative loop, or index.html's own doDeal()/runTurn()/passTurn() inside their
+     NET.online branches) drives the actual UI/pacing around them.
+     seatsWithCards()/handOver() were moved here VERBATIM from § TURNS (byte-identical, zero
+     behavior change for the offline path, which still calls the same global function - it's
+     just defined earlier in the file now) - see HANDOFF.md "v0.15" for why. */
+  function seatsWithCards(){return G.hands.filter(h=>h.length>0).length;}
+  // A hand is over once every seat has either played out (empty hand) or bowed out (2026-07-08
+  // rule) - NOT just "all hands empty," since a bowed-out seat can still hold leftover cards
+  // it's no longer allowed to play this hand.
+  function handOver(){ return G.hands.every((h,s)=>h.length===0||G.bowedOut[s]); }
+  // True exactly when the next doDeal()-equivalent needs a FRESH shuffle (the deal schedule for
+  // this hand has run out) - the caller (only ever the server; the offline/local-shuffle path is
+  // untouched, see doDeal()) uses this to decide whether it needs to generate a new deck+dealer
+  // before calling dealDecision() below.
+  function needsReshuffle(){ return G.schedRound>=G.schedule.length; }
+  /* dealDecision(seed): mutates G exactly like doDeal() does, MINUS every toast()/animateDeal()/
+     wait()/syncAll() call (those are the caller's job - see doServerDeal() in server.js and the
+     NET.online branch of doDeal() below). `seed` is only consulted when needsReshuffle() is true
+     at call time: {deck (a real shuffled 52-card array - only the SERVER ever has one to hand
+     in), dealer}. Returns {reshuffled, dealer, k, hands} - `hands` is exactly which cards each
+     seat received THIS round (seat index -> array of card objects), popped from the real deck -
+     the caller (server) broadcasts this so every client can apply the identical cards without
+     ever holding a real deck of its own (see "§ v0.15 wire protocol" in HANDOFF.md - hand
+     privacy was never a security boundary in this app, so this is fine). */
+  function dealDecision(seed){
+    G.dealSeq++;
+    G.bowedOut=G.seats.map(()=>false);   // fresh hand - everyone's back in (RULES.md 2026-07-08)
+    let reshuffled=false;
+    if(needsReshuffle()){
+      reshuffled=true;
+      G.deck=seed.deck.slice(); G.discard=[]; G.schedRound=0;
+      G.dealer=seed.dealer; G.turn=(G.dealer+1)%G.n;
+    }
+    const k=G.schedule[G.schedRound]; G.schedRound++;
+    const hands={};
+    for(let s=0;s<G.n;s++)hands[s]=[];
+    for(let i=0;i<k;i++)for(let j=0;j<G.n;j++){
+      const seat=(G.dealer+1+j)%G.n, card=G.deck.pop();
+      G.hands[seat].push(card); hands[seat].push(card);
+    }
+    // RULE (Blake, 2026-07-10): "the first person to go is always left of the dealer" - after
+    // EVERY deal, not just a fresh reshuffle (RULES.md, resolved 2026-07-10).
+    G.turn=(G.dealer+1)%G.n;
+    return {reshuffled,dealer:G.dealer,k,hands,deckCount:G.deck.length};
+  }
+  /* passDecision(seat,newlyBowedOut): mutates G exactly like the "no legal move" branches of
+     runTurn()/passTurn() do, minus toast()/wait(). `newlyBowedOut` is true exactly when THIS
+     call is what bows the seat out for the hand (the caller already knows - it just ran
+     legalMoves() and got nothing back); false for a seat that was already bowed out (an
+     automatic re-pass) or one with a merely-empty hand this round (never flagged bowed-out,
+     RULES.md doesn't call that a bow-out). Returns {threwIn} - whole-table-stuck throw-in
+     (RULES.md, resolved 2026-07-10). */
+  function passDecision(seat,newlyBowedOut){
+    if(newlyBowedOut)G.bowedOut[seat]=true;
+    G.passStreak++;
+    let threwIn=false;
+    if(G.passStreak>=seatsWithCards()&&seatsWithCards()>0){
+      for(const h of G.hands){G.discard.push(...h);h.length=0;}
+      G.passStreak=0;
+      threwIn=true;
+    }
+    return {threwIn,passStreak:G.passStreak};
+  }
+  function advanceTurn(){ G.turn=(G.turn+1)%G.n; return G.turn; }
+
+  /* ============================= § AI ============================= */
+  function dangerAt(owner,steps){
+    if(steps>=LAY.L)return 0;
+    const my=loopIdx(owner,steps); let d=0;
+    for(let s=0;s<G.n;s++){ if(sameTeam(s,owner))continue;
+      for(const p of G.pieces[s]){ if(p.state!=='track')continue;
+        const dist=(my-loopIdx(s,p.steps)+LAY.L)%LAY.L;
+        if(dist>=1&&dist<=12)d++;
+      }}
+    return d;
+  }
+  function kickVal(owner,k){
+    const vic=G.pieces[k.seat][k.pi];
+    if(k.seat===owner)return -45-vic.steps*0.3;        // taking out your own tee: absolute last resort
+    if(sameTeam(k.seat,owner))return -18-vic.steps*0.2;
+    return 22+vic.steps*0.25;
+  }
+  function scoreMove(seat,m){
+    let sc=0;
+    if(m.type==='enter'){ sc+=16; if(m.kick)sc+=kickVal(m.owner,m.kick); }
+    else if(m.type==='move'){
+      const p=G.pieces[m.owner][m.pi];
+      sc+=(m.to-p.steps)*0.4+p.steps*0.06;
+      if(m.to>=LAY.L)sc+=20;
+      if(m.kick)sc+=kickVal(m.owner,m.kick); else sc-=dangerAt(m.owner,m.to)*3.5;
+    }
+    else if(m.type==='back'){
+      const p=G.pieces[m.owner][m.pi];
+      sc-=6; if(p.steps>=LAY.L)sc-=22;
+      if(m.kick)sc+=kickVal(m.owner,m.kick);
+      sc-=dangerAt(m.owner,m.to)*2;
+    }
+    else if(m.type==='swap'){
+      const a=G.pieces[m.owner][m.pi],b=G.pieces[m.ts][m.tpi];
+      const an=(loopIdx(m.ts,b.steps)-entryIdx(m.owner)+LAY.L)%LAY.L;
+      const bn=(loopIdx(m.owner,a.steps)-entryIdx(m.ts)+LAY.L)%LAY.L;
+      sc+=(an-a.steps)*0.5;
+      if(sameTeam(m.ts,m.owner))sc+=(bn-b.steps)*0.45; else sc+=(b.steps-bn)*0.3;
+    }
+    return sc;
+  }
+  function chooseAI(seat,moves){
+    const d=G.seats[seat].diff;
+    if(d==='easy')return rand(moves);
+    const jitter=d==='medium'?9:2;
+    let best=null,bs=-1e9;
+    for(const m of moves){
+      const s=scoreMove(seat,m)+(Math.random()*2-1)*jitter;
+      if(s>bs){bs=s;best=m;}
+    }
+    return best;
+  }
+
+  return {
+    newGame,
+    freshDeck,
+    buildLayout,
+    computeViewSeat,
+    entryIdx,
+    loopIdx,
+    stepPos,
+    partnerOf,
+    sameTeam,
+    allHome,
+    trackOccupant,
+    homeOcc,
+    isSnug,
+    pathForward,
+    pathBack,
+    actingOwner,
+    legalMoves,
+    applyMove,
+    ImpossibleStateError,
+    dangerAt,
+    kickVal,
+    scoreMove,
+    chooseAI,
+    seatsWithCards,
+    handOver,
+    needsReshuffle,
+    dealDecision,
+    passDecision,
+    advanceTurn,
+    COLORS4,
+    COLORS6,
+    SCHEDULES,
+    HOME_N,
+    getG:()=>G, setG:(g)=>{G=g;}, getLAY:()=>LAY, setLAY:(l)=>{LAY=l;},
+  };
+}
+
+export { createEngine, rand };

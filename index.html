@@ -1410,6 +1410,17 @@ const sSnug=()=>{ // safe-and-snug chime
 };
 const sNo=()=>tone(160,.2,'sawtooth',.07,0,-40);
 
+/* ===== NASTY ENGINE EXTRACT: BEGIN =====
+   v0.15 (server-authoritative rebuild): everything from here to "ENGINE EXTRACT: END" below
+   is mechanically extracted verbatim by server/build-engine.js into server/engine.js (Node,
+   CommonJS) and server/cloud/engine.js (Deno, ESM) — the SAME rules code the client runs is
+   what the server runs, so there is exactly one authored copy of the rules. These markers are
+   part of the authored source: if this span ever moves, the markers must move with it. See
+   HANDOFF.md's "v0.15" section for the full extraction mechanism and regeneration step — this
+   is the single easiest thing for a future session to forget: edit the engine here, forget to
+   run `npm run build-engine` in server/, and the server silently runs stale rules. A checked-in
+   test (server/test-engine-sync.js) fails loudly if the generated files ever drift from this
+   block, but only if someone remembers to run it. */
 /* ============================= § LAYOUT ============================= */
 const COLORS4=[
   {name:'Green', c:'#2f8f5b',dark:'#1b5637'},
@@ -1866,6 +1877,76 @@ function applyMove(seat,m){
   return card;
 }
 
+/* ============================= § TURN DECISIONS =============================
+   v0.15: pure, deterministic turn-flow decision helpers - the dealing schedule, bow-out, and
+   whole-table-stuck throw-in are RULES (see RULES.md) exactly like legalMoves()/applyMove(),
+   so they get the same single-source-of-truth treatment, living in this same extracted block.
+   These are DECISION-ONLY: no toast()/wait()/animation/DOM - a caller (the server's headless
+   authoritative loop, or index.html's own doDeal()/runTurn()/passTurn() inside their
+   NET.online branches) drives the actual UI/pacing around them.
+   seatsWithCards()/handOver() were moved here VERBATIM from § TURNS (byte-identical, zero
+   behavior change for the offline path, which still calls the same global function - it's
+   just defined earlier in the file now) - see HANDOFF.md "v0.15" for why. */
+function seatsWithCards(){return G.hands.filter(h=>h.length>0).length;}
+// A hand is over once every seat has either played out (empty hand) or bowed out (2026-07-08
+// rule) - NOT just "all hands empty," since a bowed-out seat can still hold leftover cards
+// it's no longer allowed to play this hand.
+function handOver(){ return G.hands.every((h,s)=>h.length===0||G.bowedOut[s]); }
+// True exactly when the next doDeal()-equivalent needs a FRESH shuffle (the deal schedule for
+// this hand has run out) - the caller (only ever the server; the offline/local-shuffle path is
+// untouched, see doDeal()) uses this to decide whether it needs to generate a new deck+dealer
+// before calling dealDecision() below.
+function needsReshuffle(){ return G.schedRound>=G.schedule.length; }
+/* dealDecision(seed): mutates G exactly like doDeal() does, MINUS every toast()/animateDeal()/
+   wait()/syncAll() call (those are the caller's job - see doServerDeal() in server.js and the
+   NET.online branch of doDeal() below). `seed` is only consulted when needsReshuffle() is true
+   at call time: {deck (a real shuffled 52-card array - only the SERVER ever has one to hand
+   in), dealer}. Returns {reshuffled, dealer, k, hands} - `hands` is exactly which cards each
+   seat received THIS round (seat index -> array of card objects), popped from the real deck -
+   the caller (server) broadcasts this so every client can apply the identical cards without
+   ever holding a real deck of its own (see "§ v0.15 wire protocol" in HANDOFF.md - hand
+   privacy was never a security boundary in this app, so this is fine). */
+function dealDecision(seed){
+  G.dealSeq++;
+  G.bowedOut=G.seats.map(()=>false);   // fresh hand - everyone's back in (RULES.md 2026-07-08)
+  let reshuffled=false;
+  if(needsReshuffle()){
+    reshuffled=true;
+    G.deck=seed.deck.slice(); G.discard=[]; G.schedRound=0;
+    G.dealer=seed.dealer; G.turn=(G.dealer+1)%G.n;
+  }
+  const k=G.schedule[G.schedRound]; G.schedRound++;
+  const hands={};
+  for(let s=0;s<G.n;s++)hands[s]=[];
+  for(let i=0;i<k;i++)for(let j=0;j<G.n;j++){
+    const seat=(G.dealer+1+j)%G.n, card=G.deck.pop();
+    G.hands[seat].push(card); hands[seat].push(card);
+  }
+  // RULE (Blake, 2026-07-10): "the first person to go is always left of the dealer" - after
+  // EVERY deal, not just a fresh reshuffle (RULES.md, resolved 2026-07-10).
+  G.turn=(G.dealer+1)%G.n;
+  return {reshuffled,dealer:G.dealer,k,hands,deckCount:G.deck.length};
+}
+/* passDecision(seat,newlyBowedOut): mutates G exactly like the "no legal move" branches of
+   runTurn()/passTurn() do, minus toast()/wait(). `newlyBowedOut` is true exactly when THIS
+   call is what bows the seat out for the hand (the caller already knows - it just ran
+   legalMoves() and got nothing back); false for a seat that was already bowed out (an
+   automatic re-pass) or one with a merely-empty hand this round (never flagged bowed-out,
+   RULES.md doesn't call that a bow-out). Returns {threwIn} - whole-table-stuck throw-in
+   (RULES.md, resolved 2026-07-10). */
+function passDecision(seat,newlyBowedOut){
+  if(newlyBowedOut)G.bowedOut[seat]=true;
+  G.passStreak++;
+  let threwIn=false;
+  if(G.passStreak>=seatsWithCards()&&seatsWithCards()>0){
+    for(const h of G.hands){G.discard.push(...h);h.length=0;}
+    G.passStreak=0;
+    threwIn=true;
+  }
+  return {threwIn,passStreak:G.passStreak};
+}
+function advanceTurn(){ G.turn=(G.turn+1)%G.n; return G.turn; }
+
 /* ============================= § AI ============================= */
 function dangerAt(owner,steps){
   if(steps>=LAY.L)return 0;
@@ -1918,6 +1999,7 @@ function chooseAI(seat,moves){
   }
   return best;
 }
+/* ===== NASTY ENGINE EXTRACT: END ===== */
 
 /* ============================= § RENDER ============================= */
 const SVG='http://www.w3.org/2000/svg';
@@ -2740,11 +2822,9 @@ async function doDeal(){
   // with no wire-protocol change (the server only ever relays an opaque {seq,digest} pair).
   if(NET.online)runStateCheck();
 }
-function seatsWithCards(){return G.hands.filter(h=>h.length>0).length;}
-// A hand is over once every seat has either played out (empty hand) or bowed out (2026-07-08
-// rule) - NOT just "all hands empty" like before bow-out existed, since a bowed-out seat can
-// still be holding leftover cards it's no longer allowed to play this hand.
-function handOver(){ return G.hands.every((h,s)=>h.length===0||G.bowedOut[s]); }
+// v0.15: seatsWithCards()/handOver() moved verbatim into the extracted engine block (see
+// "§ TURN DECISIONS", right after § ENGINE) - same global functions, defined earlier in the
+// file now, zero behavior change here.
 async function passTurn(seat){
   G.passStreak++;
   if(G.passStreak>=seatsWithCards()&&seatsWithCards()>0){
