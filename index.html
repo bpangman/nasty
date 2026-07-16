@@ -2476,11 +2476,26 @@ let uiResolve=null;
 // on top of that whenever it isn't suppressed. When the GAME ends, showWin() throws up the
 // full-screen win overlay a beat later, burying the band entirely. So a stale toast is never
 // visible past the next deal or the game's end, whichever comes first.
+// v0.15.1 hotfix (2026-07-16, Blake's build-16 report): the above "never auto-fades" rule was
+// always meant for IN-GAME toasts, where a deal boundary or the win overlay reliably clears it
+// (see above) - but a toast shown while sitting on the bare MENU (a failed rejoin/reclaim, a
+// protocolMismatch banner, "kicked", etc.) has no such next-deal/win-overlay backstop, so it
+// used to sit there FOREVER until some other toast happened to replace it (Blake's frozen
+// "Couldn't reconnect you..." toast). Fix: a toast shown while `#menu` is the visible screen
+// auto-dismisses after `ms` (still ~3-4s by default; call sites that asked for longer - e.g.
+// protocolMismatch's 6000ms, "worth reading, not a quick blip" - get at least that long, floored
+// at 4000ms per Blake's ask). In-game toasts (menu hidden) are completely unchanged - still stay
+// until replaced, exactly as v0.11.2 intended. Only removes THIS toast's own element, guarded by
+// `.contains()`, so it can never clobber a newer toast that already replaced it.
 function toast(msg,ms=3000){
   if(SKIP||INSTANT)return;   // no toast spam while fast-forwarding or during reconnect catch-up
   $('toasts').replaceChildren();   // one message at a time - newest replaces the old, never stacks into the cards
   const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
   $('toasts').appendChild(t);
+  if(!$('menu').classList.contains('hidden')){
+    const dismissMs=Math.max(ms,4000);
+    setTimeout(()=>{ if($('toasts').contains(t))t.remove(); },dismissMs);
+  }
 }
 // v0.11.3 fix (Blake): since v0.11.2 a toast STAYS until replaced (see comment above) instead of
 // auto-fading - which means a toast left over from mid-game (e.g. "Geri took somebody out!") was
