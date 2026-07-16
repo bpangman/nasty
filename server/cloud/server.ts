@@ -124,6 +124,26 @@ async function pruneUnmigratableRoom(code: string) {
   log("pruned unmigratable pre-v0.15 room", code);
 }
 
+/* v0.15.1 hotfix 2/2, twin of server.js's matching block (2026-07-16, Blake's report on iOS
+   build 16: hosting a NEW game bounces straight back to the menu). Root-caused via an
+   exact-build-16 client reproduction: build 16 is v0.15 (protocolVersion 2, already
+   understands protocolMismatch fine - NOT the pre-v0.15 sendLegacyMismatch case above) but was
+   built before commit c86a253, so it never clears its nasty-last-room pointer or SAVED_GAME
+   menu state on a 'rejoinError'/'reclaimError' for a dead room. Left uncleared, every later
+   Start/Host/Join tap on that build routes through its confirmOverwriteThenRun(), which pops an
+   unexpected "you have a saved game" warning; tapping Cancel drops straight back to a bare menu
+   with nothing hosted - Blake's exact symptom. A dead/unmigratable room, or a room/player/token
+   that plain doesn't exist, can never legitimately be an in-progress game for ANY client build,
+   so it's always safe to ALSO send a 'kicked'-shaped follow-up: that handler
+   (leaveOnlineToMenu(), index.html) unconditionally clears nasty-last-room, resets NET state,
+   closes any open overlay, and lands on a clean menu - build 16 already had this handler, it
+   just never got called for a dead-room rejoin/reclaim before now. A post-c86a253 client (which
+   already runs rejoinError through the same leaveOnlineToMenu() path when no game is in
+   progress) treats this as a harmless no-op repeat - verified against both client builds. */
+function sendDeadRoomFollowup(ws: WebSocket | null | undefined, message: string) {
+  send(ws, { type: "kicked", message });
+}
+
 const ROOM_TTL_MS = 30 * 60 * 1000; // never-started lobby, fully disconnected
 const STARTED_ROOM_TTL_MS = 7 * 24 * 60 * 60 * 1000; // started-but-unfinished game
 const LOG_TTL_MS = STARTED_ROOM_TTL_MS + 24 * 60 * 60 * 1000; // backstop: always outlives the meta key
@@ -751,7 +771,7 @@ setInterval(() => {
   for (const [reqId, pending] of pendingReclaims) {
     if (now > pending.expires) {
       pendingReclaims.delete(reqId);
-      send(pending.socket, { type: "reclaimError", message: "The host didn't respond in time — try again." });
+      send(pending.socket, { type: "reclaimError", message: "The host didn't respond in time - try again." });
     }
   }
 }, HEARTBEAT_MS);
@@ -913,7 +933,7 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         // v0.15: {type:'host', protocolVersion, name, n, teams, seats}
         if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); sendLegacyMismatch(socket, "host"); return; }
         if (!underHostRateLimit(ip)) {
-          send(socket, { type: "error", message: "Too many rooms created from here — wait a minute and try again." });
+          send(socket, { type: "error", message: "Too many rooms created from here - wait a minute and try again." });
           log("rate-limited host attempt", "ip=" + ip);
           return;
         }
@@ -970,19 +990,23 @@ function handleWsUpgrade(req: Request, ip: string): Response {
       }
 
       case "rejoin": {
-        // v0.15: {type:'rejoin', protocolVersion, code, playerId, token} — snapshot-based sync
+        // v0.15: {type:'rejoin', protocolVersion, code, playerId, token} - snapshot-based sync
         // (no log replay), twin of server.js's rejoin case.
         if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); sendLegacyMismatch(socket, "rejoin"); return; }
         const code = String(msg.code || "").toUpperCase();
         const pre = await kv.get<RoomMeta>(roomKey(code));
         const playerId = Number(msg.playerId);
         const preP = pre.value && pre.value.players.find((p) => p.id === playerId);
+        // v0.15.1 hotfix 2/2: this room is verifiably gone - see sendDeadRoomFollowup() above.
         if (!pre.value || !preP || preP.token !== msg.token) {
-          send(socket, { type: "rejoinError", message: "Couldn't reconnect you to that room — it may have ended." });
+          const deadRoomMsg = "Couldn't reconnect you to that room - it may have ended.";
+          send(socket, { type: "rejoinError", message: deadRoomMsg });
+          sendDeadRoomFollowup(socket, deadRoomMsg);
           return;
         }
         if (isUnmigratableRoom(pre.value)) {
           send(socket, { type: "rejoinError", message: OLD_ROOM_MESSAGE });
+          sendDeadRoomFollowup(socket, OLD_ROOM_MESSAGE);
           await pruneUnmigratableRoom(code);
           return;
         }
@@ -992,7 +1016,12 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           p.connected = true;
           return {};
         });
-        if (!r.ok) { send(socket, { type: "rejoinError", message: "Couldn't reconnect you to that room — it may have ended." }); return; }
+        if (!r.ok) {
+          const deadRoomMsg = "Couldn't reconnect you to that room - it may have ended.";
+          send(socket, { type: "rejoinError", message: deadRoomMsg });
+          sendDeadRoomFollowup(socket, deadRoomMsg);
+          return;
+        }
         identify(code, playerId);
         const isHost = playerId === r.meta.hostPlayerId;
         if (r.meta.started) {
@@ -1017,10 +1046,18 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); sendLegacyMismatch(socket, "reclaim"); return; }
         const code = String(msg.code || "").toUpperCase();
         const pre = await kv.get<RoomMeta>(roomKey(code));
-        if (!pre.value) { send(socket, { type: "reclaimError", message: "That room code doesn't exist or has expired." }); return; }
-        if (!pre.value.started) { send(socket, { type: "reclaimError", message: "That game hasn't started yet — use Join a game instead.", reason: "notStarted" }); return; }
+        // v0.15.1 hotfix 2/2: same "this room is verifiably gone" follow-up as the rejoin case
+        // above - see sendDeadRoomFollowup().
+        if (!pre.value) {
+          const deadRoomMsg = "That room code doesn't exist or has expired.";
+          send(socket, { type: "reclaimError", message: deadRoomMsg });
+          sendDeadRoomFollowup(socket, deadRoomMsg);
+          return;
+        }
+        if (!pre.value.started) { send(socket, { type: "reclaimError", message: "That game hasn't started yet - use Join a game instead.", reason: "notStarted" }); return; }
         if (isUnmigratableRoom(pre.value)) {
           send(socket, { type: "reclaimError", message: OLD_ROOM_MESSAGE });
+          sendDeadRoomFollowup(socket, OLD_ROOM_MESSAGE);
           await pruneUnmigratableRoom(code);
           return;
         }
@@ -1032,13 +1069,13 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         if (targetPre.connected) {
           const hostP = pre.value.players.find((p) => p.id === pre.value!.hostPlayerId);
           if (!hostP || !hostP.connected) {
-            send(socket, { type: "reclaimError", message: `${targetPre.name} is already connected and the host isn't reachable to confirm a takeover — try again in a bit.` });
+            send(socket, { type: "reclaimError", message: `${targetPre.name} is already connected and the host isn't reachable to confirm a takeover - try again in a bit.` });
             return;
           }
           const reqId = newToken();
           pendingReclaims.set(reqId, { code, targetPlayerId: targetPre.id, socket, expires: Date.now() + RECLAIM_TIMEOUT_MS });
           sendToPlayer(code, hostP.id, { type: "reclaimRequest", reqId, name: targetPre.name });
-          send(socket, { type: "reclaimPending", message: `${targetPre.name} looks like they're already connected — asking the host to confirm.` });
+          send(socket, { type: "reclaimPending", message: `${targetPre.name} looks like they're already connected - asking the host to confirm.` });
           log("reclaim contested, asked host", code, targetPre.id, "ip=" + ip);
           return;
         }
@@ -1049,7 +1086,7 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           p.connected = true;
           return { playerId: p.id, token: p.token };
         });
-        if (!r.ok) { send(socket, { type: "reclaimError", message: "Try again — that seat just changed state." }); return; }
+        if (!r.ok) { send(socket, { type: "reclaimError", message: "Try again - that seat just changed state." }); return; }
         identify(code, r.extra.playerId as number);
         const isHost = (r.extra.playerId as number) === r.meta.hostPlayerId;
         send(socket, {
@@ -1404,7 +1441,7 @@ async function handler(req: Request, info: Deno.ServeHandlerInfo): Promise<Respo
     try { return await handleSoloResult(req, ip); }
     catch (e) { log("solo-result route error", e); return json(500, { error: "server error" }); }
   }
-  return new Response("nasty relay — see /health", { status: 404, headers: { "content-type": "text/plain", ...CORS_HEADERS } });
+  return new Response("nasty relay - see /health", { status: 404, headers: { "content-type": "text/plain", ...CORS_HEADERS } });
 }
 
 log(`admin token source: ${Deno.env.get("NASTY_ADMIN_TOKEN") ? "NASTY_ADMIN_TOKEN env" : "ephemeral (dev only)"}`);

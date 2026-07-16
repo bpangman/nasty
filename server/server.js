@@ -95,6 +95,37 @@ function sendLegacyMismatch(ws, kind) {
   send(ws, { type, message: LEGACY_CLIENT_MESSAGE });
 }
 
+/* v0.15.1 hotfix 2/2, server side (2026-07-16, Blake's report on iOS build 16: hosting a NEW
+ * game bounces straight back to the menu, no explanation). Root-caused via an exact-build-16
+ * client reproduction: a v0.15 client (protocolVersion 2 - this is NOT the pre-v0.15
+ * sendLegacyMismatch case above, build 16 already understands protocolMismatch fine) built
+ * BEFORE commit c86a253 never clears its `nasty-last-room` pointer or SAVED_GAME menu state on
+ * a 'rejoinError'/'reclaimError' for a dead room - that client-side bug is what c86a253 fixes,
+ * but build 16 (already submitted to TestFlight review) predates it. Left uncleared, the stale
+ * resume tile keeps re-showing, and - the actual blocker - EVERY subsequent "Start"/"Host a
+ * game"/"Join a game" tap routes through that build's confirmOverwriteThenRun(), which pops a
+ * "You have a saved game - starting a new one will replace it" warning the user never asked for;
+ * tapping its Cancel (the natural response to a warning about a game you don't recognize) drops
+ * straight back to the bare menu with nothing hosted - Blake's exact symptom.
+ *
+ * A dead/unmigratable room can NEVER legitimately be an in-progress v0.15+ game for ANY client
+ * (see isUnmigratableRoom below - a real v0.15+ room always has `engine` set once started; a
+ * generic "room/player/token not found" miss on a rejoin/reclaim likewise means the room is
+ * verifiably, permanently gone, not just briefly unreachable). So for these specific "this room
+ * is dead" replies, ALSO send a 'kicked'-shaped follow-up alongside the existing
+ * rejoinError/reclaimError reply: 'kicked' is the one message type whose handler
+ * (leaveOnlineToMenu(), index.html) unconditionally clears nasty-last-room, resets NET state,
+ * closes whatever overlay is open (including the join overlay a rejoinError may have already
+ * opened), and lands on a clean, immediately-usable menu - build 16 already had this exact
+ * handler (it's what 'kicked' has always done), it just never got called for a dead-room
+ * rejoin/reclaim before now. A post-c86a253 client (which already runs rejoinError through the
+ * same leaveOnlineToMenu() path when no game is in progress) treats this follow-up as a no-op
+ * repeat of what it just did - verified harmless by re-running the exact reproduction against
+ * the current client too. No em/en dashes in the message text (standing rule). */
+function sendDeadRoomFollowup(ws, message) {
+  send(ws, { type: "kicked", message });
+}
+
 /* v0.15.1 hotfix, part 2: rooms persisted by a pre-v0.15 server (or a v0.15 room that was
  * started before this session's rebuild) have no `G` field at all, so roomFromDisk() above
  * leaves `room.engine` null even though `room.started` is true — this server has no rules
@@ -828,7 +859,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   res.writeHead(404, Object.assign({ "content-type": "text/plain" }, CORS_HEADERS));
-  res.end("nasty relay — see /health");
+  res.end("nasty relay - see /health");
 });
 
 const wss = new WebSocketServer({ server });
@@ -899,7 +930,7 @@ wss.on("connection", (ws, req) => {
         // v0.15: {type:'host', protocolVersion, name, n, teams, seats:[{name,type,diff}]}
         if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); sendLegacyMismatch(ws, "host"); return; }
         if (!underHostRateLimit(ip)) {
-          send(ws, { type: "error", message: "Too many rooms created from here — wait a minute and try again." });
+          send(ws, { type: "error", message: "Too many rooms created from here - wait a minute and try again." });
           log("rate-limited host attempt", "ip="+ip);
           return;
         }
@@ -946,15 +977,28 @@ wss.on("connection", (ws, req) => {
       case "rejoin": {
         // v0.15: {type:'rejoin', protocolVersion, code, playerId, token}. Old clients (no/low
         // protocolVersion) get the plain-language mismatch message instead of a confusing
-        // silent failure — this matters here specifically because `rejoin` is also the path a
+        // silent failure - this matters here specifically because `rejoin` is also the path a
         // long-lived tab that never explicitly re-hosted/joined takes after a server deploy.
         if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); sendLegacyMismatch(ws, "rejoin"); return; }
         const code = String(msg.code || "").toUpperCase();
         const room = rooms.get(code);
         const playerId = msg.playerId;
         const p = room && room.players.get(playerId);
-        if (!room || !p || p.token !== msg.token) { send(ws, { type: "rejoinError", message: "Couldn't reconnect you to that room — it may have ended." }); return; }
-        if (isUnmigratableRoom(room)) { send(ws, { type: "rejoinError", message: OLD_ROOM_MESSAGE }); pruneUnmigratableRoom(room); return; }
+        // v0.15.1 hotfix 2/2: this room is verifiably gone (never existed, expired, or the
+        // token no longer matches) - see sendDeadRoomFollowup() above for why the follow-up
+        // 'kicked' message is always safe here, for every client build.
+        if (!room || !p || p.token !== msg.token) {
+          const deadRoomMsg = "Couldn't reconnect you to that room - it may have ended.";
+          send(ws, { type: "rejoinError", message: deadRoomMsg });
+          sendDeadRoomFollowup(ws, deadRoomMsg);
+          return;
+        }
+        if (isUnmigratableRoom(room)) {
+          send(ws, { type: "rejoinError", message: OLD_ROOM_MESSAGE });
+          sendDeadRoomFollowup(ws, OLD_ROOM_MESSAGE);
+          pruneUnmigratableRoom(room);
+          return;
+        }
         p.connected = true; p.ws = ws;
         identify(room, playerId);
         touch(room);
@@ -975,9 +1019,21 @@ wss.on("connection", (ws, req) => {
         if (!protocolOk(msg)) { send(ws, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); sendLegacyMismatch(ws, "reclaim"); return; }
         const code = String(msg.code || "").toUpperCase();
         const room = rooms.get(code);
-        if (!room) { send(ws, { type: "reclaimError", message: "That room code doesn't exist or has expired." }); return; }
-        if (!room.started) { send(ws, { type: "reclaimError", message: "That game hasn't started yet — use Join a game instead.", reason: "notStarted" }); return; }
-        if (isUnmigratableRoom(room)) { send(ws, { type: "reclaimError", message: OLD_ROOM_MESSAGE }); pruneUnmigratableRoom(room); return; }
+        // v0.15.1 hotfix 2/2: same "this room is verifiably gone" follow-up as the rejoin case
+        // above - see sendDeadRoomFollowup().
+        if (!room) {
+          const deadRoomMsg = "That room code doesn't exist or has expired.";
+          send(ws, { type: "reclaimError", message: deadRoomMsg });
+          sendDeadRoomFollowup(ws, deadRoomMsg);
+          return;
+        }
+        if (!room.started) { send(ws, { type: "reclaimError", message: "That game hasn't started yet - use Join a game instead.", reason: "notStarted" }); return; }
+        if (isUnmigratableRoom(room)) {
+          send(ws, { type: "reclaimError", message: OLD_ROOM_MESSAGE });
+          sendDeadRoomFollowup(ws, OLD_ROOM_MESSAGE);
+          pruneUnmigratableRoom(room);
+          return;
+        }
         if (isBadName(msg.name)) { send(ws, { type: "reclaimError", message: "Pick a nicer name." }); return; }
         const wantName = String(msg.name || "").trim().toLowerCase();
         const candidates = Array.from(room.players.values()).filter(p => p.name.trim().toLowerCase() === wantName);
@@ -986,13 +1042,13 @@ wss.on("connection", (ws, req) => {
         if (target.connected) {
           const hostP = room.players.get(room.hostPlayerId);
           if (!hostP || !hostP.connected || !hostP.ws) {
-            send(ws, { type: "reclaimError", message: `${target.name} is already connected and the host isn't reachable to confirm a takeover — try again in a bit.` });
+            send(ws, { type: "reclaimError", message: `${target.name} is already connected and the host isn't reachable to confirm a takeover - try again in a bit.` });
             return;
           }
           const reqId = newToken();
           pendingReclaims.set(reqId, { code, targetPlayerId: target.id, ws, expires: Date.now() + RECLAIM_TIMEOUT_MS });
           send(hostP.ws, { type: "reclaimRequest", reqId, name: target.name });
-          send(ws, { type: "reclaimPending", message: `${target.name} looks like they're already connected — asking the host to confirm.` });
+          send(ws, { type: "reclaimPending", message: `${target.name} looks like they're already connected - asking the host to confirm.` });
           log("reclaim contested, asked host", code, target.id, "ip="+ip);
           return;
         }
@@ -1226,7 +1282,7 @@ const reclaimSweepTimer = setInterval(() => {
   for (const [reqId, pending] of pendingReclaims) {
     if (now > pending.expires) {
       pendingReclaims.delete(reqId);
-      send(pending.ws, { type: "reclaimError", message: "The host didn't respond in time — try again." });
+      send(pending.ws, { type: "reclaimError", message: "The host didn't respond in time - try again." });
     }
   }
 }, 5000);
