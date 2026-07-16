@@ -439,8 +439,24 @@ button{font:inherit;cursor:pointer}
    and never shrinks past its natural content size; if that ever doesn't fit, the row's existing
    overflow-x:auto scrolls it like everything else, which is the correct fallback. */
 #topbar #btnPause{flex:1 0 auto;font-size:14px;font-weight:800;min-height:48px}
-#netChip.reconnecting{animation:netPulse 1s infinite}
 @keyframes netPulse{50%{opacity:.4}}
+/* v0.16: problem-only connection indicator (see updateConnIndicator()) - USED to be a small
+   always-on "🟢 online" chip in the topbar, which read as a meaningless bare dot on a phone
+   (Blake's report). Now hidden whenever the connection is healthy, appears only for the two
+   states that need the family's attention, and - per Blake's follow-up design note - lives as
+   a CENTERED banner in the gap between the NASTY logo and the board's top edge, not the
+   topbar. Absolutely positioned (positionConnIndicator(), § RENDER) so it overlays that gap
+   without ever pushing the logo or board - it's never part of either one's layout flow.
+   pointer-events:none for the same reason #gameLogo has it: it's a status message, not a
+   button, and must never intercept a tap meant for the board underneath. */
+#connIndicator{position:absolute;left:50%;transform:translateX(-50%);z-index:5;
+  pointer-events:none;text-align:center;font-size:12.5px;font-weight:700;
+  padding:6px 14px;border-radius:99px;color:#d7ecdc;background:rgba(0,0,0,.55);
+  white-space:nowrap;max-width:92%;overflow:hidden;text-overflow:ellipsis;
+  box-shadow:0 2px 8px rgba(0,0,0,.35)}
+#connIndicator.reconnecting{animation:netPulse 1s infinite;background:rgba(180,138,20,.72)}
+#connIndicator.connLost{background:rgba(190,42,42,.82);color:#ffe6e2;white-space:normal;
+  max-width:88%;line-height:1.3}
 .lobbySeat{display:flex;gap:8px;align-items:center;background:rgba(255,255,255,.06);
   border-radius:12px;padding:9px 11px;margin:7px 0}
 .lobbySeat .dot{width:20px;height:20px;border-radius:50%;flex:none;border:2px solid rgba(255,255,255,.6)}
@@ -827,7 +843,6 @@ button{font:inherit;cursor:pointer}
 <div id="game" class="hidden">
   <div id="topbar">
     <button class="iconBtn" id="btnMenu">‹ Menu</button>
-    <div class="chip hidden" id="netChip">🟢 online</div>
     <button class="iconBtn" id="btnPause">⏸ Pause/Save</button>
     <button class="iconBtn" id="btnSpeed">Speed: Normal</button>
     <button class="iconBtn" id="btnRules2">Rules</button>
@@ -838,6 +853,10 @@ button{font:inherit;cursor:pointer}
       <div class="sign"><b>NASTY</b></div>
       <div class="sub2">Est. 1993</div>
     </div>
+    <!-- v0.16: problem-only connection indicator - lives in the gap below the logo, above the
+         board (see #connIndicator's CSS + positionConnIndicator(), § RENDER). Hidden by
+         default; updateConnIndicator() (§ NET) is the only thing that ever shows it. -->
+    <div id="connIndicator" class="hidden"></div>
     <div id="boardScale">
       <svg id="boardSvg" width="1000" height="1000" viewBox="0 0 1000 1000"></svg>
       <div class="tableCard" id="deckSpot" style="left:415px;top:500px">
@@ -1160,6 +1179,12 @@ if(IS_APP){
   // getLaunchUrl() near the bottom of this script (after tryJoinOrRejoin/confirmOverwriteThenRun
   // are defined and the normal boot sequence has run) - see handleIncomingJoinLink() above.
   try{ CAP.Plugins.App.addListener('appUrlOpen', (data)=>{ handleIncomingJoinLink(data&&data.url,false); }); }catch(e){}
+  // v0.16: the app-lifecycle 'resume' event (native foreground, e.g. returning from the
+  // springboard/another app or an incoming-call/text interruption) - belt-and-suspenders
+  // alongside visibilitychange/pageshow below (this file's whole reconnect-glitch history
+  // shows any ONE of these signals can fail to fire on a given iOS build/WKWebView state, so
+  // all three call the exact same onForeground()/drainSoloQueue() pair, harmless if redundant).
+  try{ CAP.Plugins.App.addListener('resume', ()=>{ onForeground(); drainSoloQueue(); }); }catch(e){}
   /* v0.11.1 splash-centering fix (Blake: "isn't centered in the middle of the screen").
      ROOT CAUSE, tracked down by screenshotting every 100-150ms through real launches on 3
      simulator sizes: the static splash IMAGE itself was never the problem (measured dead-center
@@ -2212,6 +2237,7 @@ function fitBoard(){
   bs.style.left=((w-1000*s)/2)+'px'; bs.style.top=((h-1000*s)/2)+'px';
   positionPlaques();
   updateToastOffset();
+  positionConnIndicator();   // v0.16: re-center the connection indicator in the (re)measured logo/board gap
 }
 addEventListener('resize',fitBoard);
 
@@ -3278,6 +3304,15 @@ const NET={
   code:null, playerId:null, token:null, mySeat:-1,
   lobby:null, seatOwners:null, hostConnected:true,
   connected:false, reconnecting:false, backoff:1000,
+  reconnectingSince:null,  // v0.16: Date.now() of the FIRST failure in the current reconnect
+                           // streak (cleared the moment a connection actually succeeds again,
+                           // see connectWs()'s onopen) - lets updateConnIndicator() tell "still
+                           // trying, briefly" apart from "been failing a while, tell the
+                           // family to act" (CONN_LOST_MS below), instead of just a boolean.
+  lastMsgAt:Date.now(),    // v0.16: last time ANY message arrived on the current socket - the
+                           // proof-of-life clock for both the foreground/resume connection
+                           // check (verifyConnectionAlive()) and the mid-game silence watchdog
+                           // (see both below). Updated in connectWs()'s ws.onmessage/onopen.
   actionQueue:[], pendingActionResolvers:[], pendingCardEl:null,
   pendingStateCheck:null,  // {afterSeq,digest} - see checkStateDigest()'s integrity guard
   appliedSeq:-1,           // v0.15: broadcast seq of the last action this client has fully
@@ -3385,23 +3420,75 @@ function maybeResolvePendingStateCheck(){
     checkStateDigest(afterSeq,digest);
   }
 }
-function updateNetChip(){
-  const chip=$('netChip'); if(!chip)return;
-  if(!NET.online){ chip.classList.add('hidden'); return; }
-  chip.classList.remove('hidden');
-  if(NET.reconnecting){ chip.textContent='🟡 reconnecting…'; chip.classList.add('reconnecting'); }
-  else if(!NET.hostConnected){ chip.textContent='⏸ waiting for host'; chip.classList.remove('reconnecting'); }
-  else{ chip.textContent='🟢 online'; chip.classList.remove('reconnecting'); }
+/* v0.16: problem-only indicator - was an always-on bare "🟢 online" dot (meaningless on a
+   phone, Blake's report), now hidden whenever the connection is healthy and only shown for
+   the two states that actually need attention: amber while actively reconnecting, red once
+   that's been failing continuously long enough that sitting tight won't fix it. No em/en
+   dashes in either string (standing rule) - plain periods. The old "⏸ waiting for host" text
+   is retired from this chip; a host-disconnect no longer stalls anyone's game since v0.15 (the
+   server drives CPU turns itself), and the dedicated #waitHostOverlay already covers the one
+   case that still matters (a host who hasn't started yet) far more visibly than a small chip
+   ever did. */
+const CONN_LOST_MS=15000;
+function updateConnIndicator(){
+  const el=$('connIndicator'); if(!el)return;
+  if(!NET.online||!NET.reconnecting){ el.classList.add('hidden'); el.classList.remove('reconnecting','connLost'); return; }
+  el.classList.remove('hidden');
+  const failingLong=NET.reconnectingSince&&(Date.now()-NET.reconnectingSince>CONN_LOST_MS);
+  if(failingLong){
+    el.textContent='Connection lost. Close and reopen the app.';
+    el.classList.add('connLost'); el.classList.remove('reconnecting');
+  }else{
+    el.textContent='Reconnecting...';
+    el.classList.add('reconnecting'); el.classList.remove('connLost');
+  }
+  positionConnIndicator();
+}
+/* v0.16: centers #connIndicator in the real, MEASURED gap between the bottom of #gameLogo and
+   the top of the scaled #boardScale - not a guessed/fixed pixel offset, since that gap's size
+   depends on the device's aspect ratio the same way #boardWrap's own letterbox margin does
+   (see fitBoard()'s comment above positionPlaques() - portrait phones eat that margin
+   differently than landscape/desktop). Both #gameLogo and #boardScale are already
+   `position:absolute` siblings inside #boardWrap (position:relative) - adding this indicator
+   as a third absolutely-positioned sibling means it can never push either one's layout, exactly
+   the "must not shift the board or logo" requirement. Falls back to sitting just under the logo
+   if the two would ever overlap (an extremely tight viewport) rather than rendering off-screen
+   or on top of the board. Called whenever the indicator's shown/re-shown and on every
+   fitBoard() (resize/orientation change), so it stays correctly centered live. */
+function positionConnIndicator(){
+  const el=$('connIndicator'); if(!el||el.classList.contains('hidden'))return;
+  const wrap=$('boardWrap'), logo=$('gameLogo'), board=$('boardScale');
+  if(!wrap||!logo||!board)return;
+  const wrapR=wrap.getBoundingClientRect(), logoR=logo.getBoundingClientRect(), boardR=board.getBoundingClientRect();
+  const gapTop=logoR.bottom-wrapR.top, gapBottom=boardR.top-wrapR.top;
+  const elH=el.offsetHeight||28;
+  let top;
+  if(gapBottom-gapTop>=elH+8){
+    // A real gap exists with room to spare - center the indicator in it (Blake's ask).
+    top=gapTop+(gapBottom-gapTop-elH)/2;
+  }else{
+    // v0.16 viewport-matrix finding: on the tightest supported phones (iPhone SE 3rd gen,
+    // 375x647, and smaller) fitBoard() already centers the scaled board close enough to the
+    // logo that there's little or NO real gap left - measured directly, not assumed (board top
+    // can even sit ABOVE the logo's bottom on these sizes). Squeezing text into a gap that
+    // doesn't exist, or clipping it off-viewport, are both worse than pinning it just under the
+    // logo and accepting a few px of overlap with the board's own topmost TIP - the single
+    // corner/apex of the X-board (§ LAYOUT), not a hole-dense area, so this reads fine and
+    // never covers anything a player needs to tap. Still never overlaps the LOGO itself.
+    top=gapTop+4;
+  }
+  el.style.top=Math.round(top)+'px';
 }
 function connectWs(){
   return resolveWsUrl().then(url=>new Promise((resolve,reject)=>{
     let settled=false;
     const ws=new WebSocket(url);
     NET.ws=ws;
-    ws.onopen=()=>{ NET.connected=true; NET.reconnecting=false; NET.backoff=1000; updateNetChip();
+    ws.onopen=()=>{ NET.connected=true; NET.reconnecting=false; NET.reconnectingSince=null; NET.backoff=1000;
+      NET.lastMsgAt=Date.now(); updateConnIndicator();
       if(!settled){settled=true;resolve(ws);} };
-    ws.onmessage=e=>{ let m; try{m=JSON.parse(e.data);}catch(err){return;} handleNetMessage(m); };
-    ws.onclose=()=>{ NET.connected=false; updateNetChip();
+    ws.onmessage=e=>{ NET.lastMsgAt=Date.now(); let m; try{m=JSON.parse(e.data);}catch(err){return;} handleNetMessage(m); };
+    ws.onclose=()=>{ NET.connected=false; updateConnIndicator();
       if(!settled){settled=true;reject(new Error("Couldn't reach the game server."));}
       else if(NET.online&&NET.wantConnection)scheduleReconnect(); };
     ws.onerror=()=>{ if(!settled){settled=true;reject(new Error("Couldn't reach the game server."));} };
@@ -3409,7 +3496,13 @@ function connectWs(){
 }
 function scheduleReconnect(){
   if(NET.reconnecting)return;
-  NET.reconnecting=true; updateNetChip();
+  NET.reconnecting=true;
+  // v0.16: only stamp the START of a reconnect streak - a fast retry loop (backoff, below)
+  // keeps flipping NET.reconnecting false->true every cycle (see the .catch() below), but the
+  // FAMILY has been looking at "reconnecting" the whole time since the FIRST failure. Cleared
+  // only in connectWs()'s onopen, i.e. once a connection genuinely succeeds again.
+  if(!NET.reconnectingSince){ NET.reconnectingSince=Date.now(); setTimeout(updateConnIndicator,CONN_LOST_MS+50); }
+  updateConnIndicator();
   setTimeout(()=>{
     connectWs().then(()=>{
       netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token,protocolVersion:PROTOCOL_VERSION});
@@ -3417,6 +3510,51 @@ function scheduleReconnect(){
   },Math.min(NET.backoff,8000));
   NET.backoff=Math.min(NET.backoff*1.7,8000);
 }
+/* v0.16: foreground/resume connection verification - the actual fix for Blake's "board frozen
+   after backgrounding to text someone" report. The OLD onForeground() trusted NET.ws.readyState
+   alone - but iOS/WKWebView can suspend an app for long enough that the underlying socket is
+   silently dead while the JS-visible WebSocket object still reports readyState===OPEN (nothing
+   ever fired onclose because the OS never delivered one, it just stopped delivering anything).
+   So: never trust readyState by itself again. Ping the server and give it PING_WATCHDOG_MS to
+   prove the round trip still works (a reply of ANY kind counts - NET.lastMsgAt is bumped by
+   ws.onmessage for every message, not just a matching pong); if nothing comes back, the socket
+   is presumed half-dead and gets force-closed, then handed to the EXISTING
+   scheduleReconnect()->connectWs()->rejoin->'sync'->bootGameFromSnapshot() chain - the same
+   path a normal dropped connection already uses, not a second mechanism. Guarded by comparing
+   the captured socket reference (myWs) rather than NETGEN: this function only ever touches
+   connection bookkeeping (NET.ws/NET.connected), never G, so the relevant "has this been
+   superseded" question is "is this still the live socket," not "is this still the live game
+   generation" - NETGEN keeps doing its own job unchanged wherever G itself gets touched. */
+const PING_WATCHDOG_MS=2200;
+function verifyConnectionAlive(){
+  if(!NET.online||!NET.wantConnection)return;
+  if(!NET.ws||NET.ws.readyState!==1){ if(!NET.reconnecting)scheduleReconnect(); return; }
+  const sentAt=Date.now();
+  const myWs=NET.ws;
+  try{ netSend({type:'ping',t:sentAt}); }catch(e){}
+  setTimeout(()=>{
+    if(NET.ws!==myWs)return;              // already reconnected/replaced since this check started
+    if(NET.lastMsgAt>=sentAt)return;      // something (the pong, or anything else) proved it alive
+    try{ myWs.close(); }catch(e){}
+    NET.connected=false; updateConnIndicator();
+    if(!NET.reconnecting)scheduleReconnect();
+  },PING_WATCHDOG_MS);
+}
+/* v0.16: belt-and-suspenders mid-game watchdog. Online + not my turn means the server should
+   be talking constantly - either driving CPU turns itself or waiting on another human, either
+   way SOMETHING (a gameAction broadcast, at minimum the § HEARTBEAT pong/ping traffic both
+   servers already send) should reach this phone at least every few seconds. Total silence for
+   SILENCE_WATCHDOG_MS while online and it's not my turn isn't "a slow CPU" (the server never
+   waits on anything but a human's own move - see driveTurnLoop()/driveTurnLoopCollect(),
+   HANDOFF.md v0.15) - it's a dead pipe this phone hasn't noticed yet. Runs the exact same
+   verifyConnectionAlive() check as a real foreground event, just triggered by silence instead
+   of a lifecycle signal - not a second mechanism. */
+const SILENCE_WATCHDOG_MS=45000;
+setInterval(()=>{
+  if(!NET.online||!NET.wantConnection||!G||G.over)return;
+  if(NET.mySeat===G.turn)return;   // it's my own turn - I'm not waiting on the server right now
+  if(Date.now()-NET.lastMsgAt>SILENCE_WATCHDOG_MS)verifyConnectionAlive();
+},10000);
 /* v0.15: a single generic FIFO queue replaces the old per-kind/per-seat armMoveWait()/
    armReshuffleWait() waiters - the server now produces ONE strictly-ordered, fully
    authoritative action stream (deal/move/pass), so the client's whole job is "consume the
@@ -3492,7 +3630,7 @@ function bootGameFromNetwork(action){
   clearToasts();   // v0.11.3: game start - never inherit a toast left over from a previous game
   drawBoard(); buildTable(); fitBoard(); setTimeout(fitBoard,50);
   window.G=G; window.LAY=LAY;
-  updateNetChip();
+  updateConnIndicator();
   toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts`,2600);
   runOnlineTurnLoop();
 }
@@ -3524,7 +3662,7 @@ function bootGameFromSnapshot(snapshotG,paused,tableSpeed,appliedSeq){
   clearToasts();
   drawBoard(); buildTable(); fitBoard(); setTimeout(fitBoard,50);
   window.G=G; window.LAY=LAY;
-  updateNetChip();
+  updateConnIndicator();
   if(NET.actionQueue.length)INSTANT=true;   // see the function comment above - a tiny live race, not a replay
   updatePauseUI();
   runOnlineTurnLoop();
@@ -3683,7 +3821,7 @@ function onSync(m){
   NET.moveSentForTurn=false;
   NET.presence=m.presence||{};   // v0.9: playerId->connected snapshot, for the reunion lobby
   NET.mySeat=NET.seatOwners?NET.seatOwners.indexOf(NET.playerId):-1;
-  updateNetChip();
+  updateConnIndicator();
   if(m.G){
     bootGameFromSnapshot(m.G,m.paused,m.tableSpeed,m.appliedSeq);
     // v0.9 refinement: coming back via the menu's "Resume Saved Game" tile (as opposed to a
@@ -3799,7 +3937,7 @@ function leaveOnlineToMenu(msg,keepRoom){
   Object.assign(NET,{ws:null,online:false,isHost:false,code:null,playerId:null,token:null,mySeat:-1,
     lobby:null,seatOwners:null,actionQueue:[],pendingActionResolvers:[],pendingStateCheck:null,appliedSeq:-1});
   if(!keepRoom)clearLastRoom();   // v0.8: leaving is a deliberate choice - don't auto-rejoin this one later
-  updateNetChip();
+  updateConnIndicator();
   resetNetUiFlow();
   $('waitHostOverlay').classList.add('hidden');
   $('pauseOverlay').classList.add('hidden');
@@ -3813,13 +3951,13 @@ function handleNetMessage(m){
     case 'created':
       NET.online=true; NET.isHost=true; NET.wantConnection=true;
       NET.code=m.code; NET.playerId=m.playerId; NET.token=m.token; NET.lobby=m.lobby;
-      saveNetSession(); saveLastRoom(m.code,false); updateNetChip(); renderRoomScreen();
+      saveNetSession(); saveLastRoom(m.code,false); updateConnIndicator(); renderRoomScreen();
       $('onlineOverlay').classList.add('hidden'); $('roomOverlay').classList.remove('hidden');
       return;
     case 'joined':
       NET.online=true; NET.isHost=false; NET.wantConnection=true;
       NET.code=m.code; NET.playerId=m.playerId; NET.token=m.token; NET.lobby=m.lobby;
-      saveNetSession(); saveLastRoom(m.code,false); updateNetChip(); advanceJoinToSeatStep();
+      saveNetSession(); saveLastRoom(m.code,false); updateConnIndicator(); advanceJoinToSeatStep();
       return;
     case 'joinError':
       // v0.10.3: a code that turns out to belong to an ALREADY-STARTED game - the code+name
@@ -3871,7 +4009,7 @@ function handleNetMessage(m){
       NET.lobby=m.lobby;
       if(m.isHost!=null){
         NET.online=true; NET.wantConnection=true; NET.isHost=m.isHost;
-        updateNetChip();
+        updateConnIndicator();
         if(NET.isHost){ $('onlineOverlay').classList.add('hidden'); $('joinOverlay').classList.add('hidden'); renderRoomScreen(); $('roomOverlay').classList.remove('hidden'); }
         else advanceJoinToSeatStep();
       } else if(NET.isHost)renderRoomScreen(); else renderJoinSeatStep();
@@ -3894,7 +4032,7 @@ function handleNetMessage(m){
       toast(`👋 ${m.fromName||'Someone'} is trying to get the game going again!`,3400);
       return;
     case 'hostStatus':
-      NET.hostConnected=!!m.connected; updateNetChip();
+      NET.hostConnected=!!m.connected; updateConnIndicator();
       if(!$('game').classList.contains('hidden'))
         $('waitHostOverlay').classList.toggle('hidden',NET.hostConnected);
       return;
@@ -3905,6 +4043,18 @@ function handleNetMessage(m){
       }else feedAction({seq:m.seq,action:m.action});
       return;
     case 'sync': onSync(m); return;
+    case 'ping':
+      // v0.16: a server-INITIATED ping (as opposed to the reply to one of OUR pings, which
+      // arrives as 'pong' and needs no special handling beyond the ws.onmessage timestamp
+      // bump every message already gets). server/cloud/server.ts's § HEARTBEAT sends these on
+      // the new Deno Deploy platform, which has no real WS-frame-level ping/pong the way
+      // server.js's Node `ws` library does (see that file's HEARTBEAT/isAlive/terminate()) -
+      // this app-level echo is how the Deno server tells a half-dead client socket (one that
+      // never replies) apart from a healthy-but-quiet one, and cleans the dead one up rather
+      // than leaving a room thinking that seat is still connected. server.js never sends this
+      // unprompted, so this case is a no-op in practice against the Node server - harmless.
+      try{ netSend({type:'pong',t:m.t}); }catch(e){}
+      return;
     case 'stateCheck':
       // v0.15: the SERVER's digest now (see server.js's maybeStateCheck()) - no more "only a
       // non-host compares" special case, since there's no host-generated opinion to defer to
@@ -4200,7 +4350,7 @@ $('mTeams').onclick=()=>{CFG.teams=true;saveCfg();renderMenu();};
 function startGame(){
   // offline/local play - guaranteed untouched by any network state, even leftover state
   // from a cancelled online setup.
-  NET.online=false; NET.isHost=false; NET.wantConnection=false; updateNetChip();
+  NET.online=false; NET.isHost=false; NET.wantConnection=false; updateConnIndicator();
   const cols=CFG.n===4?COLORS4:COLORS6;
   const seats=CFG.seatMeta[CFG.n].map((s,i)=>({name:s.name||cols[i].name,type:s.type,diff:s.diff,color:cols[i]}));
   // v0.12: solo vs-CPU always rotates to put you at the bottom; pass-and-play (2+ human
@@ -4655,7 +4805,7 @@ function resumeOfflineGame(){
   // resume, so it always unpauses. (Online resumes are different on purpose - see the new
   // reunion lobby below, which pauses deliberately until the humans are back at the table.)
   G.paused=false;
-  NET.online=false; NET.isHost=false; NET.wantConnection=false; updateNetChip();
+  NET.online=false; NET.isHost=false; NET.wantConnection=false; updateConnIndicator();
   // v0.12: NET.online must be false BEFORE this call (moved the online-teardown line above up
   // a few lines for this) so computeViewSeat() can't mistake a resumed OFFLINE save for an
   // online game off stale NET state - see computeViewSeat()'s comment, § LAYOUT.
@@ -4693,20 +4843,20 @@ function tryJoinOrRejoin(code,silent){
   }
 }
 
-/* ---- App-lifecycle survival (v0.8) ----
+/* ---- App-lifecycle survival (v0.8; hardened v0.16) ----
    iOS fully EVICTS backgrounded tabs/PWAs - coming back means a complete fresh page load
    with NO url params (handled by the boot sequence at the very bottom: silent auto-rejoin
    via the last-active-room record, see tryJoinOrRejoin above). This covers the OTHER case:
    the page actually SURVIVES backgrounding (shorter backgrounds, most non-iOS browsers, a
-   foreground PWA) but its socket may have quietly died while unattended. Don't wait for the
-   next ping/digest to notice - check the moment focus comes back. */
+   foreground PWA, or an iOS app that WKWebView chose not to evict) but its socket may have
+   quietly died while unattended. v0.16: don't just check readyState here anymore - a real
+   device report (Blake, background to send a text, come back to a frozen board while the
+   other seats kept playing server-side) traced to exactly this: WKWebView can leave a socket
+   reporting OPEN when it's actually dead. verifyConnectionAlive() (§ NET above) is the actual
+   fix - it proves the round trip still works instead of trusting the object's own state. */
 function onForeground(){
   if(!NET.online)return;
-  if(!NET.ws||NET.ws.readyState!==1){
-    if(!NET.reconnecting&&NET.wantConnection)scheduleReconnect();
-    return;
-  }
-  try{ netSend({type:'ping',t:Date.now()}); }catch(e){}
+  verifyConnectionAlive();
   // v0.15: any client can ask now (the server answers directly, no host round-trip needed
   // anymore - see server.js's "requestStateCheck" case), not just non-host clients.
   if(G)netSend({type:'requestStateCheck'});
