@@ -346,13 +346,16 @@ async function handleSoloResult(req: Request, ip: string): Promise<Response> {
  * § ROOMS — KV-backed room state, see file header points 1-2.
  * ------------------------------------------------------------------------------------- */
 type Seat = { name: string; type: "human" | "cpu"; diff: string; claimedBy: number | null };
-type Player = { id: number; token: string; name: string; isHost: boolean; connected: boolean };
+type Player = { id: number; token: string; name: string; isHost: boolean; connected: boolean; leftForGood?: boolean };
 type RoomMeta = {
   code: string; createdAt: number; lastActivity: number;
   hostPlayerId: number | null; nextPlayerId: number;
   players: Player[];
   lobby: { n: number; teams: boolean; seats: Seat[] } | null;
   started: boolean; seatOwners: (number | null)[] | null;
+  // v0.16 item 4: twin of server.js's room.readyCheck - set while the host has tapped Start
+  // but not every human seat has confirmed ready yet; null the rest of the time.
+  readyCheck: { requiredPlayerIds: number[]; readyPlayerIds: number[] } | null;
   paused: boolean; logCount: number;
   // v0.15 authoritative fields (twin of server.js's room object additions):
   G: unknown | null;        // full serialized authoritative game state snapshot
@@ -604,6 +607,52 @@ async function commitAndBroadcast(code: string, E: any, out: Broadcastable[], fi
   for (const b of out) broadcastRoom(code, b.payload);
   if (r.extra.needRecord) await recordFinishedGame(code, G); // idempotent — flag committed above
   return true;
+}
+
+/* ---------------------------------------------------------------------------------------
+ * v0.16 item 4 § READY CHECK — twin of server.js's startReadyCheck()/maybeAdvanceReadyCheck()/
+ * actuallyStartGame(). The host tapping Start now only opens this gate; the real deal happens
+ * once every HUMAN seat has confirmed ready (or immediately for an all-CPU table). Always
+ * called from inside withRoomChain(code, ...) by its two callers below ("start"/"readyUp").
+ * ------------------------------------------------------------------------------------- */
+async function maybeAdvanceReadyCheck(code: string): Promise<void> {
+  const cur = await kv.get<RoomMeta>(roomKey(code));
+  if (!cur.value || !cur.value.readyCheck || cur.value.started || !cur.value.lobby) return;
+  const { requiredPlayerIds, readyPlayerIds } = cur.value.readyCheck;
+  if (!requiredPlayerIds.every((id) => readyPlayerIds.includes(id))) return;
+  await actuallyStartGame(code, cur.value);
+}
+// The old "start" case's body, unchanged in substance - now triggered once the ready check
+// clears instead of directly from the host's "start" message. Twin of server.js's function.
+async function actuallyStartGame(code: string, pre: RoomMeta): Promise<void> {
+  if (!pre.lobby) return;
+  const lobby = pre.lobby;
+  const n = lobby.n === 6 ? 6 : 4;
+  const seatsCfg = lobby.seats.map((s) => ({ name: s.name, diff: s.diff || "medium", type: s.claimedBy != null ? "human" : "cpu" }));
+  const engine = createEngine();
+  engine.setLAY(engine.buildLayout(n));
+  engine.newGame({ n, teams: !!lobby.teams, seats: seatsCfg }, { deck: engine.freshDeck(), dealer: Math.floor(Math.random() * n) });
+  engines.set(code, engine);
+  const G = engine.getG();
+  const startAction = { kind: "start", n: G.n, teams: G.teams, seats: seatsCfg, dealer: G.dealer, deck: [], tableSpeed: pre.tableSpeed || 1 };
+  const r = await touchRoom(code, (meta) => {
+    if (meta.started || !meta.lobby) return false;
+    meta.started = true;
+    meta.readyCheck = null;
+    meta.seatOwners = meta.lobby.seats.map((s) => s.claimedBy);
+    meta.G = G;
+    meta.recorded = false;
+    meta.nextSeq = 1;   // 'start' is broadcast seq 0
+    meta.logCount = 1;
+    return { seatOwners: meta.seatOwners };
+  });
+  if (!r.ok) { dropEngine(code); return; }
+  broadcastRoom(code, { type: "gameAction", seq: 0, action: startAction, seatOwners: r.meta.seatOwners });
+  log("room started", code, `n=${n}`, lobby.teams ? "teams" : "ffa");
+  // Drive the opening stretch (first deal + any leading CPU turns) immediately.
+  const metaForLoop = r.meta; // nextSeq=1, the loop advances it as it appends
+  const { out, finished } = driveTurnLoopCollect(engine, metaForLoop);
+  await commitAndBroadcast(code, engine, out, finished);
 }
 
 // v0.15 snapshot fields for sync/reclaimed — twin of server.js's gameSnapshotFields().
@@ -987,7 +1036,7 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           hostPlayerId: playerId, nextPlayerId: 2,
           players: [{ id: playerId, token, name: hostName, isHost: true, connected: true }],
           lobby: { n: msg.n === 6 ? 6 : 4, teams: !!msg.teams, seats },
-          started: false, seatOwners: null, paused: false, logCount: 0,
+          started: false, seatOwners: null, readyCheck: null, paused: false, logCount: 0,
           G: null, tableSpeed: 1, recorded: false, nextSeq: 0,
         };
         await kv.set(roomKey(code), meta, { expireIn: ROOM_TTL_MS });
@@ -1006,9 +1055,11 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         // v0.10.3: `reason:"started"` lets the client fall back to "reclaim" automatically
         // (see the "reclaim" case below) instead of dead-ending — same reasoning as server.js.
         if (preCheck.value.started) { send(socket, { type: "joinError", message: "That game already started. Ask the host to send a new code, or reconnect if you were already playing.", reason: "started" }); return; }
+        // v0.16 item 4: twin of server.js's guard - the seat list is locked in mid ready-check.
+        if (preCheck.value.readyCheck) { send(socket, { type: "joinError", message: "The host is starting the game - try again in a moment." }); return; }
         if (isBadName(msg.name)) { send(socket, { type: "joinError", message: "Pick a nicer name." }); return; }
         const r = await touchRoom(code, (meta) => {
-          if (meta.started) return false;
+          if (meta.started || meta.readyCheck) return false;
           const playerId = meta.nextPlayerId++;
           const token = newToken();
           meta.players.push({ id: playerId, token, name: cleanName(msg.name, "Player"), isHost: false, connected: true });
@@ -1038,6 +1089,14 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           sendDeadRoomFollowup(socket, deadRoomMsg);
           return;
         }
+        // v0.16 item 2: twin of server.js's matching check - a player who left for good can
+        // never reclaim their old seat via a stored token either.
+        if (preP.leftForGood) {
+          const leftMsg = "You left that game for good - a computer is playing your seat now.";
+          send(socket, { type: "rejoinError", message: leftMsg });
+          sendDeadRoomFollowup(socket, leftMsg);
+          return;
+        }
         if (isUnmigratableRoom(pre.value)) {
           send(socket, { type: "rejoinError", message: OLD_ROOM_MESSAGE });
           sendDeadRoomFollowup(socket, OLD_ROOM_MESSAGE);
@@ -1063,6 +1122,11 @@ function handleWsUpgrade(req: Request, ip: string): Response {
             type: "sync", lobby: lobbySnapshot(r.meta), seatOwners: r.meta.seatOwners,
             ...gameSnapshotFields(r.meta, isHost),
           });
+        } else if (r.meta.readyCheck) {
+          // v0.16 item 4: reconnecting mid ready-check lands back on the ready-check screen,
+          // not a stale plain-lobby seat picker - twin of server.js's matching branch.
+          send(socket, { type: "lobby", lobby: lobbySnapshot(r.meta), isHost, protocolVersion: PROTOCOL_VERSION });
+          send(socket, { type: "readyCheck", requiredPlayerIds: r.meta.readyCheck.requiredPlayerIds, readyPlayerIds: r.meta.readyCheck.readyPlayerIds, lobby: lobbySnapshot(r.meta) });
         } else {
           send(socket, { type: "lobby", lobby: lobbySnapshot(r.meta), isHost, protocolVersion: PROTOCOL_VERSION });
         }
@@ -1097,8 +1161,18 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         }
         if (isBadName(msg.name)) { send(socket, { type: "reclaimError", message: "Pick a nicer name." }); return; }
         const wantName = String(msg.name || "").trim().toLowerCase();
-        const candidates = pre.value.players.filter((p) => p.name.trim().toLowerCase() === wantName);
-        if (candidates.length === 0) { send(socket, { type: "reclaimError", message: `No one named "${cleanName(msg.name, "that")}" is in that game.` }); return; }
+        const allNamed = pre.value.players.filter((p) => p.name.trim().toLowerCase() === wantName);
+        // v0.16 item 2: twin of server.js's matching filter - a player who left for good can
+        // never be reclaimed back into their old seat.
+        const candidates = allNamed.filter((p) => !p.leftForGood);
+        if (candidates.length === 0) {
+          if (allNamed.some((p) => p.leftForGood)) {
+            send(socket, { type: "reclaimError", message: `${cleanName(msg.name, "That player")} left that game for good - a computer is playing their seat now.` });
+          } else {
+            send(socket, { type: "reclaimError", message: `No one named "${cleanName(msg.name, "that")}" is in that game.` });
+          }
+          return;
+        }
         const targetPre = candidates.find((p) => !p.connected) || candidates[0];
         if (targetPre.connected) {
           const hostP = pre.value.players.find((p) => p.id === pre.value!.hostPlayerId);
@@ -1182,7 +1256,8 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         if (!ctx) return;
         const { code, playerId } = ctx;
         const r = await touchRoom(code, (meta) => {
-          if (!meta.lobby || meta.started) return false;
+          // v0.16 item 4: the seat list is locked in for the duration of a ready check.
+          if (!meta.lobby || meta.started || meta.readyCheck) return false;
           const seat = meta.lobby.seats[msg.seatIndex as number];
           if (!seat) return false;
           if (seat.claimedBy === meta.hostPlayerId) return false;
@@ -1202,7 +1277,8 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         const { code, playerId } = ctx;
         let kicked: number | null = null;
         const r = await touchRoom(code, (meta) => {
-          if (playerId !== meta.hostPlayerId || !meta.lobby || meta.started) return false;
+          // v0.16 item 4: same lock as claimSeat above.
+          if (playerId !== meta.hostPlayerId || !meta.lobby || meta.started || meta.readyCheck) return false;
           const seat = meta.lobby.seats[msg.seatIndex as number];
           if (!seat) return false;
           const patch = (msg.patch as Record<string, unknown>) || {};
@@ -1220,41 +1296,58 @@ function handleWsUpgrade(req: Request, ip: string): Response {
       }
 
       case "start": {
-        // v0.15: {type:'start'} — bare signal, no game-config payload (twin of server.js's
-        // "start" case, see its comments). The server generates the game itself from
-        // room.lobby: real shuffled deck, random dealer, and the "unclaimed seat becomes CPU"
-        // rule re-derived from claimedBy.
+        // v0.16 item 4: {type:'start'} used to deal immediately; it now only opens the READY
+        // CHECK gate (see maybeAdvanceReadyCheck()/actuallyStartGame() above) - twin of
+        // server.js's "start" case. The actual deal happens once every human seat has
+        // confirmed ready (or immediately if there are none, e.g. an all-CPU table).
         if (!ctx) return;
         const { code, playerId } = ctx;
         await withRoomChain(code, async () => {
-          const pre = await kv.get<RoomMeta>(roomKey(code));
-          if (!pre.value || playerId !== pre.value.hostPlayerId || pre.value.started || !pre.value.lobby) return;
-          const lobby = pre.value.lobby;
-          const n = lobby.n === 6 ? 6 : 4;
-          const seatsCfg = lobby.seats.map((s) => ({ name: s.name, diff: s.diff || "medium", type: s.claimedBy != null ? "human" : "cpu" }));
-          const engine = createEngine();
-          engine.setLAY(engine.buildLayout(n));
-          engine.newGame({ n, teams: !!lobby.teams, seats: seatsCfg }, { deck: engine.freshDeck(), dealer: Math.floor(Math.random() * n) });
-          engines.set(code, engine);
-          const G = engine.getG();
-          const startAction = { kind: "start", n: G.n, teams: G.teams, seats: seatsCfg, dealer: G.dealer, deck: [], tableSpeed: pre.value.tableSpeed || 1 };
           const r = await touchRoom(code, (meta) => {
-            if (playerId !== meta.hostPlayerId || meta.started || !meta.lobby) return false;
-            meta.started = true;
-            meta.seatOwners = meta.lobby.seats.map((s) => s.claimedBy);
-            meta.G = G;
-            meta.recorded = false;
-            meta.nextSeq = 1;   // 'start' is broadcast seq 0
-            meta.logCount = 1;
-            return { seatOwners: meta.seatOwners };
+            if (playerId !== meta.hostPlayerId || meta.started || !meta.lobby || meta.readyCheck) return false;
+            const requiredPlayerIds = Array.from(new Set(meta.lobby.seats.filter((s) => s.claimedBy != null).map((s) => s.claimedBy as number)));
+            meta.readyCheck = { requiredPlayerIds, readyPlayerIds: [] };
+            return {};
           });
-          if (!r.ok) { dropEngine(code); return; }
-          broadcastRoom(code, { type: "gameAction", seq: 0, action: startAction, seatOwners: r.meta.seatOwners });
-          log("room started", code, `n=${n}`, lobby.teams ? "teams" : "ffa");
-          // Drive the opening stretch (first deal + any leading CPU turns) immediately.
-          const metaForLoop = r.meta; // nextSeq=1, the loop advances it as it appends
-          const { out, finished } = driveTurnLoopCollect(engine, metaForLoop);
-          await commitAndBroadcast(code, engine, out, finished);
+          if (!r.ok) return;
+          broadcastRoom(code, { type: "readyCheck", requiredPlayerIds: r.meta.readyCheck!.requiredPlayerIds, readyPlayerIds: r.meta.readyCheck!.readyPlayerIds, lobby: lobbySnapshot(r.meta) });
+          log("room entered ready check", code, "required=" + r.meta.readyCheck!.requiredPlayerIds.length);
+          await maybeAdvanceReadyCheck(code);   // covers the zero-humans case - proceeds immediately
+        });
+        return;
+      }
+
+      case "readyUp": {
+        // v0.16 item 4: {type:'readyUp'} - a human at the table confirms ready. Twin of
+        // server.js's case.
+        if (!ctx) return;
+        const { code, playerId } = ctx;
+        await withRoomChain(code, async () => {
+          const r = await touchRoom(code, (meta) => {
+            if (!meta.readyCheck || meta.started) return false;
+            if (!meta.readyCheck.requiredPlayerIds.includes(playerId)) return false;
+            if (!meta.readyCheck.readyPlayerIds.includes(playerId)) meta.readyCheck.readyPlayerIds.push(playerId);
+            return {};
+          });
+          if (!r.ok) return;
+          broadcastRoom(code, { type: "readyCheck", requiredPlayerIds: r.meta.readyCheck!.requiredPlayerIds, readyPlayerIds: r.meta.readyCheck!.readyPlayerIds, lobby: lobbySnapshot(r.meta) });
+          await maybeAdvanceReadyCheck(code);
+        });
+        return;
+      }
+
+      case "cancelReadyCheck": {
+        // v0.16 item 4: {type:'cancelReadyCheck'} - host-only, backs out to the plain lobby.
+        // Twin of server.js's case.
+        if (!ctx) return;
+        const { code, playerId } = ctx;
+        await withRoomChain(code, async () => {
+          const r = await touchRoom(code, (meta) => {
+            if (playerId !== meta.hostPlayerId || !meta.readyCheck || meta.started) return false;
+            meta.readyCheck = null;
+            return {};
+          });
+          if (r.ok) broadcastRoom(code, { type: "readyCheckCancelled", lobby: lobbySnapshot(r.meta) });
         });
         return;
       }
@@ -1306,6 +1399,52 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           }
           const cont = driveTurnLoopCollect(E, meta);
           await commitAndBroadcast(code, E, out.concat(cont.out), cont.finished);
+        });
+        return;
+      }
+
+      case "leaveForGood": {
+        // v0.16 item 2: {type:'leaveForGood'} — twin of server.js's case. A human seat
+        // permanently converts to a CPU for the rest of THIS game; no "host is special" branch
+        // (a host leaving for good is handled identically to any other seat — see HANDOFF.md
+        // v0.16 for the host-lifecycle audit that confirmed nothing else depends on the host
+        // staying human/connected past this point).
+        if (!ctx) return;
+        const { code, playerId } = ctx;
+        await withRoomChain(code, async () => {
+          const pre = await kv.get<RoomMeta>(roomKey(code));
+          if (!pre.value) { send(socket, { type: "leftForGood" }); return; }
+          const meta = pre.value;
+          let seat = -1;
+          if (meta.started && meta.seatOwners) seat = meta.seatOwners.indexOf(playerId);
+          const E = seat >= 0 ? getEngine(code, meta) : null;
+          const G = E ? E.getG() : null;
+          let converted = false;
+          if (E && G && seat >= 0 && G.seats[seat] && G.seats[seat].type === "human") {
+            const leaverName = G.seats[seat].name;
+            G.seats[seat].type = "cpu";
+            G.seats[seat].diff = "medium";   // "Tricky" - see engine.js chooseAI()'s diff naming
+            converted = true;
+            const out: Broadcastable[] = [{ payload: { type: "gameAction", seq: meta.nextSeq++, action: { kind: "seatToCpu", seat, diff: "medium", name: leaverName } } }];
+            // The seat may be sitting mid-turn waiting on exactly this human's move right now -
+            // drive it forward immediately instead of stalling the table.
+            const cont = driveTurnLoopCollect(E, meta);
+            await commitAndBroadcast(code, E, out.concat(cont.out), cont.finished);
+          } else {
+            seat = -1; // nothing converted - don't touch seatOwners below
+          }
+          // Invalidate this player's session for THIS room permanently (covers leaving mid-lobby
+          // too, before any seat/engine exists) and null out the seatOwners slot if converted -
+          // done in a follow-up commit so it lands even when commitAndBroadcast above already
+          // persisted a fresh meta.G that this read predates.
+          await touchRoom(code, (m) => {
+            const p = m.players.find((pp) => pp.id === playerId);
+            if (p) p.leftForGood = true;
+            if (seat >= 0 && m.seatOwners) m.seatOwners[seat] = null;
+            return {};
+          });
+          send(socket, { type: "leftForGood" });
+          log("player left for good", code, playerId, converted ? "(seat converted to CPU)" : "(no active seat)");
         });
         return;
       }

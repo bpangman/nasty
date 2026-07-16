@@ -1017,6 +1017,40 @@ button{font:inherit;cursor:pointer}
   <p>The host's connection dropped - the game will pick back up the moment they're back.</p>
 </div>
 
+<!-- v0.16 item 4: the host tapping "Start game" no longer deals right away - every HUMAN seat
+     has to confirm ready first (CPU seats auto-count). See renderReadyCheckOverlay()/§ NET. -->
+<div id="readyCheckOverlay" class="overlay hidden">
+  <div class="modalCard">
+    <h3>Everyone ready?</h3>
+    <p>The game deals as soon as everyone at the table has tapped ready.</p>
+    <div id="readyCheckList"></div>
+    <div id="readyCheckNote" style="font-size:13px;color:#ffe9a8;min-height:18px;margin-top:6px"></div>
+    <div class="bigBtns">
+      <button class="btn primary hidden" id="btnReadyUp">I'm ready</button>
+      <button class="btn ghost hidden" id="btnReadyCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- v0.16 item 4: shown ONCE per fresh online game instance, right as the deal lands - see
+     bootGameFromNetwork(), the one place this is opened from (never on a reconnect/rejoin/
+     reclaim, which uses bootGameFromSnapshot() instead - so a late joiner mid-game never sees
+     this, and a genuinely new game later shows it again). Sits on top of the freshly dealt
+     board; dismissing just hides it. -->
+<div id="onlineRulesOverlay" class="overlay hidden">
+  <div class="modalCard">
+    <h3>Online games work a little differently</h3>
+    <ul style="text-align:left;font-size:14.5px;line-height:1.6;padding-left:22px;margin:12px 0">
+      <li>No Skip button - everyone watches the same game at the same speed.</li>
+      <li>The host picks the game speed for the table.</li>
+      <li>Anyone can pause for everyone.</li>
+      <li>You can switch apps anytime. The game keeps going and catches you up when you return. If your board ever looks stuck, close and reopen the app.</li>
+      <li>Need to leave for good? A computer can take over your seat (in the Menu).</li>
+    </ul>
+    <div class="bigBtns"><button class="btn primary" id="btnOnlineRulesOk">Got it, let's play</button></div>
+  </div>
+</div>
+
 <!-- § REUNION (v0.9 refinement) - shown only to whoever tapped "Resume Saved Game" on an
      online room, so a comeback game doesn't just drop one lone player onto a moving board.
      See HANDOFF.md "Resuming an online game" for the full writeup. -->
@@ -1061,13 +1095,16 @@ button{font:inherit;cursor:pointer}
 
 <!-- v0.11 item 3: leaving a game now offers BOTH explicit choices instead of one vague
      confirm() - shared by the topbar's "‹ Menu" button and the pause overlay's "Leave game"
-     button (see doLeaveGame() / openLeaveConfirm()). -->
+     button (see doLeaveGame() / openLeaveConfirm()). v0.16 item 2: a THIRD, online-only choice
+     - btnLeaveForGood - permanently hands your seat to a computer for the rest of THIS game
+     (see doLeaveForGood()/leaveForGood, § NET). Shown/hidden per game via openLeaveConfirm(). -->
 <div id="leaveConfirmOverlay" class="overlay hidden">
   <div class="sign"><b>LEAVE GAME?</b></div>
-  <p>Do you want to keep this game to come back to later, or leave it behind for good?</p>
+  <p>Do you want to keep this game to come back to later, or leave it behind entirely?</p>
   <div class="bigBtns">
     <button class="btn primary" id="btnLeaveSave">Save &amp; leave</button>
     <button class="btn ghost" id="btnLeaveDiscard">Leave without saving</button>
+    <button class="btn ghost hidden" id="btnLeaveForGood">Leave for good - a computer takes over my seat</button>
     <button class="btn ghost" id="btnLeaveCancel">Cancel</button>
   </div>
 </div>
@@ -3331,6 +3368,8 @@ const NET={
                            // and kept current by the existing 'presence' broadcast - powers
                            // the reunion lobby's green/gray dots.
   reunionOpen:false,       // v0.9: true while the reunion lobby overlay is on screen.
+  readyCheck:null,         // v0.16 item 4: {requiredPlayerIds,readyPlayerIds} while the host's
+                           // Start tap is waiting on the table - see § READY CHECK.
 };
 window.NET=NET; // exposed for testing/debugging, same spirit as window.G/window.LAY
 applySpeed();   // v0.15: the real bootstrap call - deferred to here from § UTIL now that
@@ -3632,6 +3671,14 @@ function bootGameFromNetwork(action){
   window.G=G; window.LAY=LAY;
   updateConnIndicator();
   toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts`,2600);
+  // v0.16 item 4: this is the ONE place a genuinely fresh online game boots for a client that
+  // was already sitting in the lobby (a reconnect/rejoin/reclaim always uses
+  // bootGameFromSnapshot() instead, below - never this function) - so showing the one-time
+  // rules popup exactly here, with no separate "have I seen this" flag anywhere, already gives
+  // the right behavior for free: once per fresh game instance, never on a mid-game rejoin, and
+  // shown again for the next brand-new game. Sits visually on top of the board already drawn
+  // above; dismissing just hides it.
+  $('onlineRulesOverlay').classList.remove('hidden');
   runOnlineTurnLoop();
 }
 // v0.15: RECONNECT/rejoin/reclaim path - installs the server's authoritative `G` snapshot
@@ -3740,6 +3787,18 @@ async function applyServerAction(action,myGen){
     // abnormal case. Guarded the same way as everything else here: only touches the CURRENT G.
     if(myGen===NETGEN&&G&&!G.over&&typeof action.turn==='number')G.turn=action.turn;
   }else if(action.kind==='pass')await applyPassAction(action);
+  else if(action.kind==='seatToCpu'){
+    // v0.16 item 2: another seat at the table just chose "Leave for good" (see server.js's
+    // "leaveForGood" case) - the server already drove any move this triggered (a fresh 'move'
+    // action for this seat may follow right behind this one in the queue if it was mid-turn),
+    // this just mirrors the seat's type/diff locally so rendering (e.g. any future "CPU" hint)
+    // and chooseAI-adjacent UI stay correct, and tells the table.
+    if(myGen===NETGEN&&G&&G.seats[action.seat]){
+      G.seats[action.seat].type='cpu';
+      G.seats[action.seat].diff=action.diff;
+      toast(`${action.name} left. A computer plays their seat now.`,3400);
+    }
+  }
 }
 // Mirrors doDeal()'s visible effects (toast/animateDeal/positionDeck), sourced from the
 // server's decided fields instead of a local shuffle/pop - see server/engine.js's
@@ -3935,12 +3994,14 @@ function leaveOnlineToMenu(msg,keepRoom){
   NET.wantConnection=false;
   if(NET.ws){ try{NET.ws.close();}catch(e){} }
   Object.assign(NET,{ws:null,online:false,isHost:false,code:null,playerId:null,token:null,mySeat:-1,
-    lobby:null,seatOwners:null,actionQueue:[],pendingActionResolvers:[],pendingStateCheck:null,appliedSeq:-1});
+    lobby:null,seatOwners:null,actionQueue:[],pendingActionResolvers:[],pendingStateCheck:null,appliedSeq:-1,readyCheck:null});
   if(!keepRoom)clearLastRoom();   // v0.8: leaving is a deliberate choice - don't auto-rejoin this one later
   updateConnIndicator();
   resetNetUiFlow();
   $('waitHostOverlay').classList.add('hidden');
   $('pauseOverlay').classList.add('hidden');
+  $('readyCheckOverlay').classList.add('hidden');   // v0.16 item 4: defensive - see § READY CHECK
+  $('onlineRulesOverlay').classList.add('hidden');  // v0.16 item 4: defensive - never linger past a leave
   $('game').classList.add('hidden'); $('menu').classList.remove('hidden');
   clearToasts();   // v0.11.3: wipe any leftover in-game toast before landing on the menu
   updateMenuResumeButtons();
@@ -4014,8 +4075,30 @@ function handleNetMessage(m){
         else advanceJoinToSeatStep();
       } else if(NET.isHost)renderRoomScreen(); else renderJoinSeatStep();
       return;
+    case 'readyCheck':
+      // v0.16 item 4: host tapped Start - every human seat now needs to confirm ready before
+      // the real deal happens (see § READY CHECK). Replaces whichever lobby screen was up.
+      NET.lobby=m.lobby||NET.lobby;
+      NET.readyCheck={requiredPlayerIds:m.requiredPlayerIds,readyPlayerIds:m.readyPlayerIds};
+      openReadyCheckOverlay();
+      return;
+    case 'readyCheckCancelled':
+      // v0.16 item 4: host backed out to the plain lobby - go back to whichever lobby screen
+      // this client normally sees (host's room screen or a guest's seat step).
+      NET.lobby=m.lobby||NET.lobby;
+      NET.readyCheck=null;
+      closeReadyCheckOverlay();
+      if(NET.isHost){ renderRoomScreen(); $('roomOverlay').classList.remove('hidden'); }
+      else { $('joinOverlay').classList.remove('hidden'); advanceJoinToSeatStep(); }
+      return;
     case 'kicked':
       leaveOnlineToMenu(m.message||'The host removed your seat.');
+      return;
+    case 'leftForGood':
+      // v0.16 item 2: server-acked our own "leaveForGood" - proceed to the same clean-slate
+      // menu every other deliberate-leave path uses (see doLeaveForGood()/leaveOnlineToMenu()).
+      clearTimeout(LEAVE_FOR_GOOD_TIMER);
+      leaveOnlineToMenu(null,false);
       return;
     case 'presence':
       // v0.9: kept for the reunion lobby's green/gray dots (see § REUNION). v0.10.2: ALSO
@@ -4038,6 +4121,7 @@ function handleNetMessage(m){
       return;
     case 'gameAction':
       if(m.action.kind==='start'){
+        NET.readyCheck=null; closeReadyCheckOverlay();   // v0.16 item 4: the deal just landed
         NET.seatOwners=m.seatOwners; NET.mySeat=NET.seatOwners.indexOf(NET.playerId);
         bootGameFromNetwork(m.action);
       }else feedAction({seq:m.seq,action:m.action});
@@ -4249,6 +4333,46 @@ function renderJoinSeatStep(){
   $('joinNote').textContent=haveSeat?"You're in! Waiting for the host to start the game…":'Pick any open seat above - even ones marked CPU.';
 }
 
+/* ============================= § READY CHECK (v0.16 item 4) =============================
+   Host taps "Start game" -> the server opens a ready-check gate instead of dealing right away
+   (see server.js/server.ts's "start"/"readyUp"/"cancelReadyCheck") - shown to EVERY client
+   still sitting in the lobby, host and guests alike, replacing whichever lobby screen
+   (roomOverlay/joinOverlay) they were looking at. NET.readyCheck holds the server's latest
+   {requiredPlayerIds, readyPlayerIds} (only human seats are ever required - CPU seats need no
+   one to ready up). Cleared the moment the real deal lands (see the 'gameAction' kind==='start'
+   handler) or the host cancels back to the plain lobby (readyCheckCancelled). */
+function renderReadyCheckOverlay(){
+  if(!NET.lobby||!NET.readyCheck)return;
+  const cols=NET.lobby.n===4?COLORS4:COLORS6;
+  const required=NET.readyCheck.requiredPlayerIds||[];
+  const ready=new Set(NET.readyCheck.readyPlayerIds||[]);
+  const list=$('readyCheckList'); list.innerHTML='';
+  NET.lobby.seats.forEach((s,i)=>{
+    const isCpu=s.claimedBy==null;
+    const isReady=!isCpu&&ready.has(s.claimedBy);
+    const statusTxt=isCpu?'Computer':isReady?'Ready ✓':'Waiting…';
+    const dotColor=isCpu?'#888':isReady?'#3fae5c':cols[i].c;
+    const row=document.createElement('div'); row.className='lobbySeat';
+    row.innerHTML=`<span class="dot" style="background:${dotColor}"></span><span class="nm">${esc(s.name)}</span><span class="st">${statusTxt}</span>`;
+    list.appendChild(row);
+  });
+  const allReady=required.every(id=>ready.has(id));
+  $('readyCheckNote').textContent=allReady?"Everyone's ready - starting…":'Waiting for everyone to tap ready.';
+  const iAmRequired=required.includes(NET.playerId), iAmReady=ready.has(NET.playerId);
+  $('btnReadyUp').classList.toggle('hidden',!iAmRequired||iAmReady);
+  $('btnReadyCancel').classList.toggle('hidden',!NET.isHost);
+}
+function openReadyCheckOverlay(){
+  resetNetUiFlow();
+  renderReadyCheckOverlay();
+  $('readyCheckOverlay').classList.remove('hidden');
+}
+function closeReadyCheckOverlay(){
+  $('readyCheckOverlay').classList.add('hidden');
+}
+$('btnReadyUp').onclick=()=>netSend({type:'readyUp'});
+$('btnReadyCancel').onclick=()=>netSend({type:'cancelReadyCheck'});
+
 /* ============================= § NAMES (limits + decency, v0.9 item 9) =============================
    Shared by the setup screen, the online join flow, and (duplicated, since the server is a
    separate plain-Node file with no shared module) server.js - see its own copy + comment.
@@ -4406,6 +4530,9 @@ $('btnWinMenu').onclick=()=>{location.hash='';G=null;$('winOverlay').classList.a
 // should ever silently destroy a game still in progress.
 function openLeaveConfirm(){
   if(!G)return;
+  // v0.16 item 2: the CPU-takeover option only makes sense online (there's a server to hand
+  // the seat to) - offline/pass-and-play never shows it.
+  $('btnLeaveForGood').classList.toggle('hidden',!NET.online);
   $('leaveConfirmOverlay').classList.remove('hidden');
 }
 function doLeaveGame(saveIt){
@@ -4424,10 +4551,28 @@ function doLeaveGame(saveIt){
     $('game').classList.add('hidden');$('menu').classList.remove('hidden');clearToasts();updateMenuResumeButtons();
   }
 }
+// v0.16 item 2: "Leave for good" - tells the server to permanently convert THIS seat to a CPU
+// (see server.js/server.ts's "leaveForGood" case) and lands on a clean menu with no resume
+// tile for this game, same "clean slate" treatment leaveOnlineToMenu() already gives every
+// other deliberate-leave path. Waits for the server's ack ('leftForGood') so the seat
+// conversion has actually been sent before we tear down our own connection - but never hangs
+// forever on a bad connection: LEAVE_FOR_GOOD_TIMER falls back to leaving anyway after a few
+// seconds, since the amber/red connection banner already covers "why didn't this work."
+let LEAVE_FOR_GOOD_TIMER=null;
+function doLeaveForGood(){
+  $('leaveConfirmOverlay').classList.add('hidden');
+  $('pauseOverlay').classList.add('hidden');
+  if(!NET.online)return;   // safety net - the button is hidden offline anyway
+  netSend({type:'leaveForGood'});
+  clearTimeout(LEAVE_FOR_GOOD_TIMER);
+  LEAVE_FOR_GOOD_TIMER=setTimeout(()=>leaveOnlineToMenu(null,false),3000);
+}
 $('btnLeaveSave').onclick=()=>doLeaveGame(true);
 $('btnLeaveDiscard').onclick=()=>doLeaveGame(false);
+$('btnLeaveForGood').onclick=doLeaveForGood;
 $('btnLeaveCancel').onclick=()=>$('leaveConfirmOverlay').classList.add('hidden');
 $('btnMenu').onclick=openLeaveConfirm;
+$('btnOnlineRulesOk').onclick=()=>$('onlineRulesOverlay').classList.add('hidden');
 $('btnRules').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRules2').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRulesClose').onclick=()=>$('rulesOverlay').classList.add('hidden');
