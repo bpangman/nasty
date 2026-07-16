@@ -1,9 +1,28 @@
-// NASTY relay server — Deno Deploy port of ../server.js (the Node/ws version, which stays
-// intact for local dev/tests). SAME wire protocol, EXACTLY — every message type an old
-// deployed client sends/expects (host/join/rejoin/claimSeat/setSeat/start/action/stateCheck/
-// requestStateCheck/pauseToggle/recordResult/nudge, plus the /health, /leaderboard, /admin/*
-// HTTP routes) is implemented identically here. See HANDOFF.md "Online multiplayer" +
-// "Cloud hosting (Deno Deploy)" sections for the protocol reference and deploy instructions.
+// NASTY server — Deno Deploy port of ../server.js (the Node/ws version, which stays intact
+// for local dev/tests). SAME wire protocol, EXACTLY, as of v0.15: SERVER-AUTHORITATIVE game
+// state (protocol v2) — see HANDOFF.md's "v0.15" section, which supersedes the older "Online
+// multiplayer"/"Cloud hosting" relay-era descriptions for everything gameplay-related.
+//
+// v0.15 authoritative design, this file (mirrors server.js's driveTurnLoop design, adapted to
+// KV + per-request isolate reality):
+//   - The rules engine is imported from ./engine.js — GENERATED from index.html by
+//     ../build-engine.js (npm run build-engine in ../), NEVER hand-edited. One authored copy
+//     of the rules, three consumers (browser, Node server, this file).
+//   - Each started room's live engine instance (holding the authoritative `G`) lives in THIS
+//     ISOLATE'S memory (`engines` map below) while the room is active — realistic because the
+//     deploy is pinned to a single region where one instance serves everything (the same
+//     documented single-instance-in-practice reasoning § RELAY below has always leaned on).
+//   - Every game mutation ALSO persists a full `G` snapshot into the room's KV meta key
+//     (RoomMeta.G) in the same touchRoom commit that bumps nextSeq — so a cold start, isolate
+//     recycle, or genuine multi-isolate handoff restores the game exactly from KV
+//     (getEngine() below re-hydrates an engine from meta.G on demand). G for a 6-seat game
+//     serializes to a few KB — comfortably under KV's 64KiB per-value limit (verified with a
+//     real serialized-size check in the test suite, not assumed).
+//   - Game mutations for one room are serialized through a per-room promise chain
+//     (`roomChain` below) IN ADDITION to the per-connection msgChain — two different players'
+//     near-simultaneous messages for the same room must not interleave their engine mutations.
+//     Cross-ISOLATE serialization is not attempted (same accepted single-instance caveat as
+//     § RELAY; KV's optimistic concurrency in touchRoom still prevents silent lost writes).
 //
 // Three real differences from the Node version, all forced by running on a serverless,
 // multi-region platform instead of one long-lived process:
@@ -54,8 +73,25 @@
 // Deploy: `deno deploy --org <org> --app <app> --prod` from this directory (see HANDOFF.md
 // "Cloud hosting" for the full new-platform CLI walkthrough — deployctl/classic is retired).
 
+// v0.15: the generated rules engine — see this file's header and ../build-engine.js. Plain JS,
+// no types (Deno imports it fine; the engine object is treated as `any`-shaped on purpose,
+// its API is documented in the generated file's own header).
+// deno-lint-ignore-file no-explicit-any
+import { createEngine } from "./engine.js";
+
 const PORT = Number(Deno.env.get("NASTY_PORT") ?? 8484);
 const KV_PATH = Deno.env.get("NASTY_KV_PATH") || undefined; // undefined = Deploy's managed KV / local default
+
+/* v0.15 § PROTOCOL VERSION — twin of server.js's matching block, byte-identical semantics.
+   Breaking wire-protocol change: pre-v0.15 (lockstep) clients cannot talk to this server and
+   vice versa. host/join/rejoin/reclaim all carry protocolVersion from the client; anything
+   missing/below current gets a plain-language rejection (no dashes — standing rule). */
+const PROTOCOL_VERSION = 2;
+const PROTOCOL_MISMATCH_MESSAGE =
+  "This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.";
+function protocolOk(msg: Record<string, unknown>): boolean {
+  return typeof msg.protocolVersion === "number" && (msg.protocolVersion as number) >= PROTOCOL_VERSION;
+}
 
 const ROOM_TTL_MS = 30 * 60 * 1000; // never-started lobby, fully disconnected
 const STARTED_ROOM_TTL_MS = 7 * 24 * 60 * 60 * 1000; // started-but-unfinished game
@@ -266,6 +302,11 @@ type RoomMeta = {
   lobby: { n: number; teams: boolean; seats: Seat[] } | null;
   started: boolean; seatOwners: (number | null)[] | null;
   paused: boolean; logCount: number;
+  // v0.15 authoritative fields (twin of server.js's room object additions):
+  G: unknown | null;        // full serialized authoritative game state snapshot
+  tableSpeed: number;       // shared table pacing, host-controlled
+  recorded: boolean;        // leaderboard idempotency flag - see finishGame()
+  nextSeq: number;          // monotonic broadcast action seq (logCount's successor concept)
 };
 
 function roomKey(code: string): Deno.KvKey { return ["room", code]; }
@@ -312,15 +353,10 @@ async function touchRoom(
   return { ok: false, reason: "contention" };
 }
 
-async function getRoomLog(code: string, count: number): Promise<{ seq: number; action: unknown }[]> {
-  const map = new Map<number, unknown>();
-  for await (const e of kv.list({ prefix: ["roomlog", code] })) {
-    map.set(Number(e.key[2]), e.value);
-  }
-  const out: { seq: number; action: unknown }[] = [];
-  for (let i = 0; i < count; i++) out.push({ seq: i, action: map.get(i) });
-  return out;
-}
+// v0.15: getRoomLog() (the whole-log fetch for replay-based reconnect) is GONE — reconnect is
+// snapshot-based now (gameSnapshotFields/RoomMeta.G), so no per-action KV log entries are
+// written anymore either. The ["roomlog", code, seq] keyspace and logKey() remain only so
+// admin room deletion still sweeps any PRE-v0.15 room's leftover log entries.
 
 function lobbySnapshot(meta: RoomMeta) {
   if (!meta.lobby) return null;
@@ -332,6 +368,205 @@ function presenceSnapshot(meta: RoomMeta) {
   const out: Record<number, boolean> = {};
   for (const p of meta.players) out[p.id] = !!p.connected;
   return out;
+}
+
+/* ---------------------------------------------------------------------------------------
+ * v0.15 § AUTHORITATIVE GAME — twin of server.js's § AUTHORITATIVE TURN LOOP, adapted to KV.
+ * See this file's header for the storage strategy. The engine instance for an active room
+ * lives in this isolate's memory (fast, synchronous mutations exactly like Node's loop);
+ * every commit persists the resulting `G` snapshot + nextSeq into RoomMeta so a cold start /
+ * isolate recycle / restart restores the game exactly (getEngine() re-hydrates from meta.G).
+ * ------------------------------------------------------------------------------------- */
+const engines = new Map<string, any>();
+function getEngine(code: string, meta: RoomMeta): any | null {
+  let e = engines.get(code);
+  if (e) return e;
+  if (!meta.G) return null;
+  e = createEngine();
+  e.setLAY(e.buildLayout((meta.G as { n: number }).n));
+  e.setG(meta.G);
+  engines.set(code, e);
+  return e;
+}
+function dropEngine(code: string) { engines.delete(code); }
+
+// Per-room mutation serializer — see this file's header. Game mutations for one room must not
+// interleave (two players' near-simultaneous messages), even though different connections'
+// msgChains run independently. Chain is dropped from the map once it settles and nothing else
+// queued behind it, so the map can't grow unbounded.
+const roomChains = new Map<string, Promise<void>>();
+function withRoomChain(code: string, fn: () => Promise<void>): Promise<void> {
+  const prev = roomChains.get(code) || Promise.resolve();
+  const next = prev.then(fn, fn);
+  roomChains.set(code, next);
+  next.finally(() => { if (roomChains.get(code) === next) roomChains.delete(code); });
+  return next;
+}
+
+/* Digest — byte-identical algorithm to server.js's gDigestServer() and index.html's gDigest().
+   If it ever changes, change all THREE copies together (documented in HANDOFF.md v0.15). */
+function gDigestServer(G: any): string {
+  const parts: unknown[] = [G.turn, G.dealer, G.schedRound, G.over ? 1 : 0];
+  for (let s = 0; s < G.n; s++) {
+    parts.push(G.hands[s].length, G.bowedOut[s] ? 1 : 0);
+    for (const p of G.pieces[s]) parts.push(p.state[0], p.steps);
+  }
+  parts.push(G.deck.length, G.discard.length);
+  const str = parts.join(",");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(36);
+}
+
+function sameMove(legal: any, submitted: any): boolean {
+  if (!legal || !submitted) return false;
+  if (legal.ci !== submitted.ci || legal.type !== submitted.type || legal.owner !== submitted.owner) return false;
+  if (legal.type === "swap") return legal.ts === submitted.ts && legal.tpi === submitted.tpi;
+  if (legal.pi !== submitted.pi || legal.to !== submitted.to) return false;
+  const a = legal.kick, b = submitted.kick;
+  if (!!a !== !!b) return false;
+  if (a && (a.seat !== b.seat || a.pi !== b.pi)) return false;
+  return true;
+}
+
+/* v0.15 § SERVER-SIDE WIN RECORDING — twin of server.js's finishGame(): the server records an
+   ONLINE game's result itself the instant its own applyMove() sees G.over flip. Same stat-key
+   shape + points formula as index.html's buildResultEntries()/pointsForWin() (hand-ported —
+   pure game-result arithmetic, keep all copies in sync if the formula changes). Uses this
+   file's existing KvU64 atomic counters via applyLeaderboardEntry(). Idempotency: the caller
+   sets meta.recorded=true in the SAME touchRoom commit as the winning action, and checks it
+   before calling — survives restarts via KV, a duplicate call can never double-count. */
+const DIFF_POINTS: Record<string, number> = { easy: 1, medium: 2, hard: 3 };
+function pointsForWinServer(G: any, winSet: Set<number>): number {
+  let pts = 0;
+  G.seats.forEach((opp: any, j: number) => { if (winSet.has(j)) return; pts += opp.type === "human" ? 3 : (DIFF_POINTS[opp.diff] || 0); });
+  return pts;
+}
+function buildResultEntriesServer(G: any): { name: string; delta: Record<string, number> }[] {
+  const mode = (G.n === 4 ? "4" : "6") + (G.teams ? "t" : "s");
+  const winSet = new Set<number>(G.winners);
+  const entries: { name: string; delta: Record<string, number> }[] = [];
+  G.seats.forEach((seat: any, i: number) => {
+    if (seat.type !== "human") return;
+    const delta: Record<string, number> = {}; delta["hg" + mode] = 1;
+    if (winSet.has(i)) { delta["hw" + mode] = 1; delta.hpts = pointsForWinServer(G, winSet); }
+    entries.push({ name: seat.name, delta });
+  });
+  return entries;
+}
+async function recordFinishedGame(code: string, G: any) {
+  const entries = buildResultEntriesServer(G);
+  for (const e of entries) await applyLeaderboardEntry(e.name, e.delta);
+  log("online game finished, recorded to global leaderboard", code,
+    entries.map((e) => e.name).join(",") || "(no human seats)");
+}
+
+type Broadcastable = { payload: unknown };
+/* The authoritative loop itself — mirrors server.js's driveTurnLoop() logic EXACTLY (compare
+   the two side by side when changing either; the game-flow decisions must never drift). Runs
+   synchronously against the in-memory engine, COLLECTING broadcasts (gameAction + stateCheck,
+   in exact order) instead of sending them immediately — the caller persists the resulting G
+   to KV first, then sends the collected messages, so a client can never observe an action the
+   server could still lose to a crash-before-persist. Returns {actions, finished}. */
+const TURN_LOOP_GUARD = 200000;
+function driveTurnLoopCollect(E: any, meta: RoomMeta): { out: Broadcastable[]; finished: boolean } {
+  const out: Broadcastable[] = [];
+  const append = (action: Record<string, unknown>) => {
+    const seq = meta.nextSeq++;
+    meta.logCount = meta.nextSeq; // kept in step for any legacy reader of logCount
+    out.push({ payload: { type: "gameAction", seq, action } });
+    return seq;
+  };
+  const stateCheck = (afterSeq: number) => {
+    out.push({ payload: { type: "stateCheck", afterSeq, digest: gDigestServer(E.getG()) } });
+  };
+  for (let guard = 0; guard < TURN_LOOP_GUARD; guard++) {
+    const G = E.getG();
+    if (!G || G.over) return { out, finished: !!(G && G.over) };
+    if (E.handOver()) {
+      for (let s = 0; s < G.n; s++) { if (G.hands[s].length) { G.discard.push(...G.hands[s]); G.hands[s].length = 0; } }
+      let seed: Record<string, unknown> = {};
+      if (E.needsReshuffle()) seed = { deck: E.freshDeck(), dealer: (G.dealer + 1) % G.n };
+      const r = E.dealDecision(seed);
+      const seq = append({ kind: "deal", dealer: r.dealer, reshuffled: r.reshuffled, k: r.k, hands: r.hands, deckCount: r.deckCount, turn: E.getG().turn });
+      stateCheck(seq);
+      continue;
+    }
+    const seat = G.turn;
+    if (G.hands[seat].length === 0) {
+      E.advanceTurn();
+      append({ kind: "pass", seat, newlyBowedOut: false, threwIn: false, passStreak: G.passStreak, emptyHand: true, turn: E.getG().turn });
+      continue;
+    }
+    if (G.bowedOut[seat]) {
+      const r = E.passDecision(seat, false);
+      E.advanceTurn();
+      append({ kind: "pass", seat, newlyBowedOut: false, threwIn: r.threwIn, passStreak: r.passStreak, turn: E.getG().turn });
+      continue;
+    }
+    const moves = E.legalMoves(seat);
+    if (moves.length === 0) {
+      const r = E.passDecision(seat, true);
+      E.advanceTurn();
+      append({ kind: "pass", seat, newlyBowedOut: true, threwIn: r.threwIn, passStreak: r.passStreak, turn: E.getG().turn });
+      continue;
+    }
+    if (G.seats[seat].type === "cpu") {
+      const m = E.chooseAI(seat, moves);
+      E.applyMove(seat, m);
+      if (E.getG().over) { append({ kind: "move", seat, m, turn: G.turn }); return { out, finished: true }; }
+      E.advanceTurn();
+      const seq = append({ kind: "move", seat, m, turn: E.getG().turn });
+      // Digest computed AFTER advanceTurn(), tagged with the broadcast seq — both halves of the
+      // v0.15 digest-checkpoint fix, see server.js's matching comments (bug #3/#4 in HANDOFF).
+      if (m.kick || m.type === "swap") stateCheck(seq);
+      continue;
+    }
+    // Human seat with a legal move: stop and wait for their validated `action` message.
+    return { out, finished: false };
+  }
+  log("driveTurnLoopCollect guard tripped (possible infinite loop)", meta.code);
+  return { out, finished: false };
+}
+
+/* Persist the engine's current G into the room meta and send the collected broadcasts. The
+   single choke point every game mutation (start + human action) funnels through. */
+async function commitAndBroadcast(code: string, E: any, out: Broadcastable[], finished: boolean): Promise<boolean> {
+  const G = E.getG();
+  const r = await touchRoom(code, (meta) => {
+    meta.G = G;
+    // nextSeq was already advanced on the in-memory meta object the loop ran against, but a
+    // touchRoom contention retry rereads a FRESH meta from KV — recompute from the collected
+    // payload seqs so a retry still lands on the right value instead of an earlier one.
+    meta.nextSeq = Math.max(meta.nextSeq || 0, 0);
+    for (const b of out) {
+      const p = b.payload as { type?: string; seq?: number };
+      if (p.type === "gameAction" && typeof p.seq === "number" && p.seq >= meta.nextSeq) meta.nextSeq = p.seq + 1;
+    }
+    meta.logCount = meta.nextSeq;
+    let needRecord = false;
+    if (finished && !meta.recorded) { meta.recorded = true; needRecord = true; }
+    return { needRecord };
+  });
+  if (!r.ok) { log("commitAndBroadcast failed", code, (r as { reason: string }).reason); return false; }
+  for (const b of out) broadcastRoom(code, b.payload);
+  if (r.extra.needRecord) await recordFinishedGame(code, G); // idempotent — flag committed above
+  return true;
+}
+
+// v0.15 snapshot fields for sync/reclaimed — twin of server.js's gameSnapshotFields().
+function gameSnapshotFields(meta: RoomMeta, isHost: boolean) {
+  const hostP = meta.players.find((p) => p.id === meta.hostPlayerId);
+  return {
+    G: meta.G,
+    appliedSeq: (meta.nextSeq || 1) - 1,
+    isHost,
+    hostConnected: !!(hostP && hostP.connected),
+    paused: !!meta.paused,
+    presence: presenceSnapshot(meta),
+    tableSpeed: meta.tableSpeed || 1,
+    protocolVersion: PROTOCOL_VERSION,
+  };
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -552,6 +787,7 @@ async function handleAdminRoute(req: Request, url: URL): Promise<Response> {
     const cur = await kv.get<RoomMeta>(roomKey(code));
     if (cur.value) {
       forceCloseRoomSockets(code);
+      dropEngine(code); // v0.15: clear the in-memory authoritative engine too
       await kv.delete(roomKey(code));
       for await (const e of kv.list({ prefix: ["roomlog", code] })) await kv.delete(e.key);
       log("admin deleted room", code);
@@ -643,6 +879,8 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         return;
 
       case "host": {
+        // v0.15: {type:'host', protocolVersion, name, n, teams, seats}
+        if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
         if (!underHostRateLimit(ip)) {
           send(socket, { type: "error", message: "Too many rooms created from here — wait a minute and try again." });
           log("rate-limited host attempt", "ip=" + ip);
@@ -665,15 +903,18 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           players: [{ id: playerId, token, name: hostName, isHost: true, connected: true }],
           lobby: { n: msg.n === 6 ? 6 : 4, teams: !!msg.teams, seats },
           started: false, seatOwners: null, paused: false, logCount: 0,
+          G: null, tableSpeed: 1, recorded: false, nextSeq: 0,
         };
         await kv.set(roomKey(code), meta, { expireIn: ROOM_TTL_MS });
         identify(code, playerId);
-        send(socket, { type: "created", code, playerId, token, lobby: lobbySnapshot(meta) });
+        send(socket, { type: "created", code, playerId, token, lobby: lobbySnapshot(meta), protocolVersion: PROTOCOL_VERSION });
         log("room created", code, "ip=" + ip);
         return;
       }
 
       case "join": {
+        // v0.15: {type:'join', protocolVersion, code, name}
+        if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
         const code = String(msg.code || "").toUpperCase();
         const preCheck = await kv.get<RoomMeta>(roomKey(code));
         if (!preCheck.value) { send(socket, { type: "joinError", message: "That room code doesn't exist. Double check it with the host." }); return; }
@@ -691,13 +932,16 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         if (!r.ok) { send(socket, { type: "joinError", message: "That room code doesn't exist. Double check it with the host." }); return; }
         const playerId = r.extra.playerId as number, token = r.extra.token as string;
         identify(code, playerId);
-        send(socket, { type: "joined", code, playerId, token, lobby: lobbySnapshot(r.meta) });
+        send(socket, { type: "joined", code, playerId, token, lobby: lobbySnapshot(r.meta), protocolVersion: PROTOCOL_VERSION });
         broadcastRoom(code, { type: "lobby", lobby: lobbySnapshot(r.meta) }, playerId);
         log("player joined", code, playerId, "ip=" + ip);
         return;
       }
 
       case "rejoin": {
+        // v0.15: {type:'rejoin', protocolVersion, code, playerId, token} — snapshot-based sync
+        // (no log replay), twin of server.js's rejoin case.
+        if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
         const code = String(msg.code || "").toUpperCase();
         const pre = await kv.get<RoomMeta>(roomKey(code));
         const playerId = Number(msg.playerId);
@@ -716,15 +960,12 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         identify(code, playerId);
         const isHost = playerId === r.meta.hostPlayerId;
         if (r.meta.started) {
-          const gameLog = await getRoomLog(code, r.meta.logCount);
-          const hostP = r.meta.players.find((p) => p.id === r.meta.hostPlayerId);
           send(socket, {
-            type: "sync", lobby: lobbySnapshot(r.meta), seatOwners: r.meta.seatOwners, log: gameLog,
-            isHost, hostConnected: !!(hostP && hostP.connected), paused: !!r.meta.paused,
-            presence: presenceSnapshot(r.meta),
+            type: "sync", lobby: lobbySnapshot(r.meta), seatOwners: r.meta.seatOwners,
+            ...gameSnapshotFields(r.meta, isHost),
           });
         } else {
-          send(socket, { type: "lobby", lobby: lobbySnapshot(r.meta), isHost });
+          send(socket, { type: "lobby", lobby: lobbySnapshot(r.meta), isHost, protocolVersion: PROTOCOL_VERSION });
         }
         broadcastRoom(code, { type: "presence", playerId, connected: true }, playerId);
         if (playerId === r.meta.hostPlayerId) broadcastRoom(code, { type: "hostStatus", connected: true }, playerId);
@@ -733,9 +974,11 @@ function handleWsUpgrade(req: Request, ip: string): Response {
       }
 
       case "reclaim": {
-        // v0.10.3: {type:'reclaim', code, name} — token-less recovery, mirrors server.js's
-        // "reclaim" case. See the PendingReclaim comment near the top of this file for the
-        // known same-isolate caveat on the contested branch.
+        // v0.10.3, protocol-versioned in v0.15: {type:'reclaim', protocolVersion, code, name}
+        // — token-less recovery, mirrors server.js's "reclaim" case. See the PendingReclaim
+        // comment near the top of this file for the known same-isolate caveat on the
+        // contested branch.
+        if (!protocolOk(msg)) { send(socket, { type: "protocolMismatch", message: PROTOCOL_MISMATCH_MESSAGE }); return; }
         const code = String(msg.code || "").toUpperCase();
         const pre = await kv.get<RoomMeta>(roomKey(code));
         if (!pre.value) { send(socket, { type: "reclaimError", message: "That room code doesn't exist or has expired." }); return; }
@@ -768,12 +1011,10 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         if (!r.ok) { send(socket, { type: "reclaimError", message: "Try again — that seat just changed state." }); return; }
         identify(code, r.extra.playerId as number);
         const isHost = (r.extra.playerId as number) === r.meta.hostPlayerId;
-        const gameLog = await getRoomLog(code, r.meta.logCount);
-        const hostP2 = r.meta.players.find((p) => p.id === r.meta.hostPlayerId);
         send(socket, {
           type: "reclaimed", code, playerId: r.extra.playerId, token: r.extra.token,
-          lobby: lobbySnapshot(r.meta), seatOwners: r.meta.seatOwners, log: gameLog, isHost,
-          hostConnected: !!(hostP2 && hostP2.connected), paused: !!r.meta.paused, presence: presenceSnapshot(r.meta),
+          lobby: lobbySnapshot(r.meta), seatOwners: r.meta.seatOwners,
+          ...gameSnapshotFields(r.meta, isHost),
         });
         broadcastRoom(code, { type: "presence", playerId: r.extra.playerId as number, connected: true }, r.extra.playerId as number);
         if (isHost) broadcastRoom(code, { type: "hostStatus", connected: true }, r.extra.playerId as number);
@@ -815,11 +1056,10 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         if (pendingSocket.identify) pendingSocket.identify(code, targetPlayerId);
         else registerLocalSocket(code, targetPlayerId, pending.socket); // best-effort fallback
         const isHost = targetPlayerId === r.meta.hostPlayerId;
-        const gameLog = await getRoomLog(code, r.meta.logCount);
         send(pending.socket, {
           type: "reclaimed", code, playerId: targetPlayerId, token: r.extra.token,
-          lobby: lobbySnapshot(r.meta), seatOwners: r.meta.seatOwners, log: gameLog, isHost,
-          hostConnected: true, paused: !!r.meta.paused, presence: presenceSnapshot(r.meta),
+          lobby: lobbySnapshot(r.meta), seatOwners: r.meta.seatOwners,
+          ...gameSnapshotFields(r.meta, isHost),
         });
         broadcastRoom(code, { type: "presence", playerId: targetPlayerId, connected: true }, targetPlayerId);
         log("reclaim approved by host", code, targetPlayerId);
@@ -868,61 +1108,121 @@ function handleWsUpgrade(req: Request, ip: string): Response {
       }
 
       case "start": {
+        // v0.15: {type:'start'} — bare signal, no game-config payload (twin of server.js's
+        // "start" case, see its comments). The server generates the game itself from
+        // room.lobby: real shuffled deck, random dealer, and the "unclaimed seat becomes CPU"
+        // rule re-derived from claimedBy.
         if (!ctx) return;
         const { code, playerId } = ctx;
-        const r = await touchRoom(code, (meta) => {
-          if (playerId !== meta.hostPlayerId || meta.started || !meta.lobby) return false;
-          meta.started = true;
-          meta.seatOwners = meta.lobby.seats.map((s) => s.claimedBy);
-          meta.logCount = 1;
-          return { logKey: logKey(code, 0), logValue: msg.action };
+        await withRoomChain(code, async () => {
+          const pre = await kv.get<RoomMeta>(roomKey(code));
+          if (!pre.value || playerId !== pre.value.hostPlayerId || pre.value.started || !pre.value.lobby) return;
+          const lobby = pre.value.lobby;
+          const n = lobby.n === 6 ? 6 : 4;
+          const seatsCfg = lobby.seats.map((s) => ({ name: s.name, diff: s.diff || "medium", type: s.claimedBy != null ? "human" : "cpu" }));
+          const engine = createEngine();
+          engine.setLAY(engine.buildLayout(n));
+          engine.newGame({ n, teams: !!lobby.teams, seats: seatsCfg }, { deck: engine.freshDeck(), dealer: Math.floor(Math.random() * n) });
+          engines.set(code, engine);
+          const G = engine.getG();
+          const startAction = { kind: "start", n: G.n, teams: G.teams, seats: seatsCfg, dealer: G.dealer, deck: [], tableSpeed: pre.value.tableSpeed || 1 };
+          const r = await touchRoom(code, (meta) => {
+            if (playerId !== meta.hostPlayerId || meta.started || !meta.lobby) return false;
+            meta.started = true;
+            meta.seatOwners = meta.lobby.seats.map((s) => s.claimedBy);
+            meta.G = G;
+            meta.recorded = false;
+            meta.nextSeq = 1;   // 'start' is broadcast seq 0
+            meta.logCount = 1;
+            return { seatOwners: meta.seatOwners };
+          });
+          if (!r.ok) { dropEngine(code); return; }
+          broadcastRoom(code, { type: "gameAction", seq: 0, action: startAction, seatOwners: r.meta.seatOwners });
+          log("room started", code, `n=${n}`, lobby.teams ? "teams" : "ffa");
+          // Drive the opening stretch (first deal + any leading CPU turns) immediately.
+          const metaForLoop = r.meta; // nextSeq=1, the loop advances it as it appends
+          const { out, finished } = driveTurnLoopCollect(engine, metaForLoop);
+          await commitAndBroadcast(code, engine, out, finished);
         });
-        if (r.ok) {
-          broadcastRoom(code, { type: "gameAction", seq: 0, action: msg.action, seatOwners: r.meta.seatOwners });
-          log("room started", code);
-        }
         return;
       }
 
       case "action": {
+        // v0.15: {type:'action', action:{kind:'move', seat, m}} — the ONLY action a client
+        // may originate now (twin of server.js's "action" case; CPU moves/reshuffles are
+        // server-generated, any other kind silently ignored).
         if (!ctx) return;
         const { code, playerId } = ctx;
         const action = msg.action as Record<string, unknown>;
-        if (!action || typeof action.kind !== "string") return;
-        const r = await touchRoom(code, (meta) => {
-          if (!meta.started || !meta.seatOwners) return false;
-          if (action.kind === "move") {
-            const owner = meta.seatOwners[action.seat as number];
-            const authorized = owner == null ? playerId === meta.hostPlayerId : owner === playerId;
-            if (!authorized) return false;
-          } else if (action.kind === "reshuffle") {
-            if (playerId !== meta.hostPlayerId) return false;
-          } else {
-            return false;
+        if (!action || action.kind !== "move") return;
+        await withRoomChain(code, async () => {
+          const pre = await kv.get<RoomMeta>(roomKey(code));
+          if (!pre.value || !pre.value.started || !pre.value.seatOwners) return;
+          const meta = pre.value;
+          const E = getEngine(code, meta);
+          if (!E) return;
+          const G = E.getG();
+          if (!G || G.over) return;
+          const seat = action.seat as number;
+          const owner = meta.seatOwners![seat];
+          if (owner == null || owner !== playerId) return; // not authorized for this seat
+          const resyncThisClient = () => send(socket, {
+            type: "sync", lobby: lobbySnapshot(meta), seatOwners: meta.seatOwners,
+            ...gameSnapshotFields(meta, playerId === meta.hostPlayerId),
+          });
+          if (seat !== G.turn) { resyncThisClient(); return; } // stale/out-of-turn — resync, don't crash
+          const legal = E.legalMoves(seat);
+          const match = legal.find((lm: any) => sameMove(lm, action.m));
+          if (!match) {
+            log("rejected illegal/stale move", code, "playerId=" + playerId, "seat=" + seat);
+            resyncThisClient();
+            return;
           }
-          const seq = meta.logCount;
-          meta.logCount = seq + 1;
-          return { logKey: logKey(code, seq), logValue: action, seq };
+          const out: Broadcastable[] = [];
+          E.applyMove(seat, match);
+          if (E.getG().over) {
+            out.push({ payload: { type: "gameAction", seq: meta.nextSeq++, action: { kind: "move", seat, m: match, turn: G.turn } } });
+            await commitAndBroadcast(code, E, out, true);
+            return;
+          }
+          E.advanceTurn();
+          const moveSeq = meta.nextSeq++;
+          out.push({ payload: { type: "gameAction", seq: moveSeq, action: { kind: "move", seat, m: match, turn: E.getG().turn } } });
+          // Digest AFTER advanceTurn(), tagged with the broadcast seq — v0.15 fixes #3/#4.
+          if (match.kick || match.type === "swap") {
+            out.push({ payload: { type: "stateCheck", afterSeq: moveSeq, digest: gDigestServer(E.getG()) } });
+          }
+          const cont = driveTurnLoopCollect(E, meta);
+          await commitAndBroadcast(code, E, out.concat(cont.out), cont.finished);
         });
-        if (r.ok) broadcastRoom(code, { type: "gameAction", seq: r.extra.seq, action });
-        return;
-      }
-
-      case "stateCheck": {
-        if (!ctx) return;
-        const { code, playerId } = ctx;
-        const cur = await kv.get<RoomMeta>(roomKey(code));
-        if (!cur.value || !cur.value.started || playerId !== cur.value.hostPlayerId) return;
-        broadcastRoom(code, { type: "stateCheck", seq: msg.seq, digest: msg.digest }, playerId);
         return;
       }
 
       case "requestStateCheck": {
+        // v0.15: the server answers directly (it IS the authority) — no more relaying to the
+        // host's phone. Tagged with the most recent broadcast seq, same as server.js.
+        if (!ctx) return;
+        const { code } = ctx;
+        const cur = await kv.get<RoomMeta>(roomKey(code));
+        if (!cur.value || !cur.value.started) return;
+        const E = getEngine(code, cur.value);
+        if (!E) return;
+        broadcastRoom(code, { type: "stateCheck", afterSeq: (cur.value.nextSeq || 1) - 1, digest: gDigestServer(E.getG()) });
+        return;
+      }
+
+      case "setTableSpeed": {
+        // v0.15: host-only shared table pacing — twin of server.js's case.
         if (!ctx) return;
         const { code, playerId } = ctx;
-        const cur = await kv.get<RoomMeta>(roomKey(code));
-        if (!cur.value || !cur.value.started || cur.value.hostPlayerId == null) return;
-        sendToPlayer(code, cur.value.hostPlayerId, { type: "requestStateCheck", from: playerId });
+        const speed = Number(msg.speed);
+        if (!Number.isFinite(speed) || speed <= 0) return;
+        const r = await touchRoom(code, (meta) => {
+          if (playerId !== meta.hostPlayerId || !meta.started) return false;
+          meta.tableSpeed = speed;
+          return {};
+        });
+        if (r.ok) broadcastRoom(code, { type: "tableSpeed", speed: r.meta.tableSpeed });
         return;
       }
 
@@ -938,18 +1238,11 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         return;
       }
 
-      case "recordResult": {
-        if (!ctx) return;
-        const { code, playerId } = ctx;
-        const cur = await kv.get<RoomMeta>(roomKey(code));
-        if (!cur.value || !cur.value.started || playerId !== cur.value.hostPlayerId) return;
-        if (Array.isArray(msg.entries)) {
-          for (const e of msg.entries as Record<string, unknown>[]) {
-            if (e && e.name) await applyLeaderboardEntry(e.name, e.delta);
-          }
-        }
-        return;
-      }
+      // v0.15: "recordResult" is RETIRED — the server records a finished online game itself
+      // (recordFinishedGame(), called from commitAndBroadcast() when G.over flips) instead of
+      // waiting for the host's phone to notice the win screen. An old client that still sends
+      // it lands in the default no-op case below (it can't have gotten this far anyway — the
+      // protocol handshake rejects pre-v2 clients at host/join/rejoin/reclaim).
 
       case "nudge": {
         if (!ctx) return;
@@ -1040,7 +1333,7 @@ async function handler(req: Request, info: Deno.ServeHandlerInfo): Promise<Respo
   if (url.pathname === "/health") {
     let rooms = 0;
     for await (const _e of kv.list({ prefix: ["room"] })) rooms++;
-    return json(200, { ok: true, rooms, uptime: Math.round(performance.now() / 1000), epoch: await getEpoch() });
+    return json(200, { ok: true, rooms, uptime: Math.round(performance.now() / 1000), epoch: await getEpoch(), protocolVersion: PROTOCOL_VERSION });
   }
   if (url.pathname === "/.well-known/apple-app-site-association") {
     // No CORS headers (Apple's CDN fetches this directly, not a browser) — content-type MUST
