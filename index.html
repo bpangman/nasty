@@ -1479,45 +1479,93 @@ function applySpeed(){
   SPEED=(REDUCED?Math.max(base,6):base)*(SKIP?30:1);
 }
 
-/* --- tiny sound synth --- */
+/* --- tiny sound synth ---
+   v0.18 (2026-07-16) SOUND OVERHAUL: Blake's ask was "make them more soothing to hear" (soft
+   attacks, warm waveforms, lower levels, nothing piercing) "and make the card dealing sound
+   like card dealing" (real cards, not a beep). Two structural changes below carry the whole
+   overhaul - every named sound (sHop, sCard, sWin, etc.) is unchanged in WHICH function it
+   calls, only the sound itself changed:
+   1. tone() now ramps gain up from 0 (a real attack) instead of jumping straight to full
+      volume - that instant jump was the source of the "click" on every single note - and runs
+      every oscillator through a lowpass filter tied to its own pitch, so nothing rings with
+      harsh, piercing upper harmonics no matter the waveform.
+   2. noise() now fades its very first samples in (same click fix, for buffers) and is
+      band/lowpass-filterable per call instead of always being raw full-spectrum hiss - that's
+      what turns generic "noise" into "a card hitting felt" (see cardSnap() below) versus "a
+      soft cymbal-ish sparkle" (sWin/sSnug) versus "a deep thump" (sBoom), just by choosing a
+      different filter per use.
+   No waveform below is 'square' or 'sawtooth' anymore (both are harsh/buzzy by nature) except
+   the two celebration sounds' controlled use of filtered noise for punch - sBoom and sWin stay
+   fun and satisfying by design (Blake: don't optimize the celebration away), they just don't
+   use raspy waveforms to get there anymore. */
 let AC=null, muted=localStorage.getItem('nasty-muted')==='1';
 function ac(){ if(!AC){ try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){} } return AC; }
 addEventListener('pointerdown',()=>{ const a=ac(); if(a&&a.state==='suspended')a.resume(); },{once:false});
 function tone(f,dur,type,vol,when=0,slide=0){
   if(INSTANT)return;   // silent during reconnect catch-up - see INSTANT comment above
   const a=ac(); if(!a||muted)return;
-  const o=a.createOscillator(),g=a.createGain(),t=a.currentTime+when;
+  const o=a.createOscillator(),g=a.createGain(),lp=a.createBiquadFilter(),t=a.currentTime+when;
   o.type=type;o.frequency.setValueAtTime(f,t);
   if(slide)o.frequency.exponentialRampToValueAtTime(Math.max(30,f+slide),t+dur);
-  g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(.0001,t+dur);
-  o.connect(g);g.connect(a.destination);o.start(t);o.stop(t+dur+.02);
+  // soft attack (no click, whatever the waveform) then a gentle exponential release (no hard cutoff)
+  const atk=Math.min(.02,dur*.3);
+  g.gain.setValueAtTime(.0001,t);
+  g.gain.exponentialRampToValueAtTime(Math.max(vol,.0002),t+atk);
+  g.gain.exponentialRampToValueAtTime(.0001,t+dur);
+  // lowpass keyed to the note's own pitch - keeps every tone warm, nothing piercing up top
+  lp.type='lowpass'; lp.Q.value=.5; lp.frequency.setValueAtTime(Math.max(1000,f*3.5),t);
+  o.connect(lp);lp.connect(g);g.connect(a.destination);o.start(t);o.stop(t+dur+.03);
 }
-function noise(dur,vol,when=0){
+function noise(dur,vol,when=0,filterType='lowpass',filterFreq=2600,q=.9){
   if(INSTANT)return;   // silent during reconnect catch-up - see INSTANT comment above
   const a=ac(); if(!a||muted)return;
-  const n=a.sampleRate*dur,b=a.createBuffer(1,n,a.sampleRate),d=b.getChannelData(0);
-  for(let i=0;i<n;i++)d[i]=(Math.random()*2-1)*(1-i/n);
-  const s=a.createBufferSource(),g=a.createGain(),t=a.currentTime+when;
-  s.buffer=b;g.gain.value=vol;s.connect(g);g.connect(a.destination);s.start(t);
+  const n=Math.max(1,Math.floor(a.sampleRate*dur)),b=a.createBuffer(1,n,a.sampleRate),d=b.getChannelData(0);
+  const atkN=Math.max(1,Math.floor(a.sampleRate*.004));   // ~4ms fade-in so a noise burst never starts on a click
+  for(let i=0;i<n;i++){
+    const env=i<atkN?i/atkN:1-((i-atkN)/Math.max(1,n-atkN));
+    d[i]=(Math.random()*2-1)*env;
+  }
+  const s=a.createBufferSource(),f=a.createBiquadFilter(),g=a.createGain(),t=a.currentTime+when;
+  s.buffer=b;f.type=filterType;f.frequency.value=filterFreq;f.Q.value=q;
+  g.gain.value=vol;s.connect(f);f.connect(g);g.connect(a.destination);s.start(t);
 }
-const sHop=i=>tone(340+i*28,.06,'square',.045);
-const sLand=()=>tone(190,.09,'triangle',.10);
-const sCard=()=>noise(.13,.10);
-const sDealT=()=>noise(.06,.05);
-const sEnter=()=>{tone(240,.16,'triangle',.12,0,220);};
-const sBoom=()=>{noise(.3,.3);tone(120,.4,'sawtooth',.22,0,-70);};
-const sSwap=()=>{tone(500,.14,'sine',.1,0,-260);tone(240,.14,'sine',.1,.08,260);};
-const sWin=()=>{ // big fanfare: run up, hold the chord, sparkle on top
-  [523,659,784,1047].forEach((f,i)=>tone(f,.3,'triangle',.16,i*.12));
-  [523,659,784,1047].forEach(f=>tone(f,1.1,'triangle',.09,.55));
-  tone(1319,.6,'triangle',.12,.75); tone(1568,.8,'triangle',.10,.95);
-  noise(.5,.06,.6);
+/* cardSnap: filtered-noise "flick" - a real card's sound is mostly a short burst of high-mid
+   noise (the card's edge/face brushing air and felt), not a tone at all, so this is what makes
+   dealing (and card play) actually sound like cards instead of a synth beep. Bandpass keeps it
+   papery rather than hissy; the center frequency + duration + Q are all randomized a bit per
+   call (Blake: "so a deal of several cards sounds natural rather than machine-gun identical") -
+   every card is a slightly different flick, the way a real deal never sounds mechanically
+   identical twice. Kept short (well under 150ms) so a fast deal never smears into itself. */
+function cardSnap(vol,when=0){
+  const dur=.04+Math.random()*.03;
+  const center=1500+Math.random()*900;
+  const q=1+Math.random()*.7;
+  noise(dur,vol,when,'bandpass',center,q);
+}
+const sHop=i=>tone(300+i*16,.055,'triangle',.032);
+const sLand=()=>tone(185,.1,'triangle',.075);
+const sCard=()=>cardSnap(.13);              // one card played
+const sDealT=()=>cardSnap(.085);            // one card landing during the deal
+const sEnter=()=>{tone(230,.17,'triangle',.1,0,180);};
+const sBoom=()=>{ // NASTY! kick blast - deep thump + warm chord, stays punchy/fun, no raspy buzz
+  noise(.16,.22,0,'lowpass',650,.8);                       // low thump transient (filtered, not hissy)
+  tone(85,.4,'sine',.26,0,-42);                            // sub-bass punch, pitch drop for weight
+  tone(220,.32,'triangle',.13,.015);                       // warm chord: root
+  tone(277,.32,'triangle',.1,.02);                         // warm chord: third
+  tone(330,.28,'triangle',.08,.03);                        // warm chord: fifth
+};
+const sSwap=()=>{tone(480,.15,'sine',.085,0,-220); tone(250,.15,'sine',.085,.08,220);};
+const sWin=()=>{ // big fanfare: run up, hold the chord, sparkle on top - fun and celebratory by design
+  [523,659,784,1047].forEach((f,i)=>tone(f,.32,'triangle',.14,i*.12));
+  [523,659,784,1047].forEach(f=>tone(f,1.1,'triangle',.08,.55));
+  tone(1319,.6,'triangle',.1,.75); tone(1568,.8,'triangle',.09,.95);
+  noise(.4,.045,.6,'bandpass',3200,.8);                    // sparkle - filtered, not raw hiss
 };
 const sSnug=()=>{ // safe-and-snug chime
-  tone(740,.14,'triangle',.15); tone(1109,.22,'triangle',.15,.1);
-  tone(1480,.3,'triangle',.12,.2); noise(.12,.04,.18);
+  tone(740,.15,'triangle',.13); tone(1109,.22,'triangle',.13,.1);
+  tone(1480,.3,'triangle',.1,.2); noise(.1,.03,.18,'bandpass',3000,1);
 };
-const sNo=()=>tone(160,.2,'sawtooth',.07,0,-40);
+const sNo=()=>tone(180,.18,'triangle',.055,0,-30);
 
 /* ===== NASTY ENGINE EXTRACT: BEGIN =====
    v0.15 (server-authoritative rebuild): everything from here to "ENGINE EXTRACT: END" below
