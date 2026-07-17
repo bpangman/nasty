@@ -902,7 +902,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.19.1</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.19.2</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -1118,8 +1118,11 @@ button{font:inherit;cursor:pointer}
   </div>
 </div>
 
-<!-- v0.19: one-time first-game speed picker - see maybeShowSpeedPicker()/pickSpeed(), § UTIL.
-     Gated on localStorage 'nasty-speed-chosen', shown once ever per device then never again. -->
+<!-- v0.19: one-time first-game speed picker - see gateOnSpeedPicker()/pickSpeed(), § UTIL.
+     Gated on localStorage 'nasty-speed-chosen', shown once ever per device then never again.
+     v0.19.2: offline, the whole first deal/turn loop is held until this resolves (startGame());
+     online, this always resolves before the player reaches the lobby, so it never sits on top
+     of a live table - see the gateOnSpeedPicker() comment. -->
 <div id="speedPickerOverlay" class="overlay hidden">
   <div class="modalCard">
     <h3>How fast should the game play?</h3>
@@ -1536,7 +1539,7 @@ const REDUCED=matchMedia('(prefers-reduced-motion: reduce)').matches;
 // player, 1.0 (the old default/"Normal") is now "Quick". The NUMBERS and the localStorage key
 // ('nasty-speed') are unchanged on purpose, so an existing device that already picked, say,
 // 1.7 keeps playing at 1.7 - only the label changes. See the one-time picker below (§ UTIL,
-// maybeShowSpeedPicker) for how a brand new player lands on 0.6 deliberately, not by accident.
+// gateOnSpeedPicker) for how a brand new player lands on 0.6 deliberately, not by accident.
 const SPEED_OPTS=[[0.6,'Normal'],[1,'Quick'],[1.7,'Fast'],[2.6,'Turbo']];
 let USER_SPEED=parseFloat(localStorage.getItem('nasty-speed')||'0.6');
 if(!SPEED_OPTS.some(o=>o[0]===USER_SPEED))USER_SPEED=0.6;
@@ -1572,9 +1575,26 @@ function applySpeed(){
 // stuck open forever (nothing left to click it away) as well as pollute the soak run.
 function speedChoiceMade(){ try{ return !!localStorage.getItem('nasty-speed-chosen'); }catch(e){ return true; } }
 function markSpeedChosen(){ try{ localStorage.setItem('nasty-speed-chosen','1'); }catch(e){} }
-function maybeShowSpeedPicker(){
-  if(location.hash.indexOf('autotest')>=0)return;
-  if(speedChoiceMade())return;
+// v0.19.2 (Blake): "I could tell the CPUs were making moves on the board behind the pop-up.
+// Don't even let the initial deal start until they've selected their speed." shouldShowSpeedPicker()
+// is the single source of truth for "does this device still need to answer"; gateOnSpeedPicker(cont)
+// either runs `cont` immediately (choice already made, or an autotest hash) or holds it until
+// pickSpeed() resolves the overlay. Two call sites use it:
+//   - startGame() (offline/pass-and-play): holds the very first deal/turn-loop entirely - see
+//     beginFirstDeal() below. Nothing moves, nothing is dealt, only the seated tees show.
+//   - online's entry points ($('btnOnline') and openJoinOverlay(), § MENU): online is server-
+//     authoritative (v0.15) - once a client is at the table the server is already dealing for
+//     everyone, so a client CANNOT hold a live table. Instead the picker is resolved before the
+//     player ever reaches the lobby (hosting only reaches the lobby through btnOnline; every join
+//     path - manual button, ?join=CODE, and iOS Universal Links - funnels through
+//     openJoinOverlay()), so it can never end up on top of a live game. See HANDOFF.md v0.19.2.
+let SPEED_PICK_CONTINUATION=null;
+function shouldShowSpeedPicker(){
+  return location.hash.indexOf('autotest')<0 && !speedChoiceMade();
+}
+function gateOnSpeedPicker(cont){
+  if(!shouldShowSpeedPicker()){ cont(); return; }
+  SPEED_PICK_CONTINUATION=cont;
   $('speedPickerOverlay').classList.remove('hidden');
 }
 function pickSpeed(v){
@@ -1584,6 +1604,8 @@ function pickSpeed(v){
   applySpeed();
   updateSpeedButtonLabel();
   $('speedPickerOverlay').classList.add('hidden');
+  const cont=SPEED_PICK_CONTINUATION; SPEED_PICK_CONTINUATION=null;
+  if(cont)cont();
 }
 
 /* v0.19: spotlightEvent() - wraps ONE kick or Jack-swap's animation so it plays at a real,
@@ -4857,15 +4879,22 @@ function renderRoomScreen(){
 
 /* ---- Join a game ---- */
 let JOIN={code:'',name:''};
+// v0.19.2: every join path (the menu's "Join a game" button, a ?join=CODE web link, and an
+// iOS Universal Link) funnels through here - one place to gate the speed picker so it always
+// resolves before this device can reach a live online table (see gateOnSpeedPicker(), § UTIL).
+// A no-op if the choice was already made, so this never double-prompts after $('btnOnline')'s
+// own gate already resolved it for the manual "Play online" -> "Join a game" path.
 function openJoinOverlay(prefillCode){
-  resetNetUiFlow();
-  $('joinErr').textContent='';
-  $('joinCodeStep').classList.remove('hidden');
-  $('joinNameStep').classList.add('hidden');
-  $('joinSeatStep').classList.add('hidden');
-  $('joinCodeInput').value=prefillCode||'';
-  $('joinOverlay').classList.remove('hidden');
-  if(prefillCode&&prefillCode.length===4)advanceJoinToNameStep();
+  gateOnSpeedPicker(()=>{
+    resetNetUiFlow();
+    $('joinErr').textContent='';
+    $('joinCodeStep').classList.remove('hidden');
+    $('joinNameStep').classList.add('hidden');
+    $('joinSeatStep').classList.add('hidden');
+    $('joinCodeInput').value=prefillCode||'';
+    $('joinOverlay').classList.remove('hidden');
+    if(prefillCode&&prefillCode.length===4)advanceJoinToNameStep();
+  });
 }
 function advanceJoinToNameStep(){
   const code=$('joinCodeInput').value.trim().toUpperCase();
@@ -5049,6 +5078,29 @@ $('p4').onclick=()=>{CFG.n=4;saveCfg();renderMenu();};
 $('p6').onclick=()=>{CFG.n=6;saveCfg();renderMenu();};
 $('mFFA').onclick=()=>{CFG.teams=false;saveCfg();renderMenu();};
 $('mTeams').onclick=()=>{CFG.teams=true;saveCfg();renderMenu();};
+// v0.19.2: localStorage record of "a fresh offline game was set up but the speed picker
+// hasn't been answered yet" - lets a reload/relaunch mid-picker come back to the SAME held
+// pre-deal board instead of bouncing to the menu (CFG.n/teams deliberately do NOT persist
+// across a fresh load otherwise - see "§ MENU / BOOT" below - so without this, a reload could
+// silently swap e.g. a 6-player teams setup for the default 4-player FFA). Snapshots exactly
+// what startGame() needs; consumed (cleared) the instant the held deal actually begins.
+const PENDING_OFFLINE_START_KEY='nasty-pending-offline-start';
+function savePendingOfflineStart(){
+  try{ localStorage.setItem(PENDING_OFFLINE_START_KEY,JSON.stringify({n:CFG.n,teams:CFG.teams,seatMeta:CFG.seatMeta})); }catch(e){}
+}
+function loadPendingOfflineStart(){
+  try{ return JSON.parse(localStorage.getItem(PENDING_OFFLINE_START_KEY)); }catch(e){ return null; }
+}
+function clearPendingOfflineStart(){
+  try{ localStorage.removeItem(PENDING_OFFLINE_START_KEY); }catch(e){}
+}
+// v0.19.2: the actual "deal the first hand and start the turn loop" moment - split out of
+// startGame() so it can be held behind the speed picker (see gateOnSpeedPicker() call below).
+function beginFirstDeal(){
+  clearPendingOfflineStart();
+  toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts`,2600);
+  runTurn();
+}
 function startGame(){
   // offline/local play - guaranteed untouched by any network state, even leftover state
   // from a cancelled online setup.
@@ -5066,10 +5118,12 @@ function startGame(){
   clearToasts();   // v0.11.3: game start - never inherit a toast left over from a previous game
   drawBoard(); buildTable(); fitBoard();
   setTimeout(fitBoard,50);
-  toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts`,2600);
-  runTurn();
   window.G=G; window.LAY=LAY; // for testing / debugging
-  maybeShowSpeedPicker();   // v0.19: offline/pass-and-play's one "loaded into a game" moment - see § UTIL
+  // v0.19.2 (Blake): "don't even let the initial deal start until they've selected their
+  // speed" - the board above shows only the seated tees; nothing is dealt and the turn loop
+  // hasn't started, so nothing can move behind the picker. See gateOnSpeedPicker(), § UTIL.
+  if(shouldShowSpeedPicker())savePendingOfflineStart();
+  gateOnSpeedPicker(beginFirstDeal);
 }
 // v0.11 item 3, reworked v0.17: hosting/joining a different online game claims the one
 // 'nasty-last-room' record (the online game you can still get back into) - warn first so it
@@ -5185,11 +5239,10 @@ $('btnMenu').onclick=openLeaveConfirm;
 $('btnOnlineRulesOk').onclick=()=>{
   $('onlineRulesOverlay').classList.add('hidden');
   maybeRequestPushPermission();   // v0.16 item 5: right after the FIRST online game's rules popup is dismissed - see § PUSH
-  maybeShowSpeedPicker();   // v0.19: online's one "loaded into a game" moment - bootGameFromNetwork()
-  // always opens onlineRulesOverlay for a genuinely fresh game (never on reconnect/rejoin, which
-  // uses bootGameFromSnapshot() instead - see that function's comment) so chaining off its
-  // dismissal here gives the picker the same once-per-fresh-game timing, never mid-lobby, never
-  // stacked on top of the rules popup itself. See § UTIL.
+  // v0.19.2: the speed picker no longer chains off dismissing this overlay - by the time this
+  // fires the table is already live (bootGameFromNetwork() already dealt for everyone), too
+  // late to hold anything client-side. It now resolves before the player ever reaches the
+  // online lobby instead - see gateOnSpeedPicker() at $('btnOnline')/openJoinOverlay(), § UTIL.
 };
 $('btnRules').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRules2').onclick=()=>$('rulesOverlay').classList.remove('hidden');
@@ -5212,7 +5265,12 @@ function sendInvite(link){
   location.href=`sms:&body=${encodeURIComponent(text)}`;
 }
 /* ---- Online: entry point + host/join button wiring ---- */
-$('btnOnline').onclick=()=>{ $('onlineErr').textContent=''; $('onlineOverlay').classList.remove('hidden'); };
+// v0.19.2: gate the speed picker HERE, before the online entry overlay even opens - hosting
+// only ever reaches the lobby through this button, so this covers Host completely; Join is
+// covered by openJoinOverlay()'s own gate (manual button AND deep-link joins both funnel
+// there). See gateOnSpeedPicker(), § UTIL, and HANDOFF.md v0.19.2 for why online can't hold a
+// live table client-side the way offline holds the deal.
+$('btnOnline').onclick=()=>{ $('onlineErr').textContent=''; gateOnSpeedPicker(()=>$('onlineOverlay').classList.remove('hidden')); };
 $('btnOnlineClose').onclick=()=>$('onlineOverlay').classList.add('hidden');
 // v0.11 item 3: confirmed hosting/joining DOES claim the same local save slot - saveLastRoom()
 // overwrites the single 'nasty-last-room' localStorage record the instant a room is created or
@@ -5502,7 +5560,7 @@ $('btnSpeed').onclick=()=>{
   updateSpeedButtonLabel();
 };
 // v0.19: one-time speed picker buttons - indices into SPEED_OPTS, not raw numbers, so a future
-// ladder edit can't silently desync the buttons from the array. See maybeShowSpeedPicker()/
+// ladder edit can't silently desync the buttons from the array. See gateOnSpeedPicker()/
 // pickSpeed(), § UTIL, and the #speedPickerOverlay markup.
 SPEED_OPTS.forEach((opt,i)=>{
   const b=$('btnSpeedPick'+i);
@@ -5883,8 +5941,18 @@ else{
   drainSoloQueue();   // v0.13: retry any offline-queued solo/pass-and-play results on app open
   const qs=new URLSearchParams(location.search);
   const joinCode=qs.get('join');
+  // v0.19.2: a held offline game (speed picker still unanswered when the tab reloaded/relaunched
+  // - see startGame()/savePendingOfflineStart()) takes back over here, straight past the menu, so
+  // "reload mid-picker" lands on the exact same pre-deal board with the picker still up instead
+  // of bouncing to the menu (CFG.n/teams don't otherwise survive a fresh load - see "§ MENU /
+  // BOOT" below). A real join link always wins over a stale pending hold.
+  const pendingStart=(!joinCode&&!speedChoiceMade())?loadPendingOfflineStart():null;
   if(joinCode){
     tryJoinOrRejoin(joinCode.toUpperCase(),false);
+  }else if(pendingStart&&pendingStart.n&&pendingStart.seatMeta){
+    clearPendingOfflineStart();
+    CFG.n=pendingStart.n; CFG.teams=pendingStart.teams; CFG.seatMeta=pendingStart.seatMeta;
+    startGame();
   }else{
     // v0.9 refinement (superseding v0.8's silent auto-rejoin): no ?join=CODE - either a plain
     // fresh visit, or exactly what iOS gives you after fully evicting a backgrounded
