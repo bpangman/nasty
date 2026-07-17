@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=705fa03f-261a-4e1d-8587-d5654fd8ae69&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=ccc6375e-ec2f-4a51-9fe6-4d1b97c1f222&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -61,12 +61,17 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 21 reached the family</h1>
+<h1 style="color:#1a5c38">🎉 Build 22 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>This build is a small menu cleanup. Saved games on the main menu now have a trash icon so
-you can delete an old save right from the menu - tap it once to confirm, tap Delete to
-finish, or Cancel to back out. The Leaderboard button also lost its trophy icon for a
-cleaner look.</p>
+<p>This build ships your four requests. Win screens now show the points earned with a
+breakdown by beaten opponent, so the difficulty scoring is finally visible (the math was
+already right - beating a Nasty, a Tricky and an Easy pays exactly 3+2+1). Speeds got
+friendlier names - the relaxed pace is now called Normal and is the default, and everyone
+sees a one time "how fast should the game play" picker on their next game. Skip no longer
+hides the big moments: every knockout badge slam and Jack swap plays a shortened but
+clearly visible animation with its message while fast forwarding. And the tap bubbles now
+sit right on their tee instead of floating high, only lifting when they would cover
+another piece.</p>
 <h3>📱 The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
 <a href="https://testflight.apple.com/join/d79YpZea">https://testflight.apple.com/join/d79YpZea</a></p>
@@ -80,7 +85,7 @@ cleaner look.</p>
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 21 is live for the family 🎉', body], check=True)
+                    'NASTY: build 22 is live for the family 🎉', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED - email sent, watcher done')
 except Exception as e:
