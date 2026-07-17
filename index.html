@@ -1113,6 +1113,21 @@ button{font:inherit;cursor:pointer}
   </div>
 </div>
 
+<!-- v0.19: one-time first-game speed picker - see maybeShowSpeedPicker()/pickSpeed(), § UTIL.
+     Gated on localStorage 'nasty-speed-chosen', shown once ever per device then never again. -->
+<div id="speedPickerOverlay" class="overlay hidden">
+  <div class="modalCard">
+    <h3>How fast should the game play?</h3>
+    <p>Pick a pace for moves and animations. You can change this anytime in the game with the Speed button.</p>
+    <div class="bigBtns">
+      <button class="btn primary" id="btnSpeedPick0">Normal<br><small style="font-weight:400">relaxed</small></button>
+      <button class="btn primary" id="btnSpeedPick1">Quick<br><small style="font-weight:400">a little quicker</small></button>
+      <button class="btn primary" id="btnSpeedPick2">Fast<br><small style="font-weight:400">fast paced</small></button>
+      <button class="btn primary" id="btnSpeedPick3">Turbo<br><small style="font-weight:400">very fast</small></button>
+    </div>
+  </div>
+</div>
+
 <!-- § REUNION (v0.9 refinement) - shown only to whoever tapped "Resume Saved Game" on an
      online room, so a comeback game doesn't just drop one lone player onto a moving board.
      See HANDOFF.md "Resuming an online game" for the full writeup. -->
@@ -1512,9 +1527,14 @@ function genGameId(){
 }
 /* game speed = user setting × skip boost */
 const REDUCED=matchMedia('(prefers-reduced-motion: reduce)').matches;
-const SPEED_OPTS=[[0.6,'Slow'],[1,'Normal'],[1.7,'Fast'],[2.6,'Turbo']];
-let USER_SPEED=parseFloat(localStorage.getItem('nasty-speed')||'1');
-if(!SPEED_OPTS.some(o=>o[0]===USER_SPEED))USER_SPEED=1;
+// v0.19: ladder relabeled (Blake) - 0.6 is now "Normal" and the default for a brand new
+// player, 1.0 (the old default/"Normal") is now "Quick". The NUMBERS and the localStorage key
+// ('nasty-speed') are unchanged on purpose, so an existing device that already picked, say,
+// 1.7 keeps playing at 1.7 - only the label changes. See the one-time picker below (§ UTIL,
+// maybeShowSpeedPicker) for how a brand new player lands on 0.6 deliberately, not by accident.
+const SPEED_OPTS=[[0.6,'Normal'],[1,'Quick'],[1.7,'Fast'],[2.6,'Turbo']];
+let USER_SPEED=parseFloat(localStorage.getItem('nasty-speed')||'0.6');
+if(!SPEED_OPTS.some(o=>o[0]===USER_SPEED))USER_SPEED=0.6;
 let SKIP=false, skipSnap=null;
 let SPEED=1;
 // v0.15: online, table pacing is the SHARED NET.tableSpeed (host-controlled - see the § NET
@@ -1527,6 +1547,30 @@ let SPEED=1;
 function applySpeed(){
   const base=NET.online?NET.tableSpeed:USER_SPEED;
   SPEED=(REDUCED?Math.max(base,6):base)*(SKIP?30:1);
+}
+// v0.19: one-time "how fast should the game play" picker. Shown the first time ANY player
+// (new or existing - existing devices haven't set the flag either, and Blake wants everyone
+// to see it once) loads into an actual game, any mode. Gated on 'nasty-speed-chosen' so it
+// truly shows only once - see the two ways that flag gets set: pickSpeed() below (any choice
+// from the picker) and the Speed button handler (§ UI/MENU, near updateSpeedButtonLabel) if
+// they change speed in-game before ever seeing the picker. Deliberately skipped for
+// #autotest/#autotest6 (headless soak tests, see HANDOFF.md) - those boot straight through
+// startGame() with no human present to dismiss a modal, and popping it there would leave it
+// stuck open forever (nothing left to click it away) as well as pollute the soak run.
+function speedChoiceMade(){ try{ return !!localStorage.getItem('nasty-speed-chosen'); }catch(e){ return true; } }
+function markSpeedChosen(){ try{ localStorage.setItem('nasty-speed-chosen','1'); }catch(e){} }
+function maybeShowSpeedPicker(){
+  if(location.hash.indexOf('autotest')>=0)return;
+  if(speedChoiceMade())return;
+  $('speedPickerOverlay').classList.remove('hidden');
+}
+function pickSpeed(v){
+  USER_SPEED=v;
+  localStorage.setItem('nasty-speed',String(v));
+  markSpeedChosen();
+  applySpeed();
+  updateSpeedButtonLabel();
+  $('speedPickerOverlay').classList.add('hidden');
 }
 
 /* --- tiny sound synth ---
@@ -4939,6 +4983,7 @@ function startGame(){
   toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts`,2600);
   runTurn();
   window.G=G; window.LAY=LAY; // for testing / debugging
+  maybeShowSpeedPicker();   // v0.19: offline/pass-and-play's one "loaded into a game" moment - see § UTIL
 }
 // v0.11 item 3, reworked v0.17: hosting/joining a different online game claims the one
 // 'nasty-last-room' record (the online game you can still get back into) - warn first so it
@@ -5054,6 +5099,11 @@ $('btnMenu').onclick=openLeaveConfirm;
 $('btnOnlineRulesOk').onclick=()=>{
   $('onlineRulesOverlay').classList.add('hidden');
   maybeRequestPushPermission();   // v0.16 item 5: right after the FIRST online game's rules popup is dismissed - see § PUSH
+  maybeShowSpeedPicker();   // v0.19: online's one "loaded into a game" moment - bootGameFromNetwork()
+  // always opens onlineRulesOverlay for a genuinely fresh game (never on reconnect/rejoin, which
+  // uses bootGameFromSnapshot() instead - see that function's comment) so chaining off its
+  // dismissal here gives the picker the same once-per-fresh-game timing, never mid-lobby, never
+  // stacked on top of the rules popup itself. See § UTIL.
 };
 $('btnRules').onclick=()=>$('rulesOverlay').classList.remove('hidden');
 $('btnRules2').onclick=()=>$('rulesOverlay').classList.remove('hidden');
@@ -5355,14 +5405,23 @@ $('btnSpeed').onclick=()=>{
     const i=SPEED_OPTS.findIndex(o=>o[0]===NET.tableSpeed);
     const next=SPEED_OPTS[(i>=0?i+1:1)%SPEED_OPTS.length][0];
     netSend({type:'setTableSpeed',speed:next});   // applies once the server echoes it back to everyone, same as pause
+    markSpeedChosen();   // v0.19: the host deliberately touched speed - no need to ever show the picker on this device
     return;
   }
   const i=SPEED_OPTS.findIndex(o=>o[0]===USER_SPEED);
   USER_SPEED=SPEED_OPTS[(i+1)%SPEED_OPTS.length][0];
   localStorage.setItem('nasty-speed',String(USER_SPEED));
+  markSpeedChosen();   // v0.19: using the button IS choosing a speed - counts same as the picker, see § UTIL
   applySpeed();
   updateSpeedButtonLabel();
 };
+// v0.19: one-time speed picker buttons - indices into SPEED_OPTS, not raw numbers, so a future
+// ladder edit can't silently desync the buttons from the array. See maybeShowSpeedPicker()/
+// pickSpeed(), § UTIL, and the #speedPickerOverlay markup.
+SPEED_OPTS.forEach((opt,i)=>{
+  const b=$('btnSpeedPick'+i);
+  if(b)b.onclick=()=>pickSpeed(opt[0]);
+});
 // v0.15 (Blake, 2026-07-15): NO Skip button in online games, period - Skip only ever made
 // sense as a personal "fast-forward MY OWN wait" tool for pass-and-play/solo; online, the
 // table already moves at a shared pace nobody's individually waiting alone through (see the
