@@ -1535,7 +1535,7 @@ const REDUCED=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const SPEED_OPTS=[[0.6,'Normal'],[1,'Quick'],[1.7,'Fast'],[2.6,'Turbo']];
 let USER_SPEED=parseFloat(localStorage.getItem('nasty-speed')||'0.6');
 if(!SPEED_OPTS.some(o=>o[0]===USER_SPEED))USER_SPEED=0.6;
-let SKIP=false, skipSnap=null;
+let SKIP=false, skipSnap=null, SPOTLIGHT=false;
 let SPEED=1;
 // v0.15: online, table pacing is the SHARED NET.tableSpeed (host-controlled - see the § NET
 // comment block) instead of this device's own USER_SPEED. `NET` (a `const`, § NET) isn't
@@ -1546,7 +1546,15 @@ let SPEED=1;
 // right after `const NET=...` instead - see that one call site, § NET.
 function applySpeed(){
   const base=NET.online?NET.tableSpeed:USER_SPEED;
-  SPEED=(REDUCED?Math.max(base,6):base)*(SKIP?30:1);
+  // v0.19: SPOTLIGHT (see spotlightEvent() below) temporarily overrides the 30x SKIP boost with
+  // a gentler 2x whenever a kick/Jack-swap's own shortened animation is in flight - "roughly
+  // half normal duration" per-event, not the 30x-compressed blur every other move gets during a
+  // skip. It only ever matters while SKIP is true (spotlightEvent no-ops outside a skip); always
+  // re-derived here from whatever SKIP/SPOTLIGHT actually are RIGHT NOW rather than cached, so a
+  // skip toggled off mid-event (endSkip()/stopSkip(), or a human turn arriving) still lands on
+  // the correct speed the instant spotlightEvent's finally block calls this again.
+  const boost=SPOTLIGHT?2:(SKIP?30:1);
+  SPEED=(REDUCED?Math.max(base,6):base)*boost;
 }
 // v0.19: one-time "how fast should the game play" picker. Shown the first time ANY player
 // (new or existing - existing devices haven't set the flag either, and Blake wants everyone
@@ -1571,6 +1579,24 @@ function pickSpeed(v){
   applySpeed();
   updateSpeedButtonLabel();
   $('speedPickerOverlay').classList.add('hidden');
+}
+
+/* v0.19: spotlightEvent() - wraps ONE kick or Jack-swap's animation so it plays at a real,
+   watchable pace even mid-skip, then hands speed straight back. Outside a skip (SKIP false)
+   play is already full/normal speed, so it's a pure passthrough - never touches SPOTLIGHT/
+   applySpeed() at all, meaning ordinary (non-skip) kicks/swaps are byte-for-byte unchanged.
+   During a skip: sets SPOTLIGHT (applySpeed() above then computes a 2x boost instead of 30x -
+   half the normal-speed duration, not a 30x blur), awaits the caller's animation, then ALWAYS
+   clears SPOTLIGHT and re-applies speed in a finally - so (a) an exception mid-animation can
+   never leave speed stuck at 2x forever, and (b) SKIP being turned off mid-event (stopSkip(),
+   or a human turn arriving - see runTurn()'s `SKIP&&seatCfg.type==='human'` check) is picked up
+   correctly the instant this resumes, since applySpeed() always re-reads the CURRENT SKIP, not
+   whatever it was when the event started. */
+async function spotlightEvent(fn){
+  if(!SKIP)return fn();
+  SPOTLIGHT=true; applySpeed();
+  try{ return await fn(); }
+  finally{ SPOTLIGHT=false; applySpeed(); }
 }
 
 /* --- tiny sound synth ---
@@ -2936,8 +2962,14 @@ let uiResolve=null;
 // at 4000ms per Blake's ask). In-game toasts (menu hidden) are completely unchanged - still stay
 // until replaced, exactly as v0.11.2 intended. Only removes THIS toast's own element, guarded by
 // `.contains()`, so it can never clobber a newer toast that already replaced it.
-function toast(msg,ms=3000){
-  if(SKIP||INSTANT)return;   // no toast spam while fast-forwarding or during reconnect catch-up
+function toast(msg,ms=3000,force=false){
+  // v0.19: `force` lets a kick/Jack-swap message punch through the SKIP half of this
+  // suppression (see spotlightEvent()) - Blake's ask was "make sure even when skipping it's
+  // obvious something big happened," and a silently-suppressed toast defeated that even once
+  // the animation itself became visible again. INSTANT (reconnect catch-up replay) is NEVER
+  // bypassable, by design or by force - still an unconditional no-op, unchanged from before.
+  if(INSTANT)return;
+  if(SKIP&&!force)return;   // no toast spam while fast-forwarding, unless explicitly forced
   $('toasts').replaceChildren();   // one message at a time - newest replaces the old, never stacks into the cards
   const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
   $('toasts').appendChild(t);
@@ -3435,15 +3467,23 @@ async function performMoveInner(seat,m,cardEl){
   }else if(m.type==='swap'){
     sSwap();
     const other=$(`tee-${m.ts}-${m.tpi}`);
-    await Promise.all([
+    // v0.19: forced (bypasses SKIP's toast suppression, stays suppressed under INSTANT) and
+    // wrapped in spotlightEvent so the swap itself plays at a watchable pace mid-skip too - see
+    // spotlightEvent()/toast() comments above. No swap message existed before this change.
+    toast(`🔄 Jack swap! ${G.seats[owner].name} and ${G.seats[m.ts].name} swap tees`,2600,true);
+    await spotlightEvent(()=>Promise.all([
       animateArc(elm,plan.aP,plan.bP,700,360),
       animateArc(other,plan.bP,plan.aP,700,-360)
-    ]);
+    ]));
   }
   if(kicked){
-    if(kicked.seat===owner)toast(`💥 Ouch! ${G.seats[owner].name} takes out their OWN tee!`,2600);
-    else toast(`💥 NASTY! ${G.seats[seat].name} sends ${G.seats[kicked.seat].name} back to base!`,2600);
-    await nastyBlast(kicked.seat,kicked.pi,kicked.pos);
+    // v0.19: force=true so this survives SKIP's toast suppression (still suppressed under
+    // INSTANT, unchanged) - and nastyBlast() itself now runs through spotlightEvent() so the
+    // slam plays at a watchable, shortened-but-real-time pace during a skip instead of getting
+    // floored to a ~220ms blur by the 30x SPEED multiplier. See spotlightEvent() above.
+    if(kicked.seat===owner)toast(`💥 Ouch! ${G.seats[owner].name} takes out their OWN tee!`,2600,true);
+    else toast(`💥 NASTY! ${G.seats[seat].name} sends ${G.seats[kicked.seat].name} back to base!`,2600,true);
+    await spotlightEvent(()=>nastyBlast(kicked.seat,kicked.pi,kicked.pos));
   }
   // celebrate every tee that just became snug (safe forever)
   if(!SKIP){
@@ -3635,17 +3675,58 @@ function enableSelection(seat,moves){
     if(has)c.onclick=()=>selectCard(ci,c);
   });
 }
-/* Big tap bubbles above every pickable tee - easy to see and hit with a thumb */
+/* Big tap bubbles above every pickable tee - easy to see and hit with a thumb.
+   v0.19 (Blake): a bubble's little arrow now just barely touches its own tee by default,
+   always - no more blanket every-other-bubble stagger (v0.6.2's wide spacing left lone
+   bubbles floating high over open track). A bubble only lifts when it would REALLY cover
+   another tee on the board or an already-placed bubble (stacked tees, the base cluster),
+   and only as far as needed: real overlap detection, 6px at a time, first clear spot wins.
+   Geometry notes: the bubble is an 84px circle anchored bottom-center at (left,top) via
+   translate(-50%,-100%); its ::after arrow tip ends 12px below that anchor. A 4P tee's
+   art box is 34x44 with its top at pos.y-37 (28x38 / pos.y-31 for 6P, see .tee/.tee.sel6),
+   and the visible head top sits ~1.5px below the box top - so "tip touching the head" means
+   an anchor of pos.y-47 (4P) / pos.y-42 (6P). */
 function showBubbles(list,cls){
   clearBubbles();
   const layer=$('bubbleLayer');
+  const R=42, six=G.n===6;
+  const tipGap=six?42:47;                    // anchor offset that puts the arrow tip on the tee head
+  const tw=six?14:17, tUp=six?31:37, tDn=7;  // tee art box around its pos: half width / above / below
+  const pegs=[];                             // every tee on the board is a "do not cover" zone
+  for(let s=0;s<G.n;s++)for(let pi=0;pi<5;pi++)pegs.push({s,pi,p:teePos(s,pi)});
+  const placed=[];
   const sorted=list.slice().sort((a,b)=>teePos(a.s,a.pi).x-teePos(b.s,b.pi).x);
-  sorted.forEach((it,i)=>{
+  sorted.forEach(it=>{
     const pos=teePos(it.s,it.pi);
+    // Sweep upward from the touching position, 6px steps: first FULLY clear anchor wins. If
+    // the whole sweep is cramped (a full base cluster tucked in a top corner has nowhere with
+    // zero overlap - the old stagger overlapped there too), take the least-overlapping anchor.
+    const overlapAt=cy=>{
+      let pen=0;
+      placed.forEach(q=>{ const d=Math.hypot(q.x-pos.x,q.y-cy); if(d<2*R)pen+=2*R-d; });
+      pegs.forEach(t=>{
+        if(t.s===it.s&&t.pi===it.pi)return;
+        const nx=Math.max(t.p.x-tw,Math.min(pos.x,t.p.x+tw));
+        const ny=Math.max(t.p.y-tUp,Math.min(cy,t.p.y+tDn));
+        const d=Math.hypot(pos.x-nx,cy-ny); if(d<R)pen+=(R-d)*3;   // hiding a tee is worse
+      });
+      return pen;
+    };
+    const T0=Math.max(96,pos.y-tipGap);   // bubble anchor (arrow tip = T0+12, touching the tee)
+    let T=T0,best=T0,bestPen=Infinity;
+    for(;;){
+      const pen=overlapAt(T-R);
+      if(pen===0){ best=T; break; }
+      if(pen<bestPen){ bestPen=pen; best=T; }
+      if(T<=24)break;                     // 24 = as high as the old stagger ever reached
+      T-=6;
+    }
+    T=best;
+    placed.push({x:pos.x,y:T-R});
     const b=document.createElement('div');
     b.className='teeBubble'+(cls?' '+cls:'');
     b.style.left=pos.x+'px';
-    b.style.top=(Math.max(96,pos.y-44)-(i%2)*74)+'px';   // stagger so neighbors don't stack
+    b.style.top=T+'px';
     b.innerHTML=teeSVG(G.seats[it.s].color,true);
     b.addEventListener('click',e=>{e.stopPropagation();onTeeClick(it.s,it.pi);});
     layer.appendChild(b);
