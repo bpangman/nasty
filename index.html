@@ -959,6 +959,7 @@ button{font:inherit;cursor:pointer}
 <div id="winOverlay" class="overlay hidden">
   <div class="sign"><b id="winTitle">-</b><small id="winSub">wins the game</small></div>
   <p id="winText"></p>
+  <p id="winPoints" style="font-weight:800;color:var(--gold);font-size:14.5px"></p>
   <div class="bigBtns">
     <button class="btn primary" id="btnAgain">Play again</button>
     <button class="btn ghost" id="btnWinMenu">Back to menu</button>
@@ -5131,12 +5132,24 @@ $('btnRoomText').onclick=()=>{
    games already finished on other devices before this shipped - it just starts counting from
    here on. */
 const DIFF_POINTS={easy:1,medium:2,hard:3};
+const DIFF_LABEL={easy:'Easy',medium:'Tricky',hard:'Nasty'};
 function loadStats(){ try{return JSON.parse(localStorage.getItem('nasty-stats')||'{}');}catch(e){return{};} }
-function pointsForWin(winSet){
-  let pts=0;
-  G.seats.forEach((opp,j)=>{ if(winSet.has(j))return; pts+=opp.type==='human'?3:(DIFF_POINTS[opp.diff]||0); });
-  return pts;
+// v0.19: pulled the per-opponent math out of pointsForWin into its own function so the win
+// screen can show the SAME numbers it's about to submit, opponent by opponent (Blake's ask:
+// "I don't see that reflected in the scoring at all" - the math itself was already right, see
+// HANDOFF.md v0.19, but nothing on screen ever showed the breakdown). pointsForWin below just
+// delegates here now - same total, same stored hpts, nothing about the stats shape changed.
+function pointsBreakdown(winSet){
+  const parts=[]; let pts=0;
+  G.seats.forEach((opp,j)=>{
+    if(winSet.has(j))return;
+    const val=opp.type==='human'?3:(DIFF_POINTS[opp.diff]||0);
+    pts+=val;
+    parts.push({label:opp.type==='human'?'Human':(DIFF_LABEL[opp.diff]||opp.diff),val});
+  });
+  return {pts,parts};
 }
+function pointsForWin(winSet){ return pointsBreakdown(winSet).pts; }
 // Human-only per-seat deltas for this finished game, same shape whether it ends up going to
 // the online recordResult message or the offline solo-result HTTP POST - factored out so
 // both paths (and the offline local-stats write) compute identical numbers from one place.
@@ -5381,6 +5394,15 @@ function showWin(){
   $('winText').textContent=G.teams
     ?`Team ${cols.join(' + ')} got all ten tees home. That's how it's done.`
     :`All five ${cols[0]} tees are home. Everyone else: better luck next deal.`;
+  // v0.19: show the points this win just earned, opponent by opponent, right on the win
+  // screen - see pointsBreakdown() above. Only humans earn leaderboard points, so this is
+  // blank (nothing shown) unless a human seat is among the winners, e.g. an all-CPU autotest.
+  const winSet=new Set(G.winners);
+  const winHuman=G.winners.some(w=>G.seats[w].type==='human');
+  const {pts,parts}=pointsBreakdown(winSet);
+  $('winPoints').textContent=(winHuman&&parts.length)
+    ?`+${pts} points: `+parts.map(p=>`${p.label} ${p.val}`).join(', ')
+    :'';
   $('winOverlay').classList.remove('hidden');
 }
 
