@@ -385,6 +385,19 @@ button{font:inherit;cursor:pointer}
   border:1px solid rgba(244,197,66,.5);color:var(--cream)}
 .savedTile .t1{font-weight:800;font-size:15.5px;color:var(--gold)}
 .savedTile .t2{font-size:13px;color:#dcefe1;margin-top:2px}
+/* v0.18.1: trash-can delete, 2-tap confirm. The tile itself is no longer a <button> (a nested
+   button is invalid HTML and unreliable on iOS Safari) - .savedTileMain (role="button") is the
+   resume tap target, .savedTileTrash is a separate real <button>, and .savedTileConfirm swaps
+   in over both when the trash is tapped once. */
+.savedTileContent{display:flex;align-items:center;gap:10px}
+.savedTileMain{flex:1;min-width:0;cursor:pointer;min-height:44px;display:flex;flex-direction:column;justify-content:center}
+.savedTileTrash{flex:none;width:44px;height:44px;display:flex;align-items:center;justify-content:center;
+  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.22);border-radius:10px;
+  font-size:19px;line-height:1;color:#ffb4a8}
+.savedTileConfirm .t1{color:#ffb4a8}
+.savedTileConfirmRow{display:flex;gap:10px;margin-top:10px}
+.savedTileConfirmRow .btn{flex:1;min-height:44px;padding:10px 14px;font-size:14.5px}
+.btn.danger{background:var(--red);color:#fff}
 .panel{max-width:520px;margin:0 auto;background:rgba(9,32,20,.55);border:1px solid rgba(255,255,255,.14);
   border-radius:18px;padding:18px 16px 22px;backdrop-filter:blur(6px);text-align:left}
 .optRow{display:flex;gap:10px;align-items:center;justify-content:space-between;margin:10px 2px}
@@ -818,18 +831,54 @@ button{font:inherit;cursor:pointer}
          at once, so the single tile grew into up to three, newest first - each labeled with
          who/what it is (see updateMenuResumeButtons()). With one save it looks exactly like
          the single tile always did. -->
-    <button class="savedTile hidden" id="btnSavedGame">
-      <div class="t1">▶ Resume Saved Game</div>
-      <div class="t2" id="savedGameDetail"></div>
-    </button>
-    <button class="savedTile hidden" id="btnSavedGame2">
-      <div class="t1">▶ Resume Saved Game</div>
-      <div class="t2" id="savedGameDetail2"></div>
-    </button>
-    <button class="savedTile hidden" id="btnSavedGame3">
-      <div class="t1">▶ Resume Saved Game</div>
-      <div class="t2" id="savedGameDetail3"></div>
-    </button>
+    <div class="savedTile hidden" id="btnSavedGame">
+      <div class="savedTileContent" id="savedGameContent">
+        <div class="savedTileMain" id="savedGameMain" role="button" tabindex="0">
+          <div class="t1">▶ Resume Saved Game</div>
+          <div class="t2" id="savedGameDetail"></div>
+        </div>
+        <button class="savedTileTrash" id="savedGameTrash" type="button" aria-label="Delete saved game">🗑</button>
+      </div>
+      <div class="savedTileConfirm hidden" id="savedGameConfirm">
+        <div class="t1">Delete this saved game?</div>
+        <div class="savedTileConfirmRow">
+          <button class="btn danger" id="savedGameDelete" type="button">Delete</button>
+          <button class="btn ghost" id="savedGameCancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div class="savedTile hidden" id="btnSavedGame2">
+      <div class="savedTileContent" id="savedGameContent2">
+        <div class="savedTileMain" id="savedGameMain2" role="button" tabindex="0">
+          <div class="t1">▶ Resume Saved Game</div>
+          <div class="t2" id="savedGameDetail2"></div>
+        </div>
+        <button class="savedTileTrash" id="savedGameTrash2" type="button" aria-label="Delete saved game">🗑</button>
+      </div>
+      <div class="savedTileConfirm hidden" id="savedGameConfirm2">
+        <div class="t1">Delete this saved game?</div>
+        <div class="savedTileConfirmRow">
+          <button class="btn danger" id="savedGameDelete2" type="button">Delete</button>
+          <button class="btn ghost" id="savedGameCancel2" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div class="savedTile hidden" id="btnSavedGame3">
+      <div class="savedTileContent" id="savedGameContent3">
+        <div class="savedTileMain" id="savedGameMain3" role="button" tabindex="0">
+          <div class="t1">▶ Resume Saved Game</div>
+          <div class="t2" id="savedGameDetail3"></div>
+        </div>
+        <button class="savedTileTrash" id="savedGameTrash3" type="button" aria-label="Delete saved game">🗑</button>
+      </div>
+      <div class="savedTileConfirm hidden" id="savedGameConfirm3">
+        <div class="t1">Delete this saved game?</div>
+        <div class="savedTileConfirmRow">
+          <button class="btn danger" id="savedGameDelete3" type="button">Delete</button>
+          <button class="btn ghost" id="savedGameCancel3" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
     <div class="optRow"><label>Players</label>
       <div class="segs"><button class="seg" id="p4">4 players</button><button class="seg" id="p6">6 players</button></div>
     </div>
@@ -845,10 +894,10 @@ button{font:inherit;cursor:pointer}
     </div>
     <div class="bigBtns">
       <button class="btn ghost" id="btnRules">How to play</button>
-      <button class="btn ghost" id="btnLb">🏆 Leaderboard</button>
+      <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.15</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.18.1</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -5343,6 +5392,15 @@ function showWin(){
    names (or "All computer"), 4/6 players, teams or not, and how long ago it was saved. */
 let SAVED_GAMES=[];   // [{kind:'offline',slot,data,ts}|{kind:'online',last,ts}, ...] newest first
 let SAVED_GAME=null;  // the newest entry (or null) - kept for the older single-save call sites
+// v0.18.1: per-tile element ids, in tile order - [row,content,main,detail,trash,confirm,deleteBtn,cancelBtn].
+// 'row' is the outer .savedTile div (toggled hidden/shown); 'content' is the normal resume+trash
+// row; 'confirm' is the "Delete this saved game?" panel that swaps in over it. See markup, § MENU.
+const TILE_IDS=[
+  ['btnSavedGame','savedGameContent','savedGameMain','savedGameDetail','savedGameTrash','savedGameConfirm','savedGameDelete','savedGameCancel'],
+  ['btnSavedGame2','savedGameContent2','savedGameMain2','savedGameDetail2','savedGameTrash2','savedGameConfirm2','savedGameDelete2','savedGameCancel2'],
+  ['btnSavedGame3','savedGameContent3','savedGameMain3','savedGameDetail3','savedGameTrash3','savedGameConfirm3','savedGameDelete3','savedGameCancel3'],
+];
+let CONFIRM_DELETE_IDX=null;   // index into TILE_IDS currently showing "Delete this saved game?" (only one at a time)
 function timeAgo(ts){
   if(!ts)return '';
   const m=Math.round((Date.now()-ts)/60000);
@@ -5372,13 +5430,56 @@ function updateMenuResumeButtons(){
   entries.sort((a,b)=>b.ts-a.ts);
   SAVED_GAMES=entries;
   SAVED_GAME=entries[0]||null;
-  [['btnSavedGame','savedGameDetail'],['btnSavedGame2','savedGameDetail2'],['btnSavedGame3','savedGameDetail3']]
-    .forEach(([b,d],i)=>{
-      const e=entries[i];
-      $(b).classList.toggle('hidden',!e);
-      if(e)$(d).textContent=e.kind==='offline'?saveSlotLabel(e.data):`Room ${e.last.code} · online`;
-    });
+  CONFIRM_DELETE_IDX=null;   // v0.18.1: any re-render always drops back to the normal tile state
+  TILE_IDS.forEach(([row,content,main,detail,trash,confirm],i)=>{
+    const e=entries[i];
+    $(row).classList.toggle('hidden',!e);
+    if(e)$(detail).textContent=e.kind==='offline'?saveSlotLabel(e.data):`Room ${e.last.code} · online`;
+    $(content).classList.remove('hidden');
+    $(confirm).classList.add('hidden');
+  });
 }
+// v0.18.1: trash-can delete, 2-tap confirm. showDeleteConfirm swaps ONE tile's content for the
+// "Delete this saved game?" panel (closing any other tile's confirm first - only one at a time);
+// hideDeleteConfirm restores every visible tile to normal. deleteSavedTile does the actual
+// removal, then re-renders via updateMenuResumeButtons() so the tile disappears (or the list
+// shifts up) exactly like any other save-state change.
+function showDeleteConfirm(i){
+  TILE_IDS.forEach(([row,content,,,,confirm],j)=>{
+    if($(row).classList.contains('hidden'))return;
+    $(content).classList.toggle('hidden',j===i);
+    $(confirm).classList.toggle('hidden',j!==i);
+  });
+  CONFIRM_DELETE_IDX=i;
+}
+function hideDeleteConfirm(){
+  TILE_IDS.forEach(([row,content,,,,confirm])=>{
+    if($(row).classList.contains('hidden'))return;
+    $(content).classList.remove('hidden');
+    $(confirm).classList.add('hidden');
+  });
+  CONFIRM_DELETE_IDX=null;
+}
+function deleteSavedTile(i){
+  const e=SAVED_GAMES[i];
+  if(!e)return;
+  if(e.kind==='offline'){
+    clearOfflineSlot(e.slot);   // localStorage + IndexedDB mirror, shared with the slot-replace chooser
+    if(SAVE_SLOT===e.slot)SAVE_SLOT=null;
+  }else{
+    clearLastRoom();
+    try{localStorage.removeItem('nasty-net-'+e.last.code);}catch(err){}
+  }
+  updateMenuResumeButtons();
+}
+// Tapping anywhere outside the currently-confirming tile (another tile, or blank menu space)
+// restores it to normal - a capture-phase listener so it runs BEFORE the click's own target
+// handler (e.g. tapping a different tile's trash both closes this confirm and opens that one).
+document.addEventListener('click',ev=>{
+  if(CONFIRM_DELETE_IDX===null)return;
+  const openRow=TILE_IDS[CONFIRM_DELETE_IDX][0];
+  if(!ev.target.closest('#'+openRow))hideDeleteConfirm();
+},true);
 function onSavedTileClick(i){
   const e=SAVED_GAMES[i];
   if(!e)return;
@@ -5391,9 +5492,13 @@ function onSavedTileClick(i){
     tryJoinOrRejoin(e.last.code,false);
   }
 }
-$('btnSavedGame').onclick=()=>onSavedTileClick(0);
-$('btnSavedGame2').onclick=()=>onSavedTileClick(1);
-$('btnSavedGame3').onclick=()=>onSavedTileClick(2);
+TILE_IDS.forEach(([row,content,main,detail,trash,confirm,delBtn,cancelBtn],i)=>{
+  $(main).onclick=()=>onSavedTileClick(i);
+  $(main).onkeydown=ev=>{ if(ev.key==='Enter'||ev.key===' '){ ev.preventDefault(); onSavedTileClick(i); } };
+  $(trash).onclick=ev=>{ ev.stopPropagation(); showDeleteConfirm(i); };
+  $(delBtn).onclick=ev=>{ ev.stopPropagation(); deleteSavedTile(i); };
+  $(cancelBtn).onclick=ev=>{ ev.stopPropagation(); hideDeleteConfirm(); };
+});
 function resumeOfflineGame(slot){
   const saved=loadOfflineSlot(slot);
   if(!saved)return;
