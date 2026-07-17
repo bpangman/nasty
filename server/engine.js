@@ -633,6 +633,11 @@ function createEngine(){
       v+=piecesHome(m.kick.seat)*3*P.deny;                         // they're close to winning - deny it
       if(vic.steps>=LAY.L-6&&vic.steps<LAY.L)v+=5*P.deny;          // stripped right before their porch
       if(vic.steps>=LAY.L)v+=4*P.deny;                             // forced a non-snug home tee back out
+      // v0.18: their LAST tee still out - Nasty-only (P.ruthless is 0/undefined for every other
+      // tier, so this is a pure no-op there). "Ruthless denial" per Blake's brief: a kick against
+      // someone with all 4 other tees already home is worth taking almost no matter what else is
+      // on offer, since it's the single biggest swing available on the board.
+      if(piecesHome(m.kick.seat)===4)v+=(P.ruthless||0);
     }
     if(m.type==='swap'&&!sameTeam(m.ts,m.owner)){
       const a=G.pieces[m.owner][m.pi],b=G.pieces[m.ts][m.tpi];
@@ -642,16 +647,118 @@ function createEngine(){
     }
     return v;
   }
-  /* Tier ladder, tuned via a headless many-game harness against server/engine.js (v0.17):
-     each rung beats the one below it in roughly 3 out of 4 games (Nasty 94.8% vs Easy, 76.8% vs
-     Tricky; Tricky 76.4% vs Easy; Easy 76.2% vs a harness-only pure-random baseline; N=500 per
-     matchup, 4P FFA 2-and-2 seating). The jitter values look large next to scoreMove's scale on
-     purpose - that is the knob that separates the rungs. */
+  /* Tier ladder, tuned via a headless many-game harness against server/engine.js:
+     Easy/Tricky numbers are the original v0.17 measurements, UNCHANGED this session (Blake only
+     asked to sharpen Nasty): Tricky 76.4% vs Easy; Easy 76.2% vs a harness-only pure-random
+     baseline; N=500, 4P FFA 2-and-2 seating. Nasty's own numbers are the v0.18 ones - see the
+     "v0.18" section of HANDOFF.md for the full harness writeup and exact win rates/decision
+     timing. The jitter values look large next to scoreMove's scale on purpose - that is the knob
+     that separates the rungs (for Easy/Tricky; Nasty separates itself with ply2 + ruthless
+     instead, see below). */
   const AI_TIERS={
-    easy:  {strat:0.15,jitter:95, deny:0.5},   // strategic but very noisy - the beatable one
-    medium:{strat:0.5, jitter:35, deny:1},     // "Tricky": the middle strategist
-    hard:  {strat:1,   jitter:0,  deny:1.6},   // "Nasty": full strategy, zero noise, hardest denial
+    easy:  {strat:0.15,jitter:95, deny:0.5, ply2:false, ruthless:0},    // UNCHANGED from v0.17
+    medium:{strat:0.5, jitter:35, deny:1,   ply2:false, ruthless:0},    // "Tricky" - UNCHANGED from v0.17
+    hard:  {strat:1,   jitter:0,  deny:2.2, ply2:true,  ruthless:70},   // "Nasty" - v0.18 overhaul, see below
   };
+  /* v0.18 (2026-07-16, difficulty overhaul): Blake's ask was blunt - "make nasty difficulty damn
+     near impossible." The v0.17 Nasty was still only a ONE-PLY scored move choice (the shared
+     strategyBonus core, executed with zero noise). This session adds real lookahead to the hard
+     tier ONLY (Easy/Tricky's policy code and AI_TIERS numbers are byte-for-byte what v0.17
+     shipped - `ply2`/`ruthless` are 0/false for both, so every new code path below is a no-op for
+     them). Two single-ply "probe the very next turn" designs were tried and measurably FAILED to
+     clear the acceptance bar in harness testing before landing on the rollout below - worth
+     recording so nobody re-tries them expecting a different result:
+       1. Score the opponent's overall best next move (their own progress, kicks, everything) and
+          subtract it from our candidate. Nearly a no-op: the opponent's OTHER 4 tees keep making
+          progress no matter which of our moves we pick, so that term was almost CONSTANT across
+          candidates and just added noise on top of the already-good 1-ply signal.
+       2. Narrow that to ONLY "does the opponent have a card that kicks one of MY pieces next
+          turn" (exact, unlike scoreMove's coarse loop-distance dangerAt() heuristic). Better -
+          genuinely zero-noise on safe moves - but still just a single-turn probe, and it plateaued
+          at best around 55-60% against the frozen v0.17 policy across a wide parameter sweep (see
+          HANDOFF.md's v0.18 section for the numbers) - not enough separation from a policy that's
+          already 90% the same scoring core.
+     What ships is a heuristic-guided ROLLOUT instead (see rolloutValue() below): play EACH
+     candidate move out to a bounded depth using a cheap, fast, deterministic 1-ply policy for
+     every seat (including my own future turns), then score the resulting position - actually
+     watching several turns of consequences unfold instead of guessing from one static probe. This
+     is what finally cleared both acceptance numbers (see AI_TIERS/HANDOFF.md for the measured
+     rates). Supporting pieces:
+     - cloneG()/rolloutValue()'s applyMove() calls: the ONLY way to try "what if I play move m,
+       then keep playing" without touching the real game is to run the REAL applyMove()/
+       handOver()/needsReshuffle()/dealDecision()/passDecision()/advanceTurn() (single source of
+       truth for how a move and a whole hand's lifecycle mutate state - no duplicated logic)
+       against a throwaway clone. Since G is a plain `let` module binding and every engine
+       function reads the CURRENT value of G at call time (not a captured reference), temporarily
+       reassigning G to the clone and restoring it right after is safe as long as it all happens
+       synchronously with no await in between - true here, chooseAI is a plain sync function.
+     - Depth-2+ search (`P.ply2`): score every legal move 1-ply first (same as every tier always
+       has), then for EVERY one of those candidates (no top-K cutoff - an earlier capped version
+       was a real bug, not just an optimization: candidates outside the cutoff kept their
+       unpenalized 1-ply score, so a legitimately strong move could win purely from being exempt
+       from scrutiny, not from being better - fixed by scoring every candidate the same way),
+       simulate playing it and roll the clone forward (rolloutValue()). A move that outright WINS
+       in the simulation skips the rollout entirely and is forced to the top (LOOKAHEAD_WIN_BONUS)
+       - "exact counting for the last tee home" per the brief, no amount of position-value math
+       should ever out-vote an actual win-now move.
+     - Ruthless endgame denial (`P.ruthless`, see strategyBonus above): a flat, large, Nasty-only
+       bonus on any kick against an opponent who has all 4 OTHER tees home already - their very
+       last tee. Already covered a little by the existing deny-scaled terms, but those are small
+       relative to scoreMove's own scale; this makes the "kill shot" close to un-ignorable, which
+       is exactly the "ruthless when someone's a couple of moves from winning" behavior Blake asked
+       for, without touching Easy/Tricky's math at all (P.ruthless is 0 there). */
+  const LOOKAHEAD_W=0.06, LOOKAHEAD_WIN_BONUS=1e6;   // tuned via harness sweep, see HANDOFF.md's v0.18 section
+  function cloneG(){                                   // throwaway sim state - shares static fields, deep-copies mutable ones
+    // deck MUST be a real copy (.slice()), not the same array reference: rolloutValue() below can
+    // call dealDecision() inside the simulation, which does G.deck.pop() - sharing the real deck
+    // array here would let a throwaway rollout silently eat cards out of the ACTUAL game's deck.
+    // Caught via a real crash in testing (a later real deal came up with undefined cards) before
+    // this ever shipped - worth keeping this comment so nobody "simplifies" it back to a reference.
+    return {
+      n:G.n,teams:G.teams,seats:G.seats,
+      pieces:G.pieces.map(arr=>arr.map(p=>({state:p.state,steps:p.steps}))),
+      hands:G.hands.map(h=>h.slice()),deck:G.deck.slice(),discard:G.discard.slice(),
+      schedule:G.schedule,schedRound:G.schedRound,dealer:G.dealer,turn:G.turn,
+      passStreak:G.passStreak,over:G.over,winners:G.winners.slice(),
+      bowedOut:G.bowedOut.slice(),dealSeq:G.dealSeq,actionSeq:G.actionSeq,paused:G.paused,gameId:G.gameId
+    };
+  }
+  const ROLLOUT_PLY=48;             // ~12 rounds for 4 players - enough for a kick's fallout (and the
+                                     // fallout of avoiding one) to actually show up in the position
+  function evalForSeat(s){          // static position value, own-team relative, ~0..300 scale
+    let v=0;
+    G.pieces[s].forEach((p,pi)=>{ if(p.state==='home')v+=50+(isSnug(s,pi)?8:0);
+      else if(p.state==='track')v+=p.steps*0.6; });
+    return v;
+  }
+  function rolloutPolicy(s,mv){     // cheap, deterministic, 1-ply-only - NEVER recurses into ply2/rollout
+    let best=null,bs=-1e9;
+    for(const m of mv){ const sc=scoreMove(s,m)+strategyBonus(m,AI_TIERS.medium); if(sc>bs){bs=sc;best=m;} }
+    return best;
+  }
+  function rolloutValue(seat){      // call with G already pointed at the hypothetical post-move state
+    let ply=0;
+    while(ply<ROLLOUT_PLY&&!G.over){
+      if(handOver()){
+        for(let s=0;s<G.n;s++){ if(G.hands[s].length){ G.discard.push(...G.hands[s]); G.hands[s].length=0; } }
+        if(needsReshuffle())dealDecision({deck:freshDeck(),dealer:(G.dealer+1)%G.n}); else dealDecision({});
+        continue;
+      }
+      const s=G.turn;
+      if(G.hands[s].length===0){ advanceTurn(); continue; }
+      if(G.bowedOut[s]){ passDecision(s,false); advanceTurn(); continue; }
+      const mv=legalMoves(s);
+      if(mv.length===0){ passDecision(s,true); advanceTurn(); continue; }
+      applyMove(s,rolloutPolicy(s,mv));
+      if(!G.over)advanceTurn();
+      ply++;
+    }
+    if(G.over)return sameTeam(G.winners[0],seat)?400:-400;   // an outright win/loss inside the rollout dominates everything
+    let theirs=0,cnt=0;
+    for(let s=0;s<G.n;s++){ if(sameTeam(s,seat))continue; theirs+=evalForSeat(s); cnt++; }
+    const mine=evalForSeat(seat)+(G.teams?evalForSeat(partnerOf(seat)):0);
+    return mine-(cnt?theirs/cnt:0);
+  }
   function chooseAI(seat,moves){
     const P=AI_TIERS[G.seats[seat].diff]||AI_TIERS.medium;
     // Shared sanity rule, every tier: never kick your own tee (or your partner's) when any other
@@ -660,11 +767,30 @@ function createEngine(){
     // could occasionally override even kickVal's heavy penalty.
     const safe=moves.filter(m=>!(m.kick&&(m.kick.seat===m.owner||sameTeam(m.kick.seat,m.owner))));
     const pool=safe.length?safe:moves;
+    const scored=pool.map(m=>({m,s:scoreMove(seat,m)+P.strat*strategyBonus(m,P)
+      +(P.jitter?(Math.random()*2-1)*P.jitter:0)}));
+    // v0.18 bug found via harness (a 200-game run came back a coin-flip against the frozen v0.17
+    // policy): an earlier version of this only ran the depth-2 probe on the top LOOKAHEAD_TOPK
+    // candidates by 1-ply score, leaving every move outside that cutoff with its ORIGINAL,
+    // unpenalized 1-ply score. That's a biased comparison, not a real search - a legitimately
+    // strong move that happened to rank 11th got compared unpenalized against penalized top-10
+    // moves, and could win purely from being exempt, not from being better. legalMoves() output is
+    // small enough (a handful of cards, at most a few dozen swap candidates on a Jack) that a
+    // performance cap was never actually needed - every legal move gets the same rollout treatment
+    // now, no cutoff, no bias.
+    if(P.ply2&&pool.length>1){
+      const realG=G;
+      for(const entry of scored){
+        G=cloneG();
+        applyMove(seat,entry.m);   // real engine mutation, on the throwaway clone only
+        entry.s2=G.over?entry.s+LOOKAHEAD_WIN_BONUS:entry.s+LOOKAHEAD_W*rolloutValue(seat);
+        G=realG;
+      }
+    }
     let best=null,bs=-1e9;
-    for(const m of pool){
-      const s=scoreMove(seat,m)+P.strat*strategyBonus(m,P)
-        +(P.jitter?(Math.random()*2-1)*P.jitter:0);
-      if(s>bs){bs=s;best=m;}
+    for(const entry of scored){
+      const val=entry.s2!=null?entry.s2:entry.s;
+      if(val>bs){bs=val;best=entry.m;}
     }
     return best;
   }
