@@ -743,12 +743,17 @@ button{font:inherit;cursor:pointer}
 .modalCard h4{margin:16px 0 4px;color:var(--gold);font-size:15px}
 .modalCard p,.modalCard li{font-size:14.5px;line-height:1.55;color:#dcefe1}
 .modalCard ul{padding-left:20px;margin:6px 0}
-.lbScroll{overflow-x:auto;margin:6px 0 10px}
-.lbTable{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;min-width:430px}
-.lbTable th,.lbTable td{padding:7px 6px;font-size:13.5px;border-bottom:1px solid rgba(255,255,255,.12)}
-.lbTable th{color:#a9d2b5;font-size:11px;letter-spacing:.08em;text-transform:uppercase;text-align:right}
+.lbScroll{margin:6px 0 10px}
+.lbTable{width:100%;border-collapse:collapse;table-layout:fixed;font-variant-numeric:tabular-nums}
+.lbTable th,.lbTable td{box-sizing:border-box;padding:6px 3px;font-size:clamp(10.5px,3.1vw,13.5px);
+  border-bottom:1px solid rgba(255,255,255,.12);white-space:nowrap}
+.lbTable th{color:#a9d2b5;font-size:clamp(8.5px,2.4vw,11px);letter-spacing:.04em;text-transform:uppercase;text-align:right}
 .lbTable td{text-align:right;color:#e9f4ec}
-.lbTable th:first-child,.lbTable td:first-child{text-align:left}
+.lbTable th:first-child,.lbTable td:first-child{text-align:left;width:26%;overflow:hidden;text-overflow:ellipsis}
+.lbTable th:nth-child(2),.lbTable td:nth-child(2){width:19%}
+.lbTable th:nth-child(3),.lbTable td:nth-child(3){width:16%}
+.lbTable th:nth-child(4),.lbTable td:nth-child(4){width:18%}
+.lbTable th:nth-child(5),.lbTable td:nth-child(5){width:21%}
 .lbTable td:last-child{font-weight:800;color:var(--gold)}
 @media (prefers-reduced-motion: reduce){ .plaque.turn,.tee.selectable,.tee.targetable,#btnSkip.active,.toast.myTurn{animation:none} }
 
@@ -897,7 +902,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.19</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.19.1</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -5449,7 +5454,7 @@ function renderLb(st){
   const pct=n=>games(n)?Math.round(wins(n)/games(n)*100)+'%':'-';
   names.sort((a,b)=>pts(b)-pts(a)||wins(b)-wins(a)||games(a)-games(b));
   $('lbBody').innerHTML=`<div class="lbScroll"><table class="lbTable"><tr><th>Player</th>
-    <th>Games</th><th>Wins</th><th>Win %</th><th>Points</th></tr>`+
+    <th>Games</th><th>Wins</th><th>Win%</th><th>Points</th></tr>`+
     names.map(n=>`<tr><td>${esc(n)}</td><td>${games(n)}</td><td>${wins(n)}</td>
       <td>${pct(n)}</td><td>${pts(n)}</td></tr>`).join('')+`</table></div>`;
 }
