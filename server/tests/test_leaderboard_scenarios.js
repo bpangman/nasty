@@ -211,7 +211,9 @@ async function main() {
     await page.evaluate(() => window.netSend({ type: 'rejoin', code: window.NET.code, playerId: window.NET.playerId, token: window.NET.token, protocolVersion: PROTOCOL_VERSION }));
     await new Promise((r) => setTimeout(r, 1500));
     const lb2 = await (await fetch(BASE + '/leaderboard')).json();
-    check(lb2.OnlineWin && lb2.OnlineWin.hg4s === 1 && lb2.OnlineWin.hpts === lb1.OnlineWin.hpts, 'c: reconnect after the win did NOT double the record');
+    // v0.21: points are split solo/teams now (hptsS/hptsT) - this scenario is a 4-player
+    // free-for-all (CFG.teams=false), so a win's points land in hptsS, not the old plain hpts.
+    check(lb2.OnlineWin && lb2.OnlineWin.hg4s === 1 && lb2.OnlineWin.hptsS === lb1.OnlineWin.hptsS, 'c: reconnect after the win did NOT double the record');
     await ctx.close();
   }
 
