@@ -4282,8 +4282,12 @@ function scheduleReconnect(){
   // § RECALIBRATION below. Covers "on websocket reopen" from Blake's design directly: this is
   // the ONLY path that reopens a dropped socket, so starting recalibration right here means
   // input stays locked and the failure watchdog is armed for the WHOLE reconnect attempt, not
-  // just the brief window after a foreground event.
-  startRecalibration('reconnecting');
+  // just the brief window after a foreground event. GAME ONLY (the G&&!G.over guard): a LOBBY
+  // reconnect resolves with a 'lobby' message, never a snapshot, so nothing would ever clear
+  // recalActive there (a stuck lock that would then poison the NEXT game's input) - and a
+  // lobby has no board state to protect in the first place. The lobby keeps v0.16's plain
+  // NET.reconnecting chip behavior, unchanged.
+  if(G&&!G.over)startRecalibration('reconnecting');
   if(NET.reconnecting)return;
   NET.reconnecting=true;
   // v0.16: only stamp the START of a reconnect streak - a fast retry loop (backoff, below)
@@ -4515,6 +4519,10 @@ function bootGameFromNetwork(action){
   clearToasts();   // v0.11.3: game start - never inherit a toast left over from a previous game
   drawBoard(); buildTable(); fitBoard(); setTimeout(fitBoard,50);
   window.G=G; window.LAY=LAY;
+  // v0.20: a brand-new game start IS fresh authoritative state - defensively clear any
+  // recalibration left over from before this boot (belt-and-suspenders alongside
+  // scheduleReconnect()'s own game-only guard) so a stale lock can never carry into a new game.
+  endRecalibration();
   updateConnIndicator();
   sendPushToken();   // v0.16 item 5: in case permission was already granted from an earlier game this session - see § PUSH
   toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts`,2600);

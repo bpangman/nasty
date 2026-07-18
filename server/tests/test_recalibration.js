@@ -346,7 +346,10 @@ async function scenarioKillServerMidRecal(port, serverChild) {
 
 async function scenarioBackCompatOldClient(port) {
   log('--- Part 2d: a pre-v0.20 client (never sends "resync") still plays normally against the new server ---');
-  const oldHtml = execSync('git show HEAD:index.html', { cwd: '/Users/jarvis/nasty-game', maxBuffer: 1024 * 1024 * 20 }).toString();
+  // Pinned to 8de9c20 - the last pre-v0.20 commit (iOS build 26's exact client), i.e. the
+  // newest client in the wild that does NOT send "resync". Deliberately NOT `HEAD` (which was
+  // only equivalent the very first time this test ran, before v0.20 itself was committed).
+  const oldHtml = execSync('git show 8de9c20:index.html', { cwd: '/Users/jarvis/nasty-game', maxBuffer: 1024 * 1024 * 20 }).toString();
   const oldPath = path.join(SCRATCH, 'old-client.html');
   fs.writeFileSync(oldPath, oldHtml);
   const browser = await chromium.launch();
