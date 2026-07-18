@@ -4581,7 +4581,15 @@ async function runOnlineTurnLoop(){
   const myGen=NETGEN;
   while(true){
     if(myGen!==NETGEN)return;
-    if(!G||G.over)return;
+    if(!G||G.over){
+      // v0.20: a legitimate live action can end the game (G.over) while a recalibration was
+      // still in flight (e.g. the 45s silence watchdog fired moments earlier) - nothing is
+      // ever going to lock/unlock again once the game's over, so clear it here too rather than
+      // leave "Recalibrating..." stuck on screen through the win overlay. Cheap no-op if it
+      // was already clear.
+      endRecalibration();
+      return;
+    }
     if(G.paused){ await pauseGate(); if(myGen!==NETGEN||!G||G.over)return; }
     NET.moveSentForTurn=false;
     fadeAllDiscards();
