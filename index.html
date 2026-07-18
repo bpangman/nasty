@@ -470,6 +470,10 @@ button{font:inherit;cursor:pointer}
 #connIndicator.reconnecting{animation:netPulse 1s infinite;background:rgba(180,138,20,.72)}
 #connIndicator.connLost{background:rgba(190,42,42,.82);color:#ffe6e2;white-space:normal;
   max-width:88%;line-height:1.3}
+/* v0.20: whenever the chip is actually showing something (recalibrating/reconnecting/failed),
+   it's also a tap target - see hardResetConnection()/updateConnIndicator(). Only enabled in
+   that state (never while hidden) so it still never steals a tap meant for the board. */
+#connIndicator.tappable{pointer-events:auto;cursor:pointer}
 .lobbySeat{display:flex;gap:8px;align-items:center;background:rgba(255,255,255,.06);
   border-radius:12px;padding:9px 11px;margin:7px 0}
 .lobbySeat .dot{width:20px;height:20px;border-radius:50%;flex:none;border:2px solid rgba(255,255,255,.6)}
@@ -902,7 +906,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.19.4</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.20</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -1190,6 +1194,7 @@ button{font:inherit;cursor:pointer}
     <button class="btn primary" id="btnLeaveSave">Save &amp; leave</button>
     <button class="btn ghost" id="btnLeaveDiscard">Leave without saving</button>
     <button class="btn ghost hidden" id="btnLeaveForGood">Leave for good - a computer takes over my seat</button>
+    <button class="btn ghost hidden" id="btnResetConnection">Reset connection</button>
     <button class="btn ghost" id="btnLeaveCancel">Cancel</button>
   </div>
 </div>
@@ -4033,6 +4038,19 @@ const NET={
   reunionOpen:false,       // v0.9: true while the reunion lobby overlay is on screen.
   readyCheck:null,         // v0.16 item 4: {requiredPlayerIds,readyPlayerIds} while the host's
                            // Start tap is waiting on the table - see § READY CHECK.
+  recalActive:false,       // v0.20: true from the moment ANY recalibration attempt starts
+                           // (a foreground event, a websocket reopen, or a manual "Reset
+                           // connection" tap) until a fresh authoritative snapshot actually
+                           // lands - see § RECALIBRATION. Input is locked the whole time
+                           // (commitMove() checks this directly).
+  recalKind:null,          // 'recalibrating' (socket looked fine, asked for a lightweight
+                           // resync) or 'reconnecting' (socket was/is dead, full rejoin under
+                           // way) - display text only, see updateConnIndicator().
+  recalStartedAt:null,     // Date.now() of the FIRST attempt in the current streak - anchors
+                           // the failure window (RECAL_FAIL_MS) without resetting on every
+                           // additional foreground/reopen event while already recalibrating.
+  recalFailed:false,       // true once RECAL_FAIL_MS has elapsed with no fresh snapshot yet -
+                           // shows the "couldn't restore the connection" message + tap-to-reset.
 };
 window.NET=NET; // exposed for testing/debugging, same spirit as window.G/window.LAY
 applySpeed();   // v0.15: the real bootstrap call - deferred to here from § UTIL now that
@@ -4175,15 +4193,33 @@ function maybeResolvePendingStateCheck(){
    server drives CPU turns itself), and the dedicated #waitHostOverlay already covers the one
    case that still matters (a host who hasn't started yet) far more visibly than a small chip
    ever did. */
-const CONN_LOST_MS=15000;
+/* v0.20: RECAL_FAIL_MS replaces the old CONN_LOST_MS (15000) as the single failure-window
+   constant for both flavors of "we're trying to get a good connection back" - see
+   § RECALIBRATION below. Shorter on purpose (Blake asked for "a few seconds," and real
+   reconnects/resyncs measured in this file's own test history complete in well under 2s even
+   under chaos conditions - see HANDOFF.md v0.20), so a genuinely stuck player sees the manual
+   options much sooner than the old 15s wait. */
+const RECAL_FAIL_MS=6000;
 function updateConnIndicator(){
   const el=$('connIndicator'); if(!el)return;
-  if(!NET.online||!NET.reconnecting){ el.classList.add('hidden'); el.classList.remove('reconnecting','connLost'); return; }
+  const showing=NET.online&&(NET.recalActive||NET.reconnecting);
+  if(!showing){
+    el.classList.add('hidden'); el.classList.remove('reconnecting','connLost','tappable');
+    el.onclick=null;
+    return;
+  }
   el.classList.remove('hidden');
-  const failingLong=NET.reconnectingSince&&(Date.now()-NET.reconnectingSince>CONN_LOST_MS);
-  if(failingLong){
-    el.textContent='Connection lost. Close and reopen the app.';
+  // v0.20: reachable any time it's showing - tapping it hard-resets the connection (same
+  // machinery as the "Reset connection" menu button, see hardResetConnection()). Never a
+  // no-op tap: even mid-"Recalibrating..." it's a legitimate way to force a fresh attempt.
+  el.classList.add('tappable');
+  el.onclick=()=>hardResetConnection();
+  if(NET.recalFailed){
+    el.textContent="Couldn't restore the connection. Tap here to try again, or close and reopen the app if that doesn't help.";
     el.classList.add('connLost'); el.classList.remove('reconnecting');
+  }else if(NET.recalActive&&NET.recalKind==='recalibrating'){
+    el.textContent='Recalibrating...';
+    el.classList.add('reconnecting'); el.classList.remove('connLost');
   }else{
     el.textContent='Reconnecting...';
     el.classList.add('reconnecting'); el.classList.remove('connLost');
@@ -4241,13 +4277,20 @@ function connectWs(){
   }));
 }
 function scheduleReconnect(){
+  // v0.20: a real reconnect cycle IS a recalibration (the socket's dead, so whatever comes
+  // back next needs to be a fresh authoritative snapshot, not trusted local state) - see
+  // § RECALIBRATION below. Covers "on websocket reopen" from Blake's design directly: this is
+  // the ONLY path that reopens a dropped socket, so starting recalibration right here means
+  // input stays locked and the failure watchdog is armed for the WHOLE reconnect attempt, not
+  // just the brief window after a foreground event.
+  startRecalibration('reconnecting');
   if(NET.reconnecting)return;
   NET.reconnecting=true;
   // v0.16: only stamp the START of a reconnect streak - a fast retry loop (backoff, below)
   // keeps flipping NET.reconnecting false->true every cycle (see the .catch() below), but the
   // FAMILY has been looking at "reconnecting" the whole time since the FIRST failure. Cleared
   // only in connectWs()'s onopen, i.e. once a connection genuinely succeeds again.
-  if(!NET.reconnectingSince){ NET.reconnectingSince=Date.now(); setTimeout(updateConnIndicator,CONN_LOST_MS+50); }
+  if(!NET.reconnectingSince)NET.reconnectingSince=Date.now();
   updateConnIndicator();
   setTimeout(()=>{
     connectWs().then(()=>{
@@ -4286,20 +4329,110 @@ function verifyConnectionAlive(){
     if(!NET.reconnecting)scheduleReconnect();
   },PING_WATCHDOG_MS);
 }
+/* ============================= § RECALIBRATION (v0.20) =============================
+   Root cause of Blake's "occasionally my board is missing a few steps after I switch apps and
+   come back" report, found by direct reproduction (server/tests/test_recalibration.js,
+   scenario "silentDrift" - see HANDOFF.md v0.20 for the full writeup): the v0.16 fix
+   (verifyConnectionAlive(), above) only ever asks "is the round trip still working RIGHT NOW."
+   A ping can succeed - proving the socket is fine THIS INSTANT - even though this exact client
+   silently missed real broadcast actions while backgrounded (WKWebView can freeze JS message
+   delivery for a stretch without ever firing a close event, functionally the same failure
+   shape v0.16 already knew the transport layer could produce, just manifesting as missed
+   MESSAGES instead of a fully-dead socket). The only self-heal left in that case was the
+   integrity digest (checkStateDigest()) - and that digest only ever gets COMPARED once this
+   client applies one MORE action afterward (see maybeResolvePendingStateCheck(), called only
+   from inside runOnlineTurnLoop right after applying a fresh action). If the table then
+   genuinely idles - the most common real case, since a player usually returns because it
+   might be THEIR OWN turn, or because everyone else is also just sitting there - no further
+   action ever arrives to trigger that comparison, and the stale board just sits on screen,
+   silently, with the old problem-only connIndicator staying fully HIDDEN the whole time
+   (confirmed directly: reproduced with zero visible warning of any kind).
+
+   The fix Blake asked for: stop trying to decide whether the existing state can be trusted at
+   all. Every foreground event and every websocket reopen now unconditionally asks the server
+   for a brand-new authoritative snapshot and applies it via the EXISTING bootGameFromSnapshot()
+   pipeline (the same one 'sync'/'reclaimed' already use) - no digest, no "is the ping fast
+   enough" judgment call. In the common case the round trip is fast enough that this is a
+   sub-second blip (see connIndicator's brief "Recalibrating..." flash); if it can't complete
+   in RECAL_FAIL_MS, the player gets a clear failure message with a manual way to force it. */
+function startRecalibration(kind){
+  if(!NET.online)return;
+  NET.recalActive=true;
+  NET.recalKind=kind;
+  if(!NET.recalStartedAt){ NET.recalStartedAt=Date.now(); armRecalWatchdog(); }
+  updateConnIndicator();
+}
+function endRecalibration(){
+  NET.recalActive=false; NET.recalKind=null; NET.recalStartedAt=null; NET.recalFailed=false;
+  updateConnIndicator();
+}
+function armRecalWatchdog(){
+  const startedAt=NET.recalStartedAt;
+  setTimeout(()=>{
+    // Only flips to "failed" if THIS SAME attempt (same startedAt stamp) is still unresolved -
+    // a newer streak that already reset the clock (or a success that cleared it to null) means
+    // this particular watchdog's job is done, one way or another.
+    if(NET.recalActive&&NET.recalStartedAt===startedAt&&Date.now()-startedAt>=RECAL_FAIL_MS){
+      NET.recalFailed=true;
+      updateConnIndicator();
+    }
+  },RECAL_FAIL_MS+50);
+}
+/* The actual trigger - called from EVERY foreground signal (visibilitychange/pageshow/
+   Capacitor 'resume', see onForeground() below) whenever an online game is actually in
+   progress. If the socket still looks open, ask for the new lightweight 'resync' (server
+   reply: an ordinary 'sync' message, same shape rejoin already gets - see server.js/
+   server.ts's "resync" case) - cheap, and doesn't ripple a spurious "X reconnected" presence
+   update to the rest of the table the way a full rejoin would. If the socket looks dead,
+   scheduleReconnect() already starts its own recalibration and does the full rejoin dance.
+   Either way, bootGameFromSnapshot() (via the 'sync' handler, onSync()) is what actually clears
+   recalActive - see endRecalibration() there. */
+function triggerRecalibration(){
+  if(!NET.online||!G||G.over)return;
+  if(NET.ws&&NET.ws.readyState===1){
+    startRecalibration('recalibrating');
+    try{ netSend({type:'resync'}); }catch(e){}
+  }else if(!NET.reconnecting){
+    scheduleReconnect();
+  }
+}
+/* "Reset connection" - reachable by tapping the connIndicator chip whenever it's showing, or
+   any time during an online game via the leave menu (§ UI/MENU's btnResetConnection) per
+   Blake's ask. Hard-tears-down the current socket (if any) and lets the EXISTING
+   scheduleReconnect()->connectWs()->rejoin->'sync' chain rebuild it from scratch - the same
+   path a genuinely dropped connection already uses, just triggered manually instead of by an
+   onclose event. Always restarts the failure-window clock, so a player who taps this after
+   seeing the failure message gets a fresh RECAL_FAIL_MS to see if it works this time. Also
+   resets the retry backoff to its floor - a manual tap is an explicit "try RIGHT NOW," and
+   honoring a backoff that's already escalated from a prior automatic retry streak (up to 8s)
+   would make the button feel broken for several seconds after a genuinely fixed connection
+   (e.g. the family's server coming back up) is actually ready to accept it again. */
+function hardResetConnection(){
+  if(!NET.online)return;
+  NET.recalStartedAt=null; NET.recalFailed=false;   // let startRecalibration() below stamp a fresh clock
+  startRecalibration('reconnecting');
+  const dead=NET.ws;
+  NET.reconnecting=false;   // let scheduleReconnect() actually run instead of no-op guarding out
+  NET.backoff=1000;
+  try{ if(dead)dead.close(); }catch(e){}
+  scheduleReconnect();
+}
 /* v0.16: belt-and-suspenders mid-game watchdog. Online + not my turn means the server should
    be talking constantly - either driving CPU turns itself or waiting on another human, either
    way SOMETHING (a gameAction broadcast, at minimum the § HEARTBEAT pong/ping traffic both
    servers already send) should reach this phone at least every few seconds. Total silence for
    SILENCE_WATCHDOG_MS while online and it's not my turn isn't "a slow CPU" (the server never
    waits on anything but a human's own move - see driveTurnLoop()/driveTurnLoopCollect(),
-   HANDOFF.md v0.15) - it's a dead pipe this phone hasn't noticed yet. Runs the exact same
-   verifyConnectionAlive() check as a real foreground event, just triggered by silence instead
-   of a lifecycle signal - not a second mechanism. */
+   HANDOFF.md v0.15) - it's a dead pipe this phone hasn't noticed yet. v0.20: upgraded from a
+   plain verifyConnectionAlive() ping check to a full triggerRecalibration() - the whole point
+   of this session's root-cause finding is that a successful ping is NOT proof this client's
+   state is actually current, so silence this long deserves a real fresh snapshot, not just a
+   round-trip check. */
 const SILENCE_WATCHDOG_MS=45000;
 setInterval(()=>{
   if(!NET.online||!NET.wantConnection||!G||G.over)return;
   if(NET.mySeat===G.turn)return;   // it's my own turn - I'm not waiting on the server right now
-  if(Date.now()-NET.lastMsgAt>SILENCE_WATCHDOG_MS)verifyConnectionAlive();
+  if(Date.now()-NET.lastMsgAt>SILENCE_WATCHDOG_MS)triggerRecalibration();
 },10000);
 /* v0.15: a single generic FIFO queue replaces the old per-kind/per-seat armMoveWait()/
    armReshuffleWait() waiters - the server now produces ONE strictly-ordered, fully
@@ -4338,6 +4471,12 @@ function commitMove(seat,m,cardEl){
   // must be silently dropped rather than sent (online) or applied (offline, for symmetry/
   // belt-and-suspenders even though offline never reboots mid-game today).
   if(CUR_GEN!==NETGEN)return;
+  // v0.20: input lock while a fresh authoritative snapshot is in flight (§ RECALIBRATION) -
+  // this client's OWN idea of the board might be stale right now, so a move computed against
+  // it must never be sent. Covers both the visible-chip case and the brief pre-chip window
+  // right at trigger time (there's no UI delay between setting recalActive and this guard
+  // taking effect, so a scripted/automated tap can't race past it either).
+  if(NET.online&&NET.recalActive)return;
   if(NET.online){
     if(NET.moveSentForTurn)return;   // already sent for this turn - wait for the echo
     NET.moveSentForTurn=true;
@@ -4408,6 +4547,7 @@ function bootGameFromSnapshot(snapshotG,paused,tableSpeed,appliedSeq){
   // reflected in this snapshot (see gameSnapshotFields()'s `appliedSeq` field, server.js) -
   // see checkStateDigest()'s comment for why this matters.
   NET.appliedSeq=typeof appliedSeq==='number'?appliedSeq:-1;
+  NET.pendingStateCheck=null;   // v0.20: a fresh snapshot makes any older pending digest moot
   LAY=buildLayout(G.n,computeViewSeat(G.n,G.seats));
   saveLastRoom(NET.code,true);
   resetNetUiFlow();
@@ -4417,6 +4557,11 @@ function bootGameFromSnapshot(snapshotG,paused,tableSpeed,appliedSeq){
   clearToasts();
   drawBoard(); buildTable(); fitBoard(); setTimeout(fitBoard,50);
   window.G=G; window.LAY=LAY;
+  // v0.20: this IS the fresh authoritative snapshot § RECALIBRATION was waiting for - whether
+  // this boot came from a full rejoin/'sync' or the lightweight 'resync' reply, the client's
+  // state is now genuinely current again, so input unlocks and the chip clears (or drops back
+  // to hidden if nothing else is wrong).
+  endRecalibration();
   updateConnIndicator();
   if(NET.actionQueue.length)INSTANT=true;   // see the function comment above - a tiny live race, not a replay
   updatePauseUI();
@@ -4703,7 +4848,8 @@ function leaveOnlineToMenu(msg,keepRoom){
   NET.wantConnection=false;
   if(NET.ws){ try{NET.ws.close();}catch(e){} }
   Object.assign(NET,{ws:null,online:false,isHost:false,code:null,playerId:null,token:null,mySeat:-1,
-    lobby:null,seatOwners:null,actionQueue:[],pendingActionResolvers:[],pendingStateCheck:null,appliedSeq:-1,readyCheck:null});
+    lobby:null,seatOwners:null,actionQueue:[],pendingActionResolvers:[],pendingStateCheck:null,appliedSeq:-1,readyCheck:null,
+    recalActive:false,recalKind:null,recalStartedAt:null,recalFailed:false});
   if(!keepRoom)clearLastRoom();   // v0.8: leaving is a deliberate choice - don't auto-rejoin this one later
   updateConnIndicator();
   resetNetUiFlow();
@@ -5305,6 +5451,10 @@ function openLeaveConfirm(){
   // v0.16 item 2: the CPU-takeover option only makes sense online (there's a server to hand
   // the seat to) - offline/pass-and-play never shows it.
   $('btnLeaveForGood').classList.toggle('hidden',!NET.online);
+  // v0.20: "Reset connection" - reachable any time during an online game (not just while the
+  // connIndicator chip happens to be visible), per Blake's ask - see hardResetConnection()/
+  // § RECALIBRATION. Same online-only gating as "Leave for good."
+  $('btnResetConnection').classList.toggle('hidden',!NET.online);
   $('leaveConfirmOverlay').classList.remove('hidden');
 }
 function doLeaveGame(saveIt){
@@ -5343,6 +5493,11 @@ function doLeaveForGood(){
 $('btnLeaveSave').onclick=()=>doLeaveGame(true);
 $('btnLeaveDiscard').onclick=()=>doLeaveGame(false);
 $('btnLeaveForGood').onclick=doLeaveForGood;
+$('btnResetConnection').onclick=()=>{
+  $('leaveConfirmOverlay').classList.add('hidden');
+  $('pauseOverlay').classList.add('hidden');
+  hardResetConnection();
+};
 $('btnLeaveCancel').onclick=()=>$('leaveConfirmOverlay').classList.add('hidden');
 $('btnMenu').onclick=openLeaveConfirm;
 $('btnOnlineRulesOk').onclick=()=>{
@@ -5886,23 +6041,25 @@ function tryJoinOrRejoin(code,silent){
   }
 }
 
-/* ---- App-lifecycle survival (v0.8; hardened v0.16) ----
+/* ---- App-lifecycle survival (v0.8; hardened v0.16; made unconditional v0.20) ----
    iOS fully EVICTS backgrounded tabs/PWAs - coming back means a complete fresh page load
    with NO url params (handled by the boot sequence at the very bottom: silent auto-rejoin
    via the last-active-room record, see tryJoinOrRejoin above). This covers the OTHER case:
    the page actually SURVIVES backgrounding (shorter backgrounds, most non-iOS browsers, a
-   foreground PWA, or an iOS app that WKWebView chose not to evict) but its socket may have
-   quietly died while unattended. v0.16: don't just check readyState here anymore - a real
-   device report (Blake, background to send a text, come back to a frozen board while the
-   other seats kept playing server-side) traced to exactly this: WKWebView can leave a socket
-   reporting OPEN when it's actually dead. verifyConnectionAlive() (§ NET above) is the actual
-   fix - it proves the round trip still works instead of trusting the object's own state. */
+   foreground PWA, or an iOS app that WKWebView chose not to evict) but its socket - or just
+   this client's own idea of the game - may be stale.
+
+   v0.20: no longer trusts a successful ping as proof the local G is current (see
+   § RECALIBRATION's comment for the direct reproduction that shows why - a ping can succeed
+   while real actions were silently missed). While a game is actually in progress, every
+   foreground event now goes straight to triggerRecalibration() - an unconditional fresh
+   snapshot, not a conditional check. The lobby case (online but no G yet) still uses the
+   older verifyConnectionAlive() ping check, since there's no game state to recalibrate and no
+   input to lock - just a plain "is the socket still good" question. */
 function onForeground(){
   if(!NET.online)return;
-  verifyConnectionAlive();
-  // v0.15: any client can ask now (the server answers directly, no host round-trip needed
-  // anymore - see server.js's "requestStateCheck" case), not just non-host clients.
-  if(G)netSend({type:'requestStateCheck'});
+  if(G&&!G.over)triggerRecalibration();
+  else verifyConnectionAlive();
 }
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='visible'){ onForeground(); drainSoloQueue(); }

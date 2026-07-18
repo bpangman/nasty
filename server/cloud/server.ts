@@ -1489,6 +1489,10 @@ function handleWsUpgrade(req: Request, ip: string): Response {
       case "requestStateCheck": {
         // v0.15: the server answers directly (it IS the authority) — no more relaying to the
         // host's phone. Tagged with the most recent broadcast seq, same as server.js.
+        // v0.20: superseded as the client's own foreground-trigger by "resync" below (a direct
+        // fresh snapshot, not a digest compare that can only resolve once a LATER action
+        // arrives — see HANDOFF.md v0.20's root-cause writeup). Kept working, unmodified, so a
+        // pre-v0.20 client (build 16-26) still self-heals via its existing path.
         if (!ctx) return;
         const { code } = ctx;
         const cur = await kv.get<RoomMeta>(roomKey(code));
@@ -1496,6 +1500,30 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         const E = getEngine(code, cur.value);
         if (!E) return;
         broadcastRoom(code, { type: "stateCheck", afterSeq: (cur.value.nextSeq || 1) - 1, digest: gDigestServer(E.getG()) });
+        return;
+      }
+
+      case "resync": {
+        // v0.20: lightweight "give me a fresh full snapshot right now" for a client with an
+        // already-identified, presumed-healthy connection — twin of server.js's "resync" case,
+        // see HANDOFF.md v0.20. Deliberately skips every side effect "rejoin" has (no
+        // p.connected/presence/hostStatus churn) since nothing about the connection actually
+        // needed re-establishing — a client can call this on every foreground without ever
+        // rippling a spurious "X reconnected" to the rest of the table. Old (pre-v0.20) clients
+        // never send this — fully additive, no protocolVersion gate needed. Same response
+        // shape as "rejoin"'s success reply ('sync'), so the EXISTING client-side onSync()/
+        // bootGameFromSnapshot() handles it with zero new client-side message-type handling.
+        if (!ctx) return;
+        const { code, playerId } = ctx;
+        const cur = await kv.get<RoomMeta>(roomKey(code));
+        if (!cur.value || !cur.value.started) return;
+        const p = cur.value.players.find((pp) => pp.id === playerId);
+        if (!p) return;
+        const isHost = playerId === cur.value.hostPlayerId;
+        send(socket, {
+          type: "sync", lobby: lobbySnapshot(cur.value), seatOwners: cur.value.seatOwners,
+          ...gameSnapshotFields(cur.value, isHost),
+        });
         return;
       }
 

@@ -1386,10 +1386,39 @@ wss.on("connection", (ws, req) => {
         // Tags with the most recent broadcast seq (room.nextSeq-1) - this is an ON-DEMAND
         // check (someone's phone just came back from the background), not tied to any
         // particular action, so "everything broadcast so far" is the right checkpoint.
+        // v0.20: superseded as the CLIENT's own foreground-trigger (see index.html's
+        // triggerRecalibration(), which sends "resync" instead — a direct fresh snapshot beats
+        // a digest compare that can only ever get resolved by a LATER action, see HANDOFF.md
+        // v0.20's root-cause writeup). Kept working here, unmodified, purely so a pre-v0.20
+        // client (build 16-26) still gets its existing self-heal path — new clients never send
+        // this message at all.
         if (!ctx) return;
         const { room } = ctx;
         if (!room.started || !room.engine) return;
         maybeStateCheck(room, room.nextSeq - 1);
+        return;
+      }
+
+      case "resync": {
+        // v0.20: lightweight "give me a fresh full snapshot right now" for a client that
+        // already has a live, identified connection (ctx set from an earlier host/join/rejoin/
+        // reclaim on THIS SAME websocket) — see HANDOFF.md v0.20's "unconditional resync on
+        // every foreground" design. Deliberately NOT the same code path as "rejoin": rejoin
+        // assumes the connection itself needed re-establishing (touches p.connected, broadcasts
+        // presence/hostStatus to the rest of the room) — none of that is warranted here, since
+        // by construction this message can only arrive over a socket the server already thinks
+        // is fine. Skipping those side effects means a client can call this on EVERY single
+        // foreground without ever causing a spurious "X reconnected" ripple for anyone else at
+        // the table. Old (pre-v0.20) clients never send this message — fully additive, no
+        // protocolVersion gate needed. Same response shape as "rejoin"'s success reply
+        // ('sync'), so the client's EXISTING onSync()/bootGameFromSnapshot() handles it with
+        // zero new client-side message-type handling.
+        if (!ctx) return;
+        const { room, playerId } = ctx;
+        const p = room.players.get(playerId);
+        if (!p || !room.started || !room.engine) return;
+        const isHost = playerId === room.hostPlayerId;
+        send(ws, Object.assign({ type: "sync", lobby: lobbySnapshot(room), seatOwners: room.seatOwners }, gameSnapshotFields(room, isHost)));
         return;
       }
 

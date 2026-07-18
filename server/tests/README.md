@@ -23,6 +23,7 @@ server take `SERVER=deno` as an env var.
 | `soak_offline.js` | the standing offline soak recipe (`#autotest` 4P / `#autotest6` 6P), bit-identical-offline regression check | `node soak_offline.js both` |
 | `test_v16_features.js` | v0.16 items 2/4/6: ready-up gate, "Leave for good" CPU takeover + leaderboard exclusion, non-host pauseToggle reaching everyone | `node test_v16_features.js node` / `node test_v16_features.js deno` |
 | `test_push_notifications.js` | v0.16 item 5: `registerPush` accepted + persisted, no push while connected, exactly-once would-send-push log on disconnect (with the right token/name), no push for a seat with no registered token | `node test_push_notifications.js node` / `node test_push_notifications.js deno` |
+| `test_recalibration.js` | v0.20: the "resync" wire message (live-connection fresh snapshot, no presence ripple, silently ignored if never identified); the ACTUAL root-cause reproduction (silent background-freeze drift + genuine table idle, no self-heal without this fix); input lock during recalibration; the failure path + tap-to-reset recovery; killing the server mid-recalibration then restarting and recovering via Reset connection; a pre-v0.20 client (never sends "resync") still playing normally against the new server | `node test_recalibration.js node` / `node test_recalibration.js deno` |
 
 Expected results as of v0.15 (2026-07-16) are recorded in HANDOFF.md's v0.15 section - if a
 run here diverges from those numbers, treat it as a regression until proven otherwise.
