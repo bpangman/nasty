@@ -52,6 +52,14 @@ async function waitHealthy() {
 // (the same function a real tap ends in calling). reducedMotion:'reduce' floors SPEED at 6
 // (the app's own accessibility behavior), so a full game runs at soak-test speed.
 async function playSoloGame(page, playerName) {
+  // v0.19.2 made startGame() HOLD the very first deal behind the one-time speed picker on a
+  // device that never answered it - which a fresh Playwright profile never has, so without
+  // this the game never deals and this scenario times out on its whole 8-minute budget
+  // (exactly what happened when this suite was first re-run after v0.19.2 shipped; scenario
+  // (c) was unaffected because ONLINE entry points resolve the picker before the lobby, not
+  // at deal time - see gateOnSpeedPicker()'s comment in index.html). Mark the choice made up
+  // front, the same localStorage flag the app's own markSpeedChosen() writes.
+  await page.evaluate(() => { try { localStorage.setItem('nasty-speed-chosen', '1'); } catch (e) {} });
   await page.evaluate((name) => {
     CFG.n = 4; CFG.teams = false;
     CFG.seatMeta[4] = [
