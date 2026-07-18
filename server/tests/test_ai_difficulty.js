@@ -16,31 +16,51 @@
 //   5. All-Nasty (hard vs hard) games still finish - no stalling from the deeper search.
 //   6. Nasty's own chooseAI() wall-clock time stays inside the ~50ms/decision performance
 //      budget (same code drives every CPU turn on phones AND on the cloud server).
-// A NOTE ON THE THRESHOLDS BELOW (3 and 4): Blake's original brief asked for >=65% vs the frozen
-// old policy and >=85% vs Tricky. Both numbers were chased hard this session (see HANDOFF.md's
-// v0.18 section for the full sweep history, including two designs that were tried and measurably
-// DIDN'T work, and two real bugs found and fixed along the way). Multiple large runs (N=200-400)
-// at the shipped LOOKAHEAD_W landed new-vs-old in the 64.5-72% range (mean ~67%) and new-vs-
-// Tricky in the 80.5-86.7% range (mean ~83%) - i.e. the true rates sit close to, and often above,
-// Blake's numbers, but a fixed 200/60-game CI sample is noisy enough at these true rates that a
-// dead-on-65%/85% threshold would make this an occasionally-flaky test, not a real regression
-// signal. Same philosophy as the pre-existing Easy/Tricky checks below (thresholds set well under
-// their own dev-time measurements) - the CI floor here is set under the measured mean so this
-// test still FAILS hard if a future change actually breaks the improvement, without flaking on
-// ordinary game-to-game variance.
+//
+// v0.21 fairness fix (audit, 2026-07-18): cloneG() (index.html § AI) used to hand rolloutValue()
+// the REAL hidden state - every opponent's (and partner's, in teams) ACTUAL hand and the REAL
+// remaining deck in its REAL order - so the rollout was replaying the real hidden future with
+// perfect information instead of a plausible guess. That was genuine peeking, not a tuning
+// choice, so it's fixed regardless of what it does to the numbers below: cloneG(seat) now pools
+// and reshuffles every OTHER seat's cards plus the deck before handing them to the simulation,
+// keeping only `seat`'s own hand and the (already public) discard pile real. See index.html's
+// cloneG() comment for the mechanics and server/tests/test_deck_conservation.js for the card-
+// count-preserved sanity check on the redistribution itself.
+// Removing that illegitimate info advantage measurably weakens Nasty's edge, as expected - a fair
+// rollout simply knows less than a peeking one. Retuned (LOOKAHEAD_W 0.06->0.05, AI_TIERS.hard
+// deny 2.2->2.4, ruthless 70->150; Easy/Tricky's own AI_TIERS entries and code path untouched) to
+// win back as much ground as a FAIR rollout honestly can:
+//   - New Nasty vs Tricky: now measures ~74-80% across large (N=250-400) confirmation runs (mean
+//     ~77%) - down from the peeking era's 80.5-91.7% (mean ~83%), but still comfortably clear of
+//     old Nasty's own 76.8% vs Tricky, so the tier ladder is intact and Nasty is still clearly the
+//     hardest tier. GAMES_TRICKY bumped 60->150 and NEW_HARD_VS_TRICKY_MIN lowered 0.72->0.68 (a
+//     small-N=60 CI sample of a true ~77% rate can land as low as 70%, observed directly during
+//     this session's tuning - the larger N plus the slightly lower floor keeps this a real
+//     regression signal without flaking on ordinary variance, same philosophy as before).
+//   - New Nasty vs the frozen v0.17 policy: now measures ~44-59% across many large confirmation
+//     runs (mean ~50%, i.e. essentially a coin flip) - down from the peeking era's 64.5-72% (mean
+//     ~67%). This is the honest, expected cost of the fix: a large chunk of that old margin was
+//     the illegitimate info advantage, not a genuinely smarter policy, and no amount of retuning
+//     ruthless/deny/LOOKAHEAD_W (all swept this session) reliably restored it - every combination
+//     tried landed new-vs-old somewhere in the mid-40s to mid-50s. NEW_HARD_VS_OLD_HARD_MIN
+//     lowered 0.55->0.42 (comfortably under the observed floor, same margin-for-variance
+//     philosophy) so this check still catches a real regression (new Nasty measurably WORSE than
+//     the simple old one-ply policy) without asserting a "beats old Nasty" claim that a fair
+//     rollout can no longer honestly promise. What matters for the game - Nasty still clearly and
+//     consistently beating Tricky, with no cheating - holds.
 const { createEngine } = require("../engine.js");
 
 const GAMES = 30;              // hard-vs-easy / easy-vs-random - CI-reasonable, not the acceptance run
 const GAMES_RANDOM = 40;
 const GAMES_TRICKY_EASY = 40;  // "Tricky unchanged" sanity check
-const GAMES_OLD_HARD = 200;    // new Nasty vs frozen v0.17 Nasty - dev-time mean ~67%, see note above
-const GAMES_TRICKY = 60;       // new Nasty vs Tricky - dev-time mean ~83%, see note above
+const GAMES_OLD_HARD = 200;    // new (fair) Nasty vs frozen v0.17 Nasty - dev-time mean ~50%, see note above
+const GAMES_TRICKY = 150;      // new (fair) Nasty vs Tricky - dev-time mean ~77%, see note above (bumped from 60 for stability)
 
 const HARD_VS_EASY_MIN = 0.65;    // dev-time v0.17 measured 91.5% (old hard); new hard is only stronger
 const EASY_VS_RANDOM_MIN = 0.55;  // dev-time measured 75.5%; margin for variance
 const TRICKY_VS_EASY_MIN = 0.55;  // dev-time (v0.17) measured 76.4%; "unchanged" sanity floor
-const NEW_HARD_VS_OLD_HARD_MIN = 0.55;   // dev-time mean ~67% (64.5-72% across N=200-400 runs); margin for variance
-const NEW_HARD_VS_TRICKY_MIN = 0.72;     // dev-time mean ~83% (80.5-86.7% across N=60-200 runs); margin for variance - still well above old Nasty's own 76.8% vs Tricky
+const NEW_HARD_VS_OLD_HARD_MIN = 0.42;   // v0.21 fairness fix: dev-time mean ~50% (44-59% range) post-fix, down from ~67% pre-fix; see the v0.21 note above for why this is expected and acceptable
+const NEW_HARD_VS_TRICKY_MIN = 0.68;     // v0.21 fairness fix: dev-time mean ~77% (70-80% range) post-fix, down from ~83% pre-fix but still well above old Nasty's own 76.8% vs Tricky; see the v0.21 note above
 const DECISION_BUDGET_MS = 50;
 
 function log(...a) { console.log("[ai-difficulty]", ...a); }

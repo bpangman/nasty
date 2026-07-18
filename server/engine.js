@@ -658,7 +658,7 @@ function createEngine(){
   const AI_TIERS={
     easy:  {strat:0.15,jitter:95, deny:0.5, ply2:false, ruthless:0},    // UNCHANGED from v0.17
     medium:{strat:0.5, jitter:35, deny:1,   ply2:false, ruthless:0},    // "Tricky" - UNCHANGED from v0.17
-    hard:  {strat:1,   jitter:0,  deny:2.2, ply2:true,  ruthless:70},   // "Nasty" - v0.18 overhaul, see below
+    hard:  {strat:1,   jitter:0,  deny:2.4, ply2:true,  ruthless:150},   // "Nasty" - v0.18 overhaul, see below
   };
   /* v0.18 (2026-07-16, difficulty overhaul): Blake's ask was blunt - "make nasty difficulty damn
      near impossible." The v0.17 Nasty was still only a ONE-PLY scored move choice (the shared
@@ -707,17 +707,44 @@ function createEngine(){
        relative to scoreMove's own scale; this makes the "kill shot" close to un-ignorable, which
        is exactly the "ruthless when someone's a couple of moves from winning" behavior Blake asked
        for, without touching Easy/Tricky's math at all (P.ruthless is 0 there). */
-  const LOOKAHEAD_W=0.06, LOOKAHEAD_WIN_BONUS=1e6;   // tuned via harness sweep, see HANDOFF.md's v0.18 section
-  function cloneG(){                                   // throwaway sim state - shares static fields, deep-copies mutable ones
-    // deck MUST be a real copy (.slice()), not the same array reference: rolloutValue() below can
-    // call dealDecision() inside the simulation, which does G.deck.pop() - sharing the real deck
-    // array here would let a throwaway rollout silently eat cards out of the ACTUAL game's deck.
-    // Caught via a real crash in testing (a later real deal came up with undefined cards) before
-    // this ever shipped - worth keeping this comment so nobody "simplifies" it back to a reference.
+  const LOOKAHEAD_W=0.05, LOOKAHEAD_WIN_BONUS=1e6;   // tuned via harness sweep, see HANDOFF.md's v0.18 section
+  function cloneG(seat){                               // throwaway sim state - shares static fields, deep-copies mutable ones
+    // deck MUST be a real copy (never the same array reference): rolloutValue() below can call
+    // dealDecision() inside the simulation, which does G.deck.pop() - sharing the real deck array
+    // here would let a throwaway rollout silently eat cards out of the ACTUAL game's deck. Caught
+    // via a real crash in testing (a later real deal came up with undefined cards) before this
+    // ever shipped - worth keeping this comment so nobody "simplifies" it back to a reference.
+    //
+    // v0.21 fairness fix (audit, 2026-07-18): the rollout must only see information a real player
+    // sitting in `seat` would legitimately know. `seat`'s own hand is legitimate (it's their own
+    // cards) and G.discard is legitimate (face-up, public) - both copied straight across, same as
+    // before. Every OTHER seat's hand - INCLUDING a partner's in teams mode, RULES.md is explicit
+    // partners' cards stay hidden from each other - and the undealt deck's card identities/order
+    // are hidden information nobody at the table (let alone the AI) is supposed to see. The old
+    // code copied those real, so the rollout was replaying the REAL hidden future (every
+    // opponent's actual cards, the actual next cards off the deck) instead of a plausible guess -
+    // genuine peeking, not a bug in the simulation's mechanics. Fix: pool every card from every
+    // OTHER seat's hand plus the whole remaining deck, shuffle that pool, then hand it back out -
+    // each other seat gets a hand of the SAME SIZE it currently holds (so hand-size-dependent
+    // logic like handOver()/seatsWithCards() still behaves identically) and whatever's left over
+    // becomes the new deck (same LENGTH, so needsReshuffle()/schedule bookkeeping is unaffected).
+    // Board/pieces state needs no change - it's always public, never hidden info. Total card count
+    // is exactly preserved by construction (the pool's size never changes, only its order and how
+    // it's sliced back out) - see server/tests/test_deck_conservation.js for the automated check.
+    const pool=[];
+    for(let s=0;s<G.n;s++)if(s!==seat)for(const c of G.hands[s])pool.push(c);
+    for(const c of G.deck)pool.push(c);
+    for(let i=pool.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[pool[i],pool[j]]=[pool[j],pool[i]];}
+    let pi=0;
+    // fresh arrays every time (pool.slice()/h.slice()) - never a reference into `pool` itself or
+    // into the real G.hands/G.deck arrays, so a rollout's dealDecision()/applyMove() mutating the
+    // clone can never reach back and corrupt real state.
+    const hands=G.hands.map((h,s)=>s===seat?h.slice():pool.slice(pi,pi+=h.length));
+    const deck=pool.slice(pi);
     return {
       n:G.n,teams:G.teams,seats:G.seats,
       pieces:G.pieces.map(arr=>arr.map(p=>({state:p.state,steps:p.steps}))),
-      hands:G.hands.map(h=>h.slice()),deck:G.deck.slice(),discard:G.discard.slice(),
+      hands,deck,discard:G.discard.slice(),
       schedule:G.schedule,schedRound:G.schedRound,dealer:G.dealer,turn:G.turn,
       passStreak:G.passStreak,over:G.over,winners:G.winners.slice(),
       bowedOut:G.bowedOut.slice(),dealSeq:G.dealSeq,actionSeq:G.actionSeq,paused:G.paused,gameId:G.gameId
@@ -781,7 +808,7 @@ function createEngine(){
     if(P.ply2&&pool.length>1){
       const realG=G;
       for(const entry of scored){
-        G=cloneG();
+        G=cloneG(seat);
         applyMove(seat,entry.m);   // real engine mutation, on the throwaway clone only
         entry.s2=G.over?entry.s+LOOKAHEAD_WIN_BONUS:entry.s+LOOKAHEAD_W*rolloutValue(seat);
         G=realG;
