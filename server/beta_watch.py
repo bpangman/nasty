@@ -61,13 +61,13 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 23 reached the family</h1>
+<h1 style="color:#1a5c38">🎉 Build 24 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>This build fixes the leaderboard: on a phone screen the table was wider than the screen,
-so the Points column (the one showing the difficulty based scoring) was sitting off the
-right edge behind a scroll nobody noticed. It wasn't a scoring bug - the points were being
-tracked correctly the whole time, they just weren't visible. Every column - Player, Games,
-Wins, Win percent, Points - now fits on one line on any iPhone, no scrolling needed.</p>
+<p>This build fixes the first-game speed pop-up: before, the computer players were already
+making moves on the board behind the pop-up while you were still deciding. Now the game
+holds completely still - no cards dealt, nobody moves - until you pick your speed, and the
+very first deal plays at the pace you chose. Same idea online: the speed question now comes
+up before you enter a game room, never on top of a live table.</p>
 <h3>📱 The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
 <a href="https://testflight.apple.com/join/d79YpZea">https://testflight.apple.com/join/d79YpZea</a></p>
@@ -81,7 +81,7 @@ Wins, Win percent, Points - now fits on one line on any iPhone, no scrolling nee
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 23 is live for the family 🎉', body], check=True)
+                    'NASTY: build 24 is live for the family 🎉', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED - email sent, watcher done')
 except Exception as e:
