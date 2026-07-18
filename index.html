@@ -1014,6 +1014,10 @@ button{font:inherit;cursor:pointer}
 <div id="lbOverlay" class="overlay hidden">
   <div class="modalCard">
     <h3>🏆 Leaderboard</h3>
+    <div class="segs" style="margin-bottom:8px">
+      <button class="seg on" id="lbTabSolo">Solo</button>
+      <button class="seg" id="lbTabTeams">Teams</button>
+    </div>
     <div id="lbBody"></div>
     <p style="font-size:12.5px;color:#9ec7aa">Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a human - humans only, CPUs never show up here.</p>
     <div class="bigBtns"><button class="btn primary" id="btnLbClose">Close</button></div>
@@ -5612,13 +5616,19 @@ $('btnRoomText').onclick=()=>{
    beat, 2 for every Tricky CPU, 3 for every Nasty CPU, and 3 for every human opponent you
    beat (teammates don't count) - a win over 3 Nasty CPUs is 3+3+3=9. Every human seat on the
    winning side earns the full total, not a split share.
-   Storage: everything here is under NEW "h"-prefixed keys (hg4s/hw4s/.../hpts) - deliberately
-   NOT the old g4s/w4s keys (which used to include CPU seats too). This means old data is
-   never touched or destroyed, but the leaderboard display only ever reads the new human-only
-   keys, so any old CPU-tainted entries are naturally filtered out of view. Online games are
-   recorded to the SHARED SERVER leaderboard instead of this device's local storage (see
-   recordWin below) - otherwise a family game would get double-counted (once locally per
-   phone, once globally).
+   Storage: everything here is under NEW "h"-prefixed keys (hg4s/hw4s/hg4t/hw4t/hg6s/hw6s/
+   hg6t/hw6t/.../hptsS/hptsT) - deliberately NOT the old g4s/w4s keys (which used to include
+   CPU seats too). This means old data is never touched or destroyed, but the leaderboard
+   display only ever reads the new human-only keys, so any old CPU-tainted entries are
+   naturally filtered out of view. Online games are recorded to the SHARED SERVER leaderboard
+   instead of this device's local storage (see recordWin below) - otherwise a family game would
+   get double-counted (once locally per phone, once globally).
+   v0.21: points used to be one aggregate "hpts" field; the leaderboard overlay now has 2 tabs
+   (Solo, Teams), so points are stored per mode-family instead: hptsS for solo/free-for-all
+   wins, hptsT for team wins (see buildResultEntries() above). The old aggregate "hpts" key is
+   no longer written by this client - see server.js/cloud/server.ts for how already-shipped
+   old app builds (which still send plain hpts) get attributed to the right split bucket, and
+   how points already on disk from before this split got migrated once at boot.
    v0.13: OFFLINE games (solo vs-CPU, and pass-and-play) now sync the same way - the family
    expects ONE board that counts every game from any phone, not "online only." A finished
    offline game still writes to this device's own local "nasty-stats" (unchanged, instant,
@@ -5654,12 +5664,20 @@ function pointsForWin(winSet){ return pointsBreakdown(winSet).pts; }
 // Human-only per-seat deltas for this finished game, same shape whether it ends up going to
 // the online recordResult message or the offline solo-result HTTP POST - factored out so
 // both paths (and the offline local-stats write) compute identical numbers from one place.
+// v0.21: leaderboard split into Solo/Teams tabs - points are now stored per mode-family
+// instead of one aggregate. mode's last char ('s'/'t') picks which split key a win's points
+// land in: hptsS (solo/free-for-all wins) or hptsT (team wins). Deliberately NOT also writing
+// the old aggregate hpts anymore - the split keys are now the single source of truth going
+// forward, so there's nothing left to drift out of sync with them (see HANDOFF.md for the
+// legacy-server-attribution + one-time migration that handles data already on disk from
+// before this split, and old app builds that still send plain hpts forever).
 function buildResultEntries(mode,winSet){
   const entries=[];
+  const isTeam=mode.endsWith('t');
   G.seats.forEach((seat,i)=>{
     if(seat.type!=='human')return;
     const delta={}; delta['hg'+mode]=1;
-    if(winSet.has(i)){ delta['hw'+mode]=1; delta.hpts=pointsForWin(winSet); }
+    if(winSet.has(i)){ delta['hw'+mode]=1; delta[isTeam?'hptsT':'hptsS']=pointsForWin(winSet); }
     entries.push({name:seat.name,delta});
   });
   return entries;
@@ -5809,22 +5827,46 @@ function mergeQueuedIntoGlobal(global,queue){
   }
   return out;
 }
+/* v0.21: leaderboard split into 2 tabs - Solo (free-for-all) and Teams. renderLb() now reads
+   whichever mode-family's keys match the active tab (lbTab) instead of summing all four modes
+   together. Same table shape either way (Player/Games/Wins/Win%/Points) - just a different
+   pair of hg/hw keys and a different points key feeding it. lbLastStats holds whatever was most
+   recently rendered (local-only or merged-global) so switching tabs re-renders instantly
+   without waiting on another network round trip. */
+let lbTab='solo';
+let lbLastStats={};
 function renderLb(st){
+  lbLastStats=st;
   const names=Object.keys(st);
-  if(!names.length){$('lbBody').innerHTML='<p>No games yet - go play one!</p>';return;}
   const v=(n,k)=>st[n][k]||0;
-  const wins=n=>v(n,'hw4s')+v(n,'hw4t')+v(n,'hw6s')+v(n,'hw6t');
-  const games=n=>Math.max(v(n,'hg4s')+v(n,'hg4t')+v(n,'hg6s')+v(n,'hg6t'),wins(n));
-  const pts=n=>v(n,'hpts');
+  const isTeam=lbTab==='teams';
+  const wins=n=>isTeam?(v(n,'hw4t')+v(n,'hw6t')):(v(n,'hw4s')+v(n,'hw6s'));
+  const games=n=>Math.max(isTeam?(v(n,'hg4t')+v(n,'hg6t')):(v(n,'hg4s')+v(n,'hg6s')),wins(n));
+  const pts=n=>v(n,isTeam?'hptsT':'hptsS');
   const pct=n=>games(n)?Math.round(wins(n)/games(n)*100)+'%':'-';
-  names.sort((a,b)=>pts(b)-pts(a)||wins(b)-wins(a)||games(a)-games(b));
+  const active=names.filter(n=>games(n)>0);
+  if(!active.length){
+    $('lbBody').innerHTML=`<p>No ${isTeam?'team':'solo'} games yet - go play one!</p>`;
+    return;
+  }
+  active.sort((a,b)=>pts(b)-pts(a)||wins(b)-wins(a)||games(a)-games(b));
   $('lbBody').innerHTML=`<div class="lbScroll"><table class="lbTable"><tr><th>Player</th>
     <th>Games</th><th>Wins</th><th>Win%</th><th>Points</th></tr>`+
-    names.map(n=>`<tr><td>${esc(n)}</td><td>${games(n)}</td><td>${wins(n)}</td>
+    active.map(n=>`<tr><td>${esc(n)}</td><td>${games(n)}</td><td>${wins(n)}</td>
       <td>${pct(n)}</td><td>${pts(n)}</td></tr>`).join('')+`</table></div>`;
 }
+function setLbTab(tab){
+  lbTab=tab;
+  $('lbTabSolo').classList.toggle('on',tab==='solo');
+  $('lbTabTeams').classList.toggle('on',tab==='teams');
+  renderLb(lbLastStats);
+}
+$('lbTabSolo').onclick=()=>setLbTab('solo');
+$('lbTabTeams').onclick=()=>setLbTab('teams');
 $('btnLb').onclick=()=>{
   $('lbOverlay').classList.remove('hidden');
+  lbTab='solo';   // v0.21: Solo is always the tab shown when the leaderboard is (re)opened
+  $('lbTabSolo').classList.add('on'); $('lbTabTeams').classList.remove('on');
   const local=loadStats();
   renderLb(local);   // show local instantly, then upgrade to the real shared board if the server answers
   fetchGlobalLeaderboard().then(g=>{
@@ -6196,16 +6238,20 @@ async function refreshAdminPanel(){
     const names=Object.keys(lb);
     $('adminLb').innerHTML=names.length?names.map(n=>{
       const r=lb[n];
-      const pts=(r.hpts||0);
+      const ptsS=(r.hptsS||0), ptsT=(r.hptsT||0);
+      // v0.21: points are split solo/teams now - one input per bucket, both PATCHed together.
       return `<div class="lobbySeat"><span class="nm">${esc(n)}</span>
-        <span class="st">pts: <input class="adminPtsInput" data-name="${esc(n)}" type="number" style="width:56px" value="${pts}"></span>
+        <span class="st">solo pts: <input class="adminPtsInput" data-field="hptsS" data-name="${esc(n)}" type="number" style="width:56px" value="${ptsS}"></span>
+        <span class="st">team pts: <input class="adminPtsInput" data-field="hptsT" data-name="${esc(n)}" type="number" style="width:56px" value="${ptsT}"></span>
         <button data-name="${esc(n)}" class="adminSavePts">Save</button>
         <button data-name="${esc(n)}" class="adminDelLb">Delete</button></div>`;
     }).join(''):'<p style="font-size:13px;color:#a9d2b5">No entries yet.</p>';
     $('adminLb').querySelectorAll('.adminSavePts').forEach(b=>b.onclick=async()=>{
-      const input=$('adminLb').querySelector(`.adminPtsInput[data-name="${b.dataset.name}"]`);
+      const inputs=$('adminLb').querySelectorAll(`.adminPtsInput[data-name="${b.dataset.name}"]`);
+      const body={};
+      inputs.forEach(inp=>{ body[inp.dataset.field]=parseInt(inp.value,10)||0; });
       await adminFetch('/admin/leaderboard/'+encodeURIComponent(b.dataset.name),
-        {method:'PATCH',body:JSON.stringify({hpts:parseInt(input.value,10)||0})});
+        {method:'PATCH',body:JSON.stringify(body)});
       refreshAdminPanel();
     });
     $('adminLb').querySelectorAll('.adminDelLb').forEach(b=>b.onclick=async()=>{

@@ -234,16 +234,92 @@ function checkAdminToken(req: Request, url: URL): boolean {
 /* ---------------------------------------------------------------------------------------
  * § LEADERBOARD — Deno.KvU64 atomic counters, see file header point 1.
  * ------------------------------------------------------------------------------------- */
-const NUMERIC_STAT_KEY = /^(hg[46][st]|hw[46][st]|hpts)$/;
+// v0.21: leaderboard split into Solo/Teams tabs client-side - the aggregate "hpts" key is
+// replaced going forward by hptsS (solo/free-for-all wins) and hptsT (team wins). hpts itself
+// is deliberately NOT in this regex anymore - see applyLeaderboardEntry()'s legacy-attribution
+// logic just below for how an OLD client's plain "hpts" delta still gets accepted and
+// redirected into the correct split key, and migrateLegacyLeaderboardPoints() further below
+// for the one-time startup migration of points already in KV from before this split. Twin of
+// server.js's matching block - keep both in sync.
+const NUMERIC_STAT_KEY = /^(hg[46][st]|hw[46][st]|hptsS|hptsT)$/;
 async function applyLeaderboardEntry(name: unknown, delta: unknown) {
   const clean = cleanName(name, "");
   if (!clean || isBadName(clean) || !delta || typeof delta !== "object") return;
-  for (const k of Object.keys(delta as Record<string, unknown>)) {
-    if (!NUMERIC_STAT_KEY.test(k)) continue;
-    const v = Number((delta as Record<string, unknown>)[k]);
-    if (!Number.isFinite(v)) continue;
-    await kv.atomic().sum(["leaderboard", clean, k], BigInt(Math.round(v))).commit();
+  const d = delta as Record<string, unknown>;
+  // Legacy pre-split clients (already shipped, can't be changed) still send a plain "hpts" key
+  // instead of hptsS/hptsT. Every delta this app has ever produced always carries exactly one
+  // "hg"+mode key alongside it - use THAT sibling key's mode (last char 's'/'t') to redirect a
+  // legacy "hpts" value into the correct split bucket. If there's no sibling mode key to read
+  // from, the points can't be safely attributed to either bucket, so they're dropped rather
+  // than guessed - twin of server.js's matching logic.
+  let legacyPtsTarget: string | null = null;
+  if (Object.prototype.hasOwnProperty.call(d, "hpts")) {
+    const modeKey = Object.keys(d).find((k) => /^h[gw][46][st]$/.test(k));
+    if (modeKey) legacyPtsTarget = modeKey.endsWith("t") ? "hptsT" : "hptsS";
   }
+  for (const k of Object.keys(d)) {
+    const key = k === "hpts" ? legacyPtsTarget : k;
+    if (!key || !NUMERIC_STAT_KEY.test(key)) continue;
+    const v = Number(d[k]);
+    if (!Number.isFinite(v)) continue;
+    await kv.atomic().sum(["leaderboard", clean, key], BigInt(Math.round(v))).commit();
+  }
+}
+/* v0.21 § LEADERBOARD SPLIT MIGRATION — startup, idempotent. Twin of server.js's matching
+   function, adapted to KV having no single "load everything" boot moment: iterate every
+   ["leaderboard"] key, group by player name, and for each player missing BOTH hptsS and hptsT
+   but holding a nonzero legacy "hpts" counter, derive the split the same way server.js does
+   (unambiguous if only one side has nonzero games; otherwise split proportionally by each
+   side's wins ratio, falling back to a games-ratio split if wins are all zero on both sides).
+   Guarded by ensureLeaderboardMigrated() below so it only actually runs once per isolate -
+   safe to call it unconditionally from every request. */
+async function migrateLegacyLeaderboardPoints(): Promise<void> {
+  const byName: Record<string, Record<string, number>> = {};
+  for await (const e of kv.list<Deno.KvU64>({ prefix: ["leaderboard"] })) {
+    const name = String(e.key[1]);
+    const statKey = String(e.key[2]);
+    byName[name] = byName[name] || {};
+    byName[name][statKey] = Number(e.value.value);
+  }
+  let migrated = 0;
+  for (const name of Object.keys(byName)) {
+    const r = byName[name];
+    if (r.hptsS !== undefined || r.hptsT !== undefined) continue; // already split - idempotent skip
+    const hpts = r.hpts || 0;
+    if (!hpts) continue; // nothing to split
+    const soloGames = (r.hg4s || 0) + (r.hg6s || 0);
+    const teamGames = (r.hg4t || 0) + (r.hg6t || 0);
+    let hptsS: number;
+    if (soloGames > 0 && teamGames === 0) {
+      hptsS = hpts;
+    } else if (teamGames > 0 && soloGames === 0) {
+      hptsS = 0;
+    } else {
+      const soloWins = (r.hw4s || 0) + (r.hw6s || 0);
+      const teamWins = (r.hw4t || 0) + (r.hw6t || 0);
+      const totalWins = soloWins + teamWins;
+      if (totalWins > 0) {
+        hptsS = Math.round(hpts * soloWins / totalWins);
+      } else {
+        const totalGames = soloGames + teamGames;
+        hptsS = totalGames > 0 ? Math.round(hpts * soloGames / totalGames) : 0;
+      }
+    }
+    const hptsT = hpts - hptsS;
+    await kv.set(["leaderboard", name, "hptsS"], new Deno.KvU64(BigInt(hptsS)));
+    await kv.set(["leaderboard", name, "hptsT"], new Deno.KvU64(BigInt(hptsT)));
+    migrated++;
+  }
+  if (migrated) log("migrated", migrated, "leaderboard entries to split solo/team points");
+}
+let lbMigrationReady: Promise<void> | null = null;
+// Same lazy-once-per-isolate pattern as ensureKv() above (see that comment for why nothing
+// here can run at module/top-level scope on this platform) - called from handler() right after
+// ensureKv() resolves, so every request path is covered, but the actual KV scan+write only
+// ever happens once per isolate.
+function ensureLeaderboardMigrated(): Promise<void> {
+  if (!lbMigrationReady) lbMigrationReady = migrateLegacyLeaderboardPoints();
+  return lbMigrationReady;
 }
 async function getLeaderboard(): Promise<Record<string, Record<string, number>>> {
   const out: Record<string, Record<string, number>> = {};
@@ -505,12 +581,13 @@ function pointsForWinServer(G: any, winSet: Set<number>): number {
 }
 function buildResultEntriesServer(G: any): { name: string; delta: Record<string, number> }[] {
   const mode = (G.n === 4 ? "4" : "6") + (G.teams ? "t" : "s");
+  const isTeam = mode.endsWith("t");
   const winSet = new Set<number>(G.winners);
   const entries: { name: string; delta: Record<string, number> }[] = [];
   G.seats.forEach((seat: any, i: number) => {
     if (seat.type !== "human") return;
     const delta: Record<string, number> = {}; delta["hg" + mode] = 1;
-    if (winSet.has(i)) { delta["hw" + mode] = 1; delta.hpts = pointsForWinServer(G, winSet); }
+    if (winSet.has(i)) { delta["hw" + mode] = 1; delta[isTeam ? "hptsT" : "hptsS"] = pointsForWinServer(G, winSet); }
     entries.push({ name: seat.name, delta });
   });
   return entries;
@@ -1674,6 +1751,7 @@ function handleWsUpgrade(req: Request, ip: string): Response {
 async function handler(req: Request, info: Deno.ServeHandlerInfo): Promise<Response> {
   await ensureKv(); // see the lazy-init comment above `let kv` — must happen before ANY of
   // this request's code paths (HTTP routes below, or the WS upgrade they dispatch to) touch kv.
+  await ensureLeaderboardMigrated(); // v0.21: one-time-per-isolate split-points migration, see above
   const url = new URL(req.url);
   const ip = remoteIp(req, info);
 

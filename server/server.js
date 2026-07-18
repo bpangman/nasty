@@ -233,18 +233,85 @@ function persistLeaderboardNow() {
   try { fs.writeFileSync(LEADERBOARD_FILE, JSON.stringify(globalBoard)); }
   catch (e) { log("leaderboard persist failed", e.message); }
 }
-const NUMERIC_STAT_KEY = /^(hg[46][st]|hw[46][st]|hpts)$/;
+// v0.21: leaderboard split into Solo/Teams tabs client-side - the aggregate "hpts" key is
+// replaced going forward by hptsS (solo/free-for-all wins) and hptsT (team wins). hpts itself
+// is deliberately NOT in this regex anymore (nothing should be storing fresh points under that
+// literal key going forward) - see applyLeaderboardEntry()'s legacy-attribution logic just
+// below for how an OLD client's plain "hpts" delta still gets accepted and redirected into the
+// correct split key, and migrateLegacyLeaderboardPoints() further below for the one-time boot
+// migration of points already on disk from before this split.
+const NUMERIC_STAT_KEY = /^(hg[46][st]|hw[46][st]|hptsS|hptsT)$/;
 function applyLeaderboardEntry(name, delta) {
   const clean = cleanName(name, "");
   if (!clean || isBadName(clean) || !delta || typeof delta !== "object") return;
   const r = globalBoard[clean] = globalBoard[clean] || {};
+  // Legacy pre-split clients (already shipped, can't be changed) still send a plain "hpts" key
+  // instead of hptsS/hptsT. Every delta this app has ever produced always carries exactly one
+  // "hg"+mode key alongside it (see buildResultEntries()/buildResultEntriesServer() - every
+  // human seat gets an hg<mode>:1 delta whether or not it won) - use THAT sibling key's mode
+  // (last char 's'/'t') to redirect a legacy "hpts" value into the correct split bucket. If a
+  // delta somehow has "hpts" with no hg/hw sibling to read the mode from (shouldn't happen from
+  // any real client), the points can't be safely attributed to either bucket, so they're
+  // dropped rather than guessed - the games/wins counters (which already carry their own mode
+  // suffix) still get recorded normally either way.
+  let legacyPtsTarget = null;
+  if (Object.prototype.hasOwnProperty.call(delta, "hpts")) {
+    const modeKey = Object.keys(delta).find((k) => /^h[gw][46][st]$/.test(k));
+    if (modeKey) legacyPtsTarget = modeKey.endsWith("t") ? "hptsT" : "hptsS";
+  }
   for (const k of Object.keys(delta)) {
-    if (!NUMERIC_STAT_KEY.test(k)) continue;
+    const key = k === "hpts" ? legacyPtsTarget : k;
+    if (!key || !NUMERIC_STAT_KEY.test(key)) continue;
     const v = Number(delta[k]);
     if (!Number.isFinite(v)) continue;
-    r[k] = (r[k] || 0) + v;
+    r[key] = (r[key] || 0) + v;
   }
   scheduleLeaderboardPersist();
+}
+/* v0.21 § LEADERBOARD SPLIT MIGRATION — boot-time, idempotent. Entries stored before the
+   solo/teams split have an aggregate "hpts" and neither hptsS nor hptsT yet. For each such
+   player (skipped entirely if hptsS or hptsT is already present - that's what makes this safe
+   to run on every boot/deploy):
+     - if only one side has nonzero games (hg4s+hg6s for solo, hg4t+hg6t for teams), it's
+       unambiguous - all of hpts goes to that side.
+     - if BOTH sides have nonzero games, split proportionally by each side's WINS ratio
+       (falls back to a games-ratio split if wins are all zero on both sides).
+   hptsT is always computed as the exact remainder (hpts - hptsS), never rounded separately, so
+   the two split values always sum back to the original legacy hpts exactly. */
+function migrateLegacyLeaderboardPoints() {
+  let migrated = 0;
+  for (const name of Object.keys(globalBoard)) {
+    const r = globalBoard[name];
+    if (!r || typeof r !== "object") continue;
+    if (r.hptsS !== undefined || r.hptsT !== undefined) continue; // already split - idempotent skip
+    const hpts = Number(r.hpts) || 0;
+    if (!hpts) continue; // nothing to split
+    const soloGames = (r.hg4s || 0) + (r.hg6s || 0);
+    const teamGames = (r.hg4t || 0) + (r.hg6t || 0);
+    let hptsS;
+    if (soloGames > 0 && teamGames === 0) {
+      hptsS = hpts;
+    } else if (teamGames > 0 && soloGames === 0) {
+      hptsS = 0;
+    } else {
+      const soloWins = (r.hw4s || 0) + (r.hw6s || 0);
+      const teamWins = (r.hw4t || 0) + (r.hw6t || 0);
+      const totalWins = soloWins + teamWins;
+      if (totalWins > 0) {
+        hptsS = Math.round(hpts * soloWins / totalWins);
+      } else {
+        const totalGames = soloGames + teamGames;
+        hptsS = totalGames > 0 ? Math.round(hpts * soloGames / totalGames) : 0;
+      }
+    }
+    r.hptsS = hptsS;
+    r.hptsT = hpts - hptsS;
+    migrated++;
+  }
+  if (migrated) {
+    log("migrated", migrated, "leaderboard entries to split solo/team points");
+    scheduleLeaderboardPersist();
+  }
 }
 
 /* v0.13 § LEADERBOARD EPOCH — unchanged from v0.14. */
@@ -300,10 +367,11 @@ function pointsForWinServer(G, winSet) {
 }
 function buildResultEntriesServer(G, mode, winSet) {
   const entries = [];
+  const isTeam = mode.endsWith("t");
   G.seats.forEach((seat, i) => {
     if (seat.type !== "human") return;
     const delta = {}; delta["hg" + mode] = 1;
-    if (winSet.has(i)) { delta["hw" + mode] = 1; delta.hpts = pointsForWinServer(G, winSet); }
+    if (winSet.has(i)) { delta["hw" + mode] = 1; delta[isTeam ? "hptsT" : "hptsS"] = pointsForWinServer(G, winSet); }
     entries.push({ name: seat.name, delta });
   });
   return entries;
@@ -1527,6 +1595,7 @@ if (process.env.NASTY_DEBUG_DIGEST) {
 }
 loadRoomsFromDisk();
 loadLeaderboard();
+migrateLegacyLeaderboardPoints();
 loadSoloSeen();
 loadLeaderboardEpoch();
 log(`admin token file: ${ADMIN_TOKEN_FILE}`);
