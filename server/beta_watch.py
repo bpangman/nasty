@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=7a75fd9f-73ff-4c48-870f-f8b31ba9c00f&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=ad6c1120-9980-4ef3-a0fa-c98f928781fd&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -61,13 +61,13 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 24 reached the family</h1>
+<h1 style="color:#1a5c38">🎉 Build 25 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>This build fixes the first-game speed pop-up: before, the computer players were already
-making moves on the board behind the pop-up while you were still deciding. Now the game
-holds completely still - no cards dealt, nobody moves - until you pick your speed, and the
-very first deal plays at the pace you chose. Same idea online: the speed question now comes
-up before you enter a game room, never on top of a live table.</p>
+<p>This build fixes the tap bubbles over your stable: when several of your tees could come
+out at once, the bubbles used to stack into a tall column that could slightly overlap. Now
+they sit right on top of the stable in the same formation as the pegs themselves - one in
+the middle, the rest fanned to each side just like the tees below them - close to the pegs,
+never overlapping, easy to tell apart and easy to tap.</p>
 <h3>📱 The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
 <a href="https://testflight.apple.com/join/d79YpZea">https://testflight.apple.com/join/d79YpZea</a></p>
@@ -81,7 +81,7 @@ up before you enter a game room, never on top of a live table.</p>
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 24 is live for the family 🎉', body], check=True)
+                    'NASTY: build 25 is live for the family 🎉', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED - email sent, watcher done')
 except Exception as e:
