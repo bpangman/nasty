@@ -902,7 +902,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.19.3</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.19.4</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -3723,6 +3723,14 @@ function enableSelection(seat,moves){
    "hiding a tee is 3x worse than touching a bubble" fallback philosophy as the sweep.
    A single pickable base tee, and every track-state tee, are UNCHANGED from v0.19 - formation
    only kicks in when 2+ of one seat's base pieces are pickable in the same `list`.
+   v0.19.4 (Blake: "it's OK for the stable icons to cover holes and other pegs on the board - I'm
+   just thinking about bringing a new one out, so that doesn't matter"): the formation pass's
+   own-tee-hiding check now only looks at the SAME group's own pickable stable tees, not every
+   tee on the board - see groupPegPenalty() in the formation loop below. Opponent pegs, this
+   seat's track pegs, and empty holes may be freely covered. Bubble-vs-bubble spacing and the
+   on-canvas clamp are the only other constraints left, so the group now settles lower and
+   tighter over the cluster than v0.19.3. TRACK-state bubbles (the sweep below) are untouched -
+   they still avoid covering every tee on the board, same as always.
    Geometry notes (unchanged): the bubble is an 84px circle anchored bottom-center at (left,top)
    via translate(-50%,-100%); its ::after arrow tip ends 12px below that anchor - so any anchor
    this function computes must stay ABOVE (smaller y than) the tee it points at, never below. A
@@ -3779,14 +3787,33 @@ function showBubbles(list,cls){
       return {it,pos,cs:Math.sign(Math.round(pos.x-bc.x)),rs:Math.sign(Math.round(pos.y-bc.y))};
     });
     group.forEach(it=>formationKeys.add(it.s+'-'+it.pi));
+    // v0.19.4 (Blake: "it's OK for the stable icons to cover holes and other pegs on the board -
+    // those icons only show because I'm thinking about bringing a new one out, so that doesn't
+    // really matter"): the formation pass no longer checks against the GLOBAL pegs[] list (every
+    // tee on the board) - only against groupPegPenalty below, which only guards this SAME group's
+    // own pickable stable tees (the player still needs to see what they're choosing between).
+    // Opponent pegs, this seat's own track pegs, and empty holes are all fair game to cover now.
+    // Bubble-vs-bubble spacing (the GAP checks against `plan`/`placed`) and the on-canvas clampX
+    // are untouched - those are the only other constraints left. Net effect: with the board-wide
+    // penalty gone, the xMag/sweep search usually finds a zero-penalty plan at (or near) the very
+    // first radius/step tried, so the group sits lower and tighter over the cluster than v0.19.3.
+    const groupPegPenalty=(cx,cy,selfS,selfPi)=>{
+      let pen=0;
+      items.forEach(t=>{
+        if(t.it.s===selfS&&t.it.pi===selfPi)return;
+        const nx=Math.max(t.pos.x-tw,Math.min(cx,t.pos.x+tw));
+        const ny=Math.max(t.pos.y-tUp,Math.min(cy,t.pos.y+tDn));
+        const d=Math.hypot(cx-nx,cy-ny); if(d<R)pen+=(R-d)*3;
+      });
+      return pen;
+    };
     // Outer loop: grow the horizontal column offset xMag in fixed steps (mirroring the sweep's
     // style) until a fully clear plan exists. Inner: each bubble runs its OWN upward 6px sweep
     // at its column x (top rows planned first, so a bottom-row bubble's sweep naturally climbs
     // past its column-mate and stacks clear above it - a 2-tall column, not a 5-tall tower).
     // All penalties are evaluated at the CLAMPED position (clampX matches place()'s clamp), so
     // a corner cluster near the board edge can't pass the check and then get shoved back into
-    // an overlap at render time. Least-bad plan wins if nothing fully clear exists (same
-    // philosophy as the sweep: pegPenalty already weights a hidden tee 3x a touched bubble).
+    // an overlap at render time. Least-bad plan wins if nothing fully clear exists.
     const GAP=6,XGAP=8,XSTEP=10,MAXK=16;
     const clampX=x=>Math.min(1000+pad-R-4,Math.max(-pad+R+4,x));
     const order=items.slice().sort((a,b)=>(a.rs-b.rs)||(a.cs-b.cs));
@@ -3800,7 +3827,7 @@ function showBubbles(list,cls){
         let ay=startAy,best=startAy,bp=Infinity;
         for(;;){
           const cy=ay-R;
-          let p=pegPenalty(ax,cy,o.it.s,o.it.pi);
+          let p=groupPegPenalty(ax,cy,o.it.s,o.it.pi);
           plan.forEach(q=>{const d=Math.hypot(q.ax-ax,(q.ay-R)-cy);if(d<2*R+GAP)p+=2*R+GAP-d;});
           placed.forEach(q=>{const d=Math.hypot(q.x-ax,q.y-cy);if(d<2*R+GAP)p+=2*R+GAP-d;});
           if(p===0){best=ay;bp=0;break;}
