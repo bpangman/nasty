@@ -265,7 +265,7 @@ async function applyLeaderboardEntry(name: unknown, delta: unknown) {
     await kv.atomic().sum(["leaderboard", clean, key], BigInt(Math.round(v))).commit();
   }
 }
-/* v0.21 § LEADERBOARD SPLIT MIGRATION — startup, idempotent. Twin of server.js's matching
+/* v0.21 § LEADERBOARD SPLIT MIGRATION - startup, idempotent. Twin of server.js's matching
    function, adapted to KV having no single "load everything" boot moment: iterate every
    ["leaderboard"] key, group by player name, and for each player missing BOTH hptsS and hptsT
    but holding a nonzero legacy "hpts" counter, derive the split the same way server.js does

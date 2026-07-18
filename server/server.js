@@ -268,7 +268,7 @@ function applyLeaderboardEntry(name, delta) {
   }
   scheduleLeaderboardPersist();
 }
-/* v0.21 § LEADERBOARD SPLIT MIGRATION — boot-time, idempotent. Entries stored before the
+/* v0.21 § LEADERBOARD SPLIT MIGRATION - boot-time, idempotent. Entries stored before the
    solo/teams split have an aggregate "hpts" and neither hptsS nor hptsT yet. For each such
    player (skipped entirely if hptsS or hptsT is already present - that's what makes this safe
    to run on every boot/deploy):
