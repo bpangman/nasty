@@ -902,7 +902,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.19.2</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.19.3</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -3703,26 +3703,121 @@ function enableSelection(seat,moves){
   });
 }
 /* Big tap bubbles above every pickable tee - easy to see and hit with a thumb.
-   v0.19 (Blake): a bubble's little arrow now just barely touches its own tee by default,
-   always - no more blanket every-other-bubble stagger (v0.6.2's wide spacing left lone
-   bubbles floating high over open track). A bubble only lifts when it would REALLY cover
-   another tee on the board or an already-placed bubble (stacked tees, the base cluster),
-   and only as far as needed: real overlap detection, 6px at a time, first clear spot wins.
-   Geometry notes: the bubble is an 84px circle anchored bottom-center at (left,top) via
-   translate(-50%,-100%); its ::after arrow tip ends 12px below that anchor. A 4P tee's
-   art box is 34x44 with its top at pos.y-37 (28x38 / pos.y-31 for 6P, see .tee/.tee.sel6),
-   and the visible head top sits ~1.5px below the box top - so "tip touching the head" means
-   an anchor of pos.y-47 (4P) / pos.y-42 (6P). */
+   v0.19: a bubble's little arrow just barely touches its own tee by default, always - no more
+   blanket every-other-bubble stagger (v0.6.2's wide spacing left lone bubbles floating high over
+   open track). A bubble only lifts when it would REALLY cover another tee on the board or an
+   already-placed bubble, and only as far as needed: real overlap detection, 6px at a time, first
+   clear spot wins.
+   v0.19.3 (Blake: "the icons in the stable can overlap - lay them out symmetrically like the
+   pegs themselves, closer to the pegs"): when 2+ of the SAME seat's base/stable pieces are
+   pickable at once, several of their tees share an x-coordinate (see buildLayout's quincunx -
+   LAY.base[s] is [center, top-left, top-right, bottom-left, bottom-right] around a cluster
+   center bc, offset by +-cfg.spread on each axis), so the old vertical-only sweep forced their
+   bubbles into a tall straight-up chain that could still touch. Those groups now get a
+   "formation" pass BEFORE the sweep below: each bubble keeps the LEFT/RIGHT sign of its tee's
+   true offset from bc (left corners' bubbles stay left of center, right corners' stay right,
+   the center tee's bubble stays centered) so the result echoes the same X/diamond the pegs make,
+   just bigger and pulled in tight. Every formation bubble is pushed into `placed` before the
+   original sweep runs, so track-state (or lone single-base) bubbles still avoid them - and the
+   formation pass itself reuses the same circle-vs-circle / circle-vs-tee-rect penalty math and
+   "hiding a tee is 3x worse than touching a bubble" fallback philosophy as the sweep.
+   A single pickable base tee, and every track-state tee, are UNCHANGED from v0.19 - formation
+   only kicks in when 2+ of one seat's base pieces are pickable in the same `list`.
+   Geometry notes (unchanged): the bubble is an 84px circle anchored bottom-center at (left,top)
+   via translate(-50%,-100%); its ::after arrow tip ends 12px below that anchor - so any anchor
+   this function computes must stay ABOVE (smaller y than) the tee it points at, never below. A
+   4P tee's art box is 34x44 with its top at pos.y-37 (28x38 / pos.y-31 for 6P, see .tee/.tee.sel6),
+   and the visible head top sits ~1.5px below the box top - so "tip touching the head" means an
+   anchor of pos.y-47 (4P) / pos.y-42 (6P). */
 function showBubbles(list,cls){
   clearBubbles();
   const layer=$('bubbleLayer');
   const R=42, six=G.n===6;
   const tipGap=six?42:47;                    // anchor offset that puts the arrow tip on the tee head
   const tw=six?14:17, tUp=six?31:37, tDn=7;  // tee art box around its pos: half width / above / below
+  const pad=six?40:20;                       // CANVAS_PAD (§ RENDER fitBoard) - board-space margin
   const pegs=[];                             // every tee on the board is a "do not cover" zone
   for(let s=0;s<G.n;s++)for(let pi=0;pi<5;pi++)pegs.push({s,pi,p:teePos(s,pi)});
-  const placed=[];
-  const sorted=list.slice().sort((a,b)=>teePos(a.s,a.pi).x-teePos(b.s,b.pi).x);
+  const placed=[];                           // circle CENTERS ({x,y}) of every bubble placed so far
+  const pegPenalty=(cx,cy,selfS,selfPi)=>{
+    let pen=0;
+    pegs.forEach(t=>{
+      if(t.s===selfS&&t.pi===selfPi)return;
+      const nx=Math.max(t.p.x-tw,Math.min(cx,t.p.x+tw));
+      const ny=Math.max(t.p.y-tUp,Math.min(cy,t.p.y+tDn));
+      const d=Math.hypot(cx-nx,cy-ny); if(d<R)pen+=(R-d)*3;   // hiding a tee is worse
+    });
+    return pen;
+  };
+  const place=(it,anchorX,anchorY)=>{
+    anchorX=Math.min(1000+pad-R-4,Math.max(-pad+R+4,anchorX));
+    anchorY=Math.max(96,anchorY);
+    placed.push({x:anchorX,y:anchorY-R});
+    const b=document.createElement('div');
+    b.className='teeBubble'+(cls?' '+cls:'');
+    b.style.left=anchorX+'px';
+    b.style.top=anchorY+'px';
+    b.innerHTML=teeSVG(G.seats[it.s].color,true);
+    b.addEventListener('click',e=>{e.stopPropagation();onTeeClick(it.s,it.pi);});
+    layer.appendChild(b);
+  };
+
+  // --- formation pass: seats with 2+ pickable BASE pieces get the quincunx layout ---
+  const baseBySeat={};
+  list.forEach(it=>{
+    const st=G.pieces[it.s][it.pi]&&G.pieces[it.s][it.pi].state;
+    if(st==='base')(baseBySeat[it.s]=baseBySeat[it.s]||[]).push(it);
+  });
+  const formationKeys=new Set();
+  Object.keys(baseBySeat).forEach(sKey=>{
+    const group=baseBySeat[sKey];
+    if(group.length<2)return;                // one pickable base tee: falls through, old exact behavior
+    const s=+sKey;
+    const bc=LAY.base[s][0];
+    const items=group.map(it=>{
+      const pos=teePos(it.s,it.pi);
+      return {it,pos,cs:Math.sign(Math.round(pos.x-bc.x)),rs:Math.sign(Math.round(pos.y-bc.y))};
+    });
+    group.forEach(it=>formationKeys.add(it.s+'-'+it.pi));
+    // Outer loop: grow the horizontal column offset xMag in fixed steps (mirroring the sweep's
+    // style) until a fully clear plan exists. Inner: each bubble runs its OWN upward 6px sweep
+    // at its column x (top rows planned first, so a bottom-row bubble's sweep naturally climbs
+    // past its column-mate and stacks clear above it - a 2-tall column, not a 5-tall tower).
+    // All penalties are evaluated at the CLAMPED position (clampX matches place()'s clamp), so
+    // a corner cluster near the board edge can't pass the check and then get shoved back into
+    // an overlap at render time. Least-bad plan wins if nothing fully clear exists (same
+    // philosophy as the sweep: pegPenalty already weights a hidden tee 3x a touched bubble).
+    const GAP=6,XGAP=8,XSTEP=10,MAXK=16;
+    const clampX=x=>Math.min(1000+pad-R-4,Math.max(-pad+R+4,x));
+    const order=items.slice().sort((a,b)=>(a.rs-b.rs)||(a.cs-b.cs));
+    let bestPen=Infinity,bestPlan=null;
+    for(let k=0;k<=MAXK&&bestPen>0;k++){
+      const xMag=R+XGAP+k*XSTEP;
+      const plan=[]; let pen=0;
+      order.forEach(o=>{
+        const ax=clampX(bc.x+o.cs*xMag);
+        const startAy=Math.max(96,o.pos.y-tipGap);
+        let ay=startAy,best=startAy,bp=Infinity;
+        for(;;){
+          const cy=ay-R;
+          let p=pegPenalty(ax,cy,o.it.s,o.it.pi);
+          plan.forEach(q=>{const d=Math.hypot(q.ax-ax,(q.ay-R)-cy);if(d<2*R+GAP)p+=2*R+GAP-d;});
+          placed.forEach(q=>{const d=Math.hypot(q.x-ax,q.y-cy);if(d<2*R+GAP)p+=2*R+GAP-d;});
+          if(p===0){best=ay;bp=0;break;}
+          if(p<bp){bp=p;best=ay;}
+          if(ay<=24)break;                // same floor as the sweep below
+          ay-=6;
+        }
+        plan.push({o,ax,ay:best}); pen+=bp;
+      });
+      if(pen<bestPen){ bestPen=pen; bestPlan=plan; }
+    }
+    bestPlan.forEach(p=>place(p.o.it,p.ax,p.ay));
+  });
+
+  // --- original v0.19 sweep for everything else (single base picks, all track-state picks) ---
+  const rest=list.filter(it=>!formationKeys.has(it.s+'-'+it.pi));
+  const sorted=rest.slice().sort((a,b)=>teePos(a.s,a.pi).x-teePos(b.s,b.pi).x);
   sorted.forEach(it=>{
     const pos=teePos(it.s,it.pi);
     // Sweep upward from the touching position, 6px steps: first FULLY clear anchor wins. If
@@ -3731,12 +3826,7 @@ function showBubbles(list,cls){
     const overlapAt=cy=>{
       let pen=0;
       placed.forEach(q=>{ const d=Math.hypot(q.x-pos.x,q.y-cy); if(d<2*R)pen+=2*R-d; });
-      pegs.forEach(t=>{
-        if(t.s===it.s&&t.pi===it.pi)return;
-        const nx=Math.max(t.p.x-tw,Math.min(pos.x,t.p.x+tw));
-        const ny=Math.max(t.p.y-tUp,Math.min(cy,t.p.y+tDn));
-        const d=Math.hypot(pos.x-nx,cy-ny); if(d<R)pen+=(R-d)*3;   // hiding a tee is worse
-      });
+      pen+=pegPenalty(pos.x,cy,it.s,it.pi);
       return pen;
     };
     const T0=Math.max(96,pos.y-tipGap);   // bubble anchor (arrow tip = T0+12, touching the tee)
@@ -3748,15 +3838,7 @@ function showBubbles(list,cls){
       if(T<=24)break;                     // 24 = as high as the old stagger ever reached
       T-=6;
     }
-    T=best;
-    placed.push({x:pos.x,y:T-R});
-    const b=document.createElement('div');
-    b.className='teeBubble'+(cls?' '+cls:'');
-    b.style.left=pos.x+'px';
-    b.style.top=T+'px';
-    b.innerHTML=teeSVG(G.seats[it.s].color,true);
-    b.addEventListener('click',e=>{e.stopPropagation();onTeeClick(it.s,it.pi);});
-    layer.appendChild(b);
+    place(it,pos.x,best);
   });
 }
 function clearBubbles(){ $('bubbleLayer').innerHTML=''; }
