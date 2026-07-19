@@ -504,6 +504,7 @@ function roomFromDisk(obj) {
     paused: !!obj.paused, engine: null, tableSpeed: obj.tableSpeed || 1,
     recorded: !!obj.recorded, nextSeq: obj.nextSeq || 0,
     away: null,   // v0.22: transient - a restart just restarts the ladder clock
+    willSeat: new Set(), seatGate: null,   // v0.22 P0b: transient - see loadRoomsFromDisk's boot re-drive
   };
   for (const p of (obj.players || []))
     room.players.set(p.id, {
@@ -552,6 +553,18 @@ function loadRoomsFromDisk() {
     } catch (e) { log("failed to load room file", f, e.message); }
   }
   if (n) log(`loaded ${n} room(s) from disk (${ROOMS_DIR})`);
+  // v0.22 P0b: a restart can catch a room mid-CPU-run, or lose a transient seat gate that was
+  // holding the first deal - re-drive every live room once at boot. driveTurnLoop() is
+  // idempotent: it advances whatever the server itself owes (CPU turns, a pending deal) and
+  // stops at the current human turn; for a room already waiting on a human it's a no-op.
+  for (const room of rooms.values()) {
+    if (room.started && room.engine && !room.paused) {
+      const G = room.engine.getG();
+      if (G && !G.over) {
+        try { driveTurnLoop(room); } catch (e) { log("boot re-drive failed", room.code, e.message); }
+      }
+    }
+  }
 }
 function flushAllPersists() {
   for (const t of persistTimers.values()) clearTimeout(t);
@@ -614,6 +627,8 @@ function makeRoom(code) {
     recorded: false,      // v0.15: leaderboard idempotency flag, see finishGame()
     nextSeq: 0,           // v0.15: ever-increasing action seq, independent of log trimming
     away: null,           // v0.22: transient away-ladder state, never persisted - see § AWAY LADDER
+    willSeat: new Set(),  // v0.22 P0b: playerIds whose readyUp carried willSeat:true - see § SEAT GATE
+    seatGate: null,       // v0.22 P0b: {waiting:Set, timer} while the first deal is being held
   };
   rooms.set(code, room);
   return room;
@@ -797,6 +812,7 @@ function playerLooksAway(p) {
 }
 function currentAwayTarget(room) {
   if (!room.started || !room.engine || room.paused || !room.seatOwners) return null;
+  if (room.seatGate) return null;   // v0.22 P0b: pre-first-deal - nobody is "on turn" in any meaningful sense yet
   const G = room.engine.getG();
   if (!G || G.over) return null;
   const seat = G.turn;
@@ -923,6 +939,35 @@ function maybeAdvanceReadyCheck(room) {
   if (!requiredPlayerIds.every(id => ready.has(id))) return;
   actuallyStartGame(room);
 }
+/* ---------------------------------------------------------------------------------------
+ * v0.22 P0b § SEAT GATE — hold the FIRST deal until every human is actually LOOKING at the
+ * board. Blake's report: his group was still reading the pre-game popups when the server
+ * dealt hand 1, auto-bowed-out every human whose turn arrived with no legal move, let the
+ * CPUs play the whole hand out and dealt hand 2 - "we only had four cards in our initial
+ * deal" (rules-correct 5-then-4 deal sizes; they just never saw hand 1).
+ * Two layers: the CLIENT now shows its one-time popups during the READY CHECK (so they're
+ * dismissed before "I'm ready" is even tappable), and THIS gate is the server-side
+ * belt-and-suspenders: a new client's readyUp carries willSeat:true, promising an explicit
+ * {type:'seated'} once its board is visible with no overlays - the start action still
+ * broadcasts immediately (clients need it to render the board at all), but the first deal
+ * waits for every promised 'seated'. Old clients (builds 16-28) never send willSeat and are
+ * treated as seated immediately - their behavior is byte-identical to v0.21. A capped timer
+ * guarantees one broken client can never hold the table hostage; a disconnect releases that
+ * player's slot early. All transient in-memory state - a restart falls back to "deal now"
+ * via loadRoomsFromDisk()'s boot re-drive, the same semantics as the cap expiring.
+ * ------------------------------------------------------------------------------------- */
+const SEAT_GATE_CAP_MS = envInt("NASTY_SEAT_GATE_CAP_MS", 25 * 1000);
+function releaseSeatGateSlot(room, playerId, why) {
+  if (!room.seatGate || !room.seatGate.waiting.has(playerId)) return;
+  room.seatGate.waiting.delete(playerId);
+  if (room.seatGate.waiting.size === 0) {
+    clearTimeout(room.seatGate.timer);
+    room.seatGate = null;
+    log("seat gate cleared - dealing", room.code, "(" + why + ")");
+    driveTurnLoop(room);
+  }
+}
+
 // The old "start" case's body, unchanged in substance - now triggered once the ready check
 // clears instead of directly from the host's "start" message. See that case's comment.
 function actuallyStartGame(room) {
@@ -951,7 +996,21 @@ function actuallyStartGame(room) {
   touch(room);
   broadcast(room, { type: "gameAction", seq: 0, action: startAction, seatOwners: room.seatOwners });
   log("room started", room.code, `n=${n}`, room.lobby.teams ? "teams" : "ffa");
-  driveTurnLoop(room);
+  // v0.22 P0b § SEAT GATE: only players who PROMISED a 'seated' signal (new clients) are ever
+  // waited for; a table of old clients (empty set) deals immediately, exactly as before.
+  const waiting = new Set(Array.from(room.willSeat || []).filter(id => room.seatOwners.includes(id)));
+  room.willSeat = new Set();
+  if (waiting.size === 0) { driveTurnLoop(room); return; }
+  room.seatGate = {
+    waiting,
+    timer: setTimeout(() => {
+      if (rooms.get(room.code) !== room || !room.seatGate) return;
+      log("seat gate cap expired - dealing anyway", room.code, "unseated=" + Array.from(room.seatGate.waiting).join(","));
+      room.seatGate = null;
+      driveTurnLoop(room);
+    }, SEAT_GATE_CAP_MS),
+  };
+  log("holding the first deal until everyone is seated", room.code, "waiting=" + waiting.size);
 }
 
 /* ---- tiny HTTP helpers (no framework, matches the rest of this file's style) ---- */
@@ -1171,6 +1230,9 @@ wss.on("connection", (ws, req) => {
       p.connected = false;
       p.ws = null;
       touch(room);
+      // v0.22 P0b: never hold the first deal for a phone that's gone - its overlays are moot.
+      // (The cap would cover this anyway; this just resolves it sooner.)
+      releaseSeatGateSlot(room, playerId, "unseated player disconnected");
       broadcast(room, { type: "presence", playerId, connected: false });
       if (playerId === room.hostPlayerId) broadcast(room, { type: "hostStatus", connected: false });
       // v0.16 item 5: covers the OTHER real trigger shape beyond driveTurnLoop's own turn-start
@@ -1447,6 +1509,9 @@ wss.on("connection", (ws, req) => {
         const { room, playerId } = ctx;
         if (!room.readyCheck || room.started) return;
         if (!room.readyCheck.requiredPlayerIds.includes(playerId)) return;
+        // v0.22 P0b: a new client's readyUp announces it will send {type:'seated'} once its
+        // board is actually visible - see § SEAT GATE. Old clients never set this.
+        if (msg.willSeat) room.willSeat.add(playerId);
         room.readyCheck.ready.add(playerId);
         touch(room);
         broadcast(room, { type: "readyCheck", requiredPlayerIds: room.readyCheck.requiredPlayerIds, readyPlayerIds: Array.from(room.readyCheck.ready), lobby: lobbySnapshot(room) });
@@ -1461,6 +1526,7 @@ wss.on("connection", (ws, req) => {
         const { room, playerId } = ctx;
         if (playerId !== room.hostPlayerId || !room.readyCheck || room.started) return;
         room.readyCheck = null;
+        room.willSeat = new Set();   // v0.22 P0b: promises reset with the check - re-announced on the next readyUp
         touch(room);
         broadcast(room, { type: "readyCheckCancelled", lobby: lobbySnapshot(room) });
         log("room ready check cancelled", room.code);
@@ -1563,6 +1629,23 @@ wss.on("connection", (ws, req) => {
         const { room } = ctx;
         if (!room.started || !room.engine) return;
         maybeStateCheck(room, room.nextSeq - 1);
+        return;
+      }
+
+      case "seated": {
+        // v0.22 P0b § SEAT GATE: this client's board is genuinely on screen with no pre-game
+        // overlay in the way - release its slot; the last one out releases the first deal.
+        if (!ctx) return;
+        const { room, playerId } = ctx;
+        if (room.seatGate) { releaseSeatGateSlot(room, playerId, "all seated"); return; }
+        // Belt-and-suspenders restart recovery: a restart loses the transient gate, and a
+        // room can in principle sit at nextSeq===1 (start broadcast, first deal never dealt)
+        // with nothing left to trigger the loop - any seated client is a safe re-drive
+        // moment (the loop no-ops unless the server genuinely owes the table something).
+        if (room.started && room.engine && !room.paused) {
+          const G = room.engine.getG();
+          if (G && !G.over && room.nextSeq === 1) driveTurnLoop(room);
+        }
         return;
       }
 

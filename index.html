@@ -1637,6 +1637,7 @@ function pickSpeed(v){
   $('speedPickerOverlay').classList.add('hidden');
   const cont=SPEED_PICK_CONTINUATION; SPEED_PICK_CONTINUATION=null;
   if(cont)cont();
+  maybeSendSeated();   // v0.22 P0b: defensive - if a board was somehow up behind the picker
 }
 
 /* v0.19: spotlightEvent() - wraps ONE kick or Jack-swap's animation so it plays at a real,
@@ -4105,6 +4106,9 @@ const NET={
                            // additional foreground/reopen event while already recalibrating.
   recalFailed:false,       // true once RECAL_FAIL_MS has elapsed with no fresh snapshot yet -
                            // shows the "couldn't restore the connection" message + tap-to-reset.
+  seatedSent:false,        // v0.22 P0b: this game-boot has told the server "my board is
+                           // actually on screen, no overlays in the way" - see
+                           // maybeSendSeated(); reset by both boot functions.
   silentAutoResume:false,  // v0.22 P2 cold-reload path: set only by boot()'s silent auto-rejoin
                            // attempt (a fresh page load with a recent, STARTED last-room record
                            // - the iOS memory-kill relaunch shape). onSync() checks it once: a
@@ -4626,14 +4630,13 @@ function bootGameFromNetwork(action){
   clearAwayUI();   // v0.22 P3: a fresh game can never inherit a stale away-ladder line
   sendPushToken();   // v0.16 item 5: in case permission was already granted from an earlier game this session - see § PUSH
   toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts`,2600);
-  // v0.16 item 4: this is the ONE place a genuinely fresh online game boots for a client that
-  // was already sitting in the lobby (a reconnect/rejoin/reclaim always uses
-  // bootGameFromSnapshot() instead, below - never this function) - so showing the one-time
-  // rules popup exactly here, with no separate "have I seen this" flag anywhere, already gives
-  // the right behavior for free: once per fresh game instance, never on a mid-game rejoin, and
-  // shown again for the next brand-new game. Sits visually on top of the board already drawn
-  // above; dismissing just hides it.
-  $('onlineRulesOverlay').classList.remove('hidden');
+  // v0.22 P0b: the one-time rules popup no longer shows here - it moved to the READY CHECK
+  // phase (see openReadyCheckOverlay()), where reading it can't cost anyone their first hand.
+  // By the time this boot runs, every required human has already dismissed it (the popup sat
+  // above the "I'm ready" button). Announce that this screen is genuinely looking at the
+  // board so the server can release the first deal (see maybeSendSeated()).
+  NET.seatedSent=false;
+  maybeSendSeated();
   runOnlineTurnLoop();
 }
 // v0.15: RECONNECT/rejoin/reclaim path - installs the server's authoritative `G` snapshot
@@ -4672,6 +4675,11 @@ function bootGameFromSnapshot(snapshotG,paused,tableSpeed,appliedSeq){
   endRecalibration();
   updateConnIndicator();
   clearAwayUI();   // v0.22 P3: the fresh snapshot IS current - any away line will be re-broadcast if still true
+  // v0.22 P0b: a rejoin/reclaim/resync shows no popups, so this screen is looking at the
+  // board right now - if the room happens to still be holding its first deal (this phone
+  // reconnected mid seat gate), this is what releases our slot.
+  NET.seatedSent=false;
+  maybeSendSeated();
   if(NET.actionQueue.length)INSTANT=true;   // see the function comment above - a tiny live race, not a replay
   updatePauseUI();
   runOnlineTurnLoop();
@@ -5016,6 +5024,20 @@ function leaveOnlineToMenu(msg,keepRoom){
    the seat STAYS human, its owner can rejoin normally), 'clear' (they're back / turn moved
    on). No automatic forfeits, no auto-CPU-conversion - "Leave for good" (v0.16) remains the
    only permanent seat conversion, and it remains the player's OWN choice. */
+/* v0.22 P0b: "seated" - tells the server this screen is ACTUALLY showing the board with no
+   pre-game overlay (rules popup, speed picker) in the way. The server holds a fresh game's
+   FIRST deal until every player who announced willSeat (see btnReadyUp) has sent this - so
+   nobody's opening hand can ever again be dealt, bowed out and played away behind a popup
+   they were still reading (Blake's four-card-hand report). Sent at most once per game boot;
+   re-checked from every overlay-dismiss point. */
+function maybeSendSeated(){
+  if(!NET.online||NET.seatedSent||!G)return;
+  if($('game').classList.contains('hidden'))return;
+  if(!$('onlineRulesOverlay').classList.contains('hidden'))return;
+  if(!$('speedPickerOverlay').classList.contains('hidden'))return;
+  NET.seatedSent=true;
+  netSend({type:'seated'});
+}
 function updatePresenceUI(){
   if(!G||!NET.online||!NET.seatOwners)return;
   for(let s=0;s<G.n;s++){
@@ -5147,6 +5169,7 @@ function handleNetMessage(m){
       NET.lobby=m.lobby||NET.lobby;
       NET.readyCheck=null;
       closeReadyCheckOverlay();
+      $('onlineRulesOverlay').classList.add('hidden');   // v0.22 P0b: the popup rides the ready check now - never linger past a cancel
       if(NET.isHost){ renderRoomScreen(); $('roomOverlay').classList.remove('hidden'); }
       else { $('joinOverlay').classList.remove('hidden'); advanceJoinToSeatStep(); }
       return;
@@ -5453,13 +5476,27 @@ function renderReadyCheckOverlay(){
 }
 function openReadyCheckOverlay(){
   resetNetUiFlow();
+  const firstOpen=$('readyCheckOverlay').classList.contains('hidden');
   renderReadyCheckOverlay();
   $('readyCheckOverlay').classList.remove('hidden');
+  // v0.22 P0b: the one-time online rules popup now shows HERE - on top of the ready check,
+  // BEFORE the player can tap "I'm ready" - instead of over the live board after the deal
+  // (its old spot in bootGameFromNetwork()). Blake's report: while his group was reading the
+  // popup, the server had already dealt hand 1, auto-bowed-out every human with no legal
+  // move, let the CPUs play the whole hand and dealt hand 2 - they never saw their 5-card
+  // hand. Since the popup sits above this overlay, dismissing it is now a precondition of
+  // readying up, so a fresh game's deal can no longer land behind it. Shown only on the
+  // FIRST open of a given ready check (every readyUp re-broadcast re-calls this function).
+  if(firstOpen)$('onlineRulesOverlay').classList.remove('hidden');
 }
 function closeReadyCheckOverlay(){
   $('readyCheckOverlay').classList.add('hidden');
 }
-$('btnReadyUp').onclick=()=>netSend({type:'readyUp'});
+// v0.22 P0b: willSeat tells the server this client understands the seat gate (it will send
+// {type:'seated'} once its board is actually visible with no overlays in the way) - the
+// server holds the FIRST deal for exactly the players who announced this. Old builds 16-28
+// never send the flag and are treated as seated immediately, so nothing changes for them.
+$('btnReadyUp').onclick=()=>netSend({type:'readyUp',willSeat:true});
 $('btnReadyCancel').onclick=()=>netSend({type:'cancelReadyCheck'});
 
 /* ============================= § NAMES (limits + decency, v0.9 item 9) =============================
@@ -5729,6 +5766,7 @@ $('btnLeaveCancel').onclick=()=>$('leaveConfirmOverlay').classList.add('hidden')
 $('btnMenu').onclick=openLeaveConfirm;
 $('btnOnlineRulesOk').onclick=()=>{
   $('onlineRulesOverlay').classList.add('hidden');
+  maybeSendSeated();   // v0.22 P0b: if the board is up behind this popup, we're seated now
   maybeRequestPushPermission();   // v0.16 item 5: right after the FIRST online game's rules popup is dismissed - see § PUSH
   // v0.19.2: the speed picker no longer chains off dismissing this overlay - by the time this
   // fires the table is already live (bootGameFromNetwork() already dealt for everyone), too

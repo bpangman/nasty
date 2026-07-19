@@ -762,11 +762,27 @@ async function actuallyStartGame(code: string, pre: RoomMeta): Promise<void> {
   if (!r.ok) { dropEngine(code); return; }
   broadcastRoom(code, { type: "gameAction", seq: 0, action: startAction, seatOwners: r.meta.seatOwners });
   log("room started", code, `n=${n}`, lobby.teams ? "teams" : "ffa");
-  // Drive the opening stretch (first deal + any leading CPU turns) immediately.
-  const metaForLoop = r.meta; // nextSeq=1, the loop advances it as it appends
-  const { out, finished } = driveTurnLoopCollect(engine, metaForLoop);
-  const ok = await commitAndBroadcast(code, engine, out, finished);
-  if (ok) maybeSendTurnPush(code, engine, finished).catch((e) => log("push check failed", code, (e as Error).message));
+  // v0.22 P0b § SEAT GATE: only players who PROMISED a 'seated' signal (new clients) are ever
+  // waited for; a table of old clients (empty set) deals immediately, exactly as before.
+  const seatOwnersNow = r.meta.seatOwners || [];
+  const waiting = new Set(Array.from(willSeatMap.get(code) || []).filter((id) => seatOwnersNow.includes(id)));
+  willSeatMap.delete(code);
+  if (waiting.size === 0) {
+    // Drive the opening stretch (first deal + any leading CPU turns) immediately.
+    const metaForLoop = r.meta; // nextSeq=1, the loop advances it as it appends
+    const { out, finished } = driveTurnLoopCollect(engine, metaForLoop);
+    const ok = await commitAndBroadcast(code, engine, out, finished);
+    if (ok) maybeSendTurnPush(code, engine, finished).catch((e) => log("push check failed", code, (e as Error).message));
+    return;
+  }
+  const timer = setTimeout(() => {
+    if (!seatGates.has(code)) return;
+    seatGates.delete(code);
+    log("seat gate cap expired - dealing anyway", code);
+    withRoomChain(code, () => releaseFirstDeal(code)).catch((e) => log("seat gate cap release failed", code, (e as Error).message));
+  }, SEAT_GATE_CAP_MS);
+  seatGates.set(code, { waiting, timer });
+  log("holding the first deal until everyone is seated", code, "waiting=" + waiting.size);
 }
 
 // v0.15 snapshot fields for sync/reclaimed — twin of server.js's gameSnapshotFields().
@@ -1018,7 +1034,8 @@ async function awaySweep() {
     const cur = await kv.get<RoomMeta>(roomKey(code));
     const meta = cur.value;
     let target: { seat: number; name: string } | null = null;
-    if (meta && meta.started && !meta.paused && meta.seatOwners) {
+    // v0.22 P0b: a room still holding its first deal has nobody meaningfully "on turn" yet.
+    if (meta && meta.started && !meta.paused && meta.seatOwners && !seatGates.has(code)) {
       const E = getEngine(code, meta);
       const G = E ? E.getG() : null;
       if (G && !G.over && G.seats[G.turn] && G.seats[G.turn].type === "human") {
@@ -1050,6 +1067,45 @@ async function awaySweep() {
   }
 }
 setInterval(() => { awaySweep().catch((e) => log("away sweep failed", (e as Error).message)); }, AWAY_SWEEP_MS);
+
+/* ---------------------------------------------------------------------------------------
+ * v0.22 P0b § SEAT GATE — twin of server.js's matching block, keep in sync. Hold the FIRST
+ * deal until every human who PROMISED a 'seated' signal (readyUp with willSeat:true - new
+ * clients only) is actually looking at the board; old clients (builds 16-28) never promise
+ * and are treated as seated immediately, so their behavior is unchanged. Capped so a broken
+ * client can never hold the table hostage; a disconnect releases that slot early. State is
+ * isolate-local + transient on purpose - an isolate recycle mid-gate degrades to "deal now"
+ * via the 'seated' fallback re-drive (releaseFirstDeal no-ops unless the first deal is
+ * genuinely still pending, i.e. nextSeq is still 1).
+ * ------------------------------------------------------------------------------------- */
+const SEAT_GATE_CAP_MS = envInt("NASTY_SEAT_GATE_CAP_MS", 25 * 1000);
+const willSeatMap = new Map<string, Set<number>>();
+const seatGates = new Map<string, { waiting: Set<number>; timer: ReturnType<typeof setTimeout> }>();
+async function releaseFirstDeal(code: string): Promise<void> {
+  // Always called inside withRoomChain(code, ...) - same serialization as every game mutation.
+  const cur = await kv.get<RoomMeta>(roomKey(code));
+  if (!cur.value || !cur.value.started || cur.value.paused) return;
+  const meta = cur.value;
+  if (meta.nextSeq !== 1) return;   // the first deal already happened - nothing to release
+  const E = getEngine(code, meta);
+  if (!E) return;
+  const G = E.getG();
+  if (!G || G.over) return;
+  const { out, finished } = driveTurnLoopCollect(E, meta);
+  const ok = await commitAndBroadcast(code, E, out, finished);
+  if (ok) maybeSendTurnPush(code, E, finished).catch((e) => log("push check failed", code, (e as Error).message));
+}
+function releaseSeatGateSlot(code: string, playerId: number, why: string) {
+  const gate = seatGates.get(code);
+  if (!gate || !gate.waiting.has(playerId)) return;
+  gate.waiting.delete(playerId);
+  if (gate.waiting.size === 0) {
+    clearTimeout(gate.timer);
+    seatGates.delete(code);
+    log("seat gate cleared - dealing", code, "(" + why + ")");
+    withRoomChain(code, () => releaseFirstDeal(code)).catch((e) => log("seat gate release failed", code, (e as Error).message));
+  }
+}
 
 /* ---------------------------------------------------------------------------------------
  * § HTTP — CORS + /health, /leaderboard, /admin/*. See server.js's CORS_HEADERS comment for
@@ -1516,6 +1572,13 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         // server.js's case.
         if (!ctx) return;
         const { code, playerId } = ctx;
+        // v0.22 P0b: a new client's readyUp announces it will send {type:'seated'} once its
+        // board is actually visible - see § SEAT GATE. Old clients never set this.
+        if (msg.willSeat) {
+          let s = willSeatMap.get(code);
+          if (!s) { s = new Set(); willSeatMap.set(code, s); }
+          s.add(playerId);
+        }
         await withRoomChain(code, async () => {
           const r = await touchRoom(code, (meta) => {
             if (!meta.readyCheck || meta.started) return false;
@@ -1541,7 +1604,10 @@ function handleWsUpgrade(req: Request, ip: string): Response {
             meta.readyCheck = null;
             return {};
           });
-          if (r.ok) broadcastRoom(code, { type: "readyCheckCancelled", lobby: lobbySnapshot(r.meta) });
+          if (r.ok) {
+            willSeatMap.delete(code);   // v0.22 P0b: promises reset with the check - re-announced on the next readyUp
+            broadcastRoom(code, { type: "readyCheckCancelled", lobby: lobbySnapshot(r.meta) });
+          }
         });
         return;
       }
@@ -1659,6 +1725,19 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         const E = getEngine(code, cur.value);
         if (!E) return;
         broadcastRoom(code, { type: "stateCheck", afterSeq: (cur.value.nextSeq || 1) - 1, digest: gDigestServer(E.getG()) });
+        return;
+      }
+
+      case "seated": {
+        // v0.22 P0b § SEAT GATE: this client's board is genuinely on screen with no pre-game
+        // overlay in the way - release its slot; the last one out releases the first deal.
+        // With no gate present this still runs the fallback re-drive (isolate-recycle
+        // recovery: releaseFirstDeal no-ops unless the first deal is genuinely pending).
+        if (!ctx) return;
+        const { code, playerId } = ctx;
+        const gate = seatGates.get(code);
+        if (gate) { releaseSeatGateSlot(code, playerId, "all seated"); return; }
+        await withRoomChain(code, () => releaseFirstDeal(code));
         return;
       }
 
@@ -1862,6 +1941,8 @@ function handleWsUpgrade(req: Request, ip: string): Response {
       const stillCurrent = localSockets.get(code)?.get(playerId) === socket;
       if (!stillCurrent) return; // a takeover already replaced us locally — don't unregister IT
       unregisterLocalSocket(code, playerId);
+      // v0.22 P0b: never hold the first deal for a phone that's gone - its overlays are moot.
+      releaseSeatGateSlot(code, playerId, "unseated player disconnected");
       const r = await touchRoom(code, (meta) => {
         const p = meta.players.find((pp) => pp.id === playerId);
         if (!p) return false;
