@@ -282,22 +282,22 @@ async function scenarioInputLockAndFailure(browser, port) {
   const postState = await gState(g1);
   check(preState === postState, 'G is unchanged locally after the scripted tap during recalibration');
 
-  // Wait past the failure window (RECAL_FAIL_MS=6000) with the send still frozen.
-  await new Promise((r) => setTimeout(r, 6500));
-  const failed = await g1.evaluate(() => window.NET.recalFailed === true);
-  check(failed, 'recalFailed flips true after the failure window elapses with no fresh snapshot');
-  const chipText = await g1.evaluate(() => document.getElementById('connIndicator').textContent);
-  check(/restore|reopen/i.test(chipText), `failure message is shown and dash-free: "${chipText}"`);
-  check(!chipText.includes('–') && !chipText.includes('—') && !chipText.includes(' - a') , 'no em/en dash in the failure message text');
-
-  // Manual reset (tap the chip == hardResetConnection()) recovers once the send path works again.
-  await unfreezeSendOnly(g1);
-  await g1.evaluate(() => document.getElementById('connIndicator').click());
-  await new Promise((r) => setTimeout(r, 2500));
-  const recoveredActive = await g1.evaluate(() => window.NET.recalActive === false && window.NET.recalFailed === false);
-  check(recoveredActive, 'tapping the connIndicator (manual reset) recovers - recalActive/recalFailed both clear');
+  // v0.22 CONTRACT CHANGE (P2): the eaten-resync shape no longer ends in the failure message.
+  // The 2s resync ack watchdog (RESYNC_ACK_MS, index.html § RECALIBRATION) notices no sync
+  // came back, tears the presumed-zombie socket down and rebuilds it AUTOMATICALLY - the
+  // fresh socket (this scenario only froze the OLD socket's send) reconnects and converges
+  // with zero user action, and the manual failure prompt never shows. The failure message
+  // still exists for the genuinely-unreachable-server case - scenario 2c (kill the server)
+  // covers it, where reconnects themselves keep failing.
+  await new Promise((r) => setTimeout(r, 5000));
+  const autoRecovered = await g1.evaluate(() => window.NET.recalActive === false && window.NET.connected === true);
+  check(autoRecovered, 'v0.22: the eaten resync AUTO-recovers via the 2s ack watchdog (socket rebuilt, no user action)');
+  const neverFailed = await g1.evaluate(() => window.NET.recalFailed === false);
+  check(neverFailed, 'v0.22: the manual failure prompt never showed - automation exhausted itself first');
+  await unfreezeSendOnly(g1);   // restore the (now-orphaned) old socket's send stub - harmless cleanup
+  await new Promise((r) => setTimeout(r, 800));
   const hostFinal = await gState(hostPage), g1Final = await gState(g1);
-  check(hostFinal === g1Final, 'G converges after the manual reset');
+  check(hostFinal === g1Final, 'G converges after the automatic recovery');
   return true;
 }
 
