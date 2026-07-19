@@ -106,6 +106,12 @@ function startStaticServer(httpPort, wsPort) {
 function wsConnect(port) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://localhost:${port}`);
+    // Echo the server's app-level pings like a real client does - the Deno server force-closes
+    // any socket that stays app-level silent past its staleness window (§ HEARTBEAT), which
+    // would otherwise kill this harness's long-lived host connection halfway through the test.
+    ws.on("message", (raw) => {
+      try { const m = JSON.parse(raw.toString()); if (m.type === "ping") ws.send(JSON.stringify({ type: "pong", t: m.t })); } catch (e) { /* ignore */ }
+    });
     ws.on("open", () => resolve(ws));
     ws.on("error", reject);
   });
@@ -207,7 +213,8 @@ async function main() {
 
   // --- Leg 4: the gate - a PAUSED room must NOT be silently sat down at. ---
   sendJ(hostWs, { type: "pauseToggle", paused: true });
-  await sleep(800);
+  const pausedLanded = await waitFor(async () => { const rr = await roomInfo(code); return rr && rr.paused === true; }, 8000, "pause request landed");
+  check(pausedLanded >= 0, `${KIND}: precondition - the harness's pause actually landed server-side`);
   try { simctl(`terminate ${UD} ${SAFARI}`); } catch (e) { /* fine */ }
   await sleep(2000);
   simctl(`openurl ${UD} "${plainUrl}"`);
