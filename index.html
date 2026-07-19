@@ -598,6 +598,23 @@ button{font:inherit;cursor:pointer}
 .plaque .nm{font-weight:800;font-size:calc(17px * var(--pfont));white-space:nowrap;
   max-width:calc(130px * var(--pfont));overflow:hidden;text-overflow:ellipsis}
 .plaque.turn{box-shadow:0 0 0 3px var(--gold),0 0 26px rgba(244,197,66,.55);animation:turnPulse 1.6s infinite}
+/* v0.22 P0: passive presence - a disconnected player's plate dims instead of any blocking
+   overlay (see updatePresenceUI(), § NET). Composes with .turn (an away player can still be
+   the on-turn seat - the gold ring shows through the dimming so the table can see who
+   everyone's waiting on). */
+.plaque.away{opacity:.45;filter:grayscale(.75)}
+/* v0.22 P3: the away-ladder STATUS LINE reuses the normal update bubble (#toasts, latest-wins,
+   fixed --bandH height - unchanged); its tappable BUTTONS live in this separate fixed row just
+   ABOVE the bubble so the band's fixed-height geometry never has to grow or clip. The row
+   itself is pointer-events:none (never blocks a board tap in the empty space); only the
+   buttons take input. See renderAwayLine()/clearAwayUI(), § NET. */
+#awayActions{position:fixed;bottom:calc(var(--handH,148px) + 8px + var(--bandH,60px) + 6px);
+  left:12px;right:124px;z-index:65;display:flex;gap:6px;justify-content:center;flex-wrap:wrap;
+  pointer-events:none}
+#awayActions button{pointer-events:auto;font-size:12.5px;font-weight:700;padding:6px 12px;
+  border-radius:10px;border:1px solid rgba(255,255,255,.35);background:rgba(15,10,6,.88);
+  color:var(--cream);cursor:pointer;box-shadow:0 6px 16px rgba(0,0,0,.4)}
+#awayActions button:disabled{opacity:.5;cursor:default}
 @keyframes turnPulse{50%{box-shadow:0 0 0 3px var(--gold),0 0 40px rgba(244,197,66,.85)}}
 
 /* ---------- Tee pick bubbles (big tap targets) ---------- */
@@ -906,7 +923,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.21</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.22</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -958,6 +975,9 @@ button{font:inherit;cursor:pointer}
 </div>
 
 <div id="toasts"></div>
+<!-- v0.22 P3: away-ladder action buttons (Nudge again / Have the computer play this turn) -
+     rendered by renderAwayLine(), § NET; empty and invisible the rest of the time. -->
+<div id="awayActions"></div>
 
 <!-- ================= OVERLAYS ================= -->
 <div id="passOverlay" class="overlay hidden">
@@ -1087,10 +1107,12 @@ button{font:inherit;cursor:pointer}
   </div>
 </div>
 
-<div id="waitHostOverlay" class="overlay hidden">
-  <div class="sign"><b>PAUSED</b><small>waiting for host</small></div>
-  <p>The host's connection dropped - the game will pick back up the moment they're back.</p>
-</div>
+<!-- v0.22 P0: the old #waitHostOverlay ("PAUSED - waiting for host") is GONE. It was a relic
+     of the pre-v0.15 lockstep design: since v0.15 the SERVER drives every CPU turn, deal and
+     bow-out regardless of the host, so a host disconnect never actually pauses anything - the
+     overlay was false AND it blocked every other player's input. Replaced by passive presence:
+     a disconnected player's name plate dims (see updatePresenceUI(), § NET) plus a small
+     non-blocking toast. The server still broadcasts hostStatus for old app builds. -->
 
 <!-- v0.16 item 4: the host tapping "Start game" no longer deals right away - every HUMAN seat
      has to confirm ready first (CPU seats auto-count). See renderReadyCheckOverlay()/§ NET. -->
@@ -2667,6 +2689,7 @@ function buildTable(){
     dl.appendChild(d);
   }
   syncAll();
+  updatePresenceUI();   // v0.22 P0: rebuilt plates need their away-dimming re-applied (§ NET)
 }
 function esc(s){return s.replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));}
 function teePos(s,pi){
@@ -4082,6 +4105,15 @@ const NET={
                            // additional foreground/reopen event while already recalibrating.
   recalFailed:false,       // true once RECAL_FAIL_MS has elapsed with no fresh snapshot yet -
                            // shows the "couldn't restore the connection" message + tap-to-reset.
+  silentAutoResume:false,  // v0.22 P2 cold-reload path: set only by boot()'s silent auto-rejoin
+                           // attempt (a fresh page load with a recent, STARTED last-room record
+                           // - the iOS memory-kill relaunch shape). onSync() checks it once: a
+                           // LIVE game (not paused, not over) drops straight onto the board with
+                           // NO table pause and NO reunion lobby (one phone's memory kill must
+                           // never pause the family); anything else quietly falls back to the
+                           // menu tile. Completely separate from enteringViaResume (the
+                           // deliberate "Resume Saved Game" tap, which pauses + reunions by
+                           // design).
 };
 window.NET=NET; // exposed for testing/debugging, same spirit as window.G/window.LAY
 applySpeed();   // v0.15: the real bootstrap call - deferred to here from § UTIL now that
@@ -4098,6 +4130,7 @@ applySpeed();   // v0.15: the real bootstrap call - deferred to here from § UTI
    snapshot landing and an old consumer loop noticing) but the guard costs nothing to keep. */
 let NETGEN=0;
 window.getNetGen=()=>NETGEN;   // debug/test hook, same pattern as getSelState/getCurGen
+let LAST_ROOM_TS_BUMP=0;       // v0.22 P2: throttle for the mid-game last-room ts refresh (see runOnlineTurnLoop)
 function resolveWsUrl(){
   const qs=new URLSearchParams(location.search);
   const override=qs.get('ws');
@@ -4221,9 +4254,9 @@ function maybeResolvePendingStateCheck(){
    that's been failing continuously long enough that sitting tight won't fix it. No em/en
    dashes in either string (standing rule) - plain periods. The old "⏸ waiting for host" text
    is retired from this chip; a host-disconnect no longer stalls anyone's game since v0.15 (the
-   server drives CPU turns itself), and the dedicated #waitHostOverlay already covers the one
-   case that still matters (a host who hasn't started yet) far more visibly than a small chip
-   ever did. */
+   server drives CPU turns itself). v0.22 P0 finished the job: the blocking #waitHostOverlay
+   relic is gone entirely too - host presence renders passively like everyone else's (dimmed
+   plate + toast, see § PRESENCE + AWAY LADDER below). */
 /* v0.20: RECAL_FAIL_MS replaces the old CONN_LOST_MS (15000) as the single failure-window
    constant for both flavors of "we're trying to get a good connection back" - see
    § RECALIBRATION below. Shorter on purpose (Blake asked for "a few seconds," and real
@@ -4331,7 +4364,9 @@ function scheduleReconnect(){
     connectWs().then(()=>{
       netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token,protocolVersion:PROTOCOL_VERSION});
     }).catch(()=>{ NET.reconnecting=false; scheduleReconnect(); });
-  },Math.min(NET.backoff,8000));
+  // v0.22 P4: small jitter (±15%) so several family phones dropped by the same network blip
+  // don't all retry in lockstep - the standard reconnect-backoff recommendation, one line.
+  },Math.min(NET.backoff,8000)*(0.85+Math.random()*0.3));
   NET.backoff=Math.min(NET.backoff*1.7,8000);
 }
 /* v0.16: foreground/resume connection verification - the actual fix for Blake's "board frozen
@@ -4422,11 +4457,27 @@ function armRecalWatchdog(){
    scheduleReconnect() already starts its own recalibration and does the full rejoin dance.
    Either way, bootGameFromSnapshot() (via the 'sync' handler, onSync()) is what actually clears
    recalActive - see endRecalibration() there. */
+const RESYNC_ACK_MS=2000;   // v0.22 P2: how long a resync request gets to produce a sync reply
+let RESYNC_ACK_TIMER=null;
 function triggerRecalibration(){
   if(!NET.online||!G||G.over)return;
   if(NET.ws&&NET.ws.readyState===1){
     startRecalibration('recalibrating');
     try{ netSend({type:'resync'}); }catch(e){}
+    // v0.22 P2: ack watchdog. A socket that lived through an iOS backgrounding can report
+    // OPEN while actually being dead (WebKit bug 228296 shape) - the resync request above
+    // then just vanishes and, pre-v0.22, the player stared at "Recalibrating..." for the
+    // whole RECAL_FAIL_MS window before even being ASKED to act. Now: no sync back within
+    // RESYNC_ACK_MS means the socket is presumed a zombie and gets torn down + rebuilt
+    // automatically (hardResetConnection() - the same machinery as the manual tap, backoff
+    // already reset to its floor there). Automation exhausts itself before any manual prompt.
+    clearTimeout(RESYNC_ACK_TIMER);
+    const myWs=NET.ws;
+    RESYNC_ACK_TIMER=setTimeout(()=>{
+      if(NET.ws!==myWs)return;   // a newer path already replaced the socket - its job, not ours
+      if(!NET.recalActive||NET.recalKind!=='recalibrating')return;   // the sync landed, or a full reconnect took over
+      hardResetConnection();
+    },RESYNC_ACK_MS);
   }else if(!NET.reconnecting){
     scheduleReconnect();
   }
@@ -4463,12 +4514,29 @@ function hardResetConnection(){
    of this session's root-cause finding is that a successful ping is NOT proof this client's
    state is actually current, so silence this long deserves a real fresh snapshot, not just a
    round-trip check. */
-const SILENCE_WATCHDOG_MS=45000;
+/* v0.22 P4: tightened from 45s to 30s - cellular NAT gateways drop idle mappings in as little
+   as ~30s, so 45s of silence meant the pipe could already be NAT-dead for 15s before this
+   watchdog even looked. With both servers now pinging at least every ~25s (see § HEARTBEAT in
+   server.js/server.ts) and the client-side keepalive below, 30s of TOTAL silence is
+   unambiguously a dead pipe, not a quiet one. */
+const SILENCE_WATCHDOG_MS=30000;
 setInterval(()=>{
   if(!NET.online||!NET.wantConnection||!G||G.over)return;
   if(NET.mySeat===G.turn)return;   // it's my own turn - I'm not waiting on the server right now
   if(Date.now()-NET.lastMsgAt>SILENCE_WATCHDOG_MS)triggerRecalibration();
 },10000);
+/* v0.22 P4: client-side app-level keepalive - guarantees SOMETHING crosses the wire in the
+   client->server direction at least every ~25s on an idle table (the server's own pings only
+   cover server->client; the pong echo covers the other direction, but only while those pings
+   actually arrive). 25s is 75% of the ~30s cellular-NAT idle floor, the standard heartbeat
+   sizing. Skipped whenever the wire was recently active anyway - this is a floor, not a chat. */
+const CLIENT_KEEPALIVE_MS=25000;
+setInterval(()=>{
+  if(!NET.online||!NET.wantConnection)return;
+  if(!NET.ws||NET.ws.readyState!==1)return;
+  if(Date.now()-NET.lastMsgAt<15000)return;   // recent inbound traffic means the mapping's alive
+  try{ netSend({type:'ping',t:Date.now()}); }catch(e){}
+},CLIENT_KEEPALIVE_MS);
 /* v0.15: a single generic FIFO queue replaces the old per-kind/per-seat armMoveWait()/
    armReshuffleWait() waiters - the server now produces ONE strictly-ordered, fully
    authoritative action stream (deal/move/pass), so the client's whole job is "consume the
@@ -4555,6 +4623,7 @@ function bootGameFromNetwork(action){
   // scheduleReconnect()'s own game-only guard) so a stale lock can never carry into a new game.
   endRecalibration();
   updateConnIndicator();
+  clearAwayUI();   // v0.22 P3: a fresh game can never inherit a stale away-ladder line
   sendPushToken();   // v0.16 item 5: in case permission was already granted from an earlier game this session - see § PUSH
   toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts`,2600);
   // v0.16 item 4: this is the ONE place a genuinely fresh online game boots for a client that
@@ -4602,6 +4671,7 @@ function bootGameFromSnapshot(snapshotG,paused,tableSpeed,appliedSeq){
   // to hidden if nothing else is wrong).
   endRecalibration();
   updateConnIndicator();
+  clearAwayUI();   // v0.22 P3: the fresh snapshot IS current - any away line will be re-broadcast if still true
   if(NET.actionQueue.length)INSTANT=true;   // see the function comment above - a tiny live race, not a replay
   updatePauseUI();
   runOnlineTurnLoop();
@@ -4662,6 +4732,11 @@ async function runOnlineTurnLoop(){
     NET.appliedSeq=entry.seq;   // v0.15: see checkStateDigest()'s comment for why this - not
                                 // G.actionSeq - is the correct checkpoint key
     maybeResolvePendingStateCheck();
+    // v0.22 P2 cold-reload path: keep the last-room record's timestamp fresh while a game is
+    // actively flowing (throttled - one tiny localStorage write a minute at most), so a
+    // memory-killed phone relaunching mid-game sees a RECENT record and silently rejoins.
+    // Without this the ts only updated on (re)boots, which could be an hour stale mid-game.
+    if(Date.now()-LAST_ROOM_TS_BUMP>60000){ LAST_ROOM_TS_BUMP=Date.now(); saveLastRoom(NET.code,true); }
   }
 }
 // Applies one server-decided action through the appropriate rendering helper. 'move' reuses
@@ -4672,6 +4747,9 @@ async function runOnlineTurnLoop(){
 // actual dealt cards, whether the hand threw in) rather than this client re-deriving anything.
 async function applyServerAction(action,myGen){
   clearTurnPrompt();
+  if(AWAY_STATE)clearAwayUI();   // v0.22 P3: any fresh action means the wait ended (their move,
+                                 // a server-played turn, or a seatToCpu) - drop the ladder UI
+
   if(action.kind==='deal')await applyDealAction(action);
   else if(action.kind==='move'){
     const cardEl=(NET.mySeat===action.seat)?NET.pendingCardEl:null; NET.pendingCardEl=null;
@@ -4783,6 +4861,21 @@ function onSync(m){
   updateConnIndicator();
   sendPushToken();   // v0.16 item 5: re-register on every reconnect (rejoin/reclaim both land here) - see § PUSH
   if(m.G){
+    // v0.22 P2 cold-reload path: this sync answers boot()'s SILENT auto-rejoin (an iOS
+    // memory-kill relaunch - see the boot sequence at the bottom of this file). Only a game
+    // that is genuinely LIVE right now (not paused, not over) gets silently rejoined straight
+    // to the board; a paused or finished game quietly falls back to the menu tile instead
+    // (keepRoom:true - the tile stays, the deliberate resume path still works). Critically,
+    // this path never touches enteringViaResume, so it can never pause the table or open the
+    // reunion lobby - one phone's memory kill must never interrupt the family's game.
+    if(NET.silentAutoResume){
+      NET.silentAutoResume=false;
+      if(m.G.over||m.paused){ leaveOnlineToMenu(null,true); return; }
+      NET.silentRejoin=false;
+      bootGameFromSnapshot(m.G,m.paused,m.tableSpeed,m.appliedSeq);
+      toast('Welcome back - picking up right where you were',2400);
+      return;
+    }
     bootGameFromSnapshot(m.G,m.paused,m.tableSpeed,m.appliedSeq);
     // v0.9 refinement: coming back via the menu's "Resume Saved Game" tile (as opposed to a
     // normal brief mid-session reconnect blip) shows the reunion lobby instead of dropping
@@ -4896,11 +4989,11 @@ function leaveOnlineToMenu(msg,keepRoom){
   if(NET.ws){ try{NET.ws.close();}catch(e){} }
   Object.assign(NET,{ws:null,online:false,isHost:false,code:null,playerId:null,token:null,mySeat:-1,
     lobby:null,seatOwners:null,actionQueue:[],pendingActionResolvers:[],pendingStateCheck:null,appliedSeq:-1,readyCheck:null,
-    recalActive:false,recalKind:null,recalStartedAt:null,recalFailed:false});
+    recalActive:false,recalKind:null,recalStartedAt:null,recalFailed:false,silentAutoResume:false});
   if(!keepRoom)clearLastRoom();   // v0.8: leaving is a deliberate choice - don't auto-rejoin this one later
   updateConnIndicator();
+  clearAwayUI();   // v0.22 P3: never leave a stale away-ladder line/button behind
   resetNetUiFlow();
-  $('waitHostOverlay').classList.add('hidden');
   $('pauseOverlay').classList.add('hidden');
   $('readyCheckOverlay').classList.add('hidden');   // v0.16 item 4: defensive - see § READY CHECK
   $('onlineRulesOverlay').classList.add('hidden');  // v0.16 item 4: defensive - never linger past a leave
@@ -4908,6 +5001,70 @@ function leaveOnlineToMenu(msg,keepRoom){
   clearToasts();   // v0.11.3: wipe any leftover in-game toast before landing on the menu
   updateMenuResumeButtons();
   if(msg)toast(msg);   // an intentional fresh menu-context message (e.g. "kicked") is fine - it's new, not stale
+}
+/* ============================= § PRESENCE + AWAY LADDER (v0.22) =============================
+   P0 - passive presence: a disconnected player's name plate dims (ANY seat, host included -
+   the server's existing 'presence' broadcasts already cover every player symmetrically) plus a
+   small non-blocking toast. This REPLACES the old blocking #waitHostOverlay entirely - since
+   v0.15 the server drives the whole game itself, so nobody's disconnect ever actually stops
+   play; the table just deserves to see who's away.
+   P3 - the current-player-away ladder is SERVER-driven (see server.js/server.ts "§ AWAY
+   LADDER"): while the on-turn HUMAN's socket is disconnected/silent, the server broadcasts
+   additive 'awayStatus' messages old clients simply ignore. Stages: 'nudged' (~30s - status
+   line + a re-nudge button for anyone), 'cpuOffer' (~2.5min - adds a one-tap "have the
+   computer play this one turn" button; the SERVER plays that single turn with the Tricky AI,
+   the seat STAYS human, its owner can rejoin normally), 'clear' (they're back / turn moved
+   on). No automatic forfeits, no auto-CPU-conversion - "Leave for good" (v0.16) remains the
+   only permanent seat conversion, and it remains the player's OWN choice. */
+function updatePresenceUI(){
+  if(!G||!NET.online||!NET.seatOwners)return;
+  for(let s=0;s<G.n;s++){
+    const el=$(`plaque-${s}`); if(!el)continue;
+    const pid=NET.seatOwners[s];
+    const away=G.seats[s].type==='human'&&pid!=null&&pid!==NET.playerId&&!NET.presence[pid];
+    el.classList.toggle('away',away);
+  }
+}
+let AWAY_STATE=null;   // {seat, stage, name} while the server's ladder has a stage on screen
+function clearAwayUI(){
+  AWAY_STATE=null;
+  const aa=$('awayActions'); if(aa)aa.replaceChildren();
+}
+function handleAwayStatus(m){
+  if(!NET.online||!G||G.over)return;
+  if(m.stage==='clear'){ clearAwayUI(); return; }
+  // A stage about MY OWN seat reaching me means I'm demonstrably back - the server's own
+  // sweep will notice and clear momentarily; never show myself a "waiting for you" line.
+  if(m.seat===NET.mySeat)return;
+  AWAY_STATE={seat:m.seat,stage:m.stage,name:m.name||((G.seats[m.seat]||{}).name)||'them'};
+  renderAwayLine();
+}
+function renderAwayLine(){
+  if(!AWAY_STATE||!G||G.over)return;
+  const {seat,stage,name}=AWAY_STATE;
+  // Status line: the normal update bubble (latest-wins, same as every turn prompt).
+  turnPrompt(stage==='cpuOffer'?`Still waiting for ${name}.`:`Waiting for ${name}. We sent their phone a nudge.`,false);
+  // Buttons: the dedicated row just above the bubble (see #awayActions, § STYLE).
+  const aa=$('awayActions'); if(!aa)return;
+  aa.replaceChildren();
+  const nudge=document.createElement('button');
+  nudge.textContent='Nudge again';
+  nudge.onclick=()=>{
+    const pid=NET.seatOwners?NET.seatOwners[seat]:null;
+    if(pid!=null)netSend({type:'nudge',targetPlayerId:pid});
+    nudge.disabled=true; nudge.textContent='Nudge sent';
+    setTimeout(()=>{ if(nudge.isConnected){ nudge.disabled=false; nudge.textContent='Nudge again'; } },30000);
+  };
+  aa.appendChild(nudge);
+  if(stage==='cpuOffer'){
+    const cpu=document.createElement('button');
+    cpu.textContent=`Have the computer play this turn for ${name}`;
+    cpu.onclick=()=>{
+      netSend({type:'playTurnForAway',seat});
+      cpu.disabled=true; cpu.textContent='Asking the computer...';
+    };
+    aa.appendChild(cpu);
+  }
 }
 function handleNetMessage(m){
   switch(m.type){
@@ -5002,24 +5159,46 @@ function handleNetMessage(m){
       clearTimeout(LEAVE_FOR_GOOD_TIMER);
       leaveOnlineToMenu(null,false);
       return;
-    case 'presence':
+    case 'presence': {
       // v0.9: kept for the reunion lobby's green/gray dots (see § REUNION). v0.10.2: ALSO
       // feeds the plain pause overlay's tap-to-resume gate (updatePauseUI(), § TURNS) - so a
       // returning player's dot flipping green live-updates whether the OTHER player(s) still
       // sitting on the plain paused screen see it as resumable.
+      const was=NET.presence[m.playerId];
       NET.presence[m.playerId]=!!m.connected;
       if(NET.reunionOpen)renderReunionOverlay();
       else updatePauseUI();
+      // v0.22 P0: passive presence on the live board - dim/undim the plate and show a small
+      // non-blocking toast, only for a REAL change (not the initial seeding), only while a
+      // live game is actually on screen, and never for this device's own blips.
+      updatePresenceUI();
+      if(was!==undefined&&!!m.connected!==!!was&&G&&!G.over&&!NET.reunionOpen
+         &&m.playerId!==NET.playerId&&!$('game').classList.contains('hidden')){
+        const seat=NET.seatOwners?NET.seatOwners.indexOf(m.playerId):-1;
+        if(seat>=0&&G.seats[seat]&&G.seats[seat].type==='human'){
+          toast(m.connected?`${G.seats[seat].name} is back`:`${G.seats[seat].name} lost connection`,2600);
+        }
+      }
       return;
+    }
     case 'nudged':
       // v0.9: someone in the reunion lobby is trying to get this player back to the table -
       // best-effort (only reaches a phone that still has a live connection here somewhere).
       toast(`👋 ${m.fromName||'Someone'} is trying to get the game going again!`,3400);
       return;
     case 'hostStatus':
+      // v0.22 P0: this no longer toggles any overlay. The old #waitHostOverlay ("PAUSED -
+      // waiting for host") was a pre-v0.15 relic: the SERVER runs every CPU turn, deal and
+      // bow-out itself now, so a gone host stalls nothing but their own seat's turns - and
+      // the 'presence' broadcast above (which the server sends for the host too, symmetric
+      // with every other player) already drives the passive plate-dim + toast. The server
+      // keeps broadcasting hostStatus so old app builds behave exactly as before;
+      // NET.hostConnected is kept in case anything ever wants it again.
       NET.hostConnected=!!m.connected; updateConnIndicator();
-      if(!$('game').classList.contains('hidden'))
-        $('waitHostOverlay').classList.toggle('hidden',NET.hostConnected);
+      return;
+    case 'awayStatus':
+      // v0.22 P3: server-driven current-player-away ladder - see § PRESENCE + AWAY LADDER.
+      handleAwayStatus(m);
       return;
     case 'gameAction':
       if(m.action.kind==='start'){
@@ -5037,8 +5216,9 @@ function handleNetMessage(m){
       // server.js's Node `ws` library does (see that file's HEARTBEAT/isAlive/terminate()) -
       // this app-level echo is how the Deno server tells a half-dead client socket (one that
       // never replies) apart from a healthy-but-quiet one, and cleans the dead one up rather
-      // than leaving a room thinking that seat is still connected. server.js never sends this
-      // unprompted, so this case is a no-op in practice against the Node server - harmless.
+      // than leaving a room thinking that seat is still connected. v0.22 P4: server.js now
+      // ALSO sends these (every ~25s, alongside its protocol-frame ping) so the Node server
+      // gets the same app-level proof-of-life signal - this echo serves both servers now.
       try{ netSend({type:'pong',t:m.t}); }catch(e){}
       return;
     case 'stateCheck':
@@ -6117,7 +6297,11 @@ function tryJoinOrRejoin(code,silent){
     connectWs().then(()=>{ netSend({type:'rejoin',code,playerId:saved.playerId,token:saved.token,protocolVersion:PROTOCOL_VERSION}); })
       .catch(()=>{
         NET.wantConnection=false; NET.silentRejoin=false;
-        if(silent){ clearLastRoom(); updateMenuResumeButtons(); } else openJoinOverlay(code);
+        // v0.22 P2: a silent attempt failing to even CONNECT (server unreachable, airplane
+        // mode at launch) says nothing about whether the room is dead - keep the record and
+        // just land on the normal menu with its resume tile intact. Only a real rejoinError
+        // (the room is verifiably gone) clears the record, via its own handler.
+        if(silent){ NET.silentAutoResume=false; updateMenuResumeButtons(); } else openJoinOverlay(code);
       });
   }else if(silent){
     updateMenuResumeButtons();
@@ -6143,14 +6327,32 @@ function tryJoinOrRejoin(code,silent){
    input to lock - just a plain "is the socket still good" question. */
 function onForeground(){
   if(!NET.online)return;
+  // v0.22 P2: a foreground IS a user-visible retry - reset the reconnect backoff to its floor
+  // before anything else, so a background-era retry streak that escalated to 8s can never make
+  // the player stare at "Reconnecting..." for 8 extra seconds after they're already back.
+  NET.backoff=1000;
   if(G&&!G.over)triggerRecalibration();
   else verifyConnectionAlive();
 }
+/* v0.22 P2 - the WebKit bug 228296 workaround, iOS app only: a WebSocket that lives through a
+   backgrounding can come back as a zombie (readyState OPEN, close events never fire, messages
+   silently lost - see HANDOFF.md v0.22 and the reconnect research doc). Instead of ever
+   letting that shape exist, the app proactively closes its socket CLEANLY the moment it goes
+   hidden - every return is then the known-clean "socket dead, full rejoin + snapshot" path,
+   which this codebase's own storm tests measure at ~100-150ms. The website keeps its socket
+   (desktop browsers don't freeze background tabs' sockets the same way, and the resync ack
+   watchdog in triggerRecalibration() covers the rare zombie there). */
+function onBackgroundHide(){
+  if(!IS_APP)return;
+  if(!NET.online||!NET.wantConnection||!NET.ws)return;
+  try{NET.ws.close();}catch(e){}
+}
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='visible'){ onForeground(); drainSoloQueue(); }
-  else flushPendingOfflineSave();   // v0.10.3: see flushPendingOfflineSave() - going hidden
+  else { flushPendingOfflineSave(); onBackgroundHide(); }   // v0.10.3: see flushPendingOfflineSave() - going hidden
   // (backgrounding, or the OS about to suspend/kill the tab) is exactly the moment a pending
-  // debounced offline save needs to land NOW, not in up to 250ms.
+  // debounced offline save needs to land NOW, not in up to 250ms. v0.22: also the moment the
+  // iOS app proactively closes its socket - see onBackgroundHide() above.
 });
 addEventListener('pageshow',()=>{ onForeground(); drainSoloQueue(); });
 addEventListener('pagehide',flushPendingOfflineSave);   // v0.10.3: belt-and-suspenders - some
@@ -6296,6 +6498,23 @@ else{
   drainSoloQueue();   // v0.13: retry any offline-queued solo/pass-and-play results on app open
   const qs=new URLSearchParams(location.search);
   const joinCode=qs.get('join');
+  // v0.22 Layer-2 lifecycle test hook (harmless in prod - same family as #autotest and ?ws=):
+  // ?testseed=CODE:PLAYERID:TOKEN pre-seeds this device's stored session + last-room record
+  // for a room the TEST harness created out-of-band, then falls through to the normal boot
+  // below, where the silent auto-rejoin path picks it up exactly like a real memory-kill
+  // relaunch would. Holding a valid rejoin token already grants that seat, so this exposes
+  // nothing a raw websocket client couldn't already do. See server/tests/sim_lifecycle.js.
+  const seed=qs.get('testseed');
+  if(seed){
+    try{
+      const [sc,spid,stok]=seed.split(':');
+      if(sc&&spid&&stok){
+        localStorage.setItem('nasty-net-'+sc.toUpperCase(),JSON.stringify({playerId:+spid,token:stok}));
+        localStorage.setItem('nasty-last-room',JSON.stringify({code:sc.toUpperCase(),wasStarted:true,ts:Date.now()}));
+        markSpeedChosen();
+      }
+    }catch(e){}
+  }
   // v0.19.2: a held offline game (speed picker still unanswered when the tab reloaded/relaunched
   // - see startGame()/savePendingOfflineStart()) takes back over here, straight past the menu, so
   // "reload mid-picker" lands on the exact same pre-deal board with the picker still up instead
@@ -6318,6 +6537,25 @@ else{
     // offline or online, freshly opened or coming back from eviction - surfaces through the
     // same single, deliberate "▶ Resume Saved Game" tile on the menu; tapping it is what
     // actually rejoins (and, for an online game, opens the reunion lobby).
+    //
+    // v0.22 P2 cold-reload refinement: ONE narrow, deliberate exception to the v0.9 rule. iOS
+    // can memory-kill the webview of a backgrounded app mid-game; the app then relaunches cold
+    // to this exact code path with no foreground event ever firing - and the FAMILY'S game is
+    // still running without this phone. For that shape only - a STARTED room touched within
+    // the last 30 minutes, with a stored session - quietly TRY to rejoin; onSync() then only
+    // actually drops onto the board if the game is genuinely live RIGHT NOW (not paused, not
+    // over - see the silentAutoResume branch there), and never pauses the table or opens the
+    // reunion lobby doing it. Anything else (paused game, finished game, dead room, unreachable
+    // server, stale record) falls back to this same menu + tile, exactly as v0.9 designed.
+    // This does not re-litigate v0.9's call: that complaint was about days-old games bouncing
+    // a LONE player onto a stale board; the 30-minute liveness gate + the server-checked
+    // "still live" gate mean this only ever fires while the family is actively mid-game.
+    const last=loadLastRoom();
+    const RESUME_SILENT_WINDOW_MS=30*60*1000;
+    if(last&&last.wasStarted&&loadNetSession(last.code)&&Date.now()-(last.ts||0)<RESUME_SILENT_WINDOW_MS){
+      NET.silentAutoResume=true;
+      tryJoinOrRejoin(last.code,true);
+    }
     updateMenuResumeButtons();
   }
 }

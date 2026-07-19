@@ -712,7 +712,9 @@ async function maybeSendTurnPush(code: string, E: any, finished: boolean): Promi
   const ownerId = cur.value.seatOwners[seat];
   if (ownerId == null) return;
   const player = cur.value.players.find((p) => p.id === ownerId);
-  if (!player || player.connected) return;   // they're right there - no need to buzz their phone
+  // v0.22: was `player.connected` alone - now the shared away test (twin of server.js), so a
+  // silent zombie socket also counts as "not right there" and still gets buzzed.
+  if (!player || !playerLooksAway(code, player)) return;   // they're right there - no need to buzz their phone
   if (!player.pushToken) return;             // never registered (web player, or app player before granting permission)
   await sendTurnPush({
     token: player.pushToken, playerName: G.seats[seat].name,
@@ -971,6 +973,85 @@ setInterval(() => {
 }, HEARTBEAT_MS);
 
 /* ---------------------------------------------------------------------------------------
+ * v0.22 § AWAY LADDER — twin of server.js's matching block, keep the two in sync. While the
+ * on-turn HUMAN's socket is disconnected (or app-level silent - socketLastSeen), escalate:
+ * AWAY_NUDGE_MS -> turn push (no-op until the APNs key lands) + {awayStatus stage:'nudged'};
+ * AWAY_CPU_OFFER_MS -> {awayStatus stage:'cpuOffer'} (one-tap server-played single turn via
+ * 'playTurnForAway', any player, no vote - seat STAYS human); target back / turn moved on /
+ * room paused -> {awayStatus stage:'clear'}. Additive messages old builds 16-28 ignore. No
+ * automatic forfeits, no automatic CPU conversion. State is isolate-local + transient on
+ * purpose (an isolate recycle just restarts the clock) - same single-instance-in-practice
+ * reasoning as § RELAY. The sweep is gated on kvReady so it can never run during the
+ * platform's build-time module evaluation (see ensureKv()'s load-bearing comment).
+ * ------------------------------------------------------------------------------------- */
+function envInt(name: string, dflt: number): number {
+  const v = Number(Deno.env.get(name));
+  return Number.isFinite(v) && v > 0 ? v : dflt;
+}
+const AWAY_NUDGE_MS = envInt("NASTY_AWAY_NUDGE_MS", 30 * 1000);
+const AWAY_CPU_OFFER_MS = envInt("NASTY_AWAY_CPU_MS", 150 * 1000);
+const AWAY_SILENT_MS = envInt("NASTY_AWAY_SILENT_MS", 60 * 1000);
+const AWAY_SWEEP_MS = envInt("NASTY_AWAY_SWEEP_MS", Math.min(5000, Math.max(500, Math.floor(AWAY_NUDGE_MS / 3))));
+const AWAY_REPUSH_MIN_MS = 25 * 1000;
+type AwayState = { seat: number; since: number; nudgeSent: boolean; offerSent: boolean; announced: boolean; lastPushAt: number };
+const awayStates = new Map<string, AwayState>();
+function playerLooksAway(code: string, p: Player | undefined): boolean {
+  if (!p) return true;
+  if (!p.connected) return true;
+  const ws = localSockets.get(code)?.get(p.id);
+  if (ws && Date.now() - (socketLastSeen.get(ws) ?? Date.now()) > AWAY_SILENT_MS) return true;
+  return false;
+}
+function clearAwayState(code: string) {
+  const a = awayStates.get(code);
+  if (!a) return;
+  if (a.announced) broadcastRoom(code, { type: "awayStatus", stage: "clear", seat: a.seat });
+  awayStates.delete(code);
+}
+async function awaySweep() {
+  if (!kvReady) return;   // no request has initialized KV yet - nothing can be in play
+  await ensureKv();
+  const now = Date.now();
+  // Rooms with at least one locally-connected socket are the only ones with anyone to show
+  // ladder UI to (single-instance-in-practice, same reasoning as § RELAY).
+  for (const code of Array.from(localSockets.keys())) {
+    const cur = await kv.get<RoomMeta>(roomKey(code));
+    const meta = cur.value;
+    let target: { seat: number; name: string } | null = null;
+    if (meta && meta.started && !meta.paused && meta.seatOwners) {
+      const E = getEngine(code, meta);
+      const G = E ? E.getG() : null;
+      if (G && !G.over && G.seats[G.turn] && G.seats[G.turn].type === "human") {
+        const seat = G.turn;
+        const ownerId = meta.seatOwners[seat];
+        if (ownerId != null && playerLooksAway(code, meta.players.find((p) => p.id === ownerId))) {
+          target = { seat, name: G.seats[seat].name };
+        }
+      }
+    }
+    const a = awayStates.get(code);
+    if (!target) { if (a) clearAwayState(code); continue; }
+    if (!a || a.seat !== target.seat) {
+      awayStates.set(code, { seat: target.seat, since: now, nudgeSent: false, offerSent: false, announced: false, lastPushAt: 0 });
+    }
+    const st = awayStates.get(code)!;
+    if (!st.nudgeSent && now - st.since >= AWAY_NUDGE_MS) {
+      st.nudgeSent = true; st.announced = true; st.lastPushAt = now;
+      const E = getEngine(code, meta!);
+      if (E) maybeSendTurnPush(code, E, false).catch((e) => log("push check failed", code, (e as Error).message));
+      broadcastRoom(code, { type: "awayStatus", stage: "nudged", seat: target.seat, name: target.name });
+      log("away ladder: nudged stage", code, "seat=" + target.seat);
+    }
+    if (!st.offerSent && now - st.since >= AWAY_CPU_OFFER_MS) {
+      st.offerSent = true; st.announced = true;
+      broadcastRoom(code, { type: "awayStatus", stage: "cpuOffer", seat: target.seat, name: target.name });
+      log("away ladder: cpuOffer stage", code, "seat=" + target.seat);
+    }
+  }
+}
+setInterval(() => { awaySweep().catch((e) => log("away sweep failed", (e as Error).message)); }, AWAY_SWEEP_MS);
+
+/* ---------------------------------------------------------------------------------------
  * § HTTP — CORS + /health, /leaderboard, /admin/*. See server.js's CORS_HEADERS comment for
  * why this is needed (bpangman.github.io and the relay are different origins).
  * ------------------------------------------------------------------------------------- */
@@ -1022,6 +1103,7 @@ async function handleAdminRoute(req: Request, url: URL): Promise<Response> {
       const meta = e.value;
       out.push({
         code: meta.code, started: meta.started, playerCount: meta.players.length,
+        paused: !!meta.paused,   // v0.22: lets the lifecycle test assert "never paused" server-side
         players: meta.players.map((p) => ({ id: p.id, name: p.name, isHost: p.isHost, connected: !!p.connected })),
       });
     }
@@ -1645,6 +1727,71 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         const target = cur.value.players.find((p) => p.id === msg.targetPlayerId);
         const sender = cur.value.players.find((p) => p.id === playerId);
         if (target) sendToPlayer(code, target.id, { type: "nudged", fromPlayerId: playerId, fromName: sender ? sender.name : "Someone" });
+        // v0.22 § AWAY LADDER: twin of server.js's re-nudge extension - a nudge aimed at the
+        // disconnected/silent ON-TURN player also re-fires the turn push, rate-limited.
+        if (target && cur.value.seatOwners) {
+          const E = getEngine(code, cur.value);
+          const G = E ? E.getG() : null;
+          if (E && G && !G.over && cur.value.seatOwners[G.turn] === target.id && playerLooksAway(code, target)) {
+            const a = awayStates.get(code);
+            const now = Date.now();
+            if (!a || now - (a.lastPushAt || 0) > AWAY_REPUSH_MIN_MS) {
+              if (a) a.lastPushAt = now;
+              maybeSendTurnPush(code, E, false).catch((e) => log("push check failed", code, (e as Error).message));
+            }
+          }
+        }
+        return;
+      }
+
+      case "playTurnForAway": {
+        // v0.22 § AWAY LADDER: twin of server.js's case - see that file's comment for the full
+        // design. Any connected player, once the cpuOffer stage is reached for this exact
+        // seat's current turn, may have the server play that ONE turn with the Tricky AI. The
+        // seat STAYS human; first tap wins (the turn advances, later taps fail seat===G.turn).
+        if (!ctx) return;
+        const { code } = ctx;
+        const wantSeat = Number(msg.seat);
+        await withRoomChain(code, async () => {
+          const pre = await kv.get<RoomMeta>(roomKey(code));
+          if (!pre.value || !pre.value.started || pre.value.paused || !pre.value.seatOwners) return;
+          const meta = pre.value;
+          const E = getEngine(code, meta);
+          if (!E) return;
+          const G = E.getG();
+          if (!G || G.over) return;
+          if (wantSeat !== G.turn) return;                 // stale tap - the turn already moved on
+          if (!G.seats[wantSeat] || G.seats[wantSeat].type !== "human") return;
+          const ownerId = meta.seatOwners![wantSeat];
+          if (ownerId == null) return;
+          if (!playerLooksAway(code, meta.players.find((p) => p.id === ownerId))) return;   // they're back
+          const a = awayStates.get(code);
+          if (!a || a.seat !== wantSeat || !a.offerSent) return;   // only after the offer stage
+          const moves = E.legalMoves(wantSeat);
+          if (moves.length === 0) return;   // defensive - the loop would have auto-passed this seat
+          const savedDiff = G.seats[wantSeat].diff;
+          G.seats[wantSeat].diff = "medium";   // "Tricky" - one-turn assist, restored right after
+          const m = E.chooseAI(wantSeat, moves);
+          G.seats[wantSeat].diff = savedDiff;
+          E.applyMove(wantSeat, m);
+          log("away ladder: computer played one turn for seat", wantSeat, "room", code);
+          clearAwayState(code);
+          const out: Broadcastable[] = [];
+          if (E.getG().over) {
+            out.push({ payload: { type: "gameAction", seq: meta.nextSeq++, action: { kind: "move", seat: wantSeat, m, turn: G.turn } } });
+            await commitAndBroadcast(code, E, out, true);
+            return;
+          }
+          E.advanceTurn();
+          const moveSeq = meta.nextSeq++;
+          out.push({ payload: { type: "gameAction", seq: moveSeq, action: { kind: "move", seat: wantSeat, m, turn: E.getG().turn } } });
+          if (m.kick || m.type === "swap") {
+            out.push({ payload: { type: "stateCheck", afterSeq: moveSeq, digest: gDigestServer(E.getG()) } });
+          }
+          const cont = driveTurnLoopCollect(E, meta);
+          const ok = await commitAndBroadcast(code, E, out.concat(cont.out), cont.finished);
+          if (ok) maybeSendTurnPush(code, E, cont.finished).catch((e) => log("push check failed", code, (e as Error).message));
+        });
         return;
       }
 

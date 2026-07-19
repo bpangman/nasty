@@ -39,7 +39,16 @@ const PORT = process.env.NASTY_PORT ? parseInt(process.env.NASTY_PORT, 10) : 848
 const ROOM_TTL_MS = 30 * 60 * 1000;              // never-started lobby, fully disconnected
 const STARTED_ROOM_TTL_MS = 7 * 24 * 60 * 60 * 1000; // started-but-unfinished game, fully disconnected
 const PRUNE_EVERY_MS = 5 * 60 * 1000;
-const HEARTBEAT_MS = 30 * 1000;
+// v0.22 P4: 30s -> 25s. Cellular NAT gateways drop idle mappings in as little as ~30s; the
+// standard sizing is a heartbeat at ~75% of the shortest infrastructure timeout. The same
+// interval now also carries an APP-LEVEL {type:'ping'} alongside the protocol-frame ping (see
+// the hb interval near the bottom) - a frozen WKWebView's networking process can keep
+// answering protocol-frame pings while the page's JS is suspended, so only an app-level echo
+// proves the CLIENT is actually alive. That app-level proof feeds the § AWAY LADDER's
+// "silent" detection; it is deliberately NOT used to terminate sockets (old builds 16-17
+// never echo app-level pings - the protocol-frame pong keeps governing termination, so
+// nothing changes for any old client).
+const HEARTBEAT_MS = 25 * 1000;
 // v0.8: rooms directory for on-disk persistence (one JSON file per room). Override via
 // NASTY_ROOMS_DIR for tests, so a test server never touches production's saved rooms.
 const ROOMS_DIR = process.env.NASTY_ROOMS_DIR
@@ -494,6 +503,7 @@ function roomFromDisk(obj) {
     readyCheck: obj.readyCheck ? { requiredPlayerIds: obj.readyCheck.requiredPlayerIds || [], ready: new Set(obj.readyCheck.readyPlayerIds || []) } : null,
     paused: !!obj.paused, engine: null, tableSpeed: obj.tableSpeed || 1,
     recorded: !!obj.recorded, nextSeq: obj.nextSeq || 0,
+    away: null,   // v0.22: transient - a restart just restarts the ladder clock
   };
   for (const p of (obj.players || []))
     room.players.set(p.id, {
@@ -603,6 +613,7 @@ function makeRoom(code) {
     tableSpeed: 1,        // v0.15: shared table pacing, host-controlled
     recorded: false,      // v0.15: leaderboard idempotency flag, see finishGame()
     nextSeq: 0,           // v0.15: ever-increasing action seq, independent of log trimming
+    away: null,           // v0.22: transient away-ladder state, never persisted - see § AWAY LADDER
   };
   rooms.set(code, room);
   return room;
@@ -733,13 +744,94 @@ function maybeSendTurnPush(room, seat) {
   const ownerId = room.seatOwners ? room.seatOwners[seat] : null;
   if (ownerId == null) return;
   const player = room.players.get(ownerId);
-  if (!player || player.connected) return;   // they're right there - no need to buzz their phone
+  // v0.22: was `player.connected` alone - now the shared away test, so a SILENT zombie socket
+  // (TCP alive, app frozen - reports connected but hasn't produced an app-level message in
+  // AWAY_SILENT_MS) also counts as "not right there" and still gets its phone buzzed.
+  if (!player || !playerLooksAway(player)) return;   // they're right there - no need to buzz their phone
   if (!player.pushToken) return;             // never registered (web player, or app player before granting permission)
   sendTurnPush({
     token: player.pushToken, playerName: G.seats[seat].name,
     title: "NASTY", body: "It's your turn in NASTY",
   }).catch(e => log("push send threw", room.code, e.message));
 }
+
+/* ---------------------------------------------------------------------------------------
+ * v0.22 § AWAY LADDER — the family-appropriate escalation ladder for "the on-turn HUMAN's
+ * phone is gone" (disconnected, or app-level silent - see ws.lastAppMsgAt). Server-driven so
+ * every phone at the table sees the same thing, wired with ADDITIVE protocol messages
+ * ('awayStatus' broadcasts + the 'playTurnForAway' client request) that old builds 16-28
+ * simply ignore. The ladder, timed from when the away-wait starts:
+ *   0 .. AWAY_NUDGE_MS      nothing beyond the client's own passive grey plate (P0).
+ *   AWAY_NUDGE_MS           fire the v0.16 turn push (graceful no-op until the APNs key
+ *                           lands) + broadcast {awayStatus, stage:'nudged'} - clients show
+ *                           "Waiting for X. We sent their phone a nudge." with a re-nudge
+ *                           button (the existing 'nudge' message, extended below to re-fire
+ *                           the push, rate-limited).
+ *   AWAY_CPU_OFFER_MS       broadcast {awayStatus, stage:'cpuOffer'} - every OTHER player
+ *                           gets a one-tap "Have the computer play this turn for X" button
+ *                           ('playTurnForAway' - any player, no vote). The server plays that
+ *                           SINGLE turn via chooseAI at Tricky; the seat STAYS human and its
+ *                           owner can rejoin normally.
+ * Deliberately NO automatic forfeits and NO automatic CPU conversion (v0.16's reasoning
+ * stands - "Leave for good" remains the only permanent conversion, and remains the player's
+ * own choice). Composes with pause (a paused room's ladder resets - see currentAwayTarget)
+ * and with leaveForGood (a converted seat is type 'cpu', so it can never be an away target).
+ * Thresholds are env-tunable so the permanent freeze-recovery test can run fast; room.away is
+ * transient in-memory state on purpose (a restart just restarts the clock).
+ * ------------------------------------------------------------------------------------- */
+function envInt(name, dflt) {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && v > 0 ? v : dflt;
+}
+const AWAY_NUDGE_MS = envInt("NASTY_AWAY_NUDGE_MS", 30 * 1000);
+const AWAY_CPU_OFFER_MS = envInt("NASTY_AWAY_CPU_MS", 150 * 1000);
+const AWAY_SILENT_MS = envInt("NASTY_AWAY_SILENT_MS", 60 * 1000);
+const AWAY_SWEEP_MS = envInt("NASTY_AWAY_SWEEP_MS", Math.min(5000, Math.max(500, Math.floor(AWAY_NUDGE_MS / 3))));
+const AWAY_REPUSH_MIN_MS = 25 * 1000;   // re-nudge push rate limit per away stretch
+
+function playerLooksAway(p) {
+  if (!p) return true;
+  if (!p.connected) return true;
+  if (p.ws && p.ws.lastAppMsgAt && Date.now() - p.ws.lastAppMsgAt > AWAY_SILENT_MS) return true;
+  return false;
+}
+function currentAwayTarget(room) {
+  if (!room.started || !room.engine || room.paused || !room.seatOwners) return null;
+  const G = room.engine.getG();
+  if (!G || G.over) return null;
+  const seat = G.turn;
+  if (!G.seats[seat] || G.seats[seat].type !== "human") return null;
+  const ownerId = room.seatOwners[seat];
+  if (ownerId == null) return null;
+  if (!playerLooksAway(room.players.get(ownerId))) return null;
+  return { seat, name: G.seats[seat].name };
+}
+function broadcastAwayClear(room) {
+  if (room.away && room.away.announced) broadcast(room, { type: "awayStatus", stage: "clear", seat: room.away.seat });
+  room.away = null;
+}
+const awaySweepTimer = setInterval(() => {
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    const t = currentAwayTarget(room);
+    if (!t) { if (room.away) broadcastAwayClear(room); continue; }
+    if (!room.away || room.away.seat !== t.seat) {
+      room.away = { seat: t.seat, since: now, nudgeSent: false, offerSent: false, announced: false, lastPushAt: 0 };
+    }
+    const a = room.away;
+    if (!a.nudgeSent && now - a.since >= AWAY_NUDGE_MS) {
+      a.nudgeSent = true; a.announced = true; a.lastPushAt = now;
+      maybeSendTurnPush(room, t.seat);   // graceful no-op until the APNs key lands
+      broadcast(room, { type: "awayStatus", stage: "nudged", seat: t.seat, name: t.name });
+      log("away ladder: nudged stage", room.code, "seat=" + t.seat);
+    }
+    if (!a.offerSent && now - a.since >= AWAY_CPU_OFFER_MS) {
+      a.offerSent = true; a.announced = true;
+      broadcast(room, { type: "awayStatus", stage: "cpuOffer", seat: t.seat, name: t.name });
+      log("away ladder: cpuOffer stage", room.code, "seat=" + t.seat);
+    }
+  }
+}, AWAY_SWEEP_MS);
 
 function driveTurnLoop(room) {
   const E = room.engine;
@@ -902,6 +994,7 @@ async function handleAdminRoute(req, res, url) {
   if (parts.length === 2 && parts[1] === "rooms" && req.method === "GET") {
     const list = Array.from(rooms.values()).map(r => ({
       code: r.code, started: r.started,
+      paused: !!r.paused,   // v0.22: lets the lifecycle test assert "never paused" server-side
       playerCount: r.players.size,
       players: Array.from(r.players.values()).map(p => ({ id: p.id, name: p.name, isHost: p.isHost, connected: p.connected })),
     }));
@@ -1048,10 +1141,16 @@ function gameSnapshotFields(room, isHost) {
 wss.on("connection", (ws, req) => {
   const ip = remoteIp(req);
   ws.isAlive = true;
+  // v0.22: app-level proof-of-life clock (twin of server.ts's socketLastSeen) - any inbound
+  // APPLICATION message counts; protocol-frame pongs deliberately do NOT (a frozen WKWebView's
+  // network stack can keep answering those with the page's JS fully suspended - the exact
+  // "silent" shape the § AWAY LADDER needs to see through).
+  ws.lastAppMsgAt = Date.now();
   ws.on("pong", () => { ws.isAlive = true; });
   let ctx = null;
 
   ws.on("message", (raw) => {
+    ws.lastAppMsgAt = Date.now();
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch (e) { return; }
     if (!msg || typeof msg.type !== "string") return;
@@ -1523,6 +1622,61 @@ wss.on("connection", (ws, req) => {
         const target = room.players.get(msg.targetPlayerId);
         const sender = room.players.get(playerId);
         if (target && target.ws) send(target.ws, { type: "nudged", fromPlayerId: playerId, fromName: sender ? sender.name : "Someone" });
+        // v0.22 § AWAY LADDER: a nudge aimed at the disconnected/silent ON-TURN player also
+        // re-fires the turn push (rate-limited per away stretch) - this is the "Nudge again"
+        // button's whole point once the live-toast route above can't reach them.
+        if (room.engine && room.seatOwners) {
+          const G = room.engine.getG();
+          if (G && !G.over && room.seatOwners[G.turn] === msg.targetPlayerId && playerLooksAway(target)) {
+            const a = room.away;
+            const now = Date.now();
+            if (!a || now - (a.lastPushAt || 0) > AWAY_REPUSH_MIN_MS) {
+              if (a) a.lastPushAt = now;
+              maybeSendTurnPush(room, G.turn);
+            }
+          }
+        }
+        return;
+      }
+
+      case "playTurnForAway": {
+        // v0.22 § AWAY LADDER: {type:'playTurnForAway', seat} - ANY connected player may, once
+        // the ladder's cpuOffer stage has been reached for that exact seat's current turn, have
+        // the server play that ONE turn with the Tricky AI. One tap, no vote; the first tap
+        // wins (the turn advances, so a second tap fails the seat===G.turn check and is
+        // silently ignored). The seat STAYS human, its owner rejoins normally - this is help,
+        // never a takeover. Old clients never send this message - fully additive.
+        if (!ctx) return;
+        const { room } = ctx;
+        if (!room.started || !room.engine || room.paused) return;
+        const E = room.engine, G = E.getG();
+        if (!G || G.over) return;
+        const seat = Number(msg.seat);
+        if (seat !== G.turn) return;                       // stale tap - the turn already moved on
+        if (!G.seats[seat] || G.seats[seat].type !== "human") return;
+        const ownerId = room.seatOwners ? room.seatOwners[seat] : null;
+        if (ownerId == null) return;
+        if (!playerLooksAway(room.players.get(ownerId))) return;   // they're back - it's their turn again
+        if (!room.away || room.away.seat !== seat || !room.away.offerSent) return;   // only after the offer stage
+        const moves = E.legalMoves(seat);
+        if (moves.length === 0) return;   // defensive - driveTurnLoop would have auto-passed this seat
+        // chooseAI at Tricky ("medium" - this codebase's internal name for it) regardless of
+        // anything stored on the seat - a one-turn assist, not a difficulty change; the seat's
+        // own config is restored immediately after the pick.
+        const savedDiff = G.seats[seat].diff;
+        G.seats[seat].diff = "medium";
+        const m = E.chooseAI(seat, moves);
+        G.seats[seat].diff = savedDiff;
+        E.applyMove(seat, m);
+        log("away ladder: computer played one turn for seat", seat, "room", room.code);
+        broadcastAwayClear(room);
+        if (E.getG().over) { appendAction(room, { kind: "move", seat, m, turn: G.turn }); finishGame(room); return; }
+        E.advanceTurn();
+        // Same explicit-turn + post-advance digest pattern as every other move site (v0.15
+        // bugs #3/#4 - see driveTurnLoop's comments).
+        const awaySeqNum = appendAction(room, { kind: "move", seat, m, turn: E.getG().turn });
+        if (m.kick || m.type === "swap") maybeStateCheck(room, awaySeqNum);
+        driveTurnLoop(room);
         return;
       }
 
@@ -1558,6 +1712,11 @@ const hb = setInterval(() => {
     if (ws.isAlive === false) { try { ws.terminate(); } catch (e) {} return; }
     ws.isAlive = false;
     try { ws.ping(); } catch (e) {}
+    // v0.22 P4: app-level ping too - the client echoes {type:'pong'} (index.html's 'ping'
+    // case, shipped v0.16/build 18), which refreshes ws.lastAppMsgAt and thereby the § AWAY
+    // LADDER's "silent" clock. Builds 16-17 ignore it silently - harmless, never terminated
+    // over it (see HEARTBEAT_MS's comment).
+    send(ws, { type: "ping", t: Date.now() });
   });
 }, HEARTBEAT_MS);
 
@@ -1604,7 +1763,7 @@ log(`protocol version: ${PROTOCOL_VERSION}`);
 server.listen(PORT, () => log(`nasty relay listening on :${PORT}`));
 
 function shutdown() {
-  clearInterval(hb); clearInterval(pruneTimer); clearInterval(reclaimSweepTimer);
+  clearInterval(hb); clearInterval(pruneTimer); clearInterval(reclaimSweepTimer); clearInterval(awaySweepTimer);
   flushAllPersists();
   if (lbPersistTimer) { clearTimeout(lbPersistTimer); lbPersistTimer = null; }
   persistLeaderboardNow();
