@@ -763,9 +763,12 @@ async function actuallyStartGame(code: string, pre: RoomMeta): Promise<void> {
   broadcastRoom(code, { type: "gameAction", seq: 0, action: startAction, seatOwners: r.meta.seatOwners });
   log("room started", code, `n=${n}`, lobby.teams ? "teams" : "ffa");
   // v0.22 P0b § SEAT GATE: only players who PROMISED a 'seated' signal (new clients) are ever
-  // waited for; a table of old clients (empty set) deals immediately, exactly as before.
+  // waited for; a table of old clients (empty set) deals immediately, exactly as before. A
+  // promiser who has ALREADY disconnected again (their close ran before this gate existed)
+  // is skipped up front - their overlays are moot and their close can't release them anymore.
   const seatOwnersNow = r.meta.seatOwners || [];
-  const waiting = new Set(Array.from(willSeatMap.get(code) || []).filter((id) => seatOwnersNow.includes(id)));
+  const waiting = new Set(Array.from(willSeatMap.get(code) || []).filter((id) =>
+    seatOwnersNow.includes(id) && !!(r.meta.players.find((p) => p.id === id) || {}).connected));
   willSeatMap.delete(code);
   if (waiting.size === 0) {
     // Drive the opening stretch (first deal + any leading CPU turns) immediately.

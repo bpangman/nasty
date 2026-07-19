@@ -997,8 +997,11 @@ function actuallyStartGame(room) {
   broadcast(room, { type: "gameAction", seq: 0, action: startAction, seatOwners: room.seatOwners });
   log("room started", room.code, `n=${n}`, room.lobby.teams ? "teams" : "ffa");
   // v0.22 P0b § SEAT GATE: only players who PROMISED a 'seated' signal (new clients) are ever
-  // waited for; a table of old clients (empty set) deals immediately, exactly as before.
-  const waiting = new Set(Array.from(room.willSeat || []).filter(id => room.seatOwners.includes(id)));
+  // waited for; a table of old clients (empty set) deals immediately, exactly as before. A
+  // promiser who has ALREADY disconnected again (their close ran before this gate existed)
+  // is skipped up front - their overlays are moot and their close can't release them anymore.
+  const waiting = new Set(Array.from(room.willSeat || []).filter(id =>
+    room.seatOwners.includes(id) && !!(room.players.get(id) || {}).connected));
   room.willSeat = new Set();
   if (waiting.size === 0) { driveTurnLoop(room); return; }
   room.seatGate = {
