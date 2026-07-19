@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=2efa1bd7-6388-4d25-91cb-ab510ff2c4e8&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=1ed86158-f749-4c60-943d-dd6d4f1257cf&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -61,13 +61,14 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 27 reached the family</h1>
+<h1 style="color:#1a5c38">🎉 Build 28 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>This update fixes the occasional "my board looks different from everyone else's" glitch after
-switching apps and coming back to an online game. The app now always double checks it's fully
-caught up before letting you play again (you'll briefly see "Recalibrating"), so that can't
-happen anymore. If a connection ever truly gets stuck, there's now a clear message and a Reset
-connection button (also always available from the Menu) to fix it without closing the app.</p>
+<p>Two things in this update. First, the card audit you asked for: the deck is confirmed a true
+52 card deck, exactly 4 of each card, fully dealt before any reshuffle - that part was always
+right. But the Nasty computer player WAS caught peeking at everyone's hidden cards when it
+planned ahead. That's fixed - it now plays with only what a real player could see, and it's
+still clearly the toughest opponent, just honest now. Second, the leaderboard now has two tabs:
+Solo for free for all games and Teams for team games, each with its own points.</p>
 <h3>📱 The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
 <a href="https://testflight.apple.com/join/d79YpZea">https://testflight.apple.com/join/d79YpZea</a></p>
@@ -81,7 +82,7 @@ connection button (also always available from the Menu) to fix it without closin
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 27 is live for the family 🎉', body], check=True)
+                    'NASTY: build 28 is live for the family 🎉', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED - email sent, watcher done')
 except Exception as e:
