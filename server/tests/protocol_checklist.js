@@ -236,7 +236,10 @@ async function main() {
     const j2 = await r2.json();
     check(j2.duplicate === true, "duplicate gameId is an idempotent no-op");
     const lb = await (await fetch(BASE + "/leaderboard")).json();
-    check(lb.ProtoTest && lb.ProtoTest.hg4s === 1 && lb.ProtoTest.hpts === 5, "leaderboard shows the solo result exactly once");
+    // v0.21 split: a LEGACY plain-hpts delta (what this POST deliberately still sends - it
+    // doubles as the old-client compatibility check) gets redirected into the correct split
+    // bucket via its hg4s mode sibling - solo, so hptsS. Plain hpts is never stored anymore.
+    check(lb.ProtoTest && lb.ProtoTest.hg4s === 1 && lb.ProtoTest.hptsS === 5, "leaderboard shows the solo result exactly once (legacy hpts redirected to hptsS)");
     const r3 = await fetch(BASE + "/solo-result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ gameId: "stale-" + Date.now(), epoch: 0, entries: [{ name: "Stale", delta: { hg4s: 1 } }] }) });
     check(r3.status === 409, "stale-epoch solo result rejected 409");
   }
@@ -263,9 +266,11 @@ async function main() {
     check(Array.isArray(rooms) && rooms.some((r) => r.code === code), "admin: rooms list shows the live room");
     const ren = await fetch(BASE + `/admin/rooms/${code}/rename`, { method: "POST", headers: { "x-admin-token": ADMIN_TOKEN, "content-type": "application/json" }, body: JSON.stringify({ playerId: joined.playerId, name: "Renamed" }) });
     check(ren.ok, "admin: player rename");
-    const patch = await fetch(BASE + "/admin/leaderboard/ProtoTest", { method: "PATCH", headers: { "x-admin-token": ADMIN_TOKEN, "content-type": "application/json" }, body: JSON.stringify({ hpts: 42 }) });
+    // v0.21 split: the admin points editor PATCHes the split keys (hptsS/hptsT) - plain hpts
+    // is no longer an accepted stat key anywhere.
+    const patch = await fetch(BASE + "/admin/leaderboard/ProtoTest", { method: "PATCH", headers: { "x-admin-token": ADMIN_TOKEN, "content-type": "application/json" }, body: JSON.stringify({ hptsS: 42 }) });
     const pj = await patch.json();
-    check(patch.ok && pj.hpts === 42, "admin: leaderboard PATCH sets absolute value");
+    check(patch.ok && pj.hptsS === 42, "admin: leaderboard PATCH sets absolute value");
     const del = await fetch(BASE + "/admin/leaderboard/ProtoTest", { method: "DELETE", headers: { "x-admin-token": ADMIN_TOKEN } });
     check(del.ok, "admin: leaderboard DELETE");
     const lb2 = await (await fetch(BASE + "/leaderboard")).json();
