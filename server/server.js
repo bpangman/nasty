@@ -771,7 +771,7 @@ function maybeSendTurnPush(room, seat) {
 }
 
 /* ---------------------------------------------------------------------------------------
- * v0.22 § AWAY LADDER — the family-appropriate escalation ladder for "the on-turn HUMAN's
+ * v0.22 § AWAY LADDER - the family-appropriate escalation ladder for "the on-turn HUMAN's
  * phone is gone" (disconnected, or app-level silent - see ws.lastAppMsgAt). Server-driven so
  * every phone at the table sees the same thing, wired with ADDITIVE protocol messages
  * ('awayStatus' broadcasts + the 'playTurnForAway' client request) that old builds 16-28
@@ -940,7 +940,7 @@ function maybeAdvanceReadyCheck(room) {
   actuallyStartGame(room);
 }
 /* ---------------------------------------------------------------------------------------
- * v0.22 P0b § SEAT GATE — hold the FIRST deal until every human is actually LOOKING at the
+ * v0.22 P0b § SEAT GATE - hold the FIRST deal until every human is actually LOOKING at the
  * board. Blake's report: his group was still reading the pre-game popups when the server
  * dealt hand 1, auto-bowed-out every human whose turn arrived with no legal move, let the
  * CPUs play the whole hand out and dealt hand 2 - "we only had four cards in our initial

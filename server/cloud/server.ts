@@ -992,7 +992,7 @@ setInterval(() => {
 }, HEARTBEAT_MS);
 
 /* ---------------------------------------------------------------------------------------
- * v0.22 § AWAY LADDER — twin of server.js's matching block, keep the two in sync. While the
+ * v0.22 § AWAY LADDER - twin of server.js's matching block, keep the two in sync. While the
  * on-turn HUMAN's socket is disconnected (or app-level silent - socketLastSeen), escalate:
  * AWAY_NUDGE_MS -> turn push (no-op until the APNs key lands) + {awayStatus stage:'nudged'};
  * AWAY_CPU_OFFER_MS -> {awayStatus stage:'cpuOffer'} (one-tap server-played single turn via
@@ -1072,7 +1072,7 @@ async function awaySweep() {
 setInterval(() => { awaySweep().catch((e) => log("away sweep failed", (e as Error).message)); }, AWAY_SWEEP_MS);
 
 /* ---------------------------------------------------------------------------------------
- * v0.22 P0b § SEAT GATE — twin of server.js's matching block, keep in sync. Hold the FIRST
+ * v0.22 P0b § SEAT GATE - twin of server.js's matching block, keep in sync. Hold the FIRST
  * deal until every human who PROMISED a 'seated' signal (readyUp with willSeat:true - new
  * clients only) is actually looking at the board; old clients (builds 16-28) never promise
  * and are treated as seated immediately, so their behavior is unchanged. Capped so a broken
