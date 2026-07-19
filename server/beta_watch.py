@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=1ed86158-f749-4c60-943d-dd6d4f1257cf&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=167dda1a-e764-43bb-a786-5a46448f8a27&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -61,14 +61,16 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 28 reached the family</h1>
+<h1 style="color:#1a5c38">🎉 Build 29 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>Two things in this update. First, the card audit you asked for: the deck is confirmed a true
-52 card deck, exactly 4 of each card, fully dealt before any reshuffle - that part was always
-right. But the Nasty computer player WAS caught peeking at everyone's hidden cards when it
-planned ahead. That's fixed - it now plays with only what a real player could see, and it's
-still clearly the toughest opponent, just honest now. Second, the leaderboard now has two tabs:
-Solo for free for all games and Teams for team games, each with its own points.</p>
+<p>This one is the big online reliability update, built from what happened in your last two
+family games. Switching apps or taking a call can no longer freeze the table for anyone - if a
+player drops, their name plate just dims and the game keeps going. The first hand now waits
+until everyone has closed the how to play popup, so nobody misses their opening five cards
+again. If someone is away on their turn, the table shows a status line and can nudge their
+phone, and after a couple of minutes anyone can have the computer play that single turn for
+them - they keep their seat and can come right back. And coming back to the game is faster and
+steadier, even if your phone quietly closed the app in the background.</p>
 <h3>📱 The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
 <a href="https://testflight.apple.com/join/d79YpZea">https://testflight.apple.com/join/d79YpZea</a></p>
@@ -82,7 +84,7 @@ Solo for free for all games and Teams for team games, each with its own points.<
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 28 is live for the family 🎉', body], check=True)
+                    'NASTY: build 29 is live for the family 🎉', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED - email sent, watcher done')
 except Exception as e:
