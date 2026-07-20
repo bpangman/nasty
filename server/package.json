@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "build-engine": "node build-engine.js",
-    "test": "node test-engine-sync.js && node test-engine-headless.js && node tests/test_deck_conservation.js"
+    "test": "node test-engine-sync.js && node test-engine-headless.js && node tests/test_own_landing_illegal.js && node tests/test_deck_conservation.js"
   },
   "license": "ISC",
   "type": "commonjs",

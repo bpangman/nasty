@@ -123,7 +123,7 @@ async function main() {
       { name: "Pusher", type: "human", diff: "medium" },
       { name: "C1", type: "cpu", diff: "easy" }, { name: "C2", type: "cpu", diff: "easy" }, { name: "C3", type: "cpu", diff: "easy" },
     ];
-    sendJ(ws, { type: "host", protocolVersion: 2, name: "Pusher", n: 4, teams: false, seats });
+    sendJ(ws, { type: "host", protocolVersion: 3, name: "Pusher", n: 4, teams: false, seats });
     const created = await nextMsg(ws, (m) => m.type === "created");
     code = created.code; playerId = created.playerId; token = created.token;
 
@@ -143,7 +143,7 @@ async function main() {
      *    (it's the only human - every CPU seat auto-plays through, so the loop is GUARANTEED
      *    to stop here) while the socket is STILL open - no push should fire yet.
      * ================================================================================= */
-    sendJ(ws, { type: "start", protocolVersion: 2 });
+    sendJ(ws, { type: "start", protocolVersion: 3 });
     await nextMsg(ws, (m) => m.type === "readyCheck");
     sendJ(ws, { type: "readyUp" });
     await nextMsg(ws, (m) => m.type === "gameAction" && m.action.kind === "start");
@@ -175,10 +175,10 @@ async function main() {
       { name: "NoTokenPlayer", type: "human", diff: "medium" },
       { name: "C1", type: "cpu", diff: "easy" }, { name: "C2", type: "cpu", diff: "easy" }, { name: "C3", type: "cpu", diff: "easy" },
     ];
-    sendJ(ws, { type: "host", protocolVersion: 2, name: "NoTokenPlayer", n: 4, teams: false, seats });
+    sendJ(ws, { type: "host", protocolVersion: 3, name: "NoTokenPlayer", n: 4, teams: false, seats });
     await nextMsg(ws, (m) => m.type === "created");
     // Deliberately never send registerPush.
-    sendJ(ws, { type: "start", protocolVersion: 2 });
+    sendJ(ws, { type: "start", protocolVersion: 3 });
     await nextMsg(ws, (m) => m.type === "readyCheck");
     sendJ(ws, { type: "readyUp" });
     await nextMsg(ws, (m) => m.type === "gameAction" && m.action.kind === "start");

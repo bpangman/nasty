@@ -88,7 +88,10 @@ const KV_PATH = Deno.env.get("NASTY_KV_PATH") || undefined; // undefined = Deplo
    Breaking wire-protocol change: pre-v0.15 (lockstep) clients cannot talk to this server and
    vice versa. host/join/rejoin/reclaim all carry protocolVersion from the client; anything
    missing/below current gets a plain-language rejection (no dashes — standing rule). */
-const PROTOCOL_VERSION = 2;
+/* v0.23 (2026-07-20): 2 -> 3 for the "you can NOT take out your own pegs" rule change - twin
+   of server.js's matching comment. Protocol-2 clients (builds 16-29) get the friendly update
+   message; the engine's legalMoves() validation still rejects any stale move gracefully. */
+const PROTOCOL_VERSION = 3;
 const PROTOCOL_MISMATCH_MESSAGE =
   "This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.";
 function protocolOk(msg: Record<string, unknown>): boolean {

@@ -356,48 +356,69 @@ async function main() {
   await host.context().close(); await g1.context().close(); await g2.context().close();
 
   // ---------------------------------------------------------------------------
-  // Scenario 5: back-compat - the exact build 28 client vs the new server + away ladder.
+  // Scenario 5 (v0.23): OLD-BUILD LOCKOUT - the exact build 28 client (protocol 2) vs the
+  // new protocol-3 server. The "you can NOT take out your own pegs" rule change altered
+  // MOVE LEGALITY, so old builds can no longer be allowed into an online room at all - they
+  // would offer moves the new server rejects. This scenario replaces the pre-v0.23 version
+  // (old client playing alongside new ones), which is impossible by design now: it asserts
+  // the lockout is the clean, friendly experience - the plain-language update message and a
+  // usable menu, never a room, never a crash. Offline play on old builds is untouched (not
+  // exercised here - no server involved in offline).
   // ---------------------------------------------------------------------------
-  log("--- back-compat: pinned build 28 client (commit " + BUILD28_COMMIT + ") ---");
+  log("--- old-build lockout: pinned build 28 client (commit " + BUILD28_COMMIT + ") ---");
   const oldHtmlPath = path.join(SCRATCH, "build28.html");
   const oldHtml = execSync(`git show ${BUILD28_COMMIT}:index.html`, { cwd: "/Users/jarvis/nasty-game", maxBuffer: 1024 * 1024 * 20 }).toString();
   fs.writeFileSync(oldHtmlPath, oldHtml);
   const host28 = await newPage(browser, PORT, oldHtmlPath);   // build 28 client, direct
-  const ng1 = await newPage(browser, PORT);                    // current client
-  const ng2 = await newPage(browser, PORT);                    // current client
-  const code2 = await hostRoom(host28, seatMeta, 4);
-  await claimSeat(host28, 0, "Host");
-  await joinRoom(ng1, code2, "G1"); await claimSeat(ng1, 1, "G1");
-  await joinRoom(ng2, code2, "G2"); await claimSeat(ng2, 2, "G2");
-  await sleep(400);
-  await startGameOnline(host28, [host28, ng1, ng2]);
-  const drive2 = { on: true };
-  const d2 = (async () => { while (drive2.on) { await tryDriveMove(host28, 0); await tryDriveMove(ng1, 1); await tryDriveMove(ng2, 2); await sleep(150); } })();
-  await sleep(3000);
-  // ng1 drops hard (deliberate socket close, reconnect suppressed) - away ladder targets seat 1.
-  await ng1.evaluate(() => { window.NET.wantConnection = false; try { window.NET.ws.close(); } catch (e) {} });
-  const ladderRan = await ng2.waitForFunction(() =>
-    [...document.querySelectorAll("#awayActions button")].some((b) => b.textContent.startsWith("Have the computer")),
-    { timeout: 30000 }).then(() => true).catch(() => false);
-  check(ladderRan, `${KIND}: back-compat room's away ladder reached the cpuOffer stage (current client saw it)`);
-  if (ladderRan) {
-    await ng2.evaluate(() => {
-      const b = [...document.querySelectorAll("#awayActions button")].find((x) => x.textContent.startsWith("Have the computer"));
-      if (b) b.click();
+
+  // 5a. build 28 tries to HOST: must get protocolMismatch (its own protocolVersion is 2),
+  // show the friendly message, and land back on a clean menu - no room, no crash.
+  const hostOutcome = await host28.evaluate(() => {
+    CFG.n = 4; CFG.teams = false;
+    return new Promise((resolve) => {
+      const orig = window.handleNetMessage;
+      const seen = [];
+      window.handleNetMessage = function (m) {
+        seen.push(m.type); orig(m);
+        if (m.type === "created" || m.type === "protocolMismatch") {
+          window.handleNetMessage = orig;
+          setTimeout(() => resolve({ seen, toast: (document.getElementById("toasts") || {}).textContent || "", online: window.NET.online }), 600);
+        }
+      };
+      window.hostCreateRoom();
     });
-    const advanced = await ng2.waitForFunction(() => window.G && window.G.turn !== 1, { timeout: 5000 }).then(() => true).catch(() => false);
-    check(advanced, `${KIND}: server played the away turn - and the build 28 host applied it as an ordinary move`);
-  }
-  await sleep(1500);
-  drive2.on = false; await d2;
-  await sleep(800);
-  const s28 = await gState(host28), sg2 = await gState(ng2);
-  check(s28 && s28 === sg2, `${KIND}: build 28 host's G matches the current client's G after away broadcasts + a server-played turn`);
-  check((host28.__errors || []).length === 0, `${KIND}: zero page errors on the build 28 client (awayStatus ignored cleanly)`);
-  // ng1 comes back - the seat is still theirs.
-  await ng1.evaluate(() => { window.NET.wantConnection = true; window.hardResetConnection(); });
-  const back = await ng1.waitForFunction(() => window.NET.connected === true && window.G != null, { timeout: 10000 }).then(() => true).catch(() => false);
-  check(back, `${KIND}: the away player rejoined normally afterward (seat stayed human and reclaimable)`);
+  });
+  check(hostOutcome.seen.includes("protocolMismatch") && !hostOutcome.seen.includes("created"),
+    `${KIND}: build 28 HOST attempt got protocolMismatch, never a room (saw: ${hostOutcome.seen.join(",")})`);
+  check(/newest version/i.test(hostOutcome.toast) && !/[\u2014\u2013]/.test(hostOutcome.toast),
+    `${KIND}: build 28 saw the friendly plain-language update message (dash-free): "${hostOutcome.toast.slice(0, 80)}"`);
+  check(hostOutcome.online === false, `${KIND}: build 28 landed back on a clean menu (NET.online false), not stuck mid-flow`);
+
+  // 5b. a CURRENT client hosts a real room; build 28 tries to JOIN it: same lockout, and the
+  // current client's room is completely unaffected.
+  const ngHost = await newPage(browser, PORT);
+  const code2 = await hostRoom(ngHost, seatMeta, 4);
+  const joinOutcome = await host28.evaluate((code) => new Promise((resolve) => {
+    window.connectWs().then(() => {
+      const orig = window.handleNetMessage;
+      const seen = [];
+      window.handleNetMessage = function (m) {
+        seen.push(m.type); orig(m);
+        if (m.type === "joined" || m.type === "protocolMismatch") {
+          window.handleNetMessage = orig;
+          setTimeout(() => resolve({ seen }), 400);
+        }
+      };
+      window.netSend({ type: "join", protocolVersion: PROTOCOL_VERSION, code, name: "Old28" });
+    }).catch(() => resolve({ seen: ["connectFailed"] }));
+  }), code2);
+  check(joinOutcome.seen.includes("protocolMismatch") && !joinOutcome.seen.includes("joined"),
+    `${KIND}: build 28 JOIN attempt got protocolMismatch, never a seat (saw: ${joinOutcome.seen.join(",")})`);
+  const hostStillFine = await ngHost.evaluate(() => window.NET.online === true && window.NET.code != null && (window.__errors || []).length === 0).catch(() => false);
+  check(hostStillFine !== false && (ngHost.__errors || []).length === 0, `${KIND}: the current host's room was untouched by the rejected old-build join`);
+  check((host28.__errors || []).length === 0, `${KIND}: zero page errors on the build 28 client through both rejections`);
+  await ngHost.context().close();
+  await host28.context().close();
 
   await browser.close();
   await proxy.close();

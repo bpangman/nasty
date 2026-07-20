@@ -356,8 +356,11 @@ function createEngine(){
      holes so starts sit exactly 12 apart. Steps L-1 = your porch (the shared tip-center
      hole right before your start - you CAN be kicked there). From the porch you branch
      inward: steps L..L+4 = your safe row, which nobody else can touch. */
-  /* You can NEVER pass your own peg (or your partner's, in teams). Landing exactly on
-     ANY peg - even your own - takes it out; if that's your only move, it's forced. */
+  /* You can NEVER pass your own peg (or your partner's, in teams) - and, as of v0.23
+     (Blake, 2026-07-20), you can never LAND on your own peg either: a move that would land
+     exactly on your own peg (or your partner's, in teams - same grouping as the never-pass
+     rule) is simply ILLEGAL. It is never offered and can never be forced. Landing exactly
+     on an OPPONENT's peg still takes it out. */
   function pathForward(owner,p,n){
     const t=p+n; if(t>LAY.L+HOME_N-1)return null;
     let kick=null;
@@ -366,8 +369,10 @@ function createEngine(){
       else{
         const occ=trackOccupant(loopIdx(owner,q));
         if(!occ)continue;
-        if(q<t){ if(occ.seat===owner||(G.teams&&sameTeam(occ.seat,owner)))return null; }
-        else kick=occ;
+        // v0.23: your own peg (or your partner's) ANYWHERE on the path - passed over OR landed
+        // on - makes the whole move illegal. sameTeam() covers "own" even in free-for-all.
+        if(sameTeam(occ.seat,owner))return null;
+        if(q===t)kick=occ;
       }
     }
     return{kick};
@@ -380,8 +385,9 @@ function createEngine(){
       else{
         const occ=trackOccupant(loopIdx(owner,q));
         if(!occ)continue;
-        if(q>t){ if(occ.seat===owner||(G.teams&&sameTeam(occ.seat,owner)))return null; }
-        else kick=occ;
+        // v0.23: same rule backwards - own/partner peg on the path or the landing hole = illegal.
+        if(sameTeam(occ.seat,owner))return null;
+        if(q===t)kick=occ;
       }
     }
     return{kick};
@@ -397,8 +403,10 @@ function createEngine(){
       if(r==='K'||r==='A'){
         const bi=G.pieces[owner].findIndex(p=>p.state==='base');
         if(bi>=0){
-          const occ=trackOccupant(loopIdx(owner,0));   // whoever's on your start gets kicked - even your own tee
-          ms.push({ci,type:'enter',owner,pi:bi,to:0,kick:occ||null});
+          const occ=trackOccupant(loopIdx(owner,0));
+          // v0.23: an OPPONENT on your start gets kicked; your own (or partner's) tee sitting
+          // there makes coming out illegal - never offered, never forced (Blake, 2026-07-20).
+          if(!occ||!sameTeam(occ.seat,owner))ms.push({ci,type:'enter',owner,pi:bi,to:0,kick:occ||null});
         }
       }
       if(r==='J'){
@@ -547,9 +555,11 @@ function createEngine(){
     return d;
   }
   function kickVal(owner,k){
+    // v0.23: a kick can only ever hit an OPPONENT now (landing on your own or partner's peg is
+    // illegal, so legalMoves() never produces such a kick) - the old own/partner penalty
+    // branches were dead code and are gone. `owner` kept in the signature: exported name,
+    // called with two args by the frozen-policy AI harness (server/tests/test_ai_difficulty.js).
     const vic=G.pieces[k.seat][k.pi];
-    if(k.seat===owner)return -45-vic.steps*0.3;        // taking out your own tee: absolute last resort
-    if(sameTeam(k.seat,owner))return -18-vic.steps*0.2;
     return 22+vic.steps*0.25;
   }
   function scoreMove(seat,m){
@@ -626,7 +636,7 @@ function createEngine(){
         }
       }
     }
-    if(m.kick&&!sameTeam(m.kick.seat,m.owner)){
+    if(m.kick){                                                    // v0.23: every kick is an opponent kick now (own/partner landings are illegal)
       const vic=G.pieces[m.kick.seat][m.kick.pi];                 // pre-kick steps - still intact here
       v+=kickVal(m.owner,m.kick)*0.55;                             // kick-hungry: extra weight on top of kickVal
       v+=piecesHome(m.kick.seat)*3*P.deny;                         // they're close to winning - deny it
@@ -787,12 +797,10 @@ function createEngine(){
   }
   function chooseAI(seat,moves){
     const P=AI_TIERS[G.seats[seat].diff]||AI_TIERS.medium;
-    // Shared sanity rule, every tier: never kick your own tee (or your partner's) when any other
-    // move exists (RULES.md: landing on your own or partner's tee sends it back to base). If every
-    // legal move is a self/partner kick, it's forced - play it. Without this, Easy's large jitter
-    // could occasionally override even kickVal's heavy penalty.
-    const safe=moves.filter(m=>!(m.kick&&(m.kick.seat===m.owner||sameTeam(m.kick.seat,m.owner))));
-    const pool=safe.length?safe:moves;
+    // v0.23: the old "never kick your own/partner tee unless forced" safe-filter is gone -
+    // landing on your own or partner's peg is now ILLEGAL (RULES.md, changed 2026-07-20), so
+    // legalMoves() never offers such a move and there is nothing left to filter.
+    const pool=moves;
     const scored=pool.map(m=>({m,s:scoreMove(seat,m)+P.strat*strategyBonus(m,P)
       +(P.jitter?(Math.random()*2-1)*P.jitter:0)}));
     // v0.18 bug found via harness (a 200-game run came back a coin-flip against the frozen v0.17

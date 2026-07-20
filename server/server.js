@@ -70,7 +70,13 @@ const CODE_ALPHABET = "BCDFGHJKMNPQRSTVWXZ";
  * PROTOCOL_VERSION gets a plain-language, non-technical rejection instead of a confusing
  * silent failure. See index.html's handling of `protocolMismatch` for the client side.
  * ------------------------------------------------------------------------------------- */
-const PROTOCOL_VERSION = 2;
+/* v0.23 (2026-07-20): 2 -> 3 for the "you can NOT take out your own pegs" rule change - move
+ * legality changed (own/partner landings are illegal now), so protocol-2 clients (builds
+ * 16-29) would offer/submit moves this server's legalMoves() no longer produces. The gate
+ * gives them the plain-language update message below instead of silent desyncs; the engine's
+ * own legalMoves() validation in the "action" case still rejects any stale move gracefully
+ * (resync, never a crash). */
+const PROTOCOL_VERSION = 3;
 const PROTOCOL_MISMATCH_MESSAGE =
   "This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.";
 function protocolOk(msg) {
