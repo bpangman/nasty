@@ -345,10 +345,16 @@ async function scenarioKillServerMidRecal(port, serverChild) {
 }
 
 async function scenarioBackCompatOldClient(port) {
-  log('--- Part 2d: a pre-v0.20 client (never sends "resync") still plays normally against the new server ---');
-  // Pinned to 8de9c20 - the last pre-v0.20 commit (iOS build 26's exact client), i.e. the
-  // newest client in the wild that does NOT send "resync". Deliberately NOT `HEAD` (which was
-  // only equivalent the very first time this test ran, before v0.20 itself was committed).
+  log('--- Part 2d (v0.23): a pre-v0.23 client is turned away cleanly by the protocol gate ---');
+  // HISTORY: through v0.22 this scenario proved a pinned pre-v0.20 client (commit 8de9c20,
+  // iOS build 26 - the newest client that never sends "resync") could still play a full game
+  // against the new server. v0.23's rule change ("you can NOT take out your own pegs") bumped
+  // PROTOCOL_VERSION 2 -> 3 because move LEGALITY changed - so by design that client can no
+  // longer be admitted at all, and the old co-play assertion is impossible. What this scenario
+  // guards now: the lockout is the CLEAN, friendly experience - protocolMismatch with the
+  // plain-language update message, a usable menu, zero page errors, never a room. The fuller
+  // old-build lockout matrix (join against a live room, room-unaffected checks) lives in
+  // test_freeze_recovery.js scenario 5.
   const oldHtml = execSync('git show 8de9c20:index.html', { cwd: '/Users/jarvis/nasty-game', maxBuffer: 1024 * 1024 * 20 }).toString();
   const oldPath = path.join(SCRATCH, 'old-client.html');
   fs.writeFileSync(oldPath, oldHtml);
@@ -363,21 +369,26 @@ async function scenarioBackCompatOldClient(port) {
     { name: 'Old', type: 'human', diff: 'medium' }, { name: 'C1', type: 'cpu', diff: 'easy' },
     { name: 'C2', type: 'cpu', diff: 'medium' }, { name: 'C3', type: 'cpu', diff: 'hard' },
   ];
-  const code = await hostRoom(page, seatMeta, 4);
-  check(code && code.length === 4, 'old client hosts a room against the new server');
-  await claimSeat(page, 0, 'Old');
-  await startGameOnline(page);
-  await page.waitForFunction(() => window.G != null, { timeout: 10000 });
-  const stop = { stop: false };
-  const driver = (async () => { while (!stop.stop) { await tryDriveMove(page, 0); await new Promise((r) => setTimeout(r, 120)); } })();
-  const over = await (async () => {
-    const t0 = Date.now();
-    while (Date.now() - t0 < 4 * 60 * 1000) { if (await page.evaluate(() => window.G.over).catch(() => false)) return true; await new Promise((r) => setTimeout(r, 1000)); }
-    return false;
-  })();
-  stop.stop = true; await driver;
-  check(over, 'old (pre-v0.20, never sends "resync") client reaches G.over normally against the new server');
-  check((page.__errors || []).length === 0, 'zero page errors for the old client');
+  const outcome = await page.evaluate((seatMeta) => {
+    CFG.n = 4; CFG.teams = false; CFG.seatMeta[4] = seatMeta;
+    return new Promise((resolve) => {
+      const orig = window.handleNetMessage;
+      const seen = [];
+      window.handleNetMessage = function (m) {
+        seen.push(m.type); orig(m);
+        if (m.type === 'created' || m.type === 'protocolMismatch') {
+          window.handleNetMessage = orig;
+          setTimeout(() => resolve({ seen, toast: (document.getElementById('toasts') || {}).textContent || '', online: window.NET.online }), 600);
+        }
+      };
+      window.hostCreateRoom();
+    });
+  }, seatMeta);
+  check(outcome.seen.includes('protocolMismatch') && !outcome.seen.includes('created'),
+    `pre-v0.23 client HOST attempt got protocolMismatch, never a room (saw: ${outcome.seen.join(',')})`);
+  check(/newest version/i.test(outcome.toast), 'pre-v0.23 client saw the friendly plain-language update message');
+  check(outcome.online === false, 'pre-v0.23 client landed back on a clean menu (NET.online false)');
+  check((page.__errors || []).length === 0, 'zero page errors for the old client through the rejection');
   await browser.close();
   return true;
 }
