@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=167dda1a-e764-43bb-a786-5a46448f8a27&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=d45cea85-ddb6-4959-bbcf-fbd236ae30c4&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -61,16 +61,16 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 29 reached the family</h1>
+<h1 style="color:#1a5c38">🎉 Build 30 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>This one is the big online reliability update, built from what happened in your last two
-family games. Switching apps or taking a call can no longer freeze the table for anyone - if a
-player drops, their name plate just dims and the game keeps going. The first hand now waits
-until everyone has closed the how to play popup, so nobody misses their opening five cards
-again. If someone is away on their turn, the table shows a status line and can nudge their
-phone, and after a couple of minutes anyone can have the computer play that single turn for
-them - they keep their seat and can come right back. And coming back to the game is faster and
-steadier, even if your phone quietly closed the app in the background.</p>
+<p>This one is your rule change: you can no longer take out your own pegs. A move that
+would land on your own peg (or your partner\'s, in teams) simply is not offered anymore. The
+rules screen now describes getting out as bringing a peg out onto your starting block. And
+when pegs bunch up close together, their tap buttons now sit beside the peg with a little
+arrow pointing at it, so you can always tap the one you mean.</p>
+<p>One important note for the family: because the rules changed, everyone should update
+before the next online game. Anyone on an older version will see a friendly message asking
+them to update before they can host or join online. Offline play works on any version.</p>
 <h3>📱 The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
 <a href="https://testflight.apple.com/join/d79YpZea">https://testflight.apple.com/join/d79YpZea</a></p>
@@ -84,7 +84,7 @@ steadier, even if your phone quietly closed the app in the background.</p>
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 29 is live for the family 🎉', body], check=True)
+                    'NASTY: build 30 is live for the family 🎉', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED - email sent, watcher done')
 except Exception as e:
