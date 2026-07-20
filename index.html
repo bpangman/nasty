@@ -626,8 +626,25 @@ button{font:inherit;cursor:pointer}
   border:12px solid transparent;border-top-color:var(--gold)}
 .teeBubble.tgt{border-color:#ff5c5c}
 .teeBubble.tgt::after{border-top-color:#ff5c5c}
+/* v0.23 (Blake: crowded track bubbles): when 2+ TRACK bubbles would sit too close for
+   distinct taps, the crowded ones move to the SIDE of their tee with the arrow rotated to
+   point HORIZONTALLY at it - a proper rotated variant, not a squished hack. .sideL = the
+   bubble sits LEFT of the tee (arrow on its right edge points right at the tee); .sideR
+   mirrors. The (left,top) anchor showBubbles() sets is the ARROW-side edge midpoint
+   (right-center for .sideL, left-center for .sideR), so each variant carries its own
+   translate and its own pulse keyframes to keep that anchor pinned while it breathes.
+   These land AFTER the .tgt rules on purpose: same specificity, source order lets the side
+   arrow color reset win, and the .tgt.sideL/.tgt.sideR pair below re-tints the side arrow. */
+.teeBubble.sideL{transform:translate(-100%,-50%);animation-name:bubblePulseL}
+.teeBubble.sideR{transform:translate(0,-50%);animation-name:bubblePulseR}
+.teeBubble.sideL::after{top:50%;left:100%;transform:translateY(-50%);border-top-color:transparent;border-left-color:var(--gold)}
+.teeBubble.sideR::after{top:50%;left:auto;right:100%;transform:translateY(-50%);border-top-color:transparent;border-right-color:var(--gold)}
+.teeBubble.tgt.sideL::after{border-top-color:transparent;border-left-color:#ff5c5c}
+.teeBubble.tgt.sideR::after{border-top-color:transparent;border-right-color:#ff5c5c}
 .teeBubble svg{transform:scale(1.7)}
 @keyframes bubblePulse{50%{transform:translate(-50%,-100%) scale(1.07)}}
+@keyframes bubblePulseL{50%{transform:translate(-100%,-50%) scale(1.07)}}
+@keyframes bubblePulseR{50%{transform:translate(0,-50%) scale(1.07)}}
 @media (prefers-reduced-motion: reduce){ .teeBubble{animation:none} }
 
 /* ---------- In-game logo ---------- */
@@ -3826,12 +3843,17 @@ function showBubbles(list,cls){
     });
     return pen;
   };
-  const place=(it,anchorX,anchorY)=>{
-    anchorX=Math.min(1000+pad-R-4,Math.max(-pad+R+4,anchorX));
-    anchorY=Math.max(96,anchorY);
-    placed.push({x:anchorX,y:anchorY-R});
+  const place=(it,anchorX,anchorY,side)=>{
+    // side (v0.23): 'L'/'R' = a crowded-track side bubble - the anchor is the arrow-side
+    // edge midpoint (see the .sideL/.sideR CSS), already validated/clamped by the crowd
+    // pass below, so only the default above-the-tee shape gets the historical clamps here.
+    if(!side){
+      anchorX=Math.min(1000+pad-R-4,Math.max(-pad+R+4,anchorX));
+      anchorY=Math.max(96,anchorY);
+    }
+    placed.push(side?{x:side==='L'?anchorX-R:anchorX+R,y:anchorY}:{x:anchorX,y:anchorY-R});
     const b=document.createElement('div');
-    b.className='teeBubble'+(cls?' '+cls:'');
+    b.className='teeBubble'+(side?' side'+side:'')+(cls?' '+cls:'');
     b.style.left=anchorX+'px';
     b.style.top=anchorY+'px';
     b.innerHTML=teeSVG(G.seats[it.s].color,true);
@@ -3911,9 +3933,43 @@ function showBubbles(list,cls){
     bestPlan.forEach(p=>place(p.o.it,p.ax,p.ay));
   });
 
-  // --- original v0.19 sweep for everything else (single base picks, all track-state picks) ---
+  // --- v0.23 crowded-track pass (Blake: "when pegs in play are close together you can't
+  // reliably tap the one you want"): find groups of 2+ TRACK bubbles whose DEFAULT
+  // touching-above positions would sit closer than TAP_MIN center-to-center (the bubble's
+  // full outer diameter, 84px + 2x4px border = 92, plus a few px of daylight). In each
+  // group ONE bubble keeps the normal above-touching spot (the topmost; middle-most on
+  // ties, so a horizontal row splits left/right around it) and every other member moves to
+  // the SIDE of its own tee - arrow rotated to point horizontally at it (see the
+  // .sideL/.sideR CSS), side chosen away from the group / toward open canvas, pushed
+  // outward in small steps until its tap circle clears everything. Lone/uncrowded track
+  // pegs and single base picks are UNTOUCHED (the original v0.19 sweep below); the stable
+  // formation pass above is untouched too. ---
+  const TAP_MIN=2*R+12;
   const rest=list.filter(it=>!formationKeys.has(it.s+'-'+it.pi));
-  const sorted=rest.slice().sort((a,b)=>teePos(a.s,a.pi).x-teePos(b.s,b.pi).x);
+  const info=rest.map(it=>{
+    const pos=teePos(it.s,it.pi);
+    const T0=Math.max(96,pos.y-tipGap);
+    return {it,pos,cx:pos.x,cy:T0-R,track:(G.pieces[it.s][it.pi]||{}).state==='track'};
+  });
+  const tr=info.filter(o=>o.track);
+  const par=tr.map((_,i)=>i);
+  const find=i=>par[i]===i?i:(par[i]=find(par[i]));
+  for(let i=0;i<tr.length;i++)for(let j=i+1;j<tr.length;j++)
+    if(Math.hypot(tr[i].cx-tr[j].cx,tr[i].cy-tr[j].cy)<TAP_MIN)par[find(i)]=find(j);
+  const groups={};
+  tr.forEach((o,i)=>{(groups[find(i)]=groups[find(i)]||[]).push(o);});
+  const crowded=new Map();   // 's-pi' -> {o,cenX} for members that go sideways
+  Object.values(groups).forEach(c=>{
+    if(c.length<2)return;
+    const cenX=c.reduce((a,o)=>a+o.cx,0)/c.length;
+    const keeper=c.slice().sort((a,b)=>(a.cy-b.cy)||(Math.abs(a.cx-cenX)-Math.abs(b.cx-cenX))||(a.cx-b.cx))[0];
+    c.forEach(o=>{if(o!==keeper)crowded.set(o.it.s+'-'+o.it.pi,{o,cenX});});
+  });
+
+  // --- original v0.19 sweep for everything else (single base picks, uncrowded track picks,
+  // and each crowd's one above-keeper) ---
+  const sorted=rest.filter(it=>!crowded.has(it.s+'-'+it.pi))
+    .slice().sort((a,b)=>teePos(a.s,a.pi).x-teePos(b.s,b.pi).x);
   sorted.forEach(it=>{
     const pos=teePos(it.s,it.pi);
     // Sweep upward from the touching position, 6px steps: first FULLY clear anchor wins. If
@@ -3935,6 +3991,40 @@ function showBubbles(list,cls){
       T-=6;
     }
     place(it,pos.x,best);
+  });
+
+  // --- v0.23: place the crowded track bubbles sideways, left-to-right, each seeing every
+  // bubble already on the canvas (formation + sweep + earlier side bubbles) via `placed`. ---
+  const vOff=six?12:15;                     // bubble center rides at the tee body's mid-height
+  [...crowded.values()].sort((a,b)=>(a.o.pos.x-b.o.pos.x)||(a.o.pos.y-b.o.pos.y)).forEach(({o,cenX})=>{
+    // preferred side: away from the group's center; a pure vertical stack (no x spread)
+    // prefers whichever side has more open canvas.
+    let pref=o.cx>cenX?1:o.cx<cenX?-1:((1000+pad-o.pos.x)>=(o.pos.x+pad)?1:-1);
+    const candAt=(sd,ext)=>{
+      const ax=o.pos.x+sd*(tw+12+ext);      // arrow tip = ax -/+ 12 = the tee's side edge when ext=0
+      const ay=Math.max(R+8,o.pos.y-vOff);
+      return {sd,ax,ay,cx:ax+sd*R,cy:ay};
+    };
+    const onCanvas=c=>c.cx-R>=-pad+4&&c.cx+R<=1000+pad-4;
+    const penAt=c=>{
+      let pen=0;
+      placed.forEach(q=>{const d=Math.hypot(q.x-c.cx,q.y-c.cy);if(d<TAP_MIN)pen+=TAP_MIN-d;});
+      pen+=pegPenalty(c.cx,c.cy,o.it.s,o.it.pi);
+      return pen;
+    };
+    let best=null,bp=Infinity;
+    outer:
+    for(const sd of [pref,-pref]){
+      for(let ext=0;ext<=48;ext+=8){        // push outward in small steps; arrow stays aimed at the tee
+        const c=candAt(sd,ext);
+        if(!onCanvas(c))continue;
+        const p=penAt(c);
+        if(p===0){best=c;bp=0;break outer;}
+        if(p<bp){bp=p;best=c;}
+      }
+    }
+    if(!best)best=candAt(pref,0);           // both sides off-canvas can't happen on this board; belt and braces
+    place(o.it,best.ax,best.ay,best.sd===-1?'L':'R');
   });
 }
 function clearBubbles(){ $('bubbleLayer').innerHTML=''; }
