@@ -102,6 +102,17 @@ async function main() {
     check(m2.type === "protocolMismatch" && !/[\u2014\u2013]/.test(m2.message || ""), "protocolMismatch for pre-v0.23 protocolVersion:2 host (rule-change lockout)");
     ws.close();
   }
+  {
+    // v0.23.1: protocol bumped 3 -> 4 for the partner-peg last-resort ruling. A protocol-3
+    // client (build 30 / the v0.23 website) would softlock in the forced-partner-landing spot
+    // (its local engine finds zero moves while the server waits for its move), so it must get
+    // the same friendly mismatch, never a room.
+    const ws = await wsConnect();
+    sendJ(ws, { type: "host", protocolVersion: 3, name: "X", n: 4, teams: false, seats: [] });
+    const m3 = await nextMsg(ws, (x) => x.type === "protocolMismatch" || x.type === "created");
+    check(m3.type === "protocolMismatch" && !/[\u2014\u2013]/.test(m3.message || ""), "protocolMismatch for pre-v0.23.1 protocolVersion:3 host (build 30 lockout)");
+    ws.close();
+  }
 
   // ---- 2. lobby: host, join, claim, host tap-claim/rename, CPU toggle, unclaimed->CPU at start ----
   const host = await wsConnect();
@@ -111,13 +122,13 @@ async function main() {
     { name: "CpuA", type: "cpu", diff: "easy" },
     { name: "CpuB", type: "cpu", diff: "hard" },
   ];
-  sendJ(host, { type: "host", protocolVersion: 3, name: "HostN", n: 4, teams: false, seats });
+  sendJ(host, { type: "host", protocolVersion: 4, name: "HostN", n: 4, teams: false, seats });
   const created = await nextMsg(host, (m) => m.type === "created");
   check(created.code && /^[BCDFGHJKMNPQRSTVWXZ]{4}$/.test(created.code), "4-letter no-vowel room code");
   const code = created.code;
 
   const guest = await wsConnect();
-  sendJ(guest, { type: "join", protocolVersion: 3, code, name: "GuestN" });
+  sendJ(guest, { type: "join", protocolVersion: 4, code, name: "GuestN" });
   const joined = await nextMsg(guest, (m) => m.type === "joined");
   check(joined.playerId != null && joined.token, "guest joined with playerId+token");
 
@@ -145,7 +156,7 @@ async function main() {
 
   // v0.16 item 4: Start now opens a ready-check gate first - seats 1 (host) and 2 (guest) are
   // the only claimed/human seats, so both (and only both) must ready up before the deal.
-  sendJ(host, { type: "start", protocolVersion: 3 });
+  sendJ(host, { type: "start", protocolVersion: 4 });
   const rc1 = await nextMsg(host, (m) => m.type === "readyCheck");
   check(rc1.requiredPlayerIds.length === 2 && rc1.requiredPlayerIds.includes(created.playerId) && rc1.requiredPlayerIds.includes(joined.playerId), "readyCheck requires exactly the 2 claimed human seats");
   check(rc1.readyPlayerIds.length === 0, "readyCheck starts with nobody ready");
@@ -175,7 +186,7 @@ async function main() {
 
   // reconnect guest with token (rejoin) -> snapshot sync
   const guest2 = await wsConnect();
-  sendJ(guest2, { type: "rejoin", protocolVersion: 3, code, playerId: joined.playerId, token: joined.token });
+  sendJ(guest2, { type: "rejoin", protocolVersion: 4, code, playerId: joined.playerId, token: joined.token });
   const sync = await nextMsg(guest2, (m) => m.type === "sync");
   check(!!sync.G && typeof sync.appliedSeq === "number" && sync.log === undefined, "token rejoin -> snapshot sync, no log replay");
   check(sync.presence && typeof sync.presence === "object", "sync carries presence map");
@@ -190,14 +201,14 @@ async function main() {
   guest2.close();
   await new Promise((r) => setTimeout(r, 600)); // let the disconnect land
   const rec1 = await wsConnect();
-  sendJ(rec1, { type: "reclaim", protocolVersion: 3, code, name: "GuestN" });
+  sendJ(rec1, { type: "reclaim", protocolVersion: 4, code, name: "GuestN" });
   const reclaimed = await nextMsg(rec1, (m) => m.type === "reclaimed");
   check(reclaimed.playerId === joined.playerId && reclaimed.token && reclaimed.token !== joined.token, "uncontested reclaim: same playerId, FRESH token");
   check(!!reclaimed.G, "reclaimed carries a G snapshot");
 
   // wrong name rejected
   const recBad = await wsConnect();
-  sendJ(recBad, { type: "reclaim", protocolVersion: 3, code, name: "NoSuch" });
+  sendJ(recBad, { type: "reclaim", protocolVersion: 4, code, name: "NoSuch" });
   const recErr = await nextMsg(recBad, (m) => m.type === "reclaimError");
   check(!!recErr, "reclaim with unknown name rejected");
   recBad.close();
@@ -205,7 +216,7 @@ async function main() {
   // ---- 6. contested reclaim: host approve, then deny ----
   const rec2 = await wsConnect();
   const reqP = nextMsg(host, (m) => m.type === "reclaimRequest", 8000);
-  sendJ(rec2, { type: "reclaim", protocolVersion: 3, code, name: "GuestN" }); // rec1 still connected -> contested
+  sendJ(rec2, { type: "reclaim", protocolVersion: 4, code, name: "GuestN" }); // rec1 still connected -> contested
   const pendingMsg = await nextMsg(rec2, (m) => m.type === "reclaimPending");
   check(!!pendingMsg, "contested reclaim parks pending");
   const req = await reqP;
@@ -221,7 +232,7 @@ async function main() {
   // now a DENIED contested attempt against rec2 (currently connected)
   const rec3 = await wsConnect();
   const reqP2 = nextMsg(host, (m) => m.type === "reclaimRequest", 8000);
-  sendJ(rec3, { type: "reclaim", protocolVersion: 3, code, name: "GuestN" });
+  sendJ(rec3, { type: "reclaim", protocolVersion: 4, code, name: "GuestN" });
   await nextMsg(rec3, (m) => m.type === "reclaimPending");
   const req2 = await reqP2;
   const deniedP = nextMsg(rec3, (m) => m.type === "reclaimError", 8000);
@@ -295,7 +306,7 @@ async function main() {
     let limited = false;
     for (let i = 0; i < 7; i++) {
       const ws = await wsConnect();
-      sendJ(ws, { type: "host", protocolVersion: 3, name: "R" + i, n: 4, teams: false, seats: [{ name: "R" + i, type: "human", diff: "medium" }] });
+      sendJ(ws, { type: "host", protocolVersion: 4, name: "R" + i, n: 4, teams: false, seats: [{ name: "R" + i, type: "human", diff: "medium" }] });
       const m = await nextMsg(ws, (x) => x.type === "created" || x.type === "error");
       if (m.type === "error" && /Too many rooms/.test(m.message)) limited = true;
       ws.close();

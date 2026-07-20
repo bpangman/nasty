@@ -163,18 +163,18 @@ async function main() {
   // seats. Then the Sim identity's raw socket closes - the PHONE takes that identity over via
   // the ?testseed= boot hook.
   const hostWs = await wsConnect(PORT);
-  sendJ(hostWs, { type: "host", protocolVersion: 3, name: "Host", n: 4, teams: false, seats: [
+  sendJ(hostWs, { type: "host", protocolVersion: 4, name: "Host", n: 4, teams: false, seats: [
     { name: "Host", type: "human", diff: "medium" }, { name: "Sim", type: "human", diff: "medium" },
     { name: "C1", type: "cpu", diff: "medium" }, { name: "C2", type: "cpu", diff: "medium" },
   ] });
   const created = await nextMsg(hostWs, (m) => m.type === "created");
   const code = created.code;
   const simWs = await wsConnect(PORT);
-  sendJ(simWs, { type: "join", protocolVersion: 3, code, name: "Sim" });
+  sendJ(simWs, { type: "join", protocolVersion: 4, code, name: "Sim" });
   const joined = await nextMsg(simWs, (m) => m.type === "joined");
   sendJ(simWs, { type: "claimSeat", seatIndex: 1, name: "Sim" });
   await sleep(300);
-  sendJ(hostWs, { type: "start", protocolVersion: 3 });
+  sendJ(hostWs, { type: "start", protocolVersion: 4 });
   await nextMsg(hostWs, (m) => m.type === "readyCheck");
   sendJ(hostWs, { type: "readyUp" });
   sendJ(simWs, { type: "readyUp" });

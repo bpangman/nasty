@@ -96,7 +96,7 @@ const isStart = (m) => m.type === "gameAction" && m.action && m.action.kind === 
 async function buildRoom(port, willSeatFlags) {
   const xff = `10.99.${xffCounter++}.1`;   // per-room source IP - keeps the host-create rate limit honest without ever tripping it
   const host = await connect(port, xff);
-  sendJ(host, { type: "host", protocolVersion: 3, name: "P0", n: 4, teams: true, seats: [
+  sendJ(host, { type: "host", protocolVersion: 4, name: "P0", n: 4, teams: true, seats: [
     { name: "P0", type: "human", diff: "medium" }, { name: "P1", type: "human", diff: "medium" },
     { name: "P2", type: "human", diff: "medium" }, { name: "P3", type: "human", diff: "medium" },
   ] });
@@ -105,13 +105,13 @@ async function buildRoom(port, willSeatFlags) {
   const clients = [host];
   for (let i = 1; i <= 3; i++) {
     const c = await connect(port, xff);
-    sendJ(c, { type: "join", protocolVersion: 3, code, name: "P" + i });
+    sendJ(c, { type: "join", protocolVersion: 4, code, name: "P" + i });
     await waitMsg(c, (m) => m.type === "joined");
     sendJ(c, { type: "claimSeat", seatIndex: i, name: "P" + i });
     clients.push(c);
   }
   await sleep(300);
-  sendJ(host, { type: "start", protocolVersion: 3 });
+  sendJ(host, { type: "start", protocolVersion: 4 });
   await Promise.all(clients.map((c) => waitMsg(c, (m) => m.type === "readyCheck")));
   clients.forEach((c, i) => sendJ(c, willSeatFlags[i] ? { type: "readyUp", willSeat: true } : { type: "readyUp" }));
   await Promise.all(clients.map((c) => waitMsg(c, isStart)));

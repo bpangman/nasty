@@ -81,14 +81,14 @@ async function protocolPart(port) {
   log('--- Part 1: raw wire-protocol "resync" checks ---');
   // A single-seat room, started immediately (3 CPUs) so there's a live G to resync against.
   const ws = await wsConnect(port);
-  sendJ(ws, { type: 'host', protocolVersion: 3, name: 'Probe', n: 4, teams: false, seats: [
+  sendJ(ws, { type: 'host', protocolVersion: 4, name: 'Probe', n: 4, teams: false, seats: [
     { name: 'Probe', type: 'human', diff: 'medium' }, { name: 'C1', type: 'cpu', diff: 'easy' },
     { name: 'C2', type: 'cpu', diff: 'medium' }, { name: 'C3', type: 'cpu', diff: 'hard' },
   ] });
   const created = await nextMsg(ws, (m) => m.type === 'created');
   const code = created.code;
   sendJ(ws, { type: 'claimSeat', seatIndex: 0, name: 'Probe' });
-  sendJ(ws, { type: 'start', protocolVersion: 3 });
+  sendJ(ws, { type: 'start', protocolVersion: 4 });
   await nextMsg(ws, (m) => m.type === 'readyCheck');
   sendJ(ws, { type: 'readyUp' });
   await nextMsg(ws, (m) => m.type === 'gameAction' && m.action.kind === 'start');

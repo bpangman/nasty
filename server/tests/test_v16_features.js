@@ -88,24 +88,24 @@ async function main() {
       { name: "G2", type: "human", diff: "medium" },
       { name: "CpuSeat", type: "cpu", diff: "easy" },
     ];
-    sendJ(host, { type: "host", protocolVersion: 3, name: "Host", n: 4, teams: false, seats });
+    sendJ(host, { type: "host", protocolVersion: 4, name: "Host", n: 4, teams: false, seats });
     const created = await nextMsg(host, (m) => m.type === "created");
     const code = created.code;
-    sendJ(g1, { type: "join", protocolVersion: 3, code, name: "G1" });
+    sendJ(g1, { type: "join", protocolVersion: 4, code, name: "G1" });
     const j1 = await nextMsg(g1, (m) => m.type === "joined");
     sendJ(g1, { type: "claimSeat", seatIndex: 1, name: "G1" });
     await nextMsg(host, (m) => m.type === "lobby" && m.lobby.seats[1].claimedBy === j1.playerId);
-    sendJ(g2, { type: "join", protocolVersion: 3, code, name: "G2" });
+    sendJ(g2, { type: "join", protocolVersion: 4, code, name: "G2" });
     const j2 = await nextMsg(g2, (m) => m.type === "joined");
     sendJ(g2, { type: "claimSeat", seatIndex: 2, name: "G2" });
     await nextMsg(host, (m) => m.type === "lobby" && m.lobby.seats[2].claimedBy === j2.playerId);
 
     // A brand new joiner mid ready-check must be turned away cleanly (seat list is locked).
-    sendJ(host, { type: "start", protocolVersion: 3 });
+    sendJ(host, { type: "start", protocolVersion: 4 });
     const rc0 = await nextMsg(host, (m) => m.type === "readyCheck");
     check(rc0.requiredPlayerIds.length === 3 && rc0.readyPlayerIds.length === 0, "readyCheck opens requiring exactly the 3 human seats, nobody ready yet");
     const late = await wsConnect();
-    sendJ(late, { type: "join", protocolVersion: 3, code, name: "Late" });
+    sendJ(late, { type: "join", protocolVersion: 4, code, name: "Late" });
     const lateErr = await nextMsg(late, (m) => m.type === "joinError");
     check(!!lateErr.message && !/[—–]/.test(lateErr.message), "a new joiner is turned away (plain-language, dash-free) while ready-check is open");
     late.close();
@@ -142,7 +142,7 @@ async function main() {
     await nextMsg(host, (m) => m.type === "lobby" && m.lobby.seats[3].type === "cpu");
 
     // Restart the ready check, get everyone ready this time -> game deals.
-    sendJ(host, { type: "start", protocolVersion: 3 });
+    sendJ(host, { type: "start", protocolVersion: 4 });
     await nextMsg(host, (m) => m.type === "readyCheck");
     sendJ(host, { type: "readyUp" });
     sendJ(g1, { type: "readyUp" });
@@ -161,11 +161,11 @@ async function main() {
       { name: "Host", type: "human", diff: "medium" },
       { name: "C1", type: "cpu", diff: "easy" }, { name: "C2", type: "cpu", diff: "easy" }, { name: "C3", type: "cpu", diff: "easy" },
     ];
-    sendJ(host, { type: "host", protocolVersion: 3, name: "Host", n: 4, teams: false, seats });
+    sendJ(host, { type: "host", protocolVersion: 4, name: "Host", n: 4, teams: false, seats });
     const created = await nextMsg(host, (m) => m.type === "created");
     sendJ(host, { type: "setSeat", seatIndex: 0, patch: { type: "cpu" } });
     await nextMsg(host, (m) => m.type === "lobby" && m.lobby.seats[0].type === "cpu");
-    sendJ(host, { type: "start", protocolVersion: 3 });
+    sendJ(host, { type: "start", protocolVersion: 4 });
     const startMsg = await nextMsg(host, (m) => m.type === "gameAction" && m.action.kind === "start", 5000);
     check(!!startMsg && startMsg.action.seats[0].type === "cpu", "zero-human table: ready check resolves immediately, deal proceeds with no one required");
     host.close();
@@ -185,14 +185,14 @@ async function main() {
       { name: "Host", type: "human", diff: "medium" }, { name: "Guest", type: "human", diff: "medium" },
       { name: "C1", type: "cpu", diff: "easy" }, { name: "C2", type: "cpu", diff: "easy" },
     ];
-    sendJ(host, { type: "host", protocolVersion: 3, name: "Host", n: 4, teams: false, seats });
+    sendJ(host, { type: "host", protocolVersion: 4, name: "Host", n: 4, teams: false, seats });
     const created = await nextMsg(host, (m) => m.type === "created");
     const code = created.code;
-    sendJ(guest, { type: "join", protocolVersion: 3, code, name: "Guest" });
+    sendJ(guest, { type: "join", protocolVersion: 4, code, name: "Guest" });
     const joined = await nextMsg(guest, (m) => m.type === "joined");
     sendJ(guest, { type: "claimSeat", seatIndex: 1, name: "Guest" });
     await nextMsg(host, (m) => m.type === "lobby" && m.lobby.seats[1].claimedBy === joined.playerId);
-    sendJ(host, { type: "start", protocolVersion: 3 });
+    sendJ(host, { type: "start", protocolVersion: 4 });
     await nextMsg(host, (m) => m.type === "readyCheck");
     sendJ(host, { type: "readyUp" }); sendJ(guest, { type: "readyUp" });
     await nextMsg(host, (m) => m.type === "gameAction" && m.action.kind === "start");
@@ -235,14 +235,14 @@ async function main() {
 
     // Token rejoin must now be rejected.
     const reGuest = await wsConnect();
-    sendJ(reGuest, { type: "rejoin", protocolVersion: 3, code, playerId: joined.playerId, token: joined.token });
+    sendJ(reGuest, { type: "rejoin", protocolVersion: 4, code, playerId: joined.playerId, token: joined.token });
     const rejoinErr = await nextMsg(reGuest, (m) => m.type === "rejoinError");
     check(/left that game for good/i.test(rejoinErr.message || "") && !/[—–]/.test(rejoinErr.message), "a token rejoin into a left-for-good seat is rejected with a clear, dash-free message");
     reGuest.close();
 
     // Name-based reclaim must also be rejected.
     const reclaimer = await wsConnect();
-    sendJ(reclaimer, { type: "reclaim", protocolVersion: 3, code, name: "Guest" });
+    sendJ(reclaimer, { type: "reclaim", protocolVersion: 4, code, name: "Guest" });
     const reclaimErr = await nextMsg(reclaimer, (m) => m.type === "reclaimError");
     check(/left that game for good/i.test(reclaimErr.message || ""), "a name-based reclaim into a left-for-good seat is rejected too");
     reclaimer.close();
@@ -258,14 +258,14 @@ async function main() {
       { name: "Host", type: "human", diff: "medium" }, { name: "Guest", type: "human", diff: "medium" },
       { name: "C1", type: "cpu", diff: "easy" }, { name: "C2", type: "cpu", diff: "easy" },
     ];
-    sendJ(host, { type: "host", protocolVersion: 3, name: "Host", n: 4, teams: false, seats });
+    sendJ(host, { type: "host", protocolVersion: 4, name: "Host", n: 4, teams: false, seats });
     const created = await nextMsg(host, (m) => m.type === "created");
     const code = created.code;
-    sendJ(guest, { type: "join", protocolVersion: 3, code, name: "Guest" });
+    sendJ(guest, { type: "join", protocolVersion: 4, code, name: "Guest" });
     const joined = await nextMsg(guest, (m) => m.type === "joined");
     sendJ(guest, { type: "claimSeat", seatIndex: 1, name: "Guest" });
     await nextMsg(host, (m) => m.type === "lobby" && m.lobby.seats[1].claimedBy === joined.playerId);
-    sendJ(host, { type: "start", protocolVersion: 3 });
+    sendJ(host, { type: "start", protocolVersion: 4 });
     await nextMsg(host, (m) => m.type === "readyCheck");
     sendJ(host, { type: "readyUp" }); sendJ(guest, { type: "readyUp" });
     await nextMsg(host, (m) => m.type === "gameAction" && m.action.kind === "start");
@@ -290,7 +290,7 @@ async function main() {
     check(!!(await checkP), "room still answers requestStateCheck after the host left for good");
 
     const reGuest = await wsConnect();
-    sendJ(reGuest, { type: "rejoin", protocolVersion: 3, code, playerId: joined.playerId, token: joined.token });
+    sendJ(reGuest, { type: "rejoin", protocolVersion: 4, code, playerId: joined.playerId, token: joined.token });
     const sync = await nextMsg(reGuest, (m) => m.type === "sync");
     check(!!sync.G, "the room itself survives and is still fully joinable/rejoinable - host leaving for good did NOT kill the room");
     reGuest.close();
@@ -311,9 +311,9 @@ async function main() {
       { name: uniqueName, type: "human", diff: "medium" },
       { name: "C1", type: "cpu", diff: "easy" }, { name: "C2", type: "cpu", diff: "easy" }, { name: "C3", type: "cpu", diff: "easy" },
     ];
-    sendJ(host, { type: "host", protocolVersion: 3, name: uniqueName, n: 4, teams: false, seats });
+    sendJ(host, { type: "host", protocolVersion: 4, name: uniqueName, n: 4, teams: false, seats });
     const created = await nextMsg(host, (m) => m.type === "created");
-    sendJ(host, { type: "start", protocolVersion: 3 });
+    sendJ(host, { type: "start", protocolVersion: 4 });
     await nextMsg(host, (m) => m.type === "readyCheck");
     sendJ(host, { type: "readyUp" });
     await nextMsg(host, (m) => m.type === "gameAction" && m.action.kind === "start");

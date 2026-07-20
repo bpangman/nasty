@@ -22,9 +22,10 @@
  *  4. The zombie-socket shape (foreground WHILE the pipe is still silently dead): the resync
  *     ack watchdog tears the socket down and rebuilds it AUTOMATICALLY - convergence with zero
  *     manual taps, and the manual failure prompt never shows.
- *  5. Back-compat: the exact iOS build 28 client (pinned commit) plays clean against the new
- *     server, ignores the new awayStatus messages, and applies a server-played away turn as a
- *     perfectly ordinary move. Old clients keep working.
+ *  5. Old-build lockout (repurposed v0.23, extended v0.23.1): the exact build 28 client
+ *     (protocol 2) AND the exact build 30 client (protocol 3), both pinned commits, each get
+ *     the friendly plain-language protocolMismatch on host and join - never a room, never a
+ *     crash, and a current host's room is untouched by the rejected attempts.
  */
 const { chromium } = require("/Users/jarvis/clawd/node_modules/playwright");
 const { createFreezeProxy } = require("./freeze_proxy.js");
@@ -46,6 +47,9 @@ const AWAY_ENV = {
 };
 // Build 28's exact client (commit 9d19b46, the last pre-v0.22 commit) for the back-compat leg.
 const BUILD28_COMMIT = "9d19b46";
+// Build 30's exact client (commit 6fa3867, the v0.23/protocol-3 iOS build 30 commit) for the
+// v0.23.1 lockout leg - protocol bumped 3 -> 4 for the partner-peg last-resort ruling.
+const BUILD30_COMMIT = "6fa3867";
 
 function log(...a) { console.log("[freeze]", new Date().toISOString(), ...a); }
 let PASS = 0, FAIL = 0;
@@ -417,8 +421,64 @@ async function main() {
   const hostStillFine = await ngHost.evaluate(() => window.NET.online === true && window.NET.code != null && (window.__errors || []).length === 0).catch(() => false);
   check(hostStillFine !== false && (ngHost.__errors || []).length === 0, `${KIND}: the current host's room was untouched by the rejected old-build join`);
   check((host28.__errors || []).length === 0, `${KIND}: zero page errors on the build 28 client through both rejections`);
-  await ngHost.context().close();
   await host28.context().close();
+
+  // ---------------------------------------------------------------------------
+  // Scenario 5c/5d (v0.23.1): BUILD 30 LOCKOUT - the exact build 30 client (commit pinned,
+  // protocol 3) vs the new protocol-4 server. The partner-peg last-resort ruling changed move
+  // legality again: a build 30 client computes its own legal-move list locally to decide
+  // whether to show a tappable hand, so in the forced-partner-landing spot it would find zero
+  // moves and softlock on "Catching up..." while the server waits for its move. It must get
+  // the same friendly lockout instead - never a room, never a crash.
+  // ---------------------------------------------------------------------------
+  log("--- v0.23.1 lockout: pinned build 30 client (commit " + BUILD30_COMMIT + ") ---");
+  const b30HtmlPath = path.join(SCRATCH, "build30.html");
+  const b30Html = execSync(`git show ${BUILD30_COMMIT}:index.html`, { cwd: "/Users/jarvis/nasty-game", maxBuffer: 1024 * 1024 * 20 }).toString();
+  fs.writeFileSync(b30HtmlPath, b30Html);
+  const host30 = await newPage(browser, PORT, b30HtmlPath);   // build 30 client, direct
+
+  const hostOutcome30 = await host30.evaluate(() => {
+    CFG.n = 4; CFG.teams = false;
+    return new Promise((resolve) => {
+      const orig = window.handleNetMessage;
+      const seen = [];
+      window.handleNetMessage = function (m) {
+        seen.push(m.type); orig(m);
+        if (m.type === "created" || m.type === "protocolMismatch") {
+          window.handleNetMessage = orig;
+          setTimeout(() => resolve({ seen, toast: (document.getElementById("toasts") || {}).textContent || "", online: window.NET.online }), 600);
+        }
+      };
+      window.hostCreateRoom();
+    });
+  });
+  check(hostOutcome30.seen.includes("protocolMismatch") && !hostOutcome30.seen.includes("created"),
+    `${KIND}: build 30 HOST attempt got protocolMismatch, never a room (saw: ${hostOutcome30.seen.join(",")})`);
+  check(/newest version/i.test(hostOutcome30.toast) && !/[—–]/.test(hostOutcome30.toast),
+    `${KIND}: build 30 saw the friendly plain-language update message (dash-free): "${hostOutcome30.toast.slice(0, 80)}"`);
+  check(hostOutcome30.online === false, `${KIND}: build 30 landed back on a clean menu (NET.online false), not stuck mid-flow`);
+
+  const joinOutcome30 = await host30.evaluate((code) => new Promise((resolve) => {
+    window.connectWs().then(() => {
+      const orig = window.handleNetMessage;
+      const seen = [];
+      window.handleNetMessage = function (m) {
+        seen.push(m.type); orig(m);
+        if (m.type === "joined" || m.type === "protocolMismatch") {
+          window.handleNetMessage = orig;
+          setTimeout(() => resolve({ seen }), 400);
+        }
+      };
+      window.netSend({ type: "join", protocolVersion: PROTOCOL_VERSION, code, name: "Old30" });
+    }).catch(() => resolve({ seen: ["connectFailed"] }));
+  }), code2);
+  check(joinOutcome30.seen.includes("protocolMismatch") && !joinOutcome30.seen.includes("joined"),
+    `${KIND}: build 30 JOIN attempt got protocolMismatch, never a seat (saw: ${joinOutcome30.seen.join(",")})`);
+  const hostStillFine30 = await ngHost.evaluate(() => window.NET.online === true && window.NET.code != null && (window.__errors || []).length === 0).catch(() => false);
+  check(hostStillFine30 !== false && (ngHost.__errors || []).length === 0, `${KIND}: the current host's room was untouched by the rejected build 30 join`);
+  check((host30.__errors || []).length === 0, `${KIND}: zero page errors on the build 30 client through both rejections`);
+  await ngHost.context().close();
+  await host30.context().close();
 
   await browser.close();
   await proxy.close();
