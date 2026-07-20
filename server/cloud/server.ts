@@ -91,7 +91,12 @@ const KV_PATH = Deno.env.get("NASTY_KV_PATH") || undefined; // undefined = Deplo
 /* v0.23 (2026-07-20): 2 -> 3 for the "you can NOT take out your own pegs" rule change - twin
    of server.js's matching comment. Protocol-2 clients (builds 16-29) get the friendly update
    message; the engine's legalMoves() validation still rejects any stale move gracefully. */
-const PROTOCOL_VERSION = 3;
+/* v0.23.1 (2026-07-20, Blake's confirmed partner-peg ruling): 3 -> 4 - twin of server.js's
+   matching comment. Partner-landing is now a legal LAST RESORT (kicks the partner peg instead
+   of bowing out); a protocol-3 client (build 30 / v0.23 website) would find zero local moves
+   in that situation and softlock on "Catching up..." while this server waits for its move, so
+   protocol-3 clients get the same friendly update message. */
+const PROTOCOL_VERSION = 4;
 const PROTOCOL_MISMATCH_MESSAGE =
   "This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.";
 function protocolOk(msg: Record<string, unknown>): boolean {

@@ -940,7 +940,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.23</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.23.1</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -1030,7 +1030,8 @@ button{font:inherit;cursor:pointer}
     <h4>The nasty part</h4>
     <ul>
       <li>Land exactly on an <b>opponent's tee</b> and it's <b>blasted back to base</b>.</li>
-      <li>You can <b>never pass your own tee</b> - or your partner's, in teams - and you can <b>never land on them</b> either. Any play that would do either simply isn't allowed.</li>
+      <li>You can <b>never pass your own tee</b> - or your partner's, in teams - and you can <b>never land on your own tee</b>. Any play that would do either simply isn't allowed.</li>
+      <li>Landing on your <b>partner's tee</b> is a last resort - it's only allowed when it's the ONLY play you have left, and then their tee goes back to base. Sorry, partner!</li>
     </ul>
     <h4>Home row</h4>
     <ul>
@@ -2121,41 +2122,55 @@ function isSnug(s,pi){
    holes so starts sit exactly 12 apart. Steps L-1 = your porch (the shared tip-center
    hole right before your start - you CAN be kicked there). From the porch you branch
    inward: steps L..L+4 = your safe row, which nobody else can touch. */
-/* You can NEVER pass your own peg (or your partner's, in teams) - and, as of v0.23
-   (Blake, 2026-07-20), you can never LAND on your own peg either: a move that would land
-   exactly on your own peg (or your partner's, in teams - same grouping as the never-pass
-   rule) is simply ILLEGAL. It is never offered and can never be forced. Landing exactly
-   on an OPPONENT's peg still takes it out. */
+/* You can NEVER pass your own peg (or your partner's, in teams) - unchanged. Landing:
+   as of v0.23 (Blake, 2026-07-20) you can never LAND exactly on your OWN peg - never
+   offered, never forced. v0.23.1 (Blake's confirmed ruling, 2026-07-20): landing exactly
+   on your PARTNER's peg in teams is a LAST RESORT - legal ONLY when it is your only
+   possible play anywhere in your hand. pathForward/pathBack tag such a landing with
+   pk:true; legalMoves() below excludes pk moves whenever ANY non-pk move exists, and
+   otherwise returns the pk moves as the legal set (so the partner peg gets kicked back
+   to its base, same kick semantics as an opponent kick). Landing exactly on an
+   OPPONENT's peg still takes it out, always. */
 function pathForward(owner,p,n){
   const t=p+n; if(t>LAY.L+HOME_N-1)return null;
-  let kick=null;
+  let kick=null,pk=false;
   for(let q=p+1;q<=t;q++){
     if(q>=LAY.L){ if(homeOcc(owner,q))return null; }
     else{
       const occ=trackOccupant(loopIdx(owner,q));
       if(!occ)continue;
-      // v0.23: your own peg (or your partner's) ANYWHERE on the path - passed over OR landed
-      // on - makes the whole move illegal. sameTeam() covers "own" even in free-for-all.
-      if(sameTeam(occ.seat,owner))return null;
-      if(q===t)kick=occ;
+      // Your own peg ANYWHERE on the path - passed over OR landed on - kills the move.
+      if(occ.seat===owner)return null;
+      if(sameTeam(occ.seat,owner)){
+        // Partner peg: passing it is still illegal; LANDING on it is the tagged
+        // last-resort case (v0.23.1) - legalMoves() decides if it's actually offered.
+        if(q!==t)return null;
+        kick=occ; pk=true;
+      }
+      else if(q===t)kick=occ;
     }
   }
-  return{kick};
+  return{kick,pk};
 }
 function pathBack(owner,p,n){
   const t=p-n; if(t<0)return null;
-  let kick=null;
+  let kick=null,pk=false;
   for(let q=p-1;q>=t;q--){
     if(q>=LAY.L){ if(homeOcc(owner,q))return null; }
     else{
       const occ=trackOccupant(loopIdx(owner,q));
       if(!occ)continue;
-      // v0.23: same rule backwards - own/partner peg on the path or the landing hole = illegal.
-      if(sameTeam(occ.seat,owner))return null;
-      if(q===t)kick=occ;
+      // Same rule backwards - own peg anywhere = illegal; partner peg only on the
+      // landing hole, tagged pk for the last-resort filter (v0.23.1).
+      if(occ.seat===owner)return null;
+      if(sameTeam(occ.seat,owner)){
+        if(q!==t)return null;
+        kick=occ; pk=true;
+      }
+      else if(q===t)kick=occ;
     }
   }
-  return{kick};
+  return{kick,pk};
 }
 function actingOwner(seat){
   if(G.teams&&allHome(seat)&&!allHome(partnerOf(seat)))return partnerOf(seat);
@@ -2169,9 +2184,13 @@ function legalMoves(seat){
       const bi=G.pieces[owner].findIndex(p=>p.state==='base');
       if(bi>=0){
         const occ=trackOccupant(loopIdx(owner,0));
-        // v0.23: an OPPONENT on your start gets kicked; your own (or partner's) tee sitting
-        // there makes coming out illegal - never offered, never forced (Blake, 2026-07-20).
+        // v0.23: an OPPONENT on your start gets kicked; your OWN tee sitting there makes
+        // coming out illegal - never offered, never forced (Blake, 2026-07-20).
+        // v0.23.1: a PARTNER's tee on your start hole is the same last-resort landing as
+        // anywhere else on the track (it is a normal shared hole a partner can occupy in
+        // passing) - tagged pk, offered only if it ends up being your only possible play.
         if(!occ||!sameTeam(occ.seat,owner))ms.push({ci,type:'enter',owner,pi:bi,to:0,kick:occ||null});
+        else if(occ.seat!==owner)ms.push({ci,type:'enter',owner,pi:bi,to:0,kick:occ,pk:true});
       }
     }
     if(r==='J'){
@@ -2189,7 +2208,7 @@ function legalMoves(seat){
         if(p.state==='base')return;
         if(p.state==='home'&&isSnug(owner,pi))return;
         const res=pathForward(owner,p.steps,fwd);
-        if(res)ms.push({ci,type:'move',owner,pi,to:p.steps+fwd,kick:res.kick});
+        if(res){const mv={ci,type:'move',owner,pi,to:p.steps+fwd,kick:res.kick};if(res.pk)mv.pk=true;ms.push(mv);}
       });
     }
     if(r==='3'){
@@ -2197,11 +2216,17 @@ function legalMoves(seat){
         if(p.state==='base')return;
         if(p.state==='home'&&isSnug(owner,pi))return;
         const res=pathBack(owner,p.steps,3);
-        if(res)ms.push({ci,type:'back',owner,pi,to:p.steps-3,kick:res.kick});
+        if(res){const mv={ci,type:'back',owner,pi,to:p.steps-3,kick:res.kick};if(res.pk)mv.pk=true;ms.push(mv);}
       });
     }
   });
-  return ms;
+  // v0.23.1 last-resort filter (Blake's confirmed ruling, 2026-07-20): partner-landing (pk)
+  // moves are excluded whenever ANY other legal move exists anywhere in the hand - any card,
+  // any piece. Only when the whole hand has NOTHING else do the pk moves become the legal set
+  // (and thus effectively forced, like any sole move) - which also means a player in that spot
+  // does NOT bow out; the partner kick happens instead. Own-landings are never in either set.
+  const nonPk=ms.filter(m=>!m.pk);
+  return nonPk.length?nonPk:ms;
 }
 // v0.10.2: thrown by applyMove() when it's asked to do something the current G genuinely
 // can't support (see the swap guard below) - a signal to the turn loop to resync instead of
@@ -2320,11 +2345,15 @@ function dangerAt(owner,steps){
   return d;
 }
 function kickVal(owner,k){
-  // v0.23: a kick can only ever hit an OPPONENT now (landing on your own or partner's peg is
-  // illegal, so legalMoves() never produces such a kick) - the old own/partner penalty
-  // branches were dead code and are gone. `owner` kept in the signature: exported name,
-  // called with two args by the frozen-policy AI harness (server/tests/test_ai_difficulty.js).
+  // v0.23.1: kicks are almost always OPPONENT kicks (own-landings are never legal; partner-
+  // landings only ever appear as a forced last resort - see legalMoves()'s pk filter). When a
+  // forced partner-landing set IS on offer, every move in it kicks a partner peg, so this
+  // penalty only ranks WHICH partner peg to send back: strongly negative, steeper per step,
+  // so the least-advanced partner peg is the least-bad choice. `owner` kept in the signature:
+  // exported name, called with two args by the frozen-policy AI harness
+  // (server/tests/test_ai_difficulty.js).
   const vic=G.pieces[k.seat][k.pi];
+  if(sameTeam(k.seat,owner))return -(22+vic.steps*0.9);
   return 22+vic.steps*0.25;
 }
 function scoreMove(seat,m){
@@ -2401,7 +2430,7 @@ function strategyBonus(m,P){
       }
     }
   }
-  if(m.kick){                                                    // v0.23: every kick is an opponent kick now (own/partner landings are illegal)
+  if(m.kick&&!sameTeam(m.kick.seat,m.owner)){                    // opponent kicks only - a forced partner kick (v0.23.1 last resort) earns no bonus here; kickVal()'s penalty already ranks those
     const vic=G.pieces[m.kick.seat][m.kick.pi];                 // pre-kick steps - still intact here
     v+=kickVal(m.owner,m.kick)*0.55;                             // kick-hungry: extra weight on top of kickVal
     v+=piecesHome(m.kick.seat)*3*P.deny;                         // they're close to winning - deny it
@@ -2562,9 +2591,10 @@ function rolloutValue(seat){      // call with G already pointed at the hypothet
 }
 function chooseAI(seat,moves){
   const P=AI_TIERS[G.seats[seat].diff]||AI_TIERS.medium;
-  // v0.23: the old "never kick your own/partner tee unless forced" safe-filter is gone -
-  // landing on your own or partner's peg is now ILLEGAL (RULES.md, changed 2026-07-20), so
-  // legalMoves() never offers such a move and there is nothing left to filter.
+  // v0.23.1: no safe-filter needed - legalMoves() itself already excludes partner-landings
+  // whenever any alternative exists, and when it hands over a forced partner-landing set the
+  // AI just scores within it (kickVal's partner penalty picks the least-bad partner peg to
+  // send back). Own-landings are never offered at all.
   const pool=moves;
   const scored=pool.map(m=>({m,s:scoreMove(seat,m)+P.strat*strategyBonus(m,P)
     +(P.jitter?(Math.random()*2-1)*P.jitter:0)}));
@@ -3593,9 +3623,13 @@ async function performMoveInner(seat,m,cardEl){
     // INSTANT, unchanged) - and nastyBlast() itself now runs through spotlightEvent() so the
     // slam plays at a watchable, shortened-but-real-time pace during a skip instead of getting
     // floored to a ~220ms blur by the 30x SPEED multiplier. See spotlightEvent() above.
-    // v0.23: no own/partner-kick branch anymore - landing on your own or partner's tee is
-    // illegal now, so every kick that reaches here is an opponent kick.
-    toast(`💥 NASTY! ${G.seats[seat].name} sends ${G.seats[kicked.seat].name} back to base!`,2600,true);
+    // v0.23.1: a kick is almost always an opponent kick, but a FORCED partner kick can reach
+    // here now (partner-landing as the only possible play - see legalMoves()'s pk filter).
+    // Give that its own gentler message so the table knows it wasn't by choice.
+    if(sameTeam(kicked.seat,owner))
+      toast(`😬 Ouch! ${G.seats[seat].name} has no other play and sends partner ${G.seats[kicked.seat].name} back to base!`,2600,true);
+    else
+      toast(`💥 NASTY! ${G.seats[seat].name} sends ${G.seats[kicked.seat].name} back to base!`,2600,true);
     await spotlightEvent(()=>nastyBlast(kicked.seat,kicked.pi,kicked.pos));
   }
   // celebrate every tee that just became snug (safe forever)
@@ -4162,7 +4196,13 @@ function clearSelection(keepTurn){
 // would offer moves the new server rejects - the version gate turns that risk into the
 // existing friendly "update the app / refresh the page" message on host/join/rejoin/reclaim
 // instead of a mid-game desync. Offline and pass-and-play on old builds are unaffected.
-const PROTOCOL_VERSION=3;
+// v0.23.1 (2026-07-20, Blake's confirmed partner-peg ruling): bumped 3 -> 4. Partner-landing
+// is now a legal LAST RESORT (sole possible play - kicks the partner peg instead of bowing
+// out). A protocol-3 client (build 30 / v0.23 site) computes its own legal moves locally to
+// decide whether to show a tappable hand; in the forced-partner-landing spot it would find
+// ZERO moves and wait on "Catching up..." forever while the new server waits for its move -
+// a softlock, so old clients get the friendly update message instead.
+const PROTOCOL_VERSION=4;
 const NET={
   ws:null, online:false, isHost:false, wantConnection:false,
   code:null, playerId:null, token:null, mySeat:-1,

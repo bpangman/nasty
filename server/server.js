@@ -76,7 +76,15 @@ const CODE_ALPHABET = "BCDFGHJKMNPQRSTVWXZ";
  * gives them the plain-language update message below instead of silent desyncs; the engine's
  * own legalMoves() validation in the "action" case still rejects any stale move gracefully
  * (resync, never a crash). */
-const PROTOCOL_VERSION = 3;
+/* v0.23.1 (2026-07-20, Blake's confirmed partner-peg ruling): 3 -> 4. Landing on a PARTNER's
+ * peg is now legal as a LAST RESORT (only possible play in the whole hand - it kicks the
+ * partner peg to base instead of the player bowing out). A protocol-3 client (build 30 /
+ * v0.23 website) computes its own seat's legal-move list LOCALLY just to decide whether to
+ * offer a tappable hand; in the forced-partner-landing situation its v0.23 engine finds ZERO
+ * moves and sits passively on "Catching up..." while THIS server waits forever for that
+ * player's move - a softlock, so old clients are NOT safe and the gate must turn them away
+ * with the same friendly update message. */
+const PROTOCOL_VERSION = 4;
 const PROTOCOL_MISMATCH_MESSAGE =
   "This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.";
 function protocolOk(msg) {
