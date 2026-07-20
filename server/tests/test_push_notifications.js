@@ -4,12 +4,15 @@
 //   node test_push_notifications.js deno     (server/cloud/server.ts on a private NASTY_PORT/NASTY_KV_PATH)
 // Never touches prod. Follows the exact same helper shape as test_v16_features.js on purpose.
 //
-// No real APNs key exists on this Mac (see server/apns-key.p8 / server/apns-key-id.txt - both
-// intentionally absent until Blake creates one, see PLANNING.md), so every push in this whole
-// test suite goes through the NO-OP LOG PATH ("would send push to token <token> for player
-// <name>") - that log line, captured from the child process's stdout, IS the observable proof
-// the trigger logic ran correctly. Once a real key exists, server/apns.js's own real-send path
-// activates automatically (see that file's header) - nothing here changes.
+// This suite doesn't care whether server/apns-key.p8 / server/apns-key-id.txt exist on disk -
+// it asserts the TRIGGER LOGIC (exactly when a push attempt happens, for which player, exactly
+// once), not delivery. Before Blake's key existed, every attempt went through the NO-OP LOG
+// PATH ("would send push to token <token> for player <name>"); now that the real key is
+// installed (2026-07-19), server/apns.js's real-send path activates automatically and logs
+// "push sent player=<name> ..." or "push rejected by APNs player=<name> ..." instead (a fake
+// test device token always gets rejected by Apple with BadDeviceToken - expected, harmless, and
+// proof the key/JWT are valid). pushAttemptLog() below matches either shape by player name so
+// this suite stays green either way, captured from the child process's stdout.
 const { spawn } = require("child_process");
 const WebSocket = require("/Users/jarvis/nasty-game/server/node_modules/ws");
 const path = require("path");
@@ -91,6 +94,14 @@ function countMatches(re) {
   const m = stdoutBuf.match(new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g"));
   return m ? m.length : 0;
 }
+// Matches a push attempt for a given player name, whichever mode apns.js is running in: the
+// no-op log (no real key on disk) carries the token; the real-send log (key present) only
+// carries the player name, never the token - see the file header comment above.
+function pushAttemptLog(name, token) {
+  const noOp = `would send push to token ${token || "\\S+"} for player ${name}`;
+  const real = `push (sent|rejected by APNs) player=${name}`;
+  return new RegExp(`(${noOp})|(${real})`);
+}
 
 async function main() {
   const child = startServer();
@@ -137,7 +148,7 @@ async function main() {
     sendJ(ws, { type: "readyUp" });
     await nextMsg(ws, (m) => m.type === "gameAction" && m.action.kind === "start");
     await new Promise((r) => setTimeout(r, 700)); // let driveTurnLoop's deal+turn-stop settle
-    check(countMatches(/would send push to token/) === 0, "no push is sent/logged while the on-turn seat's socket is still open and connected");
+    check(countMatches(pushAttemptLog("Pusher")) === 0, "no push is sent/logged while the on-turn seat's socket is still open and connected");
 
     /* ===================================================================================
      * C. Trigger logic, disconnected case: close the socket while it is genuinely this
@@ -146,10 +157,10 @@ async function main() {
      *    with exactly the token registered in part A and this seat's real player name.
      * ================================================================================= */
     ws.close();
-    const pushLog = await waitForLog(new RegExp(`would send push to token ${PUSH_TOKEN} for player Pusher`));
-    check(!!pushLog, "closing the on-turn seat's socket triggers the exact would-send-push no-op log line, with the right token and player name");
+    const pushLog = await waitForLog(pushAttemptLog("Pusher", PUSH_TOKEN));
+    check(!!pushLog, "closing the on-turn seat's socket triggers a push attempt (no-op or real-send log, whichever apns.js is running) with the right token and player name");
     await new Promise((r) => setTimeout(r, 1500)); // let any (incorrect) extra pushes have time to appear
-    check(countMatches(new RegExp(`would send push to token ${PUSH_TOKEN}`)) === 1, "exactly ONE push is logged for this turn - no spam on subsequent loop activity");
+    check(countMatches(pushAttemptLog("Pusher", PUSH_TOKEN)) === 1, "exactly ONE push is logged for this turn - no spam on subsequent loop activity");
   }
 
   /* =====================================================================================
@@ -158,7 +169,7 @@ async function main() {
    *    guard actually gates delivery, not just a coincidence of the earlier test's ordering.
    * =================================================================================== */
   {
-    const beforeCount = countMatches(/would send push to token/);
+    const beforeCount = countMatches(pushAttemptLog("NoTokenPlayer"));
     const ws = await wsConnect();
     const seats = [
       { name: "NoTokenPlayer", type: "human", diff: "medium" },
@@ -174,7 +185,7 @@ async function main() {
     await new Promise((r) => setTimeout(r, 500));
     ws.close();
     await new Promise((r) => setTimeout(r, 1500));
-    check(countMatches(/would send push to token/) === beforeCount, "a seat that never registered a push token gets no push attempt at all, even disconnected on its own turn");
+    check(countMatches(pushAttemptLog("NoTokenPlayer")) === beforeCount, "a seat that never registered a push token gets no push attempt at all, even disconnected on its own turn");
   }
 
   child.kill("SIGTERM");
