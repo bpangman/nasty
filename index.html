@@ -604,7 +604,7 @@ button{font:inherit;cursor:pointer}
   padding:calc(6px * var(--pscale)) calc(11px * var(--pscale));max-width:calc(150px * var(--pfont));
   text-align:left;transition:box-shadow .3s}
 .plaque .nm{font-weight:800;font-size:calc(17px * var(--pfont));white-space:nowrap;
-  max-width:calc(130px * var(--pfont));overflow:hidden;text-overflow:ellipsis}
+  max-width:calc(130px * var(--pfont));overflow:hidden;text-overflow:ellipsis;color:var(--cream)}
 .plaque.turn{box-shadow:0 0 0 3px var(--gold),0 0 26px rgba(244,197,66,.55);animation:turnPulse 1.6s infinite}
 /* v0.22 P0: passive presence - no blocking overlay for a disconnected player (see
    updatePresenceUI(), § NET). v0.25 item 5 (Blake): the signal is the NAME TURNING RED now,
@@ -2784,7 +2784,12 @@ function buildTable(){
     d.style.left=p.x+'px'; d.style.top=p.y+'px';
     d.style.setProperty('--rot',(p.rot||0)+'deg');
     d.style.borderLeftColor=seat.color.c; d.style.color=seat.color.c;
-    d.innerHTML=`<div class="nm" style="color:var(--cream)">${esc(seat.name)}</div>`;
+    // v0.25 item 5 fix: no inline color here anymore - an inline style attribute always beats
+    // a CSS class selector regardless of specificity, which silently made ".plaque.away
+    // .nm{color:#ff5449}" (the away/offline red-name rule, above) permanently dead CSS. The
+    // default cream color now lives in ".plaque .nm" itself (§ STYLE) so ".plaque.away .nm"
+    // can actually win when a seat goes offline.
+    d.innerHTML=`<div class="nm">${esc(seat.name)}</div>`;
     pl.appendChild(d);
   }
   const dl=$('discardLayer'); dl.innerHTML='';
