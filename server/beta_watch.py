@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=3b30b6d4-58ff-430d-b16e-697b8eaa63bd&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=41830418-192f-489b-a093-8b2f68a9848c&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -61,16 +61,19 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 31 reached the family</h1>
+<h1 style="color:#1a5c38">🎉 Build 32 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>This one finishes the landing rule from the last update, with your final ruling: you can
-never land on your own peg, but landing on your partner\'s peg IS allowed when it is the only
-play you have left. The game treats it as a last resort - it only offers that play when
-nothing else in your hand works, and then your partner\'s peg goes back to base with its own
-"no other play" message so the table knows it was forced, not a betrayal.</p>
-<p>One important note for the family: because the rules changed again, everyone should update
-before the next online game. Anyone on an older version will see a friendly message asking
-them to update before they can host or join online. Offline play works on any version.</p>
+<p>Three small things this time:</p>
+<ul>
+<li>The in-app "How to play" screen now explains the 6-player deal too (4 then 4, 48 of the 52
+cards used, the leftover 4 sit in the dealer's pile until they reshuffle) - it used to only
+spell out the 4-player deal.</li>
+<li>Setup makes it obvious you can rename any player - look for the pencil icon next to each
+name, in the offline setup screen and the online lobby alike.</li>
+<li>The fast-forward Skip button is easier to follow now: when it kicks someone out or swaps
+two players' pieces, it plays closer to normal speed and the pieces involved glow gold, so you
+never miss what happened mid-skip.</li>
+</ul>
 <h3>📱 The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
 <a href="https://testflight.apple.com/join/d79YpZea">https://testflight.apple.com/join/d79YpZea</a></p>
@@ -84,7 +87,7 @@ them to update before they can host or join online. Offline play works on any ve
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 31 is live for the family 🎉', body], check=True)
+                    'NASTY: build 32 is live for the family 🎉', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED - email sent, watcher done')
 except Exception as e:
