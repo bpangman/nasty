@@ -423,6 +423,24 @@ button{font:inherit;cursor:pointer}
   color:var(--cream);padding:8px 6px;font-size:14px;min-height:44px}
 #nameHint{font-size:12.5px;color:#9ec7aa;min-height:16px;margin:0 2px 4px;text-align:center}
 .bigBtns{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:18px}
+/* v0.26 item 2: the HOST speed picker only (#hostSpeedOverlay's #hostSpeedBtns) - a real 2x2
+   grid instead of .bigBtns' generic flex-wrap column, per Blake's ask. Deliberately NOT
+   auto-fit/minmax: with 4 tiles and a modalCard capped at max-width:520px, no single minmax
+   value can both allow 2 columns at a narrow 320px phone AND forbid 3+ columns on a wider one
+   (the math doesn't work out - verified: 2 columns needs a tile no wider than ~111px at 320px,
+   but preventing a 3rd column at the 520px cap needs a tile wider than ~152px). A fixed 2-column
+   grid plus a genuinely-narrow-only fallback is the correct mechanism, not a fixed layout - see
+   the media query below. Scoped to the id (higher specificity than .bigBtns, and this element
+   already carries both classes in the markup) so #speedPickerOverlay and the in-game Speed
+   button - separate markup entirely, confirmed by grep before touching anything - are untouched. */
+#hostSpeedBtns{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;width:100%;margin-top:18px}
+#hostSpeedBtns .btn{padding:12px 8px;font-size:15px;min-height:44px;line-height:1.3}
+#hostSpeedBtns .btn small{font-size:12.5px}
+/* Fallback for a genuinely-too-narrow screen (verified 320/375/390/430px all keep 2 columns
+   comfortably - see the v0.26 item 2 HANDOFF note for the exact measurements) - a real phone
+   this narrow is essentially untested territory today, but this keeps the promise "1 column
+   only where it truly cannot fit two" honest rather than hardcoded to always-2. */
+@media (max-width:300px){ #hostSpeedBtns{grid-template-columns:1fr} }
 .btn{border:none;border-radius:12px;padding:13px 22px;font-weight:800;font-size:16px;letter-spacing:.03em}
 .btn.primary{background:var(--gold);color:#3a2c05;box-shadow:0 6px 18px rgba(0,0,0,.35)}
 .btn.ghost{background:rgba(255,255,255,.1);color:var(--cream);border:1px solid rgba(255,255,255,.22)}
@@ -962,7 +980,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.25</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.26</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -3195,7 +3213,21 @@ function clearToasts(){ $('toasts').replaceChildren(); }
    toast(), no SKIP/INSTANT suppression: a prompt is standing STATE, not a transient event -
    the moment one fires, either the skip already ended (endSkip() runs before any local hand
    arms, see runTurn) or it's a passive waiting notice that's still true during fast-forward. */
+// v0.26 fix (recurring bug, Blake's report - the update bubble sometimes followed him to the
+// menu and sat there frozen after tapping the instant Menu button): turnPrompt is ONLY ever
+// meaningful while the board is actually on screen - no call site anywhere in this file shows
+// one intentionally on the menu (unlike toast(), which legitimately has menu-context callers,
+// e.g. leaveOnlineToMenu's own "kicked" message). Root cause (see HANDOFF v0.26): leaving to
+// the menu (leaveOnlineToMenu()/doLeaveGame()) never bumped NETGEN, so an async chain already
+// mid-animation at the exact moment Menu was tapped (runOnlineTurnLoop's own loop body,
+// performMoveInner resuming from an awaited kick/swap animation, etc.) kept right on running
+// against a NETGEN that hadn't changed, and could call turnPrompt() well after clearToasts()
+// already ran - with NET now torn down, nothing was ever going to clear it again. NETGEN is
+// now bumped on every leave (closing that gap at its source), but this guard is the hard
+// backstop for #toasts specifically: if the game screen isn't showing, don't touch it, no
+// matter which stale chain is asking.
 function turnPrompt(msg,mine){
+  if($('game').classList.contains('hidden'))return;
   $('toasts').replaceChildren();
   const t=document.createElement('div'); t.className='toast turnPrompt'+(mine?' myTurn':'');
   t.textContent=msg;
@@ -3691,6 +3723,15 @@ async function performMoveInner(seat,m,cardEl){
       if(glowSwap){ elm.classList.remove('spotlightGlow'); other.classList.remove('spotlightGlow'); }
     }
   }
+  // v0.26 fix: the move/enter animation just above is a real await with no myGen check right
+  // after it (unlike animCardPlay's check at the top of this function) - found via
+  // reproduction to be the exact gap that let a stale performMoveInner call (still running
+  // because leaveOnlineToMenu()/doLeaveGame() never used to bump NETGEN - see turnPrompt()'s
+  // comment) fire a kick toast() straight into #toasts after the player had already tapped
+  // Menu and landed on the menu screen. Re-checking here, before ANY of the kick's toast/
+  // animation/glow side effects, closes it - a superseded call now stops here instead of
+  // reaching toast() at all.
+  if(myGen!==NETGEN)return;
   if(kicked){
     // v0.19: force=true so this survives SKIP's toast suppression (still suppressed under
     // INSTANT, unchanged) - and nastyBlast() itself now runs through spotlightEvent() so the
@@ -5298,6 +5339,17 @@ function clearLastRoom(){ try{localStorage.removeItem('nasty-last-room');}catch(
 // other caller (kicked, "Leave this game", cancelling a room you hosted) keeps the original
 // deliberate-abandon behavior (clears it) by simply not passing this flag.
 function leaveOnlineToMenu(msg,keepRoom){
+  // v0.26 root-cause fix (the frozen update-bubble-on-menu bug - see turnPrompt()'s comment
+  // above and HANDOFF v0.26): this leave never used to bump NETGEN, so any async chain already
+  // mid-flight when Menu was tapped (runOnlineTurnLoop's loop body, a performMoveInner
+  // continuation resuming from an awaited kick/swap animation, an applyDealAction/applyPassAction
+  // in progress) kept comparing its captured myGen against an UNCHANGED NETGEN and sailed
+  // straight through every "am I stale?" check that already exists throughout this file -
+  // exactly the same class of race a reconnect (bootGameFromNetwork/bootGameFromSnapshot)
+  // already guards against by bumping NETGEN on ITS OWN transition. Leaving deserved the exact
+  // same treatment and never got it. Bumping it here, first thing, makes every one of those
+  // existing myGen checks do its job the instant the player leaves - not just the toasts guard.
+  NETGEN++;
   NET.wantConnection=false;
   if(NET.ws){ try{NET.ws.close();}catch(e){} }
   Object.assign(NET,{ws:null,online:false,isHost:false,code:null,playerId:null,token:null,mySeat:-1,
@@ -5359,7 +5411,12 @@ function clearAwayUI(){
   const aa=$('awayActions'); if(aa)aa.replaceChildren();
 }
 function handleAwayStatus(m){
-  if(!NET.online||!G||G.over)return;
+  // v0.26: NET.online alone already makes this provably safe (leaveOnlineToMenu() sets it
+  // false synchronously, before any queued 'awayStatus' message can be dispatched - JS has no
+  // way to interleave a message task inside that synchronous handler), but the game-hidden
+  // check is added anyway per the "gate every #toasts writer" fix - belt-and-suspenders, same
+  // spirit as turnPrompt()'s own guard, at effectively zero cost.
+  if(!NET.online||!G||G.over||$('game').classList.contains('hidden'))return;
   if(m.stage==='clear'){ clearAwayUI(); return; }
   // A stage about MY OWN seat reaching me means I'm demonstrably back - the server's own
   // sweep will notice and clear momentarily; never show myself a "waiting for you" line.
@@ -5594,12 +5651,20 @@ function handleNetMessage(m){
 // value rides the 'host' message and seeds the server's room.tableSpeed, so guests join a
 // table already running at the host's pace (the v0.19-flagged "NET.tableSpeed never seeded"
 // gap). Defaults to the host's own offline speed choice (USER_SPEED).
+// v0.26 item 2: each tile now shows the speed name AND its relative-to-Normal multiplier (e.g.
+// "Fast 2.8x") - SPEED_OPTS' own numbers (0.6/1/1.7/2.6) are literal per-animation duration
+// multipliers, not naturally 1x/2x/3x/4x, so the displayed multiplier is computed fresh every
+// time relative to whichever entry is actually named 'Normal' (never hardcoded) - if SPEED_OPTS
+// itself is ever edited, these labels stay correct with no matching change needed here.
 function openHostSpeedOverlay(){
   const wrap=$('hostSpeedBtns'); wrap.innerHTML='';
+  const base=(SPEED_OPTS.find(o=>o[1]==='Normal')||SPEED_OPTS[0])[0];
   SPEED_OPTS.forEach(([val,label])=>{
+    const ratio=Math.round((val/base)*10)/10;
+    const mult=(Number.isInteger(ratio)?String(ratio):ratio.toFixed(1))+'x';
     const b=document.createElement('button');
     b.className='btn primary';
-    b.textContent=label+(val===USER_SPEED?' ✓':'');
+    b.innerHTML=`${label}${val===USER_SPEED?' ✓':''}<br><small style="font-weight:400">${mult}</small>`;
     b.onclick=()=>{ $('hostSpeedOverlay').classList.add('hidden'); hostCreateRoom(val); };
     wrap.appendChild(b);
   });
@@ -6015,7 +6080,11 @@ $('btnReplaceCancel').onclick=()=>{ $('slotReplaceOverlay').classList.add('hidde
 $('btnStart').onclick=()=>startOfflineGameGate(startGame);
 $('btnAgain').onclick=()=>{$('winOverlay').classList.add('hidden');
   if(NET.online)leaveOnlineToMenu(); else{clearOfflineSave();startGame();}};
-$('btnWinMenu').onclick=()=>{location.hash='';G=null;$('winOverlay').classList.add('hidden');
+$('btnWinMenu').onclick=()=>{location.hash='';NETGEN++;G=null;$('winOverlay').classList.add('hidden');
+  // v0.26: same stale-chain defense as doLeaveGame()/leaveOnlineToMenu() - G.over is normally
+  // true by the time this is reachable at all, which already stops a NEW runTurn()/loop
+  // iteration from starting, but bumping NETGEN here too closes the gap for any chain still
+  // mid-animation (e.g. a queued queueMicrotask tail) at the exact moment this is tapped.
   if(NET.online)leaveOnlineToMenu();
   else{clearOfflineSave();SAVE_SLOT=null;$('game').classList.add('hidden');$('menu').classList.remove('hidden');clearToasts();updateMenuResumeButtons();}};
 // v0.10.3 FIX (real bug, Blake's 2026-07-13 report): this used to be a SILENT, PERMANENT
@@ -6073,6 +6142,9 @@ function doLeaveGame(saveIt){
   }else{
     if(saveIt)doSaveOffline();   // flush the CURRENT state first - must run before G is cleared
     else clearOfflineSave();     // "Leave without saving" - actually clears the slot, not just abandons the tab
+    NETGEN++;   // v0.26: same stale-chain fix as leaveOnlineToMenu() - a CPU turn's runTurn()/
+                // performMoveInner chain mid-animation when Menu is tapped must not go on to
+                // touch G (about to be nulled below) or write into #toasts once it resumes.
     G=null;
     SAVE_SLOT=null;              // v0.17: back on the menu, no offline game is bound to a save spot
     $('game').classList.add('hidden');$('menu').classList.remove('hidden');clearToasts();updateMenuResumeButtons();
