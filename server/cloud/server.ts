@@ -461,6 +461,12 @@ type RoomMeta = {
   tableSpeed: number;       // shared table pacing, host-controlled
   recorded: boolean;        // leaderboard idempotency flag - see finishGame()
   nextSeq: number;          // monotonic broadcast action seq (logCount's successor concept)
+  // v0.27.1: sticky per-game-instance flag, twin of server.js's room.anySurrenderOccurred - true
+  // once ANY human has surrendered/conceded THIS still-unfinished game. See § SURRENDER's
+  // leaveSeatForGoodInternal() comment below. Reset false in actuallyStartGame(), same lifecycle
+  // as `recorded`. Optional purely so an old persisted meta (from before this field existed)
+  // still parses - treated as false wherever read.
+  anySurrenderOccurred?: boolean;
 };
 
 function roomKey(code: string): Deno.KvKey { return ["room", code]; }
@@ -631,9 +637,16 @@ async function recordFinishedGame(code: string, G: any) {
    read, before the seat flips to a CPU) — extracted so the two cases can never drift apart. */
 async function leaveSeatForGoodInternal(
   code: string, playerId: number, socket: WebSocket,
-  beforeConvert?: (G: any, seat: number) => Promise<void> | void,
+  // v0.27.1: beforeConvert also receives `meta` now (the pre-conversion RoomMeta, same read the
+  // rest of this function already made) and may return {setSurrenderFlag:true} to ask that
+  // meta.anySurrenderOccurred be committed true in the SAME touchRoom write below - see the
+  // "surrender" case's § NO-FAULT EXIT comment for why this can't just mutate `meta` directly
+  // (touchRoom's own mutate callback always re-reads a FRESH meta from KV, so a value set on
+  // this earlier-read `meta` object would never actually persist).
+  beforeConvert?: (G: any, seat: number, meta: RoomMeta) => Promise<{ setSurrenderFlag?: boolean } | void> | { setSurrenderFlag?: boolean } | void,
 ): Promise<boolean> {
   let converted = false;
+  let setSurrenderFlag = false;
   await withRoomChain(code, async () => {
     const pre = await kv.get<RoomMeta>(roomKey(code));
     if (!pre.value) { send(socket, { type: "leftForGood" }); return; }
@@ -642,7 +655,10 @@ async function leaveSeatForGoodInternal(
     if (meta.started && meta.seatOwners) seat = meta.seatOwners.indexOf(playerId);
     const E = seat >= 0 ? getEngine(code, meta) : null;
     const G = E ? E.getG() : null;
-    if (beforeConvert && G && seat >= 0 && G.seats[seat]) await beforeConvert(G, seat);
+    if (beforeConvert && G && seat >= 0 && G.seats[seat]) {
+      const res = await beforeConvert(G, seat, meta);
+      if (res && res.setSurrenderFlag) setSurrenderFlag = true;
+    }
     if (E && G && seat >= 0 && G.seats[seat] && G.seats[seat].type === "human") {
       const leaverName = G.seats[seat].name;
       G.seats[seat].type = "cpu";
@@ -665,9 +681,15 @@ async function leaveSeatForGoodInternal(
       const p = m.players.find((pp) => pp.id === playerId);
       if (p) p.leftForGood = true;
       if (seat >= 0 && m.seatOwners) m.seatOwners[seat] = null;
+      if (setSurrenderFlag) m.anySurrenderOccurred = true;   // v0.27.1
       return {};
     });
     send(socket, { type: "leftForGood" });
+    // v0.27.1: broadcast the INSTANT the flag actually flips true (never re-sent for the 2nd+
+    // surrenderer - the hook only returns setSurrenderFlag on the genuine false->true
+    // transition) so every other player still at the table sees the no-fault state live, before
+    // THEY decide to leave - twin of server.js's matching broadcast() call.
+    if (setSurrenderFlag) broadcastRoom(code, { type: "surrenderOccurred" });
   });
   return converted;
 }
@@ -824,6 +846,7 @@ async function actuallyStartGame(code: string, pre: RoomMeta): Promise<void> {
     meta.seatOwners = meta.lobby.seats.map((s) => s.claimedBy);
     meta.G = G;
     meta.recorded = false;
+    meta.anySurrenderOccurred = false;   // v0.27.1: a genuinely new game/rematch resets the no-fault-exit flag
     meta.nextSeq = 1;   // 'start' is broadcast seq 0
     meta.logCount = 1;
     return { seatOwners: meta.seatOwners };
@@ -869,6 +892,8 @@ function gameSnapshotFields(meta: RoomMeta, isHost: boolean) {
     presence: presenceSnapshot(meta),
     tableSpeed: meta.tableSpeed || 1,
     protocolVersion: PROTOCOL_VERSION,
+    // v0.27.1: twin of server.js's field - see that file's gameSnapshotFields() comment.
+    anySurrenderOccurred: !!meta.anySurrenderOccurred,
   };
 }
 
@@ -1365,6 +1390,7 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           lobby: { n: msg.n === 6 ? 6 : 4, teams: !!msg.teams, seats },
           started: false, seatOwners: null, ready: [], paused: false, logCount: 0,
           G: null, tableSpeed: seededSpeed, recorded: false, nextSeq: 0,
+          anySurrenderOccurred: false,   // v0.27.1
         };
         await kv.set(roomKey(code), meta, { expireIn: ROOM_TTL_MS });
         identify(code, playerId);
@@ -1749,14 +1775,31 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         // reuses the EXACT SAME conversion/lockout machinery as "leaveForGood" via
         // leaveSeatForGoodInternal() above. Additive-safe by construction: old clients simply
         // never send this message type.
+        //
+        // v0.27.1 § NO-FAULT EXIT — twin of server.js's case. Once ANY human has surrendered in
+        // this still-unfinished game, meta.anySurrenderOccurred (see the RoomMeta type,
+        // actuallyStartGame()'s reset) is already true — every OTHER human's subsequent
+        // departure from this SAME game is then a free, no-fault exit: the leaderboard write is
+        // skipped entirely, a true stat-wise no-op, not a disguised win. The flag is read from
+        // `meta` (the pre-conversion RoomMeta leaveSeatForGoodInternal() already read inside the
+        // withRoomChain lock — safe to trust as current, nothing else can mutate this room
+        // concurrently) and, on the genuine first surrender, the hook asks
+        // leaveSeatForGoodInternal() to commit it true via {setSurrenderFlag:true} (see that
+        // function's comment for why it can't just set meta.anySurrenderOccurred directly here).
         if (!ctx) return;
         const { code, playerId } = ctx;
-        const converted = await leaveSeatForGoodInternal(code, playerId, socket, async (G, seat) => {
+        const converted = await leaveSeatForGoodInternal(code, playerId, socket, async (G, seat, meta) => {
           if (G.over || G.seats[seat].type !== "human") return;   // already finished, or not actually a human seat — nothing to surrender
           const mode = (G.n === 4 ? "4" : "6") + (G.teams ? "t" : "s");
+          if (meta.anySurrenderOccurred) {
+            // Someone else already surrendered this same game — free, no-fault exit.
+            log("no-fault exit (someone already surrendered this game)", code, "seat=" + seat, "name=" + G.seats[seat].name, "mode=" + mode);
+            return;
+          }
           const delta: Record<string, number> = {}; delta["hg" + mode] = 1;
           await applyLeaderboardEntry(G.seats[seat].name, delta);
           log("surrender recorded", code, "seat=" + seat, "name=" + G.seats[seat].name, "mode=" + mode);
+          return { setSurrenderFlag: true };
         });
         log("player surrendered", code, playerId, converted ? "(seat converted to CPU)" : "(no active seat)");
         return;

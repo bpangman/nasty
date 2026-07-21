@@ -440,7 +440,11 @@ function leaveSeatForGoodInternal(ctx, ws, beforeConvert) {
     seat = room.seatOwners.indexOf(playerId);
     if (seat >= 0) G = room.engine.getG();
   }
-  if (beforeConvert && G && seat >= 0 && G.seats[seat]) beforeConvert(G, seat);
+  // v0.27.1: `room` itself is passed as the hook's 3rd arg (not just G/seat) so the "surrender"
+  // case below can read/set room.anySurrenderOccurred for the § NO-FAULT EXIT check - safe to
+  // hand over directly (no KV/race concerns here, unlike server.ts - this whole handler runs
+  // synchronously in one Node event-loop turn, so nothing else can touch this room meanwhile).
+  if (beforeConvert && G && seat >= 0 && G.seats[seat]) beforeConvert(G, seat, room);
   let converted = false;
   if (G && seat >= 0 && G.seats[seat] && G.seats[seat].type === "human") {
     const leaverName = G.seats[seat].name;
@@ -559,6 +563,10 @@ function roomToDisk(room) {
     paused: !!room.paused,
     G: room.engine ? room.engine.getG() : null, tableSpeed: room.tableSpeed || 1,
     recorded: !!room.recorded, nextSeq: room.nextSeq || 0,
+    // v0.27.1: sticky per-game-instance flag, see § SURRENDER's leaveSeatForGoodInternal()
+    // comment below - persisted alongside `recorded` so a server restart mid-game doesn't lose
+    // whether a no-fault exit is already in effect.
+    anySurrenderOccurred: !!room.anySurrenderOccurred,
   };
 }
 function roomFromDisk(obj) {
@@ -570,6 +578,7 @@ function roomFromDisk(obj) {
     ready: new Set(obj.readyPlayerIds || []),   // v0.25 item 1: lobby-phase readiness
     paused: !!obj.paused, engine: null, tableSpeed: obj.tableSpeed || 1,
     recorded: !!obj.recorded, nextSeq: obj.nextSeq || 0,
+    anySurrenderOccurred: !!obj.anySurrenderOccurred,   // v0.27.1
     away: null,   // v0.22: transient - a restart just restarts the ladder clock
     willSeat: new Set(), seatGate: null,   // v0.22 P0b: transient - see loadRoomsFromDisk's boot re-drive
   };
@@ -694,6 +703,11 @@ function makeRoom(code) {
     tableSpeed: 1,        // v0.15: shared table pacing, host-controlled
     recorded: false,      // v0.15: leaderboard idempotency flag, see finishGame()
     nextSeq: 0,           // v0.15: ever-increasing action seq, independent of log trimming
+    // v0.27.1: sticky for THIS game instance - true once ANY human has surrendered/conceded
+    // this same still-unfinished game. See § SURRENDER's leaveSeatForGoodInternal() comment.
+    // Reset to false in actuallyStartGame(), same lifecycle as `recorded` - a genuinely NEW
+    // game/rematch at this table starts with a clean slate.
+    anySurrenderOccurred: false,
     away: null,           // v0.22: transient away-ladder state, never persisted - see § AWAY LADDER
     willSeat: new Set(),  // v0.22 P0b: playerIds whose readyUp carried willSeat:true - see § SEAT GATE
     seatGate: null,       // v0.22 P0b: {waiting:Set, timer} while the first deal is being held
@@ -1059,6 +1073,7 @@ function actuallyStartGame(room) {
   engine.newGame({ n, teams: !!room.lobby.teams, seats: seatsCfg }, { deck: engine.freshDeck(), dealer: Math.floor(Math.random() * n) });
   room.engine = engine;
   room.recorded = false;
+  room.anySurrenderOccurred = false;   // v0.27.1: a genuinely new game/rematch resets the no-fault-exit flag
   const G = engine.getG();
   const startAction = { kind: "start", n: G.n, teams: G.teams, seats: seatsCfg, dealer: G.dealer, deck: [], tableSpeed: room.tableSpeed || 1 };
   room.log = [{ seq: 0, action: startAction }];
@@ -1269,6 +1284,11 @@ function gameSnapshotFields(room, isHost) {
     presence: presenceSnapshot(room),
     tableSpeed: room.tableSpeed || 1,
     protocolVersion: PROTOCOL_VERSION,
+    // v0.27.1: server-authoritative "has anyone conceded THIS game yet" - rides every sync so a
+    // reconnect/rejoin/reclaim always lands with the right no-fault-exit state, even if a client
+    // missed the live 'surrenderOccurred' broadcast (see the "surrender" case below). Additive -
+    // old clients simply never read this field.
+    anySurrenderOccurred: !!room.anySurrenderOccurred,
   };
 }
 
@@ -1665,13 +1685,36 @@ wss.on("connection", (ws, req) => {
         // machinery as "leaveForGood" via leaveSeatForGoodInternal() below (this seat becomes a
         // CPU for the rest of the game; every other player's table is completely untouched).
         // Additive-safe by construction: old clients simply never send this message type.
+        //
+        // v0.27.1 § NO-FAULT EXIT — Blake's follow-up: once ANY human has surrendered in this
+        // still-unfinished game, the competitive game everyone else agreed to play was already
+        // altered by someone else's choice, not their own — so every OTHER human's subsequent
+        // departure from this SAME game (via any of these same surrender-flagged paths) is now
+        // FREE: no loss recorded, a true stat-wise no-op. room.anySurrenderOccurred (see
+        // makeRoom()/actuallyStartGame()) is the sticky per-game-instance flag: false at every
+        // genuinely new game/rematch, flips true the moment the FIRST surrender writes its loss
+        // below, and never un-sets again for the rest of THIS game — so a second, third, etc.
+        // surrenderer all read it as already-true and all get the free exit (no extra logic
+        // needed beyond "check it, don't re-check who else already left"). The seat still
+        // converts to a CPU exactly as before either way — only the stat consequence changes.
+        // Broadcasting 'surrenderOccurred' the instant it flips true lets every OTHER player
+        // still sitting at the table see the no-fault state live (index.html's
+        // openSurrenderConfirm()), before THEY decide to leave — not just after the fact.
         if (!ctx) return;
         const { room, playerId } = ctx;
-        const converted = leaveSeatForGoodInternal(ctx, ws, (G, seat) => {
+        const converted = leaveSeatForGoodInternal(ctx, ws, (G, seat, room) => {
           if (G.over || G.seats[seat].type !== "human") return;   // already finished, or not actually a human seat — nothing to surrender
           const mode = (G.n === 4 ? "4" : "6") + (G.teams ? "t" : "s");
+          if (room.anySurrenderOccurred) {
+            // Someone else already surrendered this same game — free, no-fault exit. Skip the
+            // leaderboard write entirely (not a disguised win/draw — a true no-op stat-wise).
+            log("no-fault exit (someone already surrendered this game)", room.code, "seat=" + seat, "name=" + G.seats[seat].name, "mode=" + mode);
+            return;
+          }
           const delta = {}; delta["hg" + mode] = 1;
           applyLeaderboardEntry(G.seats[seat].name, delta);
+          room.anySurrenderOccurred = true;
+          broadcast(room, { type: "surrenderOccurred" });
           log("surrender recorded", room.code, "seat=" + seat, "name=" + G.seats[seat].name, "mode=" + mode);
         });
         log("player surrendered", room.code, playerId, converted ? "(seat converted to CPU)" : "(no active seat)");

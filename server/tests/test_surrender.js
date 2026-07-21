@@ -9,10 +9,20 @@
  *   - the saved-tile trash delete (offline slot or a remembered online room)
  *   - the slotReplaceOverlay chooser discarding a slot when starting a new offline game with
  *     both save spots full
- * ONLY "Save & leave" and Cancel stay completely consequence-free.
+ * ONLY "Save & leave"/"Return to Game" and Cancel stay completely consequence-free.
  *
- * See index.html's recordOfflineSurrenderLoss()/doSurrenderCurrentGame()/surrenderOnlineTile()
- * and server.js/server.ts's "surrender" case (HANDOFF.md v0.27 has the full design writeup).
+ * v0.27.1 adds two things, covered by the NOFAULT-* scenarios below:
+ *   - display text renamed "surrender"->"concede" throughout (internal identifiers, function
+ *     names, and the {type:'surrender'} wire message are UNCHANGED - see the wording checks
+ *     updated from /surrender/i to /concede/i in the OFFLINE-5/6 and ONLINE-6 scenarios above).
+ *   - § NO-FAULT EXIT: once ANY human has surrendered in a still-unfinished ONLINE game, every
+ *     OTHER human's own subsequent departure from that SAME game (via any of the four
+ *     surrender-flagged paths) is free - no loss recorded, because the competitive game they
+ *     agreed to play was already altered by someone else's concession first.
+ *
+ * See index.html's recordOfflineSurrenderLoss()/doSurrenderCurrentGame()/surrenderOnlineTile()/
+ * openSurrenderConfirm()/refreshTileConfirmWording() and server.js/server.ts's "surrender" case
+ * (HANDOFF.md v0.27 and v0.27.1 have the full design writeups).
  *
  * Usage:
  *   node test_surrender.js node     (server/server.js)
@@ -26,11 +36,15 @@ const os = require("os");
 
 const KIND = process.argv[2] || "node";
 const USE_DENO = KIND === "deno";
-// Two private servers (same reasoning as test_v025_ui_flows.js): server.js/server.ts cap
+// Four private servers (same reasoning as test_v025_ui_flows.js): server.js/server.ts cap
 // host-room-creates at 5/min/IP - this suite creates several online rooms across its scenarios,
-// split across two server instances to stay safely under that cap on either one.
+// split across server instances to stay safely under that cap on any one of them. PORT3/PORT4
+// (v0.27.1) are dedicated to the new NOFAULT-* scenarios below, kept separate from PORT/PORT2's
+// existing ONLINE-* budget rather than risking a shared rolling 60s window.
 const PORT = 23700 + Math.floor(Math.random() * 500);
 const PORT2 = PORT + 1;
+const PORT3 = PORT + 2;
+const PORT4 = PORT + 3;
 const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), `nasty-surrender-${KIND}-`));
 
 function log(...a) { console.log("[surrender]", new Date().toISOString(), ...a); }
@@ -173,11 +187,98 @@ async function pollLeaderboard(port, predicate, timeoutMs) {
   }
   return lb;
 }
+/* v0.27.1 § NO-FAULT EXIT test helper - hosts a room with however many human seats seatMeta
+   declares (seat 0 is always the host), joins every OTHER human seat as its own guest page, and
+   starts the game. Returns {code, host, pages, ctxHost, guestCtxs} where pages[0] is the host
+   and pages[1..] are the guests IN SEAT ORDER - so pages[1] is always the 2nd human seat, etc.
+   Caller is responsible for closing ctxHost + every guestCtxs entry when done. */
+async function setupOnlineHumans(browser, port, seatMeta, n, teams) {
+  const humanSeats = seatMeta.map((s, i) => (s.type === "human" ? i : -1)).filter((i) => i >= 0);
+  const ctxHost = await browser.newContext({ reducedMotion: "reduce" });
+  const host = await newPage(ctxHost, port);
+  const code = await hostRoomWith(host, seatMeta, n, teams);
+  await host.evaluate(() => { const b = document.getElementById("btnOnlineRulesOk"); if (b) b.click(); });
+  const pages = [host];
+  const guestCtxs = [];
+  for (let k = 1; k < humanSeats.length; k++) {
+    const seatIndex = humanSeats[k];
+    const gctx = await browser.newContext({ reducedMotion: "reduce" });
+    const gpage = await newPage(gctx, port);
+    await joinGuest(gpage, code, seatMeta[seatIndex].name, seatIndex);
+    guestCtxs.push(gctx);
+    pages.push(gpage);
+  }
+  await host.evaluate(() => window.netSend({ type: "start", protocolVersion: PROTOCOL_VERSION, willSeat: true }));
+  await Promise.all(pages.map((p) => p.waitForFunction(() => window.G != null, { timeout: 10000 })));
+  await driveSeveralTurns(host, 0, 600);
+  return { code, host, pages, ctxHost, guestCtxs };
+}
+/* v0.27.1 § NO-FAULT EXIT: shared body for the four NOFAULT-quit/discard/takeover/trash
+   scenarios below - two humans (A=host, B=guest, seat order [A,B,cpu,cpu]), A concedes first
+   (the normal, first-surrenderer loss), then B departs via ONE of the four surrender-flagged
+   paths and must (a) SEE the no-fault wording in their own confirm dialog BEFORE committing and
+   (b) end up with ZERO leaderboard entry of any kind - a true stat-wise no-op, not a disguised
+   win/draw. leaveKind is one of 'quit' | 'discard' | 'takeover' | 'trash'. */
+async function nofaultTwoHumanScenario(browser, port, leaveKind, aName, bName) {
+  const seatMeta = [
+    { name: aName, type: "human", diff: "medium" }, { name: bName, type: "human", diff: "medium" },
+    { name: "C1", type: "cpu", diff: "easy" }, { name: "C2", type: "cpu", diff: "easy" },
+  ];
+  const { host, pages, ctxHost, guestCtxs } = await setupOnlineHumans(browser, port, seatMeta, 4, false);
+  const guest = pages[1];
+
+  await quitConfirm(host);
+  await host.waitForFunction(() => !document.getElementById("menu").classList.contains("hidden"), { timeout: 8000 });
+  const lbA = await pollLeaderboard(port, (b) => !!b[aName], 5000);
+  check(lbA[aName] && lbA[aName].hg4s === 1 && !lbA[aName].hw4s,
+    `NOFAULT-${leaveKind}: A's own concede still records the normal first-surrenderer loss (got ${JSON.stringify(lbA[aName])})`);
+
+  // The live 'surrenderOccurred' broadcast should reach B (still at the table) before B decides
+  // to leave - proves this isn't just a silent server-side skip discovered after the fact.
+  await guest.waitForFunction(() => window.NET && window.NET.anySurrenderOccurred === true, { timeout: 5000 });
+
+  if (leaveKind === "trash") {
+    // Save & leave first (safe, no stat) to create the remembered tile, then trash it from the
+    // menu - refreshTileConfirmWording()/peekOnlineRoomNoFault() rewrite the panel's wording
+    // live BEFORE the player can tap the delete/confirm button.
+    await saveAndReturnToMenu(guest);
+    await guest.evaluate(() => document.getElementById("savedGameTrash").click());
+    await guest.waitForFunction(() => /already left/i.test(document.getElementById("savedGameConfirm").textContent), { timeout: 6000 });
+    const wording = await guest.evaluate(() => ({ text: document.getElementById("savedGameConfirm").textContent, btn: document.getElementById("savedGameDelete").textContent }));
+    check(/already left/i.test(wording.text) && /without it counting as a loss/i.test(wording.text) && wording.btn === "Leave",
+      `NOFAULT-trash: the trash-delete confirm panel shows the no-fault wording before committing (got ${JSON.stringify(wording)})`);
+    await guest.evaluate(() => document.getElementById("savedGameDelete").click());
+    await sleep(700);
+  } else {
+    const wording = await guest.evaluate((kind) => {
+      if (kind === "quit") { document.getElementById("btnMenu").click(); }
+      else if (kind === "discard") { document.getElementById("btnPause").click(); document.getElementById("btnLeaveDiscard").click(); }
+      else if (kind === "takeover") { document.getElementById("btnPause").click(); document.getElementById("btnLeaveForGood").click(); }
+      return {
+        heading: document.getElementById("surrenderConfirmHeading").textContent,
+        text: document.getElementById("surrenderConfirmText").textContent,
+        btn: document.getElementById("btnSurrenderConfirm").textContent,
+      };
+    }, leaveKind);
+    check(wording.heading === "LEAVE GAME?" && /already left/i.test(wording.text) && /without it counting as a loss/i.test(wording.text) && wording.btn === "Leave",
+      `NOFAULT-${leaveKind}: B's confirm shows the no-fault wording before committing (got ${JSON.stringify(wording)})`);
+    await guest.evaluate(() => document.getElementById("btnSurrenderConfirm").click());
+    await guest.waitForFunction(() => !document.getElementById("menu").classList.contains("hidden"), { timeout: 8000 });
+  }
+  await sleep(800);
+  const lbAfterB = await (await fetch(`http://localhost:${port}/leaderboard`)).json();
+  check(!lbAfterB[bName], `NOFAULT-${leaveKind}: B's own departure recorded NO leaderboard entry at all - true no-op (got ${JSON.stringify(lbAfterB[bName])})`);
+
+  await ctxHost.close();
+  for (const c of guestCtxs) await c.close();
+}
 
 async function main() {
   const child = startServer(PORT);
   const child2 = startServer(PORT2);
-  await Promise.all([waitHealthy(PORT), waitHealthy(PORT2)]);
+  const child3 = startServer(PORT3);
+  const child4 = startServer(PORT4);
+  await Promise.all([waitHealthy(PORT), waitHealthy(PORT2), waitHealthy(PORT3), waitHealthy(PORT4)]);
   const browser = await chromium.launch();
 
   /* =================================================================================
@@ -309,7 +410,7 @@ async function main() {
 
     // Now actually delete it.
     const confirmText = await page.evaluate(() => { document.getElementById("savedGameTrash").click(); return document.getElementById("savedGameConfirm").textContent; });
-    check(/surrender/i.test(confirmText) && /loss on the leaderboard/i.test(confirmText), `OFFLINE-5: trash confirm wording mentions surrender/loss (got "${confirmText}")`);
+    check(/concede/i.test(confirmText) && /loss on the leaderboard/i.test(confirmText), `OFFLINE-5: trash confirm wording mentions concede/loss (got "${confirmText}")`);
     await page.evaluate(() => document.getElementById("savedGameDelete").click());
     const gone = await page.evaluate(() => !localStorage.getItem("nasty-save-offline-1") && !localStorage.getItem("nasty-save-offline-2"));
     check(gone, "OFFLINE-5: confirming the delete actually removes the save");
@@ -337,7 +438,7 @@ async function main() {
     const overlayShown = await page.waitForFunction(() => !document.getElementById("slotReplaceOverlay").classList.contains("hidden"), { timeout: 5000 }).then(() => true).catch(() => false);
     check(overlayShown, "OFFLINE-6: both slots full triggers the replace chooser");
     const wording = await page.evaluate(() => document.querySelector("#slotReplaceOverlay p").textContent);
-    check(/surrender/i.test(wording) && /loss on the leaderboard/i.test(wording), `OFFLINE-6: chooser wording mentions surrender/loss (got "${wording}")`);
+    check(/conceding/i.test(wording) && /loss on the leaderboard/i.test(wording), `OFFLINE-6: chooser wording mentions conceding/loss (got "${wording}")`);
 
     // Cancel: neither slot touched, no stats.
     await page.evaluate(() => document.getElementById("btnReplaceCancel").click());
@@ -547,7 +648,7 @@ async function main() {
     check(tileVisible, "ONLINE-6: the remembered online tile is showing after Save & leave");
 
     const confirmText = await page.evaluate(() => { document.getElementById("savedGameTrash").click(); return document.getElementById("savedGameConfirm").textContent; });
-    check(/surrender/i.test(confirmText) && /loss on the leaderboard/i.test(confirmText), `ONLINE-6: trash confirm wording mentions surrender/loss (got "${confirmText}")`);
+    check(/concede/i.test(confirmText) && /loss on the leaderboard/i.test(confirmText), `ONLINE-6: trash confirm wording mentions concede/loss (got "${confirmText}")`);
     await page.evaluate(() => document.getElementById("savedGameDelete").click());
     const tileGone = await page.evaluate(() => document.getElementById("btnSavedGame").classList.contains("hidden"));
     check(tileGone, "ONLINE-6: the tile disappears immediately from this device's own view");
@@ -589,10 +690,210 @@ async function main() {
     await ctx.close();
   }
 
+  /* =================================================================================
+   * NOFAULT-quit / NOFAULT-discard / NOFAULT-takeover / NOFAULT-trash: v0.27.1 § NO-FAULT EXIT.
+   * Once A has conceded a still-unfinished ONLINE game, B's own subsequent departure from that
+   * SAME game - via any of the four surrender-flagged paths - is free: the no-fault wording
+   * shows BEFORE B commits, and B ends up with zero leaderboard entry at all.
+   * ================================================================================= */
+  log("--- NOFAULT-quit: after A concedes (Quit), B's own Quit is a free no-fault exit ---");
+  await nofaultTwoHumanScenario(browser, PORT3, "quit", "NoFaultQA", "NoFaultQB");
+
+  log("--- NOFAULT-discard: after A concedes, B's 'Leave without saving' is a free no-fault exit ---");
+  await nofaultTwoHumanScenario(browser, PORT3, "discard", "NoFaultDA", "NoFaultDB");
+
+  log("--- NOFAULT-takeover: after A concedes, B's 'Have a computer take over' is a free no-fault exit ---");
+  await nofaultTwoHumanScenario(browser, PORT3, "takeover", "NoFaultTA", "NoFaultTB");
+
+  log("--- NOFAULT-trash: after A concedes, B trash-deleting their remembered tile is a free no-fault exit ---");
+  await nofaultTwoHumanScenario(browser, PORT4, "trash", "NoFaultXA", "NoFaultXB");
+
+  /* =================================================================================
+   * NOFAULT-3: 3+ humans - after the FIRST concedes, BOTH remaining humans get free exits, one
+   * after another, in the SAME game - the flag is a simple sticky boolean, not "who's already
+   * left" bookkeeping, so a THIRD departure needs no extra logic beyond re-checking it.
+   * ================================================================================= */
+  log("--- NOFAULT-3: 3+ humans - after the first concedes, every other human gets a free exit ---");
+  {
+    const seatMeta = [
+      { name: "NoFault3A", type: "human", diff: "medium" }, { name: "NoFault3B", type: "human", diff: "medium" },
+      { name: "NoFault3C", type: "human", diff: "medium" }, { name: "C1", type: "cpu", diff: "easy" },
+    ];
+    const { host, pages, ctxHost, guestCtxs } = await setupOnlineHumans(browser, PORT3, seatMeta, 4, false);
+    const [, guestB, guestC] = pages;
+
+    await quitConfirm(host);
+    await host.waitForFunction(() => !document.getElementById("menu").classList.contains("hidden"), { timeout: 8000 });
+    const lbA = await pollLeaderboard(PORT3, (b) => !!b.NoFault3A, 5000);
+    check(lbA.NoFault3A && lbA.NoFault3A.hg4s === 1, "NOFAULT-3: A's own concede still records the normal loss");
+    await guestB.waitForFunction(() => window.NET && window.NET.anySurrenderOccurred === true, { timeout: 5000 });
+    await guestC.waitForFunction(() => window.NET && window.NET.anySurrenderOccurred === true, { timeout: 5000 });
+
+    await quitConfirm(guestB);
+    await guestB.waitForFunction(() => !document.getElementById("menu").classList.contains("hidden"), { timeout: 8000 });
+    await sleep(600);
+    let lb = await (await fetch(`http://localhost:${PORT3}/leaderboard`)).json();
+    check(!lb.NoFault3B, "NOFAULT-3: B (2nd departure from this game) recorded no leaderboard entry at all");
+
+    await quitConfirm(guestC);
+    await guestC.waitForFunction(() => !document.getElementById("menu").classList.contains("hidden"), { timeout: 8000 });
+    await sleep(600);
+    lb = await (await fetch(`http://localhost:${PORT3}/leaderboard`)).json();
+    check(!lb.NoFault3C, "NOFAULT-3: C (3rd departure from this game) ALSO recorded no leaderboard entry at all - no extra logic needed");
+
+    await ctxHost.close();
+    for (const c of guestCtxs) await c.close();
+  }
+
+  /* =================================================================================
+   * NOFAULT-4: the no-fault flag is scoped to ONE game instance and never leaks across games.
+   * This server design has no "rematch in place" mechanic (every online game is its own room,
+   * see actuallyStartGame()'s comment) - so the strongest honest proof available is that a
+   * BRAND-NEW room/game, even reusing a name that already conceded in an EARLIER, unrelated
+   * game, starts with anySurrenderOccurred=false (both makeRoom()'s default and
+   * actuallyStartGame()'s reset are exercised live over the wire here, not just read from
+   * source). See HANDOFF.md v0.27.1 for the full reasoning.
+   * ================================================================================= */
+  log("--- NOFAULT-4: the no-fault flag never leaks into a brand-new room/game ---");
+  {
+    const seatMeta = [
+      { name: "NoFault4A", type: "human", diff: "medium" },
+      { name: "C1", type: "cpu", diff: "easy" }, { name: "C2", type: "cpu", diff: "easy" }, { name: "C3", type: "cpu", diff: "easy" },
+    ];
+    const ctx = await browser.newContext({ reducedMotion: "reduce" });
+    const page = await newPage(ctx, PORT4);
+    await hostRoomWith(page, seatMeta, 4, false);
+    await page.evaluate(() => { const b = document.getElementById("btnOnlineRulesOk"); if (b) b.click(); });
+    await page.evaluate(() => window.netSend({ type: "start", protocolVersion: PROTOCOL_VERSION, willSeat: true }));
+    await page.waitForFunction(() => window.G != null, { timeout: 10000 });
+    const flag = await page.evaluate(() => window.NET.anySurrenderOccurred);
+    check(flag === false, "NOFAULT-4: a brand-new room/game starts with anySurrenderOccurred=false, confirmed live over the wire");
+    const heading = await page.evaluate(() => {
+      document.getElementById("btnMenu").click();
+      const h = document.getElementById("surrenderConfirmHeading").textContent;
+      document.getElementById("btnSurrenderCancel").click();
+      return h;
+    });
+    check(heading === "CONCEDE?", `NOFAULT-4: a fresh game's own concede dialog shows the normal (not no-fault) wording (got "${heading}")`);
+    await ctx.close();
+  }
+
+  /* =================================================================================
+   * RETURN-TO-GAME: v0.27.1 - Blake's ask that Pause/Save's sheet have an explicit, prominent
+   * "Return to Game" way back in, not just "Cancel" buried in a list of ways to leave. Verifies
+   * it closes the sheet, unpauses, continues the SAME game with zero stat consequence.
+   * ================================================================================= */
+  log("--- RETURN-TO-GAME: the sheet's primary button plainly resumes play, no stat consequence ---");
+  {
+    const ctx = await browser.newContext({ reducedMotion: "reduce" });
+    const page = await newPage(ctx, PORT4);
+    const seatMeta = [
+      { name: "ReturnToGameH", type: "human", diff: "medium" },
+      { name: "C1", type: "cpu", diff: "easy" }, { name: "C2", type: "cpu", diff: "easy" }, { name: "C3", type: "cpu", diff: "easy" },
+    ];
+    await startOffline(page, { n: 4, teams: false, seatMeta });
+    const before = await page.evaluate(() => {
+      document.getElementById("btnPause").click();
+      return {
+        sheetShown: !document.getElementById("leaveConfirmOverlay").classList.contains("hidden"),
+        firstBtnId: document.querySelector("#leaveConfirmOverlay .bigBtns .btn").id,
+        firstBtnText: document.querySelector("#leaveConfirmOverlay .bigBtns .btn").textContent,
+        firstBtnIsPrimary: document.querySelector("#leaveConfirmOverlay .bigBtns .btn").classList.contains("primary"),
+        paused: window.G.paused,
+      };
+    });
+    check(before.sheetShown, "RETURN-TO-GAME: Pause/Save opens the sheet");
+    check(before.paused === true, "RETURN-TO-GAME: the game is paused while the sheet is up");
+    check(before.firstBtnId === "btnLeaveCancel" && /Return to Game/i.test(before.firstBtnText) && before.firstBtnIsPrimary,
+      `RETURN-TO-GAME: the FIRST, primary-styled button plainly reads "Return to Game" (got id=${before.firstBtnId} text="${before.firstBtnText}" primary=${before.firstBtnIsPrimary})`);
+    await page.evaluate(() => document.getElementById("btnLeaveCancel").click());
+    const after = await page.evaluate(() => ({
+      sheetHidden: document.getElementById("leaveConfirmOverlay").classList.contains("hidden"),
+      paused: window.G.paused,
+      gameHidden: document.getElementById("game").classList.contains("hidden"),
+    }));
+    check(after.sheetHidden, "RETURN-TO-GAME: tapping it closes the sheet");
+    check(after.paused === false && !after.gameHidden, "RETURN-TO-GAME: the SAME game continues, unpaused");
+    check(!(await readStats(page)).ReturnToGameH, "RETURN-TO-GAME: zero stat consequence of any kind");
+    await ctx.close();
+  }
+
+  /* =================================================================================
+   * OVERFLOW: Blake's report - "the surrender badge takes up the entire screen (and then
+   * some)". Every confirm-style overlay must stay fully within the viewport across the
+   * project's standard phone matrix (its own .confirmCard scrolls internally if content is
+   * ever taller than that) - checked here for the two worst-case, Blake-named dialogs
+   * (leaveConfirmOverlay ONLINE with all 6 buttons showing, and surrenderConfirmOverlay) across
+   * the full matrix, plus a spot check at the narrowest size (320x568) for slotReplaceOverlay
+   * and overwriteWarnOverlay. pauseOverlay got the identical .confirmCard treatment but isn't
+   * exercised here - it's the shortest of the five (sign + one line + one button), not
+   * realistically at risk, and not easily reachable single-human in this harness (it's the
+   * OTHER players' view of someone else's pause, see index.html's updatePauseUI()).
+   * ================================================================================= */
+  log("--- OVERFLOW: confirm-style overlays never spill past the viewport, phone matrix ---");
+  {
+    const ctx = await browser.newContext({ reducedMotion: "reduce" });
+    const page = await newPage(ctx, PORT4);
+    const seatMeta = [
+      { name: "OverflowH", type: "human", diff: "medium" },
+      { name: "C1", type: "cpu", diff: "easy" }, { name: "C2", type: "cpu", diff: "easy" }, { name: "C3", type: "cpu", diff: "easy" },
+    ];
+    await hostRoomWith(page, seatMeta, 4, false);
+    await page.evaluate(() => { const b = document.getElementById("btnOnlineRulesOk"); if (b) b.click(); });
+    await page.evaluate(() => window.netSend({ type: "start", protocolVersion: PROTOCOL_VERSION, willSeat: true }));
+    await page.waitForFunction(() => window.G != null, { timeout: 10000 });
+
+    const sizes = [[320, 568], [375, 667], [390, 844], [414, 896], [430, 932]];
+    for (const [w, h] of sizes) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.evaluate(() => document.getElementById("btnPause").click());
+      await page.waitForFunction(() => window.G && window.G.paused === true, { timeout: 5000 });
+      let rect = await page.evaluate(() => document.querySelector("#leaveConfirmOverlay .confirmCard").getBoundingClientRect());
+      check(rect.top >= 0 && rect.bottom <= h, `OVERFLOW: leaveConfirmOverlay (online, 6 buttons) fits within ${w}x${h} (top=${rect.top.toFixed(1)}, bottom=${rect.bottom.toFixed(1)})`);
+      await page.evaluate(() => document.getElementById("btnLeaveDiscard").click());
+      rect = await page.evaluate(() => document.querySelector("#surrenderConfirmOverlay .confirmCard").getBoundingClientRect());
+      check(rect.top >= 0 && rect.bottom <= h, `OVERFLOW: surrenderConfirmOverlay fits within ${w}x${h} (top=${rect.top.toFixed(1)}, bottom=${rect.bottom.toFixed(1)})`);
+      await page.evaluate(() => document.getElementById("btnSurrenderCancel").click());
+      await page.evaluate(() => document.getElementById("btnLeaveCancel").click());   // Return to Game - back to the board, unpaused
+      await page.waitForFunction(() => window.G && window.G.paused === false, { timeout: 5000 });
+    }
+    await ctx.close();
+  }
+  log("--- OVERFLOW (spot check, 320x568): slotReplaceOverlay + overwriteWarnOverlay ---");
+  {
+    const ctx = await browser.newContext({ reducedMotion: "reduce" });
+    const page = await newPage(ctx, PORT4);
+    await page.setViewportSize({ width: 320, height: 568 });
+    const mk = (name) => [{ name, type: "human", diff: "medium" }, { name: "C1", type: "cpu", diff: "easy" }, { name: "C2", type: "cpu", diff: "easy" }, { name: "C3", type: "cpu", diff: "easy" }];
+    await startOffline(page, { n: 4, teams: false, seatMeta: mk("OverflowSlotA") });
+    await saveAndReturnToMenu(page);
+    await startOfflineViaGate(page, { n: 4, teams: false, seatMeta: mk("OverflowSlotB") });
+    await page.waitForFunction(() => window.G != null, { timeout: 5000 });
+    await saveAndReturnToMenu(page);
+    await startOfflineViaGate(page, { n: 4, teams: false, seatMeta: mk("OverflowSlotC") });
+    await page.waitForFunction(() => !document.getElementById("slotReplaceOverlay").classList.contains("hidden"), { timeout: 5000 });
+    let rect = await page.evaluate(() => document.querySelector("#slotReplaceOverlay .confirmCard").getBoundingClientRect());
+    check(rect.top >= 0 && rect.bottom <= 568, `OVERFLOW: slotReplaceOverlay fits within 320x568 (top=${rect.top.toFixed(1)}, bottom=${rect.bottom.toFixed(1)})`);
+    await page.evaluate(() => document.getElementById("btnReplaceCancel").click());
+
+    const shown = await page.evaluate(() => {
+      localStorage.setItem("nasty-last-room", JSON.stringify({ code: "FAKE", wasStarted: true, ts: Date.now() }));
+      localStorage.setItem("nasty-net-FAKE", JSON.stringify({ playerId: 1, token: "tok" }));
+      window.confirmOverwriteThenRun(() => {});
+      return !document.getElementById("overwriteWarnOverlay").classList.contains("hidden");
+    });
+    check(shown, "OVERFLOW: overwriteWarnOverlay reachable for the fit check");
+    rect = await page.evaluate(() => document.querySelector("#overwriteWarnOverlay .confirmCard").getBoundingClientRect());
+    check(rect.top >= 0 && rect.bottom <= 568, `OVERFLOW: overwriteWarnOverlay fits within 320x568 (top=${rect.top.toFixed(1)}, bottom=${rect.bottom.toFixed(1)})`);
+    await ctx.close();
+  }
+
   await browser.close();
   child.kill("SIGTERM");
   child2.kill("SIGTERM");
-  await sleep(300);   // let both servers actually exit before cleanup - avoids an ENOTEMPTY race
+  child3.kill("SIGTERM");
+  child4.kill("SIGTERM");
+  await sleep(300);   // let all four servers actually exit before cleanup - avoids an ENOTEMPTY race
   // if a debounced persist write lands mid-rmSync (this is scratch-dir cleanup only, never
   // load-bearing for the test result itself, so a couple of retries is enough belt-and-suspenders).
   for (let i = 0; i < 5; i++) {
