@@ -1261,7 +1261,7 @@ button{font:inherit;cursor:pointer}
   <div class="bigBtns">
     <button class="btn primary" id="btnLeaveSave">Save &amp; leave</button>
     <button class="btn ghost" id="btnLeaveDiscard">Leave without saving</button>
-    <button class="btn ghost hidden" id="btnLeaveForGood">Leave for good - a computer takes over my seat</button>
+    <button class="btn ghost hidden" id="btnLeaveForGood">Have a computer take over my seat</button>
     <button class="btn ghost hidden" id="btnResetConnection">Reset connection</button>
     <button class="btn ghost" id="btnLeaveCancel">Cancel</button>
   </div>
@@ -3333,6 +3333,7 @@ function setPaused(v){
   if(!G)return;
   const was=G.paused;
   G.paused=!!v;
+  if(!G.paused)PAUSED_BY_SHEET=false;   // v0.25 item 4: any resume (ours or anyone's) retires the sheet's claim
   updatePauseUI();
   if(was&&!G.paused){ const ws=PAUSE_WAITERS; PAUSE_WAITERS=[]; ws.forEach(w=>w()); }
   scheduleSaveOffline();
@@ -6006,9 +6007,28 @@ function openLeaveConfirm(){
   $('btnResetConnection').classList.toggle('hidden',!NET.online);
   $('leaveConfirmOverlay').classList.remove('hidden');
 }
+/* v0.25 item 4: "Pause/Save" goes STRAIGHT to the options sheet - the old intermediate
+   paused screen (with its separate "Leave game" step) is no longer part of the tapper's own
+   flow. Tapping Pause/Save still pauses the whole table exactly as before (other players see
+   the normal paused overlay); the sheet just opens immediately on top for whoever tapped.
+   If THIS tap is what paused the game, closing the sheet (Cancel) or leaving through it
+   releases the pause too, so a sheet interaction can never leave the table stuck paused.
+   A pause someone ELSE started is never touched (PAUSED_BY_SHEET stays false there). */
+let PAUSED_BY_SHEET=false;
+function openPauseSheet(){
+  if(!G||G.over)return;
+  if(!G.paused){ PAUSED_BY_SHEET=true; requestPause(true); }
+  openLeaveConfirm();
+}
+function releaseSheetPause(){
+  if(!PAUSED_BY_SHEET)return;
+  PAUSED_BY_SHEET=false;
+  if(G&&!G.over)requestPause(false);
+}
 function doLeaveGame(saveIt){
   $('leaveConfirmOverlay').classList.add('hidden');
   $('pauseOverlay').classList.add('hidden');
+  releaseSheetPause();   // v0.25 item 4: leaving through the sheet never leaves the table paused
   if(NET.online){
     // keepRoom=saveIt: true = "Save & leave" (same as the old "Save & quit to menu"),
     // false = "Leave without saving" - the same deliberate-abandon path "Leave this game"
@@ -6035,6 +6055,7 @@ function doLeaveForGood(){
   $('leaveConfirmOverlay').classList.add('hidden');
   $('pauseOverlay').classList.add('hidden');
   if(!NET.online)return;   // safety net - the button is hidden offline anyway
+  releaseSheetPause();     // v0.25 item 4: same never-leave-it-paused rule as doLeaveGame
   netSend({type:'leaveForGood'});
   clearTimeout(LEAVE_FOR_GOOD_TIMER);
   LEAVE_FOR_GOOD_TIMER=setTimeout(()=>leaveOnlineToMenu(null,false),3000);
@@ -6045,10 +6066,17 @@ $('btnLeaveForGood').onclick=doLeaveForGood;
 $('btnResetConnection').onclick=()=>{
   $('leaveConfirmOverlay').classList.add('hidden');
   $('pauseOverlay').classList.add('hidden');
+  releaseSheetPause();   // v0.25 item 4: they're staying at the table - resume it too
   hardResetConnection();
 };
-$('btnLeaveCancel').onclick=()=>$('leaveConfirmOverlay').classList.add('hidden');
-$('btnMenu').onclick=openLeaveConfirm;
+$('btnLeaveCancel').onclick=()=>{
+  $('leaveConfirmOverlay').classList.add('hidden');
+  releaseSheetPause();   // v0.25 item 4: cancelling the sheet resumes a pause the sheet started
+};
+// v0.25 item 9: the topbar Menu button is an INSTANT save + straight to the menu - no dialog
+// of any kind. Every exit preserves the game (the v0.10.3 rule): online keeps the room and
+// its resume tile, offline saves to its slot. All choice dialogs live under Pause/Save now.
+$('btnMenu').onclick=()=>{ if(G)doLeaveGame(true); };
 $('btnOnlineRulesOk').onclick=()=>{
   $('onlineRulesOverlay').classList.add('hidden');
   maybeSendSeated();   // v0.22 P0b: if the board is up behind this popup, we're seated now
@@ -6429,7 +6457,11 @@ SPEED_OPTS.forEach((opt,i)=>{
 // whenever NET.online is true - see "online: hide Skip" there. The INSTANT reconnect
 // catch-up mechanism is completely unrelated and untouched - see the big § NET comment above.
 $('btnSkip').onclick=()=>{ if(!NET.online)startSkip(); };
-$('btnPause').onclick=()=>requestPause(true);
+// v0.25 item 4: Pause/Save = pause the table AND open the full options sheet in one tap -
+// see openPauseSheet(), § MENU. The old flow (paused screen first, options only after a
+// second "Leave game" tap) is gone for the tapper; everyone else still sees the normal
+// paused overlay, and its own Leave game button still opens the same sheet.
+$('btnPause').onclick=openPauseSheet;
 $('pauseOverlay').addEventListener('pointerdown',()=>{ if(PAUSE_TAP_ALLOWED)requestPause(false); });
 // v0.11 item 3: the pause overlay's "Leave game" button now opens the same two-choice
 // openLeaveConfirm() modal as the topbar's "‹ Menu" button (see doLeaveGame() above) instead
