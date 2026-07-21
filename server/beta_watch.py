@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=c7b1a7d0-6346-4b87-ae0f-fb032d86a76f&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=68784181-e29d-486c-b6b2-aa2f61571941&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -61,22 +61,15 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 33 reached the family</h1>
+<h1 style="color:#1a5c38">🎉 Build 34 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
 <p>What changed in this one:</p>
 <ul>
-<li>Everyone taps "Ready up" right on their seat before the host starts, so nobody misses their
-opening hand.</li>
-<li>The host now picks the table's speed before inviting anyone.</li>
-<li>Push notifications for your turn are fixed for real this time - the app registers for them
-every time it opens, not just once.</li>
-<li>If someone's connection drops, their name turns red so you can tell at a glance, and the
-game keeps going without them.</li>
-<li>Coming back to a game no longer auto-rejoins you into a moving table - tap your saved game,
-and if someone else is still away you can send them a rejoin link or hand their seat to a
-computer (pick its difficulty) and keep playing.</li>
-<li>Pause and Save now opens straight to your options, and the Menu button saves instantly with
-no extra tap.</li>
+<li>Fixed a bug where the little status bubble (like "your turn" or "waiting for someone") could
+sometimes get stuck on the main menu after tapping Menu to leave a game. It always clears now.</li>
+<li>The host speed picker (choosing Normal, Quick, Fast, or Turbo before inviting people) now
+shows all four options in a tidy 2 by 2 grid, and each one shows how much faster it is than
+Normal (for example Fast 2.8x).</li>
 </ul>
 <h3>📱 The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -91,7 +84,7 @@ no extra tap.</li>
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 33 is live for the family 🎉', body], check=True)
+                    'NASTY: build 34 is live for the family 🎉', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED - email sent, watcher done')
 except Exception as e:
