@@ -410,10 +410,18 @@ button{font:inherit;cursor:pointer}
 .seatRow{display:flex;gap:8px;align-items:center;background:rgba(255,255,255,.06);
   border-radius:12px;padding:8px 10px;margin:8px 0}
 .seatRow .dot{width:22px;height:22px;border-radius:50%;flex:none;border:2px solid rgba(255,255,255,.6)}
-.seatRow input{flex:1;min-width:60px;width:60px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.18);
-  border-radius:8px;color:var(--cream);padding:8px 10px;font-size:15px;min-height:44px}
+/* v0.24: .nameWrap wraps the name input so a pencil glyph can sit inside it - Blake's ask was
+   to make it obvious the name is tappable/editable (nothing signaled it before). pointer-events:
+   none on the glyph so taps still land on the input underneath it. */
+.seatRow .nameWrap{position:relative;flex:1;min-width:60px}
+.seatRow .nameWrap input{width:100%;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.18);
+  border-bottom:1px solid rgba(244,197,66,.55);border-radius:8px;color:var(--cream);
+  padding:8px 26px 8px 10px;font-size:15px;min-height:44px;box-sizing:border-box}
+.seatRow .nameWrap .editPencil{position:absolute;right:8px;top:50%;transform:translateY(-50%);
+  font-size:13px;opacity:.7;pointer-events:none}
 .seatRow select{background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.18);border-radius:8px;
   color:var(--cream);padding:8px 6px;font-size:14px;min-height:44px}
+#nameHint{font-size:12.5px;color:#9ec7aa;min-height:16px;margin:0 2px 4px;text-align:center}
 .bigBtns{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:18px}
 .btn{border:none;border-radius:12px;padding:13px 22px;font-weight:800;font-size:16px;letter-spacing:.03em}
 .btn.primary{background:var(--gold);color:#3a2c05;box-shadow:0 6px 18px rgba(0,0,0,.35)}
@@ -663,6 +671,16 @@ button{font:inherit;cursor:pointer}
 .tee.targetable{cursor:pointer;animation:teeTarget .8s infinite}
 @keyframes teeGlow{50%{filter:drop-shadow(0 0 10px #ffe57a) drop-shadow(0 5px 3px rgba(0,0,0,.38))}}
 @keyframes teeTarget{50%{filter:drop-shadow(0 0 12px #ff5c5c) drop-shadow(0 5px 3px rgba(0,0,0,.38))}}
+/* v0.24: skip-only spotlight glow for kicks + Jack swaps (Blake asked twice for the swap to
+   read more clearly during a skip) - see performMoveInner(), § ANIM/ENGINE glue. Much stronger
+   than .selectable's subtle teeGlow above on purpose: it has to be unmistakable against the
+   wood board on every tee color, added/removed directly via classList right at the JS call
+   sites, only while SKIP is true - normal play and INSTANT reconnect catch-up never get it. */
+.tee.spotlightGlow{animation:spotlightGlowPulse .45s ease-in-out infinite}
+@keyframes spotlightGlowPulse{
+  0%,100%{filter:drop-shadow(0 0 8px #fff4c2) drop-shadow(0 0 16px #ffd23f) drop-shadow(0 0 26px #ffb200) drop-shadow(0 5px 3px rgba(0,0,0,.38))}
+  50%{filter:drop-shadow(0 0 14px #fffbe6) drop-shadow(0 0 28px #ffe066) drop-shadow(0 0 42px #ffc233) drop-shadow(0 5px 3px rgba(0,0,0,.38))}
+}
 
 /* ---------- Cards ---------- */
 /* v0.10: hand cards used to be a flat 64x90px - fine on the phone width they were designed for,
@@ -930,6 +948,7 @@ button{font:inherit;cursor:pointer}
     </div>
     <div id="teamNote"></div>
     <div id="seatList"></div>
+    <div id="nameHint"></div>
     <div id="nameWarn" style="font-size:12.5px;color:#ff9a9a;min-height:16px;margin:2px 2px 0"></div>
     <div class="bigBtns">
       <button class="btn primary" id="btnStart">Start game</button>
@@ -940,7 +959,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.23.1</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.24</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -1041,7 +1060,7 @@ button{font:inherit;cursor:pointer}
     </ul>
     <h4>Turns</h4>
     <ul>
-      <li>Cards get dealt in rounds (5-4-4 with 4 players). Play one card per turn.</li>
+      <li>Cards get dealt in rounds. <b>4 players:</b> 5, then 4, then 4 (all 52 cards used). <b>6 players:</b> 4, then 4 (48 of 52 used - the leftover 4 sit unused in the dealer's pile until the deck passes to the next dealer and gets reshuffled). Play one card per turn.</li>
       <li>No playable card? You're skipped automatically until the next deal.</li>
       <li>If a partner finishes, they keep playing to move their partner's tees.</li>
     </ul>
@@ -1592,7 +1611,13 @@ const REDUCED=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const SPEED_OPTS=[[0.6,'Normal'],[1,'Quick'],[1.7,'Fast'],[2.6,'Turbo']];
 let USER_SPEED=parseFloat(localStorage.getItem('nasty-speed')||'0.6');
 if(!SPEED_OPTS.some(o=>o[0]===USER_SPEED))USER_SPEED=0.6;
-let SKIP=false, skipSnap=null, SPOTLIGHT=false;
+// v0.24: SPOTLIGHT_HUMAN distinguishes the two spotlight tiers (see spotlightEvent()/
+// applySpeed() below) - true only while the in-flight kick/swap involves at least one HUMAN
+// seat's peg (either side of a swap, or the attacker/victim of a kick). Blake's ask: the extra
+// slowdown + glow are for making sure a PERSON doesn't miss what just happened to their own
+// piece - a pure CPU-vs-CPU event during a skip stays at the older, faster 2x spotlight pace
+// with no glow, same as v0.22/v0.23 always did.
+let SKIP=false, skipSnap=null, SPOTLIGHT=false, SPOTLIGHT_HUMAN=false;
 let SPEED=1;
 // v0.15: online, table pacing is the SHARED NET.tableSpeed (host-controlled - see the § NET
 // comment block) instead of this device's own USER_SPEED. `NET` (a `const`, § NET) isn't
@@ -1603,14 +1628,19 @@ let SPEED=1;
 // right after `const NET=...` instead - see that one call site, § NET.
 function applySpeed(){
   const base=NET.online?NET.tableSpeed:USER_SPEED;
-  // v0.19: SPOTLIGHT (see spotlightEvent() below) temporarily overrides the 30x SKIP boost with
-  // a gentler 2x whenever a kick/Jack-swap's own shortened animation is in flight - "roughly
-  // half normal duration" per-event, not the 30x-compressed blur every other move gets during a
-  // skip. It only ever matters while SKIP is true (spotlightEvent no-ops outside a skip); always
-  // re-derived here from whatever SKIP/SPOTLIGHT actually are RIGHT NOW rather than cached, so a
-  // skip toggled off mid-event (endSkip()/stopSkip(), or a human turn arriving) still lands on
-  // the correct speed the instant spotlightEvent's finally block calls this again.
-  const boost=SPOTLIGHT?2:(SKIP?30:1);
+  // v0.19: SPOTLIGHT (see spotlightEvent() below) temporarily overrides the 30x SKIP boost
+  // whenever a kick/Jack-swap's own shortened animation is in flight, instead of the
+  // 30x-compressed blur every other move gets during a skip. It only ever matters while SKIP is
+  // true (spotlightEvent no-ops outside a skip); always re-derived here from whatever
+  // SKIP/SPOTLIGHT actually are RIGHT NOW rather than cached, so a skip toggled off mid-event
+  // (endSkip()/stopSkip(), or a human turn arriving) still lands on the correct speed the
+  // instant spotlightEvent's finally block calls this again.
+  // v0.24 (Blake, asked twice): the NASTY stamp and Jack swap were still hard to see even at the
+  // v0.19 2x boost - but only when a HUMAN's own peg is involved (SPOTLIGHT_HUMAN, set by
+  // spotlightEvent()'s caller - see performMoveInner()). Human-involved events drop to 1.2x -
+  // roughly normal speed, just a hair faster, err toward slower per Blake's ask. A pure
+  // CPU-vs-CPU kick/swap during a skip keeps the original v0.19 2x pace unchanged.
+  const boost=SPOTLIGHT?(SPOTLIGHT_HUMAN?1.2:2):(SKIP?30:1);
   SPEED=(REDUCED?Math.max(base,6):base)*boost;
 }
 // v0.19: one-time "how fast should the game play" picker. Shown the first time ANY player
@@ -1662,18 +1692,27 @@ function pickSpeed(v){
    watchable pace even mid-skip, then hands speed straight back. Outside a skip (SKIP false)
    play is already full/normal speed, so it's a pure passthrough - never touches SPOTLIGHT/
    applySpeed() at all, meaning ordinary (non-skip) kicks/swaps are byte-for-byte unchanged.
-   During a skip: sets SPOTLIGHT (applySpeed() above then computes a 2x boost instead of 30x -
-   half the normal-speed duration, not a 30x blur), awaits the caller's animation, then ALWAYS
+   During a skip: sets SPOTLIGHT (applySpeed() above now computes a 1.2x boost instead of 30x,
+   see v0.24 comment there - close to normal speed), awaits the caller's animation, then ALWAYS
    clears SPOTLIGHT and re-applies speed in a finally - so (a) an exception mid-animation can
-   never leave speed stuck at 2x forever, and (b) SKIP being turned off mid-event (stopSkip(),
-   or a human turn arriving - see runTurn()'s `SKIP&&seatCfg.type==='human'` check) is picked up
-   correctly the instant this resumes, since applySpeed() always re-reads the CURRENT SKIP, not
-   whatever it was when the event started. */
-async function spotlightEvent(fn){
+   never leave speed stuck at the spotlight pace forever, and (b) SKIP being turned off mid-event
+   (stopSkip(), or a human turn arriving - see runTurn()'s `SKIP&&seatCfg.type==='human'` check)
+   is picked up correctly the instant this resumes, since applySpeed() always re-reads the
+   CURRENT SKIP, not whatever it was when the event started.
+   v0.24: the caller's fn may also add a brief extra `wait()` AFTER its own animation (the kick
+   victim's stable-glow beat, see performMoveInner()) - running that wait inside fn means it's
+   still timed off the SPOTLIGHT-boosted SPEED, not the 30x skip blur, so the beat itself reads
+   clearly instead of vanishing the instant this function hands speed back.
+   v0.24: `human` (default false) is SPOTLIGHT_HUMAN for the duration of this one event only -
+   the caller (performMoveInner()) decides it per-event from the actual seats involved (either
+   swapping seat, or the kick's attacker/victim seat), not from who happens to be acting this
+   turn. true picks the new near-normal 1.2x pace; false keeps the original v0.19 2x pace - see
+   applySpeed()'s v0.24 comment. Always reset in the finally alongside SPOTLIGHT itself. */
+async function spotlightEvent(fn,human){
   if(!SKIP)return fn();
-  SPOTLIGHT=true; applySpeed();
+  SPOTLIGHT=true; SPOTLIGHT_HUMAN=!!human; applySpeed();
   try{ return await fn(); }
-  finally{ SPOTLIGHT=false; applySpeed(); }
+  finally{ SPOTLIGHT=false; SPOTLIGHT_HUMAN=false; applySpeed(); }
 }
 
 /* --- tiny sound synth ---
@@ -3613,10 +3652,26 @@ async function performMoveInner(seat,m,cardEl){
     // wrapped in spotlightEvent so the swap itself plays at a watchable pace mid-skip too - see
     // spotlightEvent()/toast() comments above. No swap message existed before this change.
     toast(`🔄 Jack swap! ${G.seats[owner].name} and ${G.seats[m.ts].name} swap tees`,2600,true);
-    await spotlightEvent(()=>Promise.all([
-      animateArc(elm,plan.aP,plan.bP,700,360),
-      animateArc(other,plan.bP,plan.aP,700,-360)
-    ]));
+    // v0.24: skip-only glow on BOTH swapping tees, but ONLY when at least one of the two seats
+    // actually swapping (owner or m.ts - the seats whose PEGS move, not necessarily whoever's
+    // hand played the card) is a human (Blake: don't bother slowing down/glowing a pure
+    // CPU-vs-CPU swap, only ones that touch a real person's piece). A pure CPU-vs-CPU swap
+    // still gets the plain v0.19 2x spotlight pace (spotlightEvent(fn,false) below) with no
+    // glow. Glow itself is gated on SKIP directly (not spotlightEvent's own SPOTLIGHT flag,
+    // since spotlightEvent's fn always runs even when SKIP is false as a plain passthrough) -
+    // normal play stays byte-for-byte unchanged, and SKIP is never true during INSTANT catch-up
+    // (mutually exclusive flows - see startSkip()/endCatchup()), so INSTANT is untouched too.
+    const humanSwap=G.seats[owner].type==='human'||G.seats[m.ts].type==='human';
+    const glowSwap=SKIP&&humanSwap;
+    if(glowSwap){ elm.classList.add('spotlightGlow'); other.classList.add('spotlightGlow'); }
+    try{
+      await spotlightEvent(()=>Promise.all([
+        animateArc(elm,plan.aP,plan.bP,700,360),
+        animateArc(other,plan.bP,plan.aP,700,-360)
+      ]),humanSwap);
+    }finally{
+      if(glowSwap){ elm.classList.remove('spotlightGlow'); other.classList.remove('spotlightGlow'); }
+    }
   }
   if(kicked){
     // v0.19: force=true so this survives SKIP's toast suppression (still suppressed under
@@ -3630,7 +3685,28 @@ async function performMoveInner(seat,m,cardEl){
       toast(`😬 Ouch! ${G.seats[seat].name} has no other play and sends partner ${G.seats[kicked.seat].name} back to base!`,2600,true);
     else
       toast(`💥 NASTY! ${G.seats[seat].name} sends ${G.seats[kicked.seat].name} back to base!`,2600,true);
-    await spotlightEvent(()=>nastyBlast(kicked.seat,kicked.pi,kicked.pos));
+    // v0.24: skip-only glow on the ATTACKER (elm - the piece that just landed and did the
+    // kicking, already at its resting spot from the move/enter/back animation above) and the
+    // VICTIM - but only when the attacker seat (owner) or the victim seat (kicked.seat) is
+    // human (same "only touch a real person's piece" rule as the swap glow above; a pure
+    // CPU-vs-CPU kick during a skip keeps the plain v0.19 2x pace, no glow, no extra beat). The
+    // victim keeps glowing in its stable for a visible beat after nastyBlast() lands it there,
+    // so the eye can follow where it went, before skip speed resumes - the beat's wait() runs
+    // INSIDE spotlightEvent's fn so it's still timed off the slower spotlight SPEED, not the
+    // 30x skip blur (see spotlightEvent()'s v0.24 comment above). Same SKIP-only gating
+    // reasoning as the swap glow above.
+    const humanKick=G.seats[owner].type==='human'||G.seats[kicked.seat].type==='human';
+    const attackerElm=elm, victimElm=$(`tee-${kicked.seat}-${kicked.pi}`);
+    const glowKick=SKIP&&humanKick;
+    if(glowKick){ attackerElm.classList.add('spotlightGlow'); victimElm.classList.add('spotlightGlow'); }
+    try{
+      await spotlightEvent(async()=>{
+        await nastyBlast(kicked.seat,kicked.pi,kicked.pos);
+        if(glowKick)await wait(500);
+      },humanKick);
+    }finally{
+      if(glowKick){ attackerElm.classList.remove('spotlightGlow'); victimElm.classList.remove('spotlightGlow'); }
+    }
   }
   // celebrate every tee that just became snug (safe forever)
   if(!SKIP){
@@ -5501,7 +5577,10 @@ function renderRoomScreen(){
         :'Tap to sit here';
       row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(s.name)}</span><span class="st">${statusTxt}</span>`;
       if(mine){
-        const btn=document.createElement('button'); btn.textContent='Rename';
+        // v0.24: pencil glyph added for the same "obviously editable" consistency as the
+        // offline seat list's .editPencil (§ STYLE/MENU) - the text label already made this
+        // discoverable pre-v0.24, this just matches the visual language.
+        const btn=document.createElement('button'); btn.textContent='✏️ Rename';
         btn.onclick=e=>{e.stopPropagation(); ROOM_EDIT_NAME={draft:s.name}; renderRoomScreen();};
         row.appendChild(btn);
       }else if(open){
@@ -5668,6 +5747,12 @@ function cleanName(raw,fallback){
   const s=String(raw||'').trim().slice(0,NAME_MAX);
   return s||fallback||'';
 }
+// v0.24 (Blake: nothing signals the seat list names can be tapped/renamed): a one-time hint
+// line under the seat list, same "show once ever per device" pattern as the speed picker's
+// speedChoiceMade()/markSpeedChosen() above. Cleared the first time anyone actually edits a
+// name (see renderMenu()'s inp.oninput) so it never nags a player who's already found it.
+function renameHintSeen(){ try{ return !!localStorage.getItem('nasty-rename-hint-seen'); }catch(e){ return true; } }
+function markRenameHintSeen(){ try{ localStorage.setItem('nasty-rename-hint-seen','1'); }catch(e){} }
 
 /* ============================= § MENU / BOOT ============================= */
 // v0.9 item 9: new stock/default names (Ginny, Geri, J.B., Jim for the first four seats).
@@ -5706,10 +5791,14 @@ function renderMenu(){
     $('teamNote').textContent='Partners sit across: '+pairs.join('  ·  ');
   }else $('teamNote').textContent='';
   const list=$('seatList'); list.innerHTML='';
+  // v0.24: one-time hint that seat names are tappable/editable - see renameHintSeen() above.
+  $('nameHint').textContent=renameHintSeen()?'':'Tap a name to change it';
   CFG.seatMeta[CFG.n].forEach((s,i)=>{
     const r=document.createElement('div'); r.className='seatRow';
+    // v0.24: name input wrapped in .nameWrap with a pencil glyph (Blake: nothing signals these
+    // are editable) - see .seatRow .nameWrap CSS, § STYLE.
     r.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span>
-      <input value="${esc(s.name)}" maxlength="${NAME_MAX}" aria-label="player name">
+      <span class="nameWrap"><input value="${esc(s.name)}" maxlength="${NAME_MAX}" aria-label="player name, tap to edit"><span class="editPencil">✏️</span></span>
       <select class="typeSel"><option value="human"${s.type==='human'?' selected':''}>Human</option>
         <option value="cpu"${s.type==='cpu'?' selected':''}>CPU</option></select>
       <select class="diffSel" ${s.type==='human'?'style="visibility:hidden"':''}>
@@ -5721,6 +5810,8 @@ function renderMenu(){
     // a modest profanity block - a bad name is silently rejected back to the last good
     // value with a friendly inline note, never saved/sent.
     inp.oninput=()=>{
+      // v0.24: first real edit anywhere retires the one-time hint line for good.
+      if(!renameHintSeen()){ markRenameHintSeen(); $('nameHint').textContent=''; }
       const val=inp.value.slice(0,NAME_MAX);
       if(isBadName(val)){
         $('nameWarn').textContent='Pick a nicer name.';
