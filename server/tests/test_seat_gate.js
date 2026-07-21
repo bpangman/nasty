@@ -5,7 +5,7 @@
  * the humans were still reading the pre-game popups - their turns arrived with no legal move,
  * they were auto-bowed-out, the CPUs played the whole hand and hand 2 was dealt before anyone
  * looked at the board. The fix holds the FIRST deal until every player who promised a
- * {type:'seated'} signal (readyUp with willSeat:true - new clients) has sent it, with a
+ * {type:'seated'} signal (a guest's readyUp / the host's start with willSeat:true) has sent it, with a
  * server-side cap and early release on disconnect; old clients never promise and get the
  * exact pre-v0.22 behavior. Usage:
  *   node test_seat_gate.js node     (server/server.js)
@@ -96,7 +96,7 @@ const isStart = (m) => m.type === "gameAction" && m.action && m.action.kind === 
 async function buildRoom(port, willSeatFlags) {
   const xff = `10.99.${xffCounter++}.1`;   // per-room source IP - keeps the host-create rate limit honest without ever tripping it
   const host = await connect(port, xff);
-  sendJ(host, { type: "host", protocolVersion: 4, name: "P0", n: 4, teams: true, seats: [
+  sendJ(host, { type: "host", protocolVersion: 5, name: "P0", n: 4, teams: true, seats: [
     { name: "P0", type: "human", diff: "medium" }, { name: "P1", type: "human", diff: "medium" },
     { name: "P2", type: "human", diff: "medium" }, { name: "P3", type: "human", diff: "medium" },
   ] });
@@ -105,15 +105,17 @@ async function buildRoom(port, willSeatFlags) {
   const clients = [host];
   for (let i = 1; i <= 3; i++) {
     const c = await connect(port, xff);
-    sendJ(c, { type: "join", protocolVersion: 4, code, name: "P" + i });
+    sendJ(c, { type: "join", protocolVersion: 5, code, name: "P" + i });
     await waitMsg(c, (m) => m.type === "joined");
     sendJ(c, { type: "claimSeat", seatIndex: i, name: "P" + i });
     clients.push(c);
   }
   await sleep(300);
-  sendJ(host, { type: "start", protocolVersion: 4 });
-  await Promise.all(clients.map((c) => waitMsg(c, (m) => m.type === "readyCheck")));
-  clients.forEach((c, i) => sendJ(c, willSeatFlags[i] ? { type: "readyUp", willSeat: true } : { type: "readyUp" }));
+  // v0.25 item 1: readiness is LOBBY state now - each GUEST readies up on the seat screen
+  // (their willSeat promise rides that message); the HOST's Start carries their own willSeat.
+  clients.forEach((c, i) => { if (i > 0) sendJ(c, willSeatFlags[i] ? { type: "readyUp", willSeat: true } : { type: "readyUp" }); });
+  await sleep(300);
+  sendJ(host, willSeatFlags[0] ? { type: "start", protocolVersion: 5, willSeat: true } : { type: "start", protocolVersion: 5 });
   await Promise.all(clients.map((c) => waitMsg(c, isStart)));
   return { clients, code, startAt: Date.now() };
 }

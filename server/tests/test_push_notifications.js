@@ -123,7 +123,7 @@ async function main() {
       { name: "Pusher", type: "human", diff: "medium" },
       { name: "C1", type: "cpu", diff: "easy" }, { name: "C2", type: "cpu", diff: "easy" }, { name: "C3", type: "cpu", diff: "easy" },
     ];
-    sendJ(ws, { type: "host", protocolVersion: 4, name: "Pusher", n: 4, teams: false, seats });
+    sendJ(ws, { type: "host", protocolVersion: 5, name: "Pusher", n: 4, teams: false, seats });
     const created = await nextMsg(ws, (m) => m.type === "created");
     code = created.code; playerId = created.playerId; token = created.token;
 
@@ -143,9 +143,7 @@ async function main() {
      *    (it's the only human - every CPU seat auto-plays through, so the loop is GUARANTEED
      *    to stop here) while the socket is STILL open - no push should fire yet.
      * ================================================================================= */
-    sendJ(ws, { type: "start", protocolVersion: 4 });
-    await nextMsg(ws, (m) => m.type === "readyCheck");
-    sendJ(ws, { type: "readyUp" });
+    sendJ(ws, { type: "start", protocolVersion: 5 });
     await nextMsg(ws, (m) => m.type === "gameAction" && m.action.kind === "start");
     await new Promise((r) => setTimeout(r, 700)); // let driveTurnLoop's deal+turn-stop settle
     check(countMatches(pushAttemptLog("Pusher")) === 0, "no push is sent/logged while the on-turn seat's socket is still open and connected");
@@ -161,6 +159,30 @@ async function main() {
     check(!!pushLog, "closing the on-turn seat's socket triggers a push attempt (no-op or real-send log, whichever apns.js is running) with the right token and player name");
     await new Promise((r) => setTimeout(r, 1500)); // let any (incorrect) extra pushes have time to appear
     check(countMatches(pushAttemptLog("Pusher", PUSH_TOKEN)) === 1, "exactly ONE push is logged for this turn - no spam on subsequent loop activity");
+
+    /* ===================================================================================
+     * C2 (v0.25 item 3 - the field-failure regression): a REJOIN re-registers a (possibly
+     * rotated) token, and the next push uses the NEW token. This is the exact chain that
+     * was broken in the field: the token must be re-registerable on every connect/rejoin,
+     * and the server must store the update on the same player identity.
+     * ================================================================================= */
+    const ROTATED_TOKEN = "TEST-DEVICE-TOKEN-ROTATED-" + Date.now();
+    const re = await wsConnect();
+    sendJ(re, { type: "rejoin", protocolVersion: 5, code, playerId, token });
+    await nextMsg(re, (m) => m.type === "sync");
+    sendJ(re, { type: "registerPush", token: ROTATED_TOKEN, platform: "ios" });
+    const reRegLog = await waitForLog(new RegExp(`push token registered ${code} playerId=${playerId}`));
+    check(!!reRegLog, "re-registering after a rejoin is accepted on the same player identity");
+    if (KIND === "node") {
+      await new Promise((r) => setTimeout(r, 1000)); // clear the persist debounce
+      const onDisk2 = JSON.parse(fs.readFileSync(path.join(SCRATCH, code + ".json"), "utf8"));
+      const p2 = onDisk2.players.find((pp) => pp.id === playerId);
+      check(!!p2 && p2.pushToken === ROTATED_TOKEN, "the ROTATED token replaced the old one in persistence");
+    }
+    // Still this seat's turn (only human at the table) - closing again must push to the NEW token.
+    re.close();
+    const rotatedPush = await waitForLog(pushAttemptLog("Pusher", ROTATED_TOKEN));
+    check(!!rotatedPush, "the next push attempt after the rejoin re-registration uses the NEW token");
   }
 
   /* =====================================================================================
@@ -175,12 +197,10 @@ async function main() {
       { name: "NoTokenPlayer", type: "human", diff: "medium" },
       { name: "C1", type: "cpu", diff: "easy" }, { name: "C2", type: "cpu", diff: "easy" }, { name: "C3", type: "cpu", diff: "easy" },
     ];
-    sendJ(ws, { type: "host", protocolVersion: 4, name: "NoTokenPlayer", n: 4, teams: false, seats });
+    sendJ(ws, { type: "host", protocolVersion: 5, name: "NoTokenPlayer", n: 4, teams: false, seats });
     await nextMsg(ws, (m) => m.type === "created");
     // Deliberately never send registerPush.
-    sendJ(ws, { type: "start", protocolVersion: 4 });
-    await nextMsg(ws, (m) => m.type === "readyCheck");
-    sendJ(ws, { type: "readyUp" });
+    sendJ(ws, { type: "start", protocolVersion: 5 });
     await nextMsg(ws, (m) => m.type === "gameAction" && m.action.kind === "start");
     await new Promise((r) => setTimeout(r, 500));
     ws.close();

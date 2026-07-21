@@ -78,7 +78,7 @@ async function main() {
   {
     const host = await wsConnect();
     const seats = [0,1,2,3].map(i => ({ name: "P"+i, type: "cpu", diff: "medium" }));
-    host.send(JSON.stringify({ type: "host", protocolVersion: 4, name: "Host", n: 4, teams: false, seats }));
+    host.send(JSON.stringify({ type: "host", protocolVersion: 5, name: "Host", n: 4, teams: false, seats }));
     const created = await nextMsg(host, (m) => m.type === "created");
     assert(created.code && created.code.length === 4, "room created with a 4-letter code");
 
@@ -91,7 +91,7 @@ async function main() {
         if (m.action.kind === "move") { sawMove = true; }
       }
     });
-    host.send(JSON.stringify({ type: "start", protocolVersion: 4 }));
+    host.send(JSON.stringify({ type: "start", protocolVersion: 5 }));
     // poll /health-adjacent by watching for game-over via a final move action with G.over —
     // simplest: watch the action stream and query admin/rooms to check `started` flips false?
     // Actually easiest: connect a fresh observer that rejoins is overkill; just wait a bit and
@@ -113,7 +113,7 @@ async function main() {
       { name: "C2", type: "cpu", diff: "easy" },
       { name: "C3", type: "cpu", diff: "easy" },
     ];
-    host.send(JSON.stringify({ type: "host", protocolVersion: 4, name: "Human", n: 4, teams: false, seats }));
+    host.send(JSON.stringify({ type: "host", protocolVersion: 5, name: "Human", n: 4, teams: false, seats }));
     const created = await nextMsg(host, (m) => m.type === "created");
     const code = created.code, playerId = created.playerId;
 
@@ -122,12 +122,11 @@ async function main() {
     collectAll(host, (m) => {
       if (m.type === "gameAction" && m.action.kind === "start") sawStart = true;
     });
-    // v0.16 item 4: Start now opens a ready-check gate - the one human seat (the host here)
-    // must confirm ready before the server actually deals.
-    host.send(JSON.stringify({ type: "start", protocolVersion: 4 }));
-    await nextMsg(host, (m) => m.type === "readyCheck");
-    host.send(JSON.stringify({ type: "readyUp" }));
+    // v0.25 item 1: readiness lives in the lobby now - the host has no guests to wait on,
+    // so Start (the host's own ready) deals directly (via the seat gate).
+    host.send(JSON.stringify({ type: "start", protocolVersion: 5, willSeat: true }));
     await nextMsg(host, (m) => m.type === "gameAction" && m.action.kind === "start");
+    host.send(JSON.stringify({ type: "seated" }));
     assert(sawStart, "start action broadcast");
 
     // Send a deliberately-illegal move for seat 0 (bogus fields) — server must reject, not crash.
@@ -146,16 +145,15 @@ async function main() {
     const host = await wsConnect();
     const guest = await wsConnect();
     const seats = [0,1,2,3].map(i => ({ name: "P"+i, type: i === 0 ? "human" : "cpu", diff: "medium" }));
-    host.send(JSON.stringify({ type: "host", protocolVersion: 4, name: "Host", n: 4, teams: false, seats }));
+    host.send(JSON.stringify({ type: "host", protocolVersion: 5, name: "Host", n: 4, teams: false, seats }));
     const created = await nextMsg(host, (m) => m.type === "created");
-    guest.send(JSON.stringify({ type: "join", protocolVersion: 4, code: created.code, name: "Guest" }));
+    guest.send(JSON.stringify({ type: "join", protocolVersion: 5, code: created.code, name: "Guest" }));
     await nextMsg(guest, (m) => m.type === "joined");
-    // v0.16 item 4: only the host claimed a seat here (the guest never did) - so only the host
-    // is required to ready up before the ready-check gate clears.
-    host.send(JSON.stringify({ type: "start", protocolVersion: 4 }));
-    await nextMsg(host, (m) => m.type === "readyCheck");
-    host.send(JSON.stringify({ type: "readyUp" }));
+    // v0.25 item 1: only the host claimed a seat here (the guest never did) - no guest
+    // readiness to wait on, so Start deals directly.
+    host.send(JSON.stringify({ type: "start", protocolVersion: 5, willSeat: true }));
     await nextMsg(host, (m) => m.type === "gameAction" && m.action.kind === "start");
+    host.send(JSON.stringify({ type: "seated" }));
 
     let guestSawSpeed = false;
     collectAll(guest, (m) => { if (m.type === "tableSpeed" && m.speed === 2.6) guestSawSpeed = true; });

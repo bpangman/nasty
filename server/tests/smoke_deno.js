@@ -67,7 +67,7 @@ async function main() {
   {
     const host = await wsConnect();
     const seats = [0,1,2,3].map(i => ({ name: "P"+i, type: "cpu", diff: "medium" }));
-    host.send(JSON.stringify({ type: "host", protocolVersion: 4, name: "Host", n: 4, teams: false, seats }));
+    host.send(JSON.stringify({ type: "host", protocolVersion: 5, name: "Host", n: 4, teams: false, seats }));
     const created = await nextMsg(host, (m) => m.type === "created");
     assert(created.code && created.code.length === 4, "room created with a 4-letter code");
     let actionCount = 0, sawDeal = false, sawMove = false, sawPass = false, sawCheck = 0;
@@ -75,7 +75,7 @@ async function main() {
       if (m.type === "gameAction") { actionCount++; if (m.action.kind==="deal") sawDeal=true; if (m.action.kind==="move") sawMove=true; if (m.action.kind==="pass") sawPass=true; }
       if (m.type === "stateCheck") sawCheck++;
     });
-    host.send(JSON.stringify({ type: "start", protocolVersion: 4 }));
+    host.send(JSON.stringify({ type: "start", protocolVersion: 5 }));
     await new Promise((r) => setTimeout(r, 6000));
     log("actions:", actionCount, "deal:", sawDeal, "move:", sawMove, "pass:", sawPass, "stateChecks:", sawCheck);
     assert(actionCount > 5, "server produced a real action stream unattended (all-CPU)");
@@ -89,18 +89,17 @@ async function main() {
     const host = await wsConnect();
     const guest = await wsConnect();
     const seats = [{name:"H",type:"human",diff:"medium"},{name:"G1",type:"human",diff:"medium"},{name:"C2",type:"cpu",diff:"easy"},{name:"C3",type:"cpu",diff:"easy"}];
-    host.send(JSON.stringify({ type: "host", protocolVersion: 4, name: "H", n: 4, teams: false, seats }));
+    host.send(JSON.stringify({ type: "host", protocolVersion: 5, name: "H", n: 4, teams: false, seats }));
     const created = await nextMsg(host, (m) => m.type === "created");
-    guest.send(JSON.stringify({ type: "join", protocolVersion: 4, code: created.code, name: "G1" }));
+    guest.send(JSON.stringify({ type: "join", protocolVersion: 5, code: created.code, name: "G1" }));
     const joined = await nextMsg(guest, (m) => m.type === "joined");
     guest.send(JSON.stringify({ type: "claimSeat", seatIndex: 1, name: "G1" }));
     await new Promise((r) => setTimeout(r, 400));
-    // v0.16 item 4: both seats are human here (host + guest) - both must ready up before the
-    // ready-check gate clears and the server actually deals.
-    host.send(JSON.stringify({ type: "start", protocolVersion: 4 }));
-    await nextMsg(host, (m) => m.type === "readyCheck");
-    host.send(JSON.stringify({ type: "readyUp" }));
+    // v0.25 item 1: readiness lives in the lobby now - the GUEST readies up on the seat
+    // screen first, then the host's Start (their own ready) deals directly.
     guest.send(JSON.stringify({ type: "readyUp" }));
+    await new Promise((r) => setTimeout(r, 300));
+    host.send(JSON.stringify({ type: "start", protocolVersion: 5 }));
     await nextMsg(host, (m) => m.type === "gameAction" && m.action.kind === "start");
     // illegal move from host seat
     host.send(JSON.stringify({ type: "action", action: { kind: "move", seat: 0, m: { ci: 999, type: "move", owner: 0, pi: 0, to: 999, kick: null } } }));
@@ -120,7 +119,7 @@ async function main() {
     assert(guestSaw === 2.6, "host's setTableSpeed broadcast to guest");
     // rejoin returns a snapshot (no log array)
     const g2 = await wsConnect();
-    g2.send(JSON.stringify({ type: "rejoin", protocolVersion: 4, code: created.code, playerId: joined.playerId, token: joined.token }));
+    g2.send(JSON.stringify({ type: "rejoin", protocolVersion: 5, code: created.code, playerId: joined.playerId, token: joined.token }));
     const sync = await nextMsg(g2, (m) => m.type === "sync");
     assert(sync.G && sync.log === undefined && typeof sync.appliedSeq === "number", "rejoin returns snapshot-based sync (G + appliedSeq, no log replay)");
     host.close(); guest.close(); g2.close();
