@@ -606,11 +606,14 @@ button{font:inherit;cursor:pointer}
 .plaque .nm{font-weight:800;font-size:calc(17px * var(--pfont));white-space:nowrap;
   max-width:calc(130px * var(--pfont));overflow:hidden;text-overflow:ellipsis}
 .plaque.turn{box-shadow:0 0 0 3px var(--gold),0 0 26px rgba(244,197,66,.55);animation:turnPulse 1.6s infinite}
-/* v0.22 P0: passive presence - a disconnected player's plate dims instead of any blocking
-   overlay (see updatePresenceUI(), § NET). Composes with .turn (an away player can still be
-   the on-turn seat - the gold ring shows through the dimming so the table can see who
-   everyone's waiting on). */
-.plaque.away{opacity:.45;filter:grayscale(.75)}
+/* v0.22 P0: passive presence - no blocking overlay for a disconnected player (see
+   updatePresenceUI(), § NET). v0.25 item 5 (Blake): the signal is the NAME TURNING RED now,
+   clearly readable against the wood, instead of the old dim/grayscale fade (which was easy
+   to miss and hard to read). A slight plate dim is kept as a secondary cue, but the plate is
+   NOT grayscaled anymore so the red actually reads as red. Composes with .turn (an away
+   player can still be the on-turn seat - the gold ring shows through). */
+.plaque.away{opacity:.9}
+.plaque.away .nm{color:#ff5449;text-shadow:0 1px 2px rgba(0,0,0,.7)}
 /* v0.22 P3: the away-ladder STATUS LINE reuses the normal update bubble (#toasts, latest-wins,
    fixed --bandH height - unchanged); its tappable BUTTONS live in this separate fixed row just
    ABOVE the bubble so the band's fixed-height geometry never has to grow or clip. The row
@@ -1170,7 +1173,8 @@ button{font:inherit;cursor:pointer}
       <li>The host picks the game speed for the table.</li>
       <li>Anyone can pause for everyone.</li>
       <li>You can switch apps anytime. The game keeps going and catches you up when you return. If your board ever looks stuck, close and reopen the app.</li>
-      <li>Need to leave for good? A computer can take over your seat (in the Menu).</li>
+      <li>When a player's name turns red, they are offline. The game keeps going and they catch up when they come back.</li>
+      <li>Need to leave for good? Have a computer take over your seat (under Pause/Save).</li>
     </ul>
     <div class="bigBtns"><button class="btn primary" id="btnOnlineRulesOk">Got it, let's play</button></div>
   </div>
