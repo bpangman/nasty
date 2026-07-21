@@ -57,7 +57,7 @@ async function main() {
   // game has real progress in KV before the kill.
   const host = await wsConnect();
   const seats = [{name:"H",type:"human",diff:"medium"},{name:"C1",type:"cpu",diff:"easy"},{name:"C2",type:"cpu",diff:"easy"},{name:"C3",type:"cpu",diff:"easy"}];
-  host.send(JSON.stringify({ type: "host", protocolVersion: 4, name: "H", n: 4, teams: false, seats }));
+  host.send(JSON.stringify({ type: "host", protocolVersion: 5, name: "H", n: 4, teams: false, seats }));
   const created = await nextMsg(host, (m) => m.type === "created");
   const code = created.code, playerId = created.playerId, token = created.token;
   // Track latest known G via applying nothing - just watch the actions and record last seq seen.
@@ -66,11 +66,10 @@ async function main() {
     const m = JSON.parse(raw.toString());
     if (m.type === "gameAction") { lastSeq = m.seq; if (typeof m.action.turn === "number") lastTurnFromAction = m.action.turn; if (m.action.kind === "move") moveCount++; }
   });
-  // v0.16 item 4: Start now opens a ready-check gate - the one human seat (this host) must
-  // confirm ready before the server actually deals.
-  host.send(JSON.stringify({ type: "start", protocolVersion: 4 }));
-  await nextMsg(host, (m) => m.type === "readyCheck");
-  host.send(JSON.stringify({ type: "readyUp" }));
+  // v0.25 item 1: readiness lives in the lobby now, not a post-Start readyCheck gate. This
+  // seat is the host and the ONLY human at the table (3 CPU seats) - a host with no guests
+  // starts directly and deals immediately.
+  host.send(JSON.stringify({ type: "start", protocolVersion: 5 }));
   await nextMsg(host, (m) => m.type === "gameAction" && m.action.kind === "start");
   await new Promise((r) => setTimeout(r, 2500));
   assert(lastSeq > 0, `game progressed before the kill (lastSeq=${lastSeq}, moves=${moveCount})`);
@@ -89,7 +88,7 @@ async function main() {
 
   // Reconnect with the saved token -> expect a snapshot sync restored from KV.
   const re = await wsConnect();
-  re.send(JSON.stringify({ type: "rejoin", protocolVersion: 4, code, playerId, token }));
+  re.send(JSON.stringify({ type: "rejoin", protocolVersion: 5, code, playerId, token }));
   const sync = await nextMsg(re, (m) => m.type === "sync");
   assert(!!sync.G, "rejoin after restart returned a G snapshot restored from KV");
   const G = sync.G;

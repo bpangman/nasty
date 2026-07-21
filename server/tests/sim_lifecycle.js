@@ -163,21 +163,23 @@ async function main() {
   // seats. Then the Sim identity's raw socket closes - the PHONE takes that identity over via
   // the ?testseed= boot hook.
   const hostWs = await wsConnect(PORT);
-  sendJ(hostWs, { type: "host", protocolVersion: 4, name: "Host", n: 4, teams: false, seats: [
+  sendJ(hostWs, { type: "host", protocolVersion: 5, name: "Host", n: 4, teams: false, seats: [
     { name: "Host", type: "human", diff: "medium" }, { name: "Sim", type: "human", diff: "medium" },
     { name: "C1", type: "cpu", diff: "medium" }, { name: "C2", type: "cpu", diff: "medium" },
   ] });
   const created = await nextMsg(hostWs, (m) => m.type === "created");
   const code = created.code;
   const simWs = await wsConnect(PORT);
-  sendJ(simWs, { type: "join", protocolVersion: 4, code, name: "Sim" });
+  sendJ(simWs, { type: "join", protocolVersion: 5, code, name: "Sim" });
   const joined = await nextMsg(simWs, (m) => m.type === "joined");
   sendJ(simWs, { type: "claimSeat", seatIndex: 1, name: "Sim" });
   await sleep(300);
-  sendJ(hostWs, { type: "start", protocolVersion: 4 });
-  await nextMsg(hostWs, (m) => m.type === "readyCheck");
-  sendJ(hostWs, { type: "readyUp" });
-  sendJ(simWs, { type: "readyUp" });
+  // v0.25 item 1: readiness lives in the lobby now - the guest (Sim) readies up on the seat
+  // screen BEFORE the host's Start, which is the host's own ready and deals directly (no more
+  // post-Start readyCheck broadcast to wait on).
+  sendJ(simWs, { type: "readyUp", willSeat: true });
+  await sleep(300);
+  sendJ(hostWs, { type: "start", protocolVersion: 5, willSeat: true });
   await nextMsg(hostWs, (m) => m.type === "gameAction" && m.action.kind === "start");
   log("room started:", code, "sim identity playerId", joined.playerId);
   simWs.close();

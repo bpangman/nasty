@@ -182,11 +182,11 @@ async function main() {
         window.hostCreateRoom();
       });
     });
-    // v0.16 item 4: Start now opens a ready-check gate - the one human seat (this page) must
-    // ready up before the server actually deals.
+    // v0.25 item 1: readiness lives in the lobby now, not a post-Start readyCheck gate. This
+    // seat is the host and the ONLY human at the table (3 CPU seats) - a host with no guests
+    // starts directly and deals immediately (same contract as test_recalibration Part 1 and
+    // test_seat_gate scenario 2).
     await page.evaluate(() => window.netSend({ type: 'start', protocolVersion: PROTOCOL_VERSION }));
-    await page.waitForFunction(() => window.NET && window.NET.readyCheck != null, { timeout: 8000 });
-    await page.evaluate(() => window.netSend({ type: 'readyUp' }));
     await page.waitForFunction(() => window.G != null, { timeout: 8000 });
     const t0 = Date.now();
     let over = false;
