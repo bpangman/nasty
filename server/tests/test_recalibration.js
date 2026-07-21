@@ -81,16 +81,15 @@ async function protocolPart(port) {
   log('--- Part 1: raw wire-protocol "resync" checks ---');
   // A single-seat room, started immediately (3 CPUs) so there's a live G to resync against.
   const ws = await wsConnect(port);
-  sendJ(ws, { type: 'host', protocolVersion: 4, name: 'Probe', n: 4, teams: false, seats: [
+  sendJ(ws, { type: 'host', protocolVersion: 5, name: 'Probe', n: 4, teams: false, seats: [
     { name: 'Probe', type: 'human', diff: 'medium' }, { name: 'C1', type: 'cpu', diff: 'easy' },
     { name: 'C2', type: 'cpu', diff: 'medium' }, { name: 'C3', type: 'cpu', diff: 'hard' },
   ] });
   const created = await nextMsg(ws, (m) => m.type === 'created');
   const code = created.code;
   sendJ(ws, { type: 'claimSeat', seatIndex: 0, name: 'Probe' });
-  sendJ(ws, { type: 'start', protocolVersion: 4 });
-  await nextMsg(ws, (m) => m.type === 'readyCheck');
-  sendJ(ws, { type: 'readyUp' });
+  // v0.25 item 1: a host with no guests starts directly (readiness lives in the lobby now).
+  sendJ(ws, { type: 'start', protocolVersion: 5 });
   await nextMsg(ws, (m) => m.type === 'gameAction' && m.action.kind === 'start');
 
   // Resync on an identified, live connection returns a full 'sync' snapshot with real G.
@@ -158,9 +157,13 @@ async function joinRoom(page, code, name) {
 async function claimSeat(page, seatIndex, name) { await page.evaluate(({ seatIndex, name }) => window.netSend({ type: 'claimSeat', seatIndex, name }), { seatIndex, name }); }
 async function startGameOnline(hostPage, humanPages) {
   const pages = humanPages || [hostPage];
-  await hostPage.evaluate(() => window.netSend({ type: 'start', protocolVersion: PROTOCOL_VERSION }));
-  await Promise.all(pages.map((p) => p.waitForFunction(() => window.NET && window.NET.readyCheck != null, { timeout: 10000 })));
-  await Promise.all(pages.map((p) => p.evaluate(() => window.netSend({ type: 'readyUp' }))));
+  // v0.25 item 1: the one-time rules popup now shows in the LOBBY (before seats) - dismiss it
+  // on every page the way a real player does, so maybeSendSeated() can fire at game boot.
+  await Promise.all(pages.map((p) => p.evaluate(() => { const b = document.getElementById('btnOnlineRulesOk'); if (b) b.click(); })));
+  // Guests ready up on the seat screen; the host's Start is their own ready (lobby-ready flow).
+  await Promise.all(pages.filter((p) => p !== hostPage).map((p) => p.evaluate(() => window.netSend({ type: 'readyUp', willSeat: true }))));
+  await new Promise((r) => setTimeout(r, 400));
+  await hostPage.evaluate(() => window.netSend({ type: 'start', protocolVersion: PROTOCOL_VERSION, willSeat: true }));
 }
 async function tryDriveMove(page, seat) {
   return page.evaluate((seat) => {
@@ -302,7 +305,7 @@ async function scenarioInputLockAndFailure(browser, port) {
 }
 
 async function scenarioKillServerMidRecal(port, serverChild) {
-  log('--- Part 2c: kill the server mid-recalibration, confirm failure UI, restart, confirm reset recovers ---');
+  log('--- Part 2c (v0.25 item 8 contract): kill the server mid-recalibration - the failure copy must NEVER appear, Recalibrating persists, and restarting the server recovers WITHOUT any manual tap ---');
   const browser = await chromium.launch();
   const seatMeta = [
     { name: 'Host', type: 'human', diff: 'medium' }, { name: 'Guest1', type: 'human', diff: 'medium' },
@@ -322,20 +325,23 @@ async function scenarioKillServerMidRecal(port, serverChild) {
   await g1.evaluate(() => { document.dispatchEvent(new Event('visibilitychange')); window.dispatchEvent(new Event('pageshow')); window.onForeground(); });
   await killPromise;
 
-  await new Promise((r) => setTimeout(r, 7000)); // past RECAL_FAIL_MS with the server truly gone
-  const failedAfterKill = await g1.evaluate(() => window.NET.recalFailed === true);
-  check(failedAfterKill, 'server killed mid-recalibration: recalFailed shows the failure message');
-  const chipVisible = await g1.evaluate(() => !document.getElementById('connIndicator').classList.contains('hidden'));
-  check(chipVisible, 'failure chip is visibly shown (not hidden) with the server down');
+  await new Promise((r) => setTimeout(r, 8000)); // well past RECAL_FAIL_MS with the server truly gone
+  // v0.25 item 8: the ONLY user-facing state is "Recalibrating..." - the failure copy is gone.
+  const chipState = await g1.evaluate(() => ({
+    hidden: document.getElementById('connIndicator').classList.contains('hidden'),
+    text: document.getElementById('connIndicator').textContent,
+    failed: window.NET.recalFailed,
+  }));
+  check(!chipState.hidden && /Recalibrating/.test(chipState.text), 'server killed mid-recalibration: chip still just says Recalibrating (visible, calm)');
+  check(!/Couldn't restore/.test(chipState.text) && chipState.failed === false, "the failure copy NEVER appears - recalFailed never flips, no scary text");
 
-  // Restart the server on the SAME port/rooms-dir so the room persists, then use the manual
-  // reset button to recover.
+  // Restart the server on the SAME port/rooms-dir so the room persists - recovery must be
+  // AUTOMATIC (the recal watchdog's periodic hard resets + the reconnect loop), no tap needed.
   const child2 = startServer(port);
   await waitHealthy(port);
-  await g1.evaluate(() => document.getElementById('connIndicator').click());
-  await new Promise((r) => setTimeout(r, 3000));
+  await g1.waitForFunction(() => window.G != null && window.NET.recalActive === false, { timeout: 20000 });
   const recovered = await g1.evaluate(() => window.G != null && window.NET.recalActive === false);
-  check(recovered, 'tapping Reset connection after the server restarts recovers into the live game');
+  check(recovered, 'after the server restarts, automatic retries recover into the live game with NO manual tap');
   const hostFinal = await gState(hostPage), g1Final = await gState(g1);
   check(hostFinal === g1Final, 'G matches host after server-kill recovery');
 

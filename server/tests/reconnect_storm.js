@@ -123,11 +123,12 @@ async function main() {
       });
     }), { code, name: 'H' + i, seat: i });
   }
-  // v0.16 item 4: Start now opens a ready-check gate - all 4 human seats must ready up before
-  // the server actually deals.
-  await pages[0].evaluate(() => window.netSend({ type: 'start', protocolVersion: PROTOCOL_VERSION }));
-  await Promise.all(pages.map((p) => p.waitForFunction(() => window.NET && window.NET.readyCheck != null, { timeout: 10000 })));
-  await Promise.all(pages.map((p) => p.evaluate(() => window.netSend({ type: 'readyUp' }))));
+  // v0.25 item 1: readiness is LOBBY state - dismiss the pre-seat rules popup like a real
+  // player, guests ready up on the seat screen, then the host's Start (their own ready) deals.
+  await Promise.all(pages.map((p) => p.evaluate(() => { const b = document.getElementById('btnOnlineRulesOk'); if (b) b.click(); })));
+  await Promise.all(pages.slice(1).map((p) => p.evaluate(() => window.netSend({ type: 'readyUp', willSeat: true }))));
+  await new Promise((r) => setTimeout(r, 400));
+  await pages[0].evaluate(() => window.netSend({ type: 'start', protocolVersion: PROTOCOL_VERSION, willSeat: true }));
   await Promise.all(pages.map((p) => p.waitForFunction(() => window.G != null, { timeout: 10000 })));
   log('game started, all 4 humans seated');
 

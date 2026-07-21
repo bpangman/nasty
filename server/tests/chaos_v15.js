@@ -111,9 +111,12 @@ async function claimSeat(page, seatIndex, name) {
 // multi-human-seat scenario.
 async function startGameOnline(hostPage, humanPages) {
   const pages = humanPages || [hostPage];
-  await hostPage.evaluate(() => window.netSend({ type: 'start', protocolVersion: PROTOCOL_VERSION }));
-  await Promise.all(pages.map((p) => p.waitForFunction(() => window.NET && window.NET.readyCheck != null, { timeout: 10000 })));
-  await Promise.all(pages.map((p) => p.evaluate(() => window.netSend({ type: 'readyUp' }))));
+  // v0.25 item 1: dismiss the pre-seat rules popup like a real player, guests ready up in the
+  // lobby, then the host's Start (their own ready) deals directly.
+  await Promise.all(pages.map((p) => p.evaluate(() => { const b = document.getElementById('btnOnlineRulesOk'); if (b) b.click(); })));
+  await Promise.all(pages.filter((p) => p !== hostPage).map((p) => p.evaluate(() => window.netSend({ type: 'readyUp', willSeat: true }))));
+  await new Promise((r) => setTimeout(r, 400));
+  await hostPage.evaluate(() => window.netSend({ type: 'start', protocolVersion: PROTOCOL_VERSION, willSeat: true }));
 }
 
 // Drives ONE legal move for `seat` on `page`, if it's currently that seat's turn there and a

@@ -50,6 +50,9 @@ const BUILD28_COMMIT = "9d19b46";
 // Build 30's exact client (commit 6fa3867, the v0.23/protocol-3 iOS build 30 commit) for the
 // v0.23.1 lockout leg - protocol bumped 3 -> 4 for the partner-peg last-resort ruling.
 const BUILD30_COMMIT = "6fa3867";
+// Build 32's exact client (commit 1cb1664, the v0.24/protocol-4 iOS build 32 commit) for the
+// v0.25 lockout leg.
+const BUILD32_COMMIT = "1cb1664";
 
 function log(...a) { console.log("[freeze]", new Date().toISOString(), ...a); }
 let PASS = 0, FAIL = 0;
@@ -120,17 +123,18 @@ async function joinRoom(page, code, name) {
 }
 async function claimSeat(page, seatIndex, name) { await page.evaluate(({ seatIndex, name }) => window.netSend({ type: "claimSeat", seatIndex, name }), { seatIndex, name }); }
 async function startGameOnline(hostPage, humanPages) {
-  await hostPage.evaluate(() => window.netSend({ type: "start", protocolVersion: PROTOCOL_VERSION }));
-  await Promise.all(humanPages.map((p) => p.waitForFunction(() => window.NET && window.NET.readyCheck != null, { timeout: 10000 })));
-  await Promise.all(humanPages.map((p) => p.evaluate(() => window.netSend({ type: "readyUp" }))));
-  await Promise.all(humanPages.map((p) => p.waitForFunction(() => window.G != null, { timeout: 15000 })));
-  // Dismiss the one-time online-rules popup the way every real player does - the overlay
-  // watchdog below treats ANY visible overlay during play as a violation, and this one is
-  // legitimately up right at the deal.
+  // v0.25 item 1: the one-time rules popup shows in the LOBBY now (before seats) - dismiss it
+  // on every page like a real player, then guests ready up on the seat screen, then the
+  // host's Start (their own ready) deals directly. The overlay watchdog below still treats
+  // any visible overlay during play as a violation, so the dismissal stays load-bearing.
   await Promise.all(humanPages.map((p) => p.evaluate(() => {
     const b = document.getElementById("btnOnlineRulesOk"); if (b) b.click();
     const o = document.getElementById("onlineRulesOverlay"); if (o) o.classList.add("hidden");
   }).catch(() => {})));
+  await Promise.all(humanPages.filter((p) => p !== hostPage).map((p) => p.evaluate(() => window.netSend({ type: "readyUp", willSeat: true }))));
+  await new Promise((r) => setTimeout(r, 400));
+  await hostPage.evaluate(() => window.netSend({ type: "start", protocolVersion: PROTOCOL_VERSION, willSeat: true }));
+  await Promise.all(humanPages.map((p) => p.waitForFunction(() => window.G != null, { timeout: 15000 })));
 }
 async function tryDriveMove(page, seat) {
   return page.evaluate((seat) => {
@@ -477,8 +481,63 @@ async function main() {
   const hostStillFine30 = await ngHost.evaluate(() => window.NET.online === true && window.NET.code != null && (window.__errors || []).length === 0).catch(() => false);
   check(hostStillFine30 !== false && (ngHost.__errors || []).length === 0, `${KIND}: the current host's room was untouched by the rejected build 30 join`);
   check((host30.__errors || []).length === 0, `${KIND}: zero page errors on the build 30 client through both rejections`);
-  await ngHost.context().close();
   await host30.context().close();
+
+  // ---------------------------------------------------------------------------
+  // Scenario 5e/5f (v0.25): BUILD 32 LOCKOUT - the exact build 32 client (commit pinned,
+  // protocol 4) vs the new protocol-5 server. The v0.25 lobby-ready start flow removed the
+  // readyCheck phase entirely: a build 32 guest would wait forever for a readyCheck broadcast
+  // that never comes, and a build 32 host expects Start to open one - so it must get the same
+  // friendly lockout instead. Never a room, never a crash, current rooms untouched.
+  // ---------------------------------------------------------------------------
+  log("--- v0.25 lockout: pinned build 32 client (commit " + BUILD32_COMMIT + ") ---");
+  const b32HtmlPath = path.join(SCRATCH, "build32.html");
+  const b32Html = execSync(`git show ${BUILD32_COMMIT}:index.html`, { cwd: "/Users/jarvis/nasty-game", maxBuffer: 1024 * 1024 * 20 }).toString();
+  fs.writeFileSync(b32HtmlPath, b32Html);
+  const host32 = await newPage(browser, PORT, b32HtmlPath);   // build 32 client, direct
+
+  const hostOutcome32 = await host32.evaluate(() => {
+    CFG.n = 4; CFG.teams = false;
+    return new Promise((resolve) => {
+      const orig = window.handleNetMessage;
+      const seen = [];
+      window.handleNetMessage = function (m) {
+        seen.push(m.type); orig(m);
+        if (m.type === "created" || m.type === "protocolMismatch") {
+          window.handleNetMessage = orig;
+          setTimeout(() => resolve({ seen, toast: (document.getElementById("toasts") || {}).textContent || "", online: window.NET.online }), 600);
+        }
+      };
+      window.hostCreateRoom();
+    });
+  });
+  check(hostOutcome32.seen.includes("protocolMismatch") && !hostOutcome32.seen.includes("created"),
+    `${KIND}: build 32 HOST attempt got protocolMismatch, never a room (saw: ${hostOutcome32.seen.join(",")})`);
+  check(/newest version/i.test(hostOutcome32.toast) && !/[—–]/.test(hostOutcome32.toast),
+    `${KIND}: build 32 saw the friendly plain-language update message (dash-free): "${hostOutcome32.toast.slice(0, 80)}"`);
+  check(hostOutcome32.online === false, `${KIND}: build 32 landed back on a clean menu (NET.online false), not stuck mid-flow`);
+
+  const joinOutcome32 = await host32.evaluate((code) => new Promise((resolve) => {
+    window.connectWs().then(() => {
+      const orig = window.handleNetMessage;
+      const seen = [];
+      window.handleNetMessage = function (m) {
+        seen.push(m.type); orig(m);
+        if (m.type === "joined" || m.type === "protocolMismatch") {
+          window.handleNetMessage = orig;
+          setTimeout(() => resolve({ seen }), 400);
+        }
+      };
+      window.netSend({ type: "join", protocolVersion: PROTOCOL_VERSION, code, name: "Old32" });
+    }).catch(() => resolve({ seen: ["connectFailed"] }));
+  }), code2);
+  check(joinOutcome32.seen.includes("protocolMismatch") && !joinOutcome32.seen.includes("joined"),
+    `${KIND}: build 32 JOIN attempt got protocolMismatch, never a seat (saw: ${joinOutcome32.seen.join(",")})`);
+  const hostStillFine32 = await ngHost.evaluate(() => window.NET.online === true && window.NET.code != null && (window.__errors || []).length === 0).catch(() => false);
+  check(hostStillFine32 !== false && (ngHost.__errors || []).length === 0, `${KIND}: the current host's room was untouched by the rejected build 32 join`);
+  check((host32.__errors || []).length === 0, `${KIND}: zero page errors on the build 32 client through both rejections`);
+  await ngHost.context().close();
+  await host32.context().close();
 
   await browser.close();
   await proxy.close();
