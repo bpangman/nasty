@@ -422,6 +422,49 @@ function finishGame(room) {
 }
 
 /* ---------------------------------------------------------------------------------------
+ * v0.27 § SURRENDER — shared by the "leaveForGood" and "surrender" message cases below (see
+ * the ws message switch). The seat-conversion + permanent-lockout mechanics are IDENTICAL
+ * either way — "surrender" only adds a loss record, via the optional beforeConvert callback,
+ * evaluated on the pre-conversion state (so it can still tell whether the seat was genuinely a
+ * live human seat in an unfinished game) BEFORE the seat flips to a CPU. Extracted so the two
+ * cases can never drift out of sync — a real bug in the old duplicated-by-hand "leaveForGood"
+ * case would previously have needed fixing twice, in two ws message handlers no test could ever
+ * prove stayed identical; now there is exactly one implementation.
+ * ------------------------------------------------------------------------------------- */
+function leaveSeatForGoodInternal(ctx, ws, beforeConvert) {
+  const { room, playerId } = ctx;
+  const p = room.players.get(playerId);
+  let seat = -1;
+  let G = null;
+  if (room.started && room.engine && room.seatOwners) {
+    seat = room.seatOwners.indexOf(playerId);
+    if (seat >= 0) G = room.engine.getG();
+  }
+  if (beforeConvert && G && seat >= 0 && G.seats[seat]) beforeConvert(G, seat);
+  let converted = false;
+  if (G && seat >= 0 && G.seats[seat] && G.seats[seat].type === "human") {
+    const leaverName = G.seats[seat].name;
+    G.seats[seat].type = "cpu";
+    G.seats[seat].diff = "medium";   // "Tricky" - see engine.js chooseAI()'s diff naming
+    room.seatOwners[seat] = null;
+    converted = true;
+    touch(room);
+    appendAction(room, { kind: "seatToCpu", seat, diff: "medium", name: leaverName });
+    // The seat may be sitting mid-turn waiting on exactly this human's move right now - drive
+    // it forward immediately instead of stalling the table until some other action re-enters
+    // driveTurnLoop().
+    driveTurnLoop(room);
+  }
+  // Invalidate this player's session for THIS room permanently, regardless of whether the game
+  // has even started yet (covers leaving mid-lobby too) - a token match alone must never let
+  // them back into a seat they deliberately gave up.
+  if (p) p.leftForGood = true;
+  if (!converted) touch(room);
+  send(ws, { type: "leftForGood" });
+  return converted;
+}
+
+/* ---------------------------------------------------------------------------------------
  * v0.13 § SOLO RESULTS — unchanged from v0.14 (offline solo/pass-and-play games have no room,
  * so they POST directly; see the client-side submitOrQueueSoloResult()).
  * ------------------------------------------------------------------------------------- */
@@ -1604,35 +1647,34 @@ wss.on("connection", (ws, req) => {
         // staying human/connected past this point).
         if (!ctx) return;
         const { room, playerId } = ctx;
-        const p = room.players.get(playerId);
-        // Invalidate this player's session for THIS room permanently, regardless of whether the
-        // game has even started yet (covers the edge case of leaving mid-lobby too) - a token
-        // match alone must never let them back into a seat they deliberately gave up.
-        if (p) p.leftForGood = true;
-        let converted = false;
-        if (room.started && room.engine && room.seatOwners) {
-          const seat = room.seatOwners.indexOf(playerId);
-          if (seat >= 0) {
-            const G = room.engine.getG();
-            const seatCfg = G && G.seats[seat];
-            if (seatCfg && seatCfg.type === "human") {
-              const leaverName = seatCfg.name;
-              seatCfg.type = "cpu";
-              seatCfg.diff = "medium";   // "Tricky" - see engine.js chooseAI()'s diff naming
-              room.seatOwners[seat] = null;
-              converted = true;
-              touch(room);
-              appendAction(room, { kind: "seatToCpu", seat, diff: "medium", name: leaverName });
-              // The seat may be sitting mid-turn waiting on exactly this human's move right
-              // now - drive it forward immediately instead of stalling the table until
-              // someone else's action happens to re-enter driveTurnLoop().
-              driveTurnLoop(room);
-            }
-          }
-        }
-        if (!converted) touch(room);
-        send(ws, { type: "leftForGood" });
+        const converted = leaveSeatForGoodInternal(ctx, ws);
         log("player left for good", room.code, playerId, converted ? "(seat converted to CPU)" : "(no active seat)");
+        return;
+      }
+
+      case "surrender": {
+        // v0.27: {type:'surrender'} — Blake's ask: the topbar Quit button, "Leave without
+        // saving" and "Have a computer take over my seat" (both under Pause/Save's sheet), and
+        // deleting a saved-game tile for a room you're in, ALL permanently abandon an unfinished
+        // game now and count as a loss on the leaderboard (see index.html's
+        // doSurrenderCurrentGame()/surrenderOnlineTile(), HANDOFF.md v0.27 for the full design
+        // and why those sheet buttons converge on this same message). Records exactly one
+        // hg<mode>+1 for THIS seat's stored name — no hw<mode>, no points, the same per-seat
+        // loss shape buildResultEntriesServer() already writes for a real finish, just recorded
+        // without G.over ever becoming true — then reuses the EXACT SAME conversion/lockout
+        // machinery as "leaveForGood" via leaveSeatForGoodInternal() below (this seat becomes a
+        // CPU for the rest of the game; every other player's table is completely untouched).
+        // Additive-safe by construction: old clients simply never send this message type.
+        if (!ctx) return;
+        const { room, playerId } = ctx;
+        const converted = leaveSeatForGoodInternal(ctx, ws, (G, seat) => {
+          if (G.over || G.seats[seat].type !== "human") return;   // already finished, or not actually a human seat — nothing to surrender
+          const mode = (G.n === 4 ? "4" : "6") + (G.teams ? "t" : "s");
+          const delta = {}; delta["hg" + mode] = 1;
+          applyLeaderboardEntry(G.seats[seat].name, delta);
+          log("surrender recorded", room.code, "seat=" + seat, "name=" + G.seats[seat].name, "mode=" + mode);
+        });
+        log("player surrendered", room.code, playerId, converted ? "(seat converted to CPU)" : "(no active seat)");
         return;
       }
 

@@ -922,9 +922,9 @@ button{font:inherit;cursor:pointer}
         <button class="savedTileTrash" id="savedGameTrash" type="button" aria-label="Delete saved game">🗑</button>
       </div>
       <div class="savedTileConfirm hidden" id="savedGameConfirm">
-        <div class="t1">Delete this saved game?</div>
+        <div class="t1">Surrender this game? This will count as a loss on the leaderboard.</div>
         <div class="savedTileConfirmRow">
-          <button class="btn danger" id="savedGameDelete" type="button">Delete</button>
+          <button class="btn danger" id="savedGameDelete" type="button">Surrender</button>
           <button class="btn ghost" id="savedGameCancel" type="button">Cancel</button>
         </div>
       </div>
@@ -938,9 +938,9 @@ button{font:inherit;cursor:pointer}
         <button class="savedTileTrash" id="savedGameTrash2" type="button" aria-label="Delete saved game">🗑</button>
       </div>
       <div class="savedTileConfirm hidden" id="savedGameConfirm2">
-        <div class="t1">Delete this saved game?</div>
+        <div class="t1">Surrender this game? This will count as a loss on the leaderboard.</div>
         <div class="savedTileConfirmRow">
-          <button class="btn danger" id="savedGameDelete2" type="button">Delete</button>
+          <button class="btn danger" id="savedGameDelete2" type="button">Surrender</button>
           <button class="btn ghost" id="savedGameCancel2" type="button">Cancel</button>
         </div>
       </div>
@@ -954,9 +954,9 @@ button{font:inherit;cursor:pointer}
         <button class="savedTileTrash" id="savedGameTrash3" type="button" aria-label="Delete saved game">🗑</button>
       </div>
       <div class="savedTileConfirm hidden" id="savedGameConfirm3">
-        <div class="t1">Delete this saved game?</div>
+        <div class="t1">Surrender this game? This will count as a loss on the leaderboard.</div>
         <div class="savedTileConfirmRow">
-          <button class="btn danger" id="savedGameDelete3" type="button">Delete</button>
+          <button class="btn danger" id="savedGameDelete3" type="button">Surrender</button>
           <button class="btn ghost" id="savedGameCancel3" type="button">Cancel</button>
         </div>
       </div>
@@ -980,13 +980,13 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.26</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.27</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
 <div id="game" class="hidden">
   <div id="topbar">
-    <button class="iconBtn" id="btnMenu">‹ Menu</button>
+    <button class="iconBtn" id="btnMenu">✕ Quit</button>
     <button class="iconBtn" id="btnPause">⏸ Pause/Save</button>
     <button class="iconBtn" id="btnSpeed">Speed: Normal</button>
     <button class="iconBtn" id="btnRules2">Rules</button>
@@ -1276,10 +1276,14 @@ button{font:inherit;cursor:pointer}
 </div>
 
 <!-- v0.11 item 3: leaving a game now offers BOTH explicit choices instead of one vague
-     confirm() - shared by the topbar's "‹ Menu" button and the pause overlay's "Leave game"
+     confirm() - shared by the topbar's Menu/Quit button and the pause overlay's "Leave game"
      button (see doLeaveGame() / openLeaveConfirm()). v0.16 item 2: a THIRD, online-only choice
-     - btnLeaveForGood - permanently hands your seat to a computer for the rest of THIS game
-     (see doLeaveForGood()/leaveForGood, § NET). Shown/hidden per game via openLeaveConfirm(). -->
+     - btnLeaveForGood - permanently hands your seat to a computer for the rest of THIS game.
+     v0.27: "Leave without saving" (btnLeaveDiscard) and "Have a computer take over my seat"
+     (btnLeaveForGood) BOTH now permanently end an unfinished game, so BOTH now route through the
+     surrenderConfirmOverlay warning below before doing anything (see openSurrenderConfirm()/
+     doSurrenderCurrentGame(), § MENU) - only "Save & leave" (btnLeaveSave) and Cancel remain
+     consequence-free. Shown/hidden per game via openLeaveConfirm(). -->
 <div id="leaveConfirmOverlay" class="overlay hidden">
   <div class="sign"><b>LEAVE GAME?</b></div>
   <p>Do you want to keep this game to come back to later, or leave it behind entirely?</p>
@@ -1289,6 +1293,22 @@ button{font:inherit;cursor:pointer}
     <button class="btn ghost hidden" id="btnLeaveForGood">Have a computer take over my seat</button>
     <button class="btn ghost hidden" id="btnResetConnection">Reset connection</button>
     <button class="btn ghost" id="btnLeaveCancel">Cancel</button>
+  </div>
+</div>
+
+<!-- v0.27: shared surrender-confirm overlay - reached from THREE places now: the topbar Quit
+     button (was "Menu" through v0.26), and this sheet's own "Leave without saving" and "Have a
+     computer take over my seat" buttons (see openSurrenderConfirm()/doSurrenderCurrentGame(),
+     § MENU). Permanently surrenders an unfinished game - a real loss on the leaderboard, not a
+     safe pause. "Save & leave" (above) and Cancel (here or above) are the only consequence-free
+     choices left. Cancel here leaves the game running exactly as it was, no stat write of any
+     kind, and releases a sheet-started pause if this came from the sheet. -->
+<div id="surrenderConfirmOverlay" class="overlay hidden">
+  <div class="sign"><b>SURRENDER?</b></div>
+  <p>Are you sure you want to surrender? This will count as a loss on the leaderboard.</p>
+  <div class="bigBtns">
+    <button class="btn danger" id="btnSurrenderConfirm">Surrender</button>
+    <button class="btn ghost" id="btnSurrenderCancel">Cancel</button>
   </div>
 </div>
 
@@ -1307,10 +1327,14 @@ button{font:inherit;cursor:pointer}
 <!-- v0.17: two offline save spots. Starting a new offline game when BOTH spots hold a saved
      game means one of them has to go - this modal asks which, with the same explicit warning
      style as the overwrite modal above. Picking one clears that spot and the new game saves
-     there from then on; Cancel keeps both saves untouched. -->
+     there from then on; Cancel keeps both saves untouched.
+     v0.27: giving up a slot here is a surrender of that unfinished game too, so the wording now
+     says so - see chooseReplaceSlot()/recordOfflineSurrenderLoss(), § MENU. Deliberately kept as
+     ONE dialog (not a second stacked confirm on top) - the warning is folded into this existing
+     chooser instead. -->
 <div id="slotReplaceOverlay" class="overlay hidden">
   <div class="sign"><b>REPLACE A SAVE?</b></div>
-  <p>Both save spots are full. Starting a new game will replace one of your saved games for good - pick which one to give up, or cancel to keep both.</p>
+  <p>Both save spots are full. Starting a new game means giving up one of your saved games for good - that counts as a surrender (a loss on the leaderboard) for whoever was playing it. Pick which one to give up, or cancel to keep both.</p>
   <div class="bigBtns">
     <button class="btn primary" id="btnReplaceSlot1"></button>
     <button class="btn primary" id="btnReplaceSlot2"></button>
@@ -5525,8 +5549,9 @@ function handleNetMessage(m){
       leaveOnlineToMenu(m.message||'The host removed your seat.');
       return;
     case 'leftForGood':
-      // v0.16 item 2: server-acked our own "leaveForGood" - proceed to the same clean-slate
-      // menu every other deliberate-leave path uses (see doLeaveForGood()/leaveOnlineToMenu()).
+      // v0.16 item 2: server-acked our own "leaveForGood" or (v0.27) "surrender" - both use
+      // this same ack - proceed to the same clean-slate menu every other deliberate-leave path
+      // uses (see doSurrenderCurrentGame()/leaveOnlineToMenu()).
       clearTimeout(LEAVE_FOR_GOOD_TIMER);
       leaveOnlineToMenu(null,false);
       return;
@@ -6070,6 +6095,10 @@ function chooseReplaceSlot(k){
   $('slotReplaceOverlay').classList.add('hidden');
   const action=PENDING_SLOT_ACTION; PENDING_SLOT_ACTION=null;
   if(!action)return;
+  // v0.27: giving up this slot is a surrender of whatever unfinished game was saved there -
+  // record the loss BEFORE clearing it (clearOfflineSlot wipes the data this reads).
+  const discarded=loadOfflineSlot(k);
+  if(discarded)recordOfflineSurrenderLoss(discarded.G);
   clearOfflineSlot(k);
   SAVE_SLOT=k;
   action();
@@ -6150,26 +6179,7 @@ function doLeaveGame(saveIt){
     $('game').classList.add('hidden');$('menu').classList.remove('hidden');clearToasts();updateMenuResumeButtons();
   }
 }
-// v0.16 item 2: "Leave for good" - tells the server to permanently convert THIS seat to a CPU
-// (see server.js/server.ts's "leaveForGood" case) and lands on a clean menu with no resume
-// tile for this game, same "clean slate" treatment leaveOnlineToMenu() already gives every
-// other deliberate-leave path. Waits for the server's ack ('leftForGood') so the seat
-// conversion has actually been sent before we tear down our own connection - but never hangs
-// forever on a bad connection: LEAVE_FOR_GOOD_TIMER falls back to leaving anyway after a few
-// seconds, since the amber/red connection banner already covers "why didn't this work."
-let LEAVE_FOR_GOOD_TIMER=null;
-function doLeaveForGood(){
-  $('leaveConfirmOverlay').classList.add('hidden');
-  $('pauseOverlay').classList.add('hidden');
-  if(!NET.online)return;   // safety net - the button is hidden offline anyway
-  releaseSheetPause();     // v0.25 item 4: same never-leave-it-paused rule as doLeaveGame
-  netSend({type:'leaveForGood'});
-  clearTimeout(LEAVE_FOR_GOOD_TIMER);
-  LEAVE_FOR_GOOD_TIMER=setTimeout(()=>leaveOnlineToMenu(null,false),3000);
-}
 $('btnLeaveSave').onclick=()=>doLeaveGame(true);
-$('btnLeaveDiscard').onclick=()=>doLeaveGame(false);
-$('btnLeaveForGood').onclick=doLeaveForGood;
 $('btnResetConnection').onclick=()=>{
   $('leaveConfirmOverlay').classList.add('hidden');
   $('pauseOverlay').classList.add('hidden');
@@ -6180,10 +6190,69 @@ $('btnLeaveCancel').onclick=()=>{
   $('leaveConfirmOverlay').classList.add('hidden');
   releaseSheetPause();   // v0.25 item 4: cancelling the sheet resumes a pause the sheet started
 };
-// v0.25 item 9: the topbar Menu button is an INSTANT save + straight to the menu - no dialog
-// of any kind. Every exit preserves the game (the v0.10.3 rule): online keeps the room and
-// its resume tile, offline saves to its slot. All choice dialogs live under Pause/Save now.
-$('btnMenu').onclick=()=>{ if(G)doLeaveGame(true); };
+/* v0.27 § SURRENDER - Blake's original ask (replace the topbar Menu button with a Quit button
+   that warns before ending an unfinished game), extended by a follow-up scope correction to
+   cover every action that PERMANENTLY ends an unfinished game: the topbar Quit button, "Leave
+   without saving" AND "Have a computer take over my seat" (both under Pause/Save's
+   leaveConfirmOverlay sheet), the saved-tile trash delete, and the slotReplaceOverlay discard
+   (the last two handled separately - see deleteSavedTile()/chooseReplaceSlot(), § MENU). ONLY
+   "Save & leave" and Cancel stay completely consequence-free - "Save & leave" (btnLeaveSave,
+   unchanged above) remains the one truly safe way to step away and come back later.
+   All three of Quit / "Leave without saving" / "Have a computer take over" now open the SAME
+   surrenderConfirmOverlay and, once confirmed, run the SAME doSurrenderCurrentGame() below -
+   reusing one implementation rather than three. This isn't a stretch: offline, "Leave without
+   saving" already meant "discard this game" - exactly what a surrender is now, once a loss is
+   recorded first. Online, "Have a computer take over" already meant "hand my seat to a CPU" -
+   exactly what a surrender does server-side, once the loss is recorded first (see server.js/
+   server.ts's "surrender" case). And "Leave without saving" online now gets that identical
+   treatment too, since it's just as much a permanent abandon as the other two. The win screen's
+   own btnWinMenu is a separate, unaffected button - a finished game has already been recorded
+   by recordWin(), there's nothing left to surrender. */
+function openSurrenderConfirm(){
+  if(!G||G.over)return;
+  $('leaveConfirmOverlay').classList.add('hidden');   // defensive: hide the sheet if this came from it
+  $('surrenderConfirmOverlay').classList.remove('hidden');
+}
+$('btnMenu').onclick=()=>openSurrenderConfirm();
+$('btnLeaveDiscard').onclick=()=>openSurrenderConfirm();
+$('btnLeaveForGood').onclick=()=>openSurrenderConfirm();
+$('btnSurrenderCancel').onclick=()=>{
+  // Cancel leaves everything exactly as it was - game keeps running, no stat write. Releases a
+  // pause the Pause/Save sheet started, if this confirm was reached from there (harmless no-op
+  // for the topbar Quit path, which never pauses) - same never-leave-it-paused rule as
+  // btnLeaveCancel above.
+  $('surrenderConfirmOverlay').classList.add('hidden');
+  releaseSheetPause();
+};
+/* Confirmed surrender - permanently abandons the CURRENT unfinished game and records a loss.
+   Offline (solo or local pass-and-play): every human seat at this device gets its own
+   hg<mode>+1 via recordOfflineSurrenderLoss() (no hw, no points), then the same discard-without-
+   saving cleanup "Leave without saving" always did. Online: only THIS device's own seat
+   surrenders - {type:'surrender'} tells the server to record the loss for just this player's
+   stored name and hand the seat to a CPU (the exact machinery "leaveForGood" always used - see
+   server.js/server.ts's "surrender" case), while every other player's table continues
+   untouched. Same ack-wait/timeout shape the old dedicated "leave for good" handler used -
+   reuses the 'leftForGood' ack and LEAVE_FOR_GOOD_TIMER fallback, no new waiting logic needed. */
+let LEAVE_FOR_GOOD_TIMER=null;
+function doSurrenderCurrentGame(){
+  $('surrenderConfirmOverlay').classList.add('hidden');
+  $('pauseOverlay').classList.add('hidden');
+  releaseSheetPause();   // in case this came from a sheet-initiated pause
+  if(!G||G.over)return;
+  if(NET.online){
+    netSend({type:'surrender'});
+    clearTimeout(LEAVE_FOR_GOOD_TIMER);
+    LEAVE_FOR_GOOD_TIMER=setTimeout(()=>leaveOnlineToMenu(null,false),3000);
+  }else{
+    recordOfflineSurrenderLoss(G);
+    NETGEN++;   // same stale-chain fix as doLeaveGame()'s offline branch, § v0.26
+    clearOfflineSave();
+    G=null;
+    SAVE_SLOT=null;
+    $('game').classList.add('hidden');$('menu').classList.remove('hidden');clearToasts();updateMenuResumeButtons();
+  }
+}
+$('btnSurrenderConfirm').onclick=()=>doSurrenderCurrentGame();
 $('btnOnlineRulesOk').onclick=()=>{
   $('onlineRulesOverlay').classList.add('hidden');
   maybeSendSeated();   // v0.22 P0b: if the board is up behind this popup, we're seated now
@@ -6346,6 +6415,41 @@ function recordWin(){
   });
   localStorage.setItem('nasty-stats',JSON.stringify(st));
   submitOrQueueSoloResult(G.gameId,entries,getKnownLocalEpoch());   // v0.13: also sync this offline result to the shared global board
+}
+/* v0.27 § SURRENDER (offline half) - Blake's ask: the topbar Quit button, deleting a saved-game
+   tile, and giving up a slot in the slotReplaceOverlay chooser all PERMANENTLY end an unfinished
+   game, and that now counts as a loss on the leaderboard - same stat shape a normal completed
+   loss already has (hg<mode>+1, no hw<mode>, no points), just recorded without G.over ever
+   becoming true. This is the ONE shared function for every OFFLINE surrender entry point (a live
+   game via doSurrenderCurrentGame(), an offline saved tile's trash-delete via deleteSavedTile(),
+   and a discarded slot via chooseReplaceSlot()) - it takes a plain game object (either the LIVE
+   G or a saved slot's {G,ts}.G snapshot, both the same shape) rather than reading the global G,
+   so it works identically whether or not that game is the one currently on screen. ONLINE
+   surrender is a completely different path (server-authoritative, see § NET's
+   doSurrenderCurrentGame()/surrenderOnlineTile() and the server's "surrender" case) - this
+   function is never called for an online game.
+   Charges EVERY human seat (pass-and-play may have more than one human at one device) - each
+   gets their own hg<mode>+1, matching buildResultEntries()'s existing per-seat shape exactly. A
+   game that's already G.over is a real finish with its own recordWin() path, not a surrender -
+   skipped here on purpose (should never actually be reachable, since every call site already
+   gates on !over, but a defensive no-op costs nothing). */
+function recordOfflineSurrenderLoss(g){
+  if(!g||g.over)return;
+  const mode=(g.n===4?'4':'6')+(g.teams?'t':'s');
+  const entries=[];
+  g.seats.forEach(seat=>{
+    if(seat.type!=='human')return;
+    const delta={}; delta['hg'+mode]=1;
+    entries.push({name:seat.name,delta});
+  });
+  if(!entries.length)return;   // an all-CPU save (shouldn't exist, but matches recordWin's own guard)
+  const st=loadStats();
+  entries.forEach(({name,delta})=>{
+    const r=st[name]=st[name]||{};
+    for(const k of Object.keys(delta))r[k]=(r[k]||0)+delta[k];
+  });
+  localStorage.setItem('nasty-stats',JSON.stringify(st));
+  submitOrQueueSoloResult(g.gameId,entries,getKnownLocalEpoch());
 }
 function wsToHttp(u){ return u.replace(/^wss:/,'https:').replace(/^ws:/,'http:'); }
 /* ---- v0.13 § LEADERBOARD EPOCH ----
@@ -6678,17 +6782,57 @@ function hideDeleteConfirm(){
   });
   CONFIRM_DELETE_IDX=null;
 }
+// v0.27: deleting ANY saved-game tile abandons an unfinished game for good - the confirm panel's
+// wording now says so (see the .savedTileConfirm markup, § MENU), and confirming records the
+// loss here, same as the topbar Quit button and the slot-replace chooser.
 function deleteSavedTile(i){
   const e=SAVED_GAMES[i];
   if(!e)return;
   if(e.kind==='offline'){
+    recordOfflineSurrenderLoss(e.data.G);   // the saved slot's own game snapshot, not the live G
     clearOfflineSlot(e.slot);   // localStorage + IndexedDB mirror, shared with the slot-replace chooser
     if(SAVE_SLOT===e.slot)SAVE_SLOT=null;
   }else{
+    surrenderOnlineTile(e.last.code);   // best-effort: tell the server so it can record the loss + hand the seat to a CPU
     clearLastRoom();
     try{localStorage.removeItem('nasty-net-'+e.last.code);}catch(err){}
   }
   updateMenuResumeButtons();
+}
+/* v0.27: deleting a REMEMBERED ONLINE tile is a surrender too, but this device isn't currently
+   connected to that room (it's sitting on the menu) - there's no live NET connection to send
+   {type:'surrender'} over. Opens a short-lived, ISOLATED websocket (deliberately never touches
+   the shared NET object or any UI - no board render, no lobby flash, nothing visible) using the
+   same stored per-room session (nasty-net-<code>) a normal reconnect would use, identifies via
+   the existing 'rejoin' handshake, then sends 'surrender' the moment the server answers with
+   either a live snapshot or a lobby state. The server's "surrender" case records the loss and
+   hands the seat to a CPU (same machinery as "leaveForGood") whether the game already started
+   or is still in its lobby - see server.js/server.ts. Fire-and-forget from the tile's point of
+   view (the local tile is already gone from this device's own display regardless - the whole
+   point is telling the SERVER, which is the actual source of truth for an online game); a short
+   timeout guarantees this can never leave a stray open socket behind. */
+function surrenderOnlineTile(code){
+  const session=loadNetSession(code);
+  if(!session)return;   // no stored session - nothing to identify this seat with, can't be attributed
+  resolveWsUrl().then(url=>{
+    let done=false;
+    const ws=new WebSocket(url);
+    const finish=()=>{ if(done)return; done=true; try{ws.close();}catch(e){} };
+    const timer=setTimeout(finish,4000);
+    ws.onopen=()=>{
+      ws.send(JSON.stringify({type:'rejoin',code,playerId:session.playerId,token:session.token,protocolVersion:PROTOCOL_VERSION}));
+    };
+    ws.onmessage=e=>{
+      let m; try{m=JSON.parse(e.data);}catch(err){return;}
+      if(m.type==='sync'||m.type==='lobby'){
+        ws.send(JSON.stringify({type:'surrender'}));
+      }else if(m.type==='leftForGood'||m.type==='rejoinError'){
+        clearTimeout(timer); finish();
+      }
+    };
+    ws.onerror=()=>{ clearTimeout(timer); finish(); };
+    ws.onclose=()=>{ clearTimeout(timer); };
+  }).catch(()=>{});
 }
 // Tapping anywhere outside the currently-confirming tile (another tile, or blank menu space)
 // restores it to normal - a capture-phase listener so it runs BEFORE the click's own target

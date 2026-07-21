@@ -145,8 +145,22 @@ async function assertCleanMenu(page, label) {
   check(state.toastsChildCount === 0, `${label}: #toasts is completely empty (found ${state.toastsChildCount}: "${state.toastsText}")`);
   return state.toastsChildCount === 0 && !state.menuHidden && state.gameHidden;
 }
+// v0.27: the topbar button (was "Menu" through v0.26) now SURRENDERS the game once confirmed -
+// a one-time, room-PERMANENT action (the seat converts to a CPU and its playerId is locked out
+// of that room for good), which would break this suite's whole premise of looping leave/rejoin
+// against the SAME persistent room 130 times (the second rep's rejoin would fail forever).
+// This soak's actual subject is the NETGEN-bump-on-leave fix inside leaveOnlineToMenu()/
+// doLeaveGame() (see HANDOFF.md v0.26) - reachable via ANY deliberate-leave path, not
+// specifically the topbar button - so it now drives the still-consequence-free "Pause/Save ->
+// Save & leave" path instead (doLeaveGame(true) -> leaveOnlineToMenu(null,true), the exact same
+// NETGEN bump and #toasts-clearing transition under test), which keeps the room resumable
+// indefinitely. The dedicated surrender confirm/cancel/record behavior itself is covered by
+// server/tests/test_surrender.js, not this file.
 async function tapMenu(page) {
-  await page.evaluate(() => { const b = document.getElementById("btnMenu"); if (b) b.click(); });
+  await page.evaluate(() => {
+    const p = document.getElementById("btnPause"); if (p) p.click();
+    const s = document.getElementById("btnLeaveSave"); if (s) s.click();
+  });
 }
 async function rejoinSavedGame(page) {
   await page.evaluate(() => { const b = document.getElementById("savedGameMain"); if (b) b.click(); });
@@ -238,16 +252,20 @@ async function main() {
 
   // ===========================================================================================
   // Scenario C: away-ladder message race - a synthetic 'awayStatus' dispatched through the REAL
-  // window.handleNetMessage entry point in the same synchronous tick right after a real Menu
+  // window.handleNetMessage entry point in the same synchronous tick right after a real leave
   // tap completes, reproducing "a message already in flight, delivered a beat after the leave"
   // per actual browser task-queue ordering (the click handler always runs to completion first).
   // ===========================================================================================
   const N_C = 40;
-  log(`--- Scenario C: ${N_C} reps racing a synthetic awayStatus message against the Menu tap ---`);
+  log(`--- Scenario C: ${N_C} reps racing a synthetic awayStatus message against the leave tap ---`);
   for (let i = 0; i < N_C; i++) {
     await sleep(rnd(30, 300));
     await page.evaluate(() => {
-      document.getElementById("btnMenu").click();   // runs doLeaveGame()->leaveOnlineToMenu() to completion, synchronously
+      // v0.27: Pause/Save -> Save & leave (see tapMenu()'s own comment above for why this suite
+      // no longer uses the now-surrendering topbar button) - still runs
+      // doLeaveGame()->leaveOnlineToMenu() to completion, synchronously, same as before.
+      const p = document.getElementById("btnPause"); if (p) p.click();
+      document.getElementById("btnLeaveSave").click();
       window.handleNetMessage({ type: "awayStatus", stage: Math.random() < 0.5 ? "nudged" : "cpuOffer", seat: 1, name: "CPU1" });
     });
     await sleep(rnd(150, 300));

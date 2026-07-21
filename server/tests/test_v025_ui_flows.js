@@ -14,18 +14,22 @@
  *     and lights up the host's Start button (item 1).
  *  B. Host picks a table speed via the real speed-picker UI before the room exists; a guest who
  *     never touches a speed control joins already running at the host's chosen pace (item 2).
- *  C. Blake's exact regression: two humans quit, one relaunches (fresh page, same profile) to
- *     the MENU (not auto-rejoined), taps the saved-game tile, gets the rejoin lobby since the
- *     other human isn't back, converts them to a CPU via the Easy/Tricky/Nasty picker, resumes,
- *     and plays on solo (items 6+7).
+ *  C. Blake's exact regression: two humans quit (via Pause/Save's "Save & leave" - still the
+ *     one consequence-free way to step away, see v0.27's Scenario G below for the topbar button
+ *     itself), one relaunches (fresh page, same profile) to the MENU (not auto-rejoined), taps
+ *     the saved-game tile, gets the rejoin lobby since the other human isn't back, converts them
+ *     to a CPU via the Easy/Tricky/Nasty picker, resumes, and plays on solo (items 6+7).
  *  D. Counterpart: if the other human never actually left (still connected), tapping the tile
  *     goes STRAIGHT to the live board - no rejoin lobby ever appears (items 6+7).
  *  E. Pause/Save opens the single-screen options sheet directly (no separate PAUSED screen
  *     first) with the exact "Have a computer take over my seat" wording (items 4+9).
  *  F. A disconnected player's name renders red (not just dimmed) and the online rules text
  *     explains it in plain language (item 5).
- *  G. The topbar Menu button is instant - no confirmation dialog of any kind ever appears
- *     (item 9).
+ *  G. v0.27: the topbar button (Quit, was "Menu" through v0.26) asks for confirmation before
+ *     surrendering an unfinished game; Cancel resumes with zero changes, confirming lands on the
+ *     menu. (Deeper surrender/loss-recording coverage lives in test_surrender.js - this scenario
+ *     just proves the topbar button's own dialog behavior, kept here since it replaces the old
+ *     "instant, no dialog" item 9 assertion this file used to make.)
  */
 const { chromium } = require("/Users/jarvis/clawd/node_modules/playwright");
 const { spawn } = require("child_process");
@@ -323,10 +327,14 @@ async function main() {
     await driveSeveralTurns(host, 0, 1500);
     await driveSeveralTurns(guest, 1, 1500);
 
-    // BOTH humans quit: an instant Menu tap (item 9 - saves + leaves, no dialog), then the app
-    // itself is killed (the page closes) - the honest shape of "quit the app," not just backgrounding.
-    await host.evaluate(() => document.getElementById("btnMenu").click());
-    await guest.evaluate(() => document.getElementById("btnMenu").click());
+    // BOTH humans quit: Pause/Save -> "Save & leave" (still the one consequence-free way to step
+    // away and keep the game resumable - v0.27 turned the topbar button itself into a surrender,
+    // which would permanently convert these seats to CPUs and defeat this whole scenario's
+    // premise of coming BACK to the same room - see Scenario G below for that button's own
+    // coverage), then the app itself is killed (the page closes) - the honest shape of "quit the
+    // app," not just backgrounding.
+    await host.evaluate(() => { document.getElementById("btnPause").click(); document.getElementById("btnLeaveSave").click(); });
+    await guest.evaluate(() => { document.getElementById("btnPause").click(); document.getElementById("btnLeaveSave").click(); });
     await host.close(); await guest.close();
 
     // ONE relaunches: a fresh page in the SAME browser context (localStorage/IndexedDB survive
@@ -429,9 +437,11 @@ async function main() {
     await host.evaluate(() => window.netSend({ type: "start", protocolVersion: PROTOCOL_VERSION, willSeat: true }));
     await Promise.all([host, guest].map((p) => p.waitForFunction(() => window.G != null, { timeout: 10000 })));
 
-    // Only the HOST quits. Guest1's page stays open and connected the entire time - the
-    // "everyone else is already back" shape (they never left in the first place).
-    await host.evaluate(() => document.getElementById("btnMenu").click());
+    // Only the HOST quits - via Pause/Save -> "Save & leave" (see Scenario C's comment above for
+    // why this suite no longer uses the now-surrendering topbar button). Guest1's page stays
+    // open and connected the entire time - the "everyone else is already back" shape (they never
+    // left in the first place).
+    await host.evaluate(() => { document.getElementById("btnPause").click(); document.getElementById("btnLeaveSave").click(); });
     await host.close();
     await sleep(500); // let the server's presence broadcast for the host's disconnect land
 
@@ -544,9 +554,13 @@ async function main() {
   }
 
   /* ===================================================================================
-   * Scenario G: the topbar Menu button is instant - no confirmation dialog ever appears.
+   * Scenario G (v0.27): the topbar button (Quit, was "Menu" through v0.26) asks for
+   * confirmation before surrendering - Cancel resumes with zero changes, confirming lands on
+   * the menu. Deeper loss-recording/offline/pass-and-play/trash-delete/slot-replace coverage
+   * lives in test_surrender.js; this scenario only proves the topbar button's own dialog shape,
+   * replacing this file's old v0.25 "instant, no dialog" assertion for item 9.
    * =================================================================================== */
-  log("--- Scenario G: instant Menu button, no dialog ---");
+  log("--- Scenario G: topbar Quit button shows a surrender confirm, Cancel is a no-op ---");
   {
     const ctx = await browser.newContext({ reducedMotion: "reduce" });
     const page = await newPage(ctx, PORT);
@@ -560,15 +574,36 @@ async function main() {
     await page.waitForFunction(() => window.G != null, { timeout: 10000 });
 
     await page.evaluate(() => document.getElementById("btnMenu").click());
-    const result = await page.evaluate(() => ({
+    const afterTap = await page.evaluate(() => ({
+      surrenderHidden: document.getElementById("surrenderConfirmOverlay").classList.contains("hidden"),
       leaveConfirmHidden: document.getElementById("leaveConfirmOverlay").classList.contains("hidden"),
       pauseHidden: document.getElementById("pauseOverlay").classList.contains("hidden"),
       menuHidden: document.getElementById("menu").classList.contains("hidden"),
       gameHidden: document.getElementById("game").classList.contains("hidden"),
     }));
-    check(result.leaveConfirmHidden && result.pauseHidden, "G: no dialog of any kind appeared after tapping Menu");
-    check(!result.menuHidden && result.gameHidden, "G: Menu landed straight on the menu screen, instantly");
-    check(!(page.__errors || []).length, "G: zero page errors on the instant Menu path");
+    check(!afterTap.surrenderHidden, "G: tapping Quit shows the surrender confirm overlay");
+    check(afterTap.leaveConfirmHidden && afterTap.pauseHidden, "G: the OTHER sheet/pause overlays stay hidden - this is a separate dialog");
+    check(afterTap.menuHidden && !afterTap.gameHidden, "G: the game is still showing - Quit alone does NOT leave until confirmed");
+
+    // Cancel: everything stays exactly as it was.
+    await page.evaluate(() => document.getElementById("btnSurrenderCancel").click());
+    const afterCancel = await page.evaluate(() => ({
+      surrenderHidden: document.getElementById("surrenderConfirmOverlay").classList.contains("hidden"),
+      gameHidden: document.getElementById("game").classList.contains("hidden"),
+      gOver: window.G ? window.G.over : "no-G",
+    }));
+    check(afterCancel.surrenderHidden, "G: Cancel closes the surrender confirm");
+    check(!afterCancel.gameHidden && afterCancel.gOver === false, "G: Cancel leaves the game running, untouched");
+
+    // Confirm: lands on the menu (the full loss-recording assertions live in test_surrender.js).
+    await page.evaluate(() => { document.getElementById("btnMenu").click(); document.getElementById("btnSurrenderConfirm").click(); });
+    await page.waitForFunction(() => !document.getElementById("menu").classList.contains("hidden"), { timeout: 5000 });
+    const afterConfirm = await page.evaluate(() => ({
+      menuHidden: document.getElementById("menu").classList.contains("hidden"),
+      gameHidden: document.getElementById("game").classList.contains("hidden"),
+    }));
+    check(!afterConfirm.menuHidden && afterConfirm.gameHidden, "G: confirming the surrender lands on the menu");
+    check(!(page.__errors || []).length, "G: zero page errors on the Quit/surrender path");
 
     await ctx.close();
   }

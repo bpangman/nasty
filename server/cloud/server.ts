@@ -624,6 +624,54 @@ async function recordFinishedGame(code: string, G: any) {
     entries.map((e) => e.name).join(",") || "(no human seats)");
 }
 
+/* v0.27 § SURRENDER — twin of server.js's leaveSeatForGoodInternal(): shared by the
+   "leaveForGood" and "surrender" cases below. The seat-conversion + permanent-lockout mechanics
+   are IDENTICAL either way — "surrender" only adds a loss record, via the optional
+   beforeConvert callback (evaluated on the PRE-conversion state, inside the same withRoomChain
+   read, before the seat flips to a CPU) — extracted so the two cases can never drift apart. */
+async function leaveSeatForGoodInternal(
+  code: string, playerId: number, socket: WebSocket,
+  beforeConvert?: (G: any, seat: number) => Promise<void> | void,
+): Promise<boolean> {
+  let converted = false;
+  await withRoomChain(code, async () => {
+    const pre = await kv.get<RoomMeta>(roomKey(code));
+    if (!pre.value) { send(socket, { type: "leftForGood" }); return; }
+    const meta = pre.value;
+    let seat = -1;
+    if (meta.started && meta.seatOwners) seat = meta.seatOwners.indexOf(playerId);
+    const E = seat >= 0 ? getEngine(code, meta) : null;
+    const G = E ? E.getG() : null;
+    if (beforeConvert && G && seat >= 0 && G.seats[seat]) await beforeConvert(G, seat);
+    if (E && G && seat >= 0 && G.seats[seat] && G.seats[seat].type === "human") {
+      const leaverName = G.seats[seat].name;
+      G.seats[seat].type = "cpu";
+      G.seats[seat].diff = "medium";   // "Tricky" - see engine.js chooseAI()'s diff naming
+      converted = true;
+      const out: Broadcastable[] = [{ payload: { type: "gameAction", seq: meta.nextSeq++, action: { kind: "seatToCpu", seat, diff: "medium", name: leaverName } } }];
+      // The seat may be sitting mid-turn waiting on exactly this human's move right now - drive
+      // it forward immediately instead of stalling the table.
+      const cont = driveTurnLoopCollect(E, meta);
+      const ok = await commitAndBroadcast(code, E, out.concat(cont.out), cont.finished);
+      if (ok) maybeSendTurnPush(code, E, cont.finished).catch((e) => log("push check failed", code, (e as Error).message));
+    } else {
+      seat = -1; // nothing converted - don't touch seatOwners below
+    }
+    // Invalidate this player's session for THIS room permanently (covers leaving mid-lobby too,
+    // before any seat/engine exists) and null out the seatOwners slot if converted - done in a
+    // follow-up commit so it lands even when commitAndBroadcast above already persisted a fresh
+    // meta.G that this read predates.
+    await touchRoom(code, (m) => {
+      const p = m.players.find((pp) => pp.id === playerId);
+      if (p) p.leftForGood = true;
+      if (seat >= 0 && m.seatOwners) m.seatOwners[seat] = null;
+      return {};
+    });
+    send(socket, { type: "leftForGood" });
+  });
+  return converted;
+}
+
 type Broadcastable = { payload: unknown };
 /* The authoritative loop itself — mirrors server.js's driveTurnLoop() logic EXACTLY (compare
    the two side by side when changing either; the game-flow decisions must never drift). Runs
@@ -1684,42 +1732,33 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         // staying human/connected past this point).
         if (!ctx) return;
         const { code, playerId } = ctx;
-        await withRoomChain(code, async () => {
-          const pre = await kv.get<RoomMeta>(roomKey(code));
-          if (!pre.value) { send(socket, { type: "leftForGood" }); return; }
-          const meta = pre.value;
-          let seat = -1;
-          if (meta.started && meta.seatOwners) seat = meta.seatOwners.indexOf(playerId);
-          const E = seat >= 0 ? getEngine(code, meta) : null;
-          const G = E ? E.getG() : null;
-          let converted = false;
-          if (E && G && seat >= 0 && G.seats[seat] && G.seats[seat].type === "human") {
-            const leaverName = G.seats[seat].name;
-            G.seats[seat].type = "cpu";
-            G.seats[seat].diff = "medium";   // "Tricky" - see engine.js chooseAI()'s diff naming
-            converted = true;
-            const out: Broadcastable[] = [{ payload: { type: "gameAction", seq: meta.nextSeq++, action: { kind: "seatToCpu", seat, diff: "medium", name: leaverName } } }];
-            // The seat may be sitting mid-turn waiting on exactly this human's move right now -
-            // drive it forward immediately instead of stalling the table.
-            const cont = driveTurnLoopCollect(E, meta);
-            const ok = await commitAndBroadcast(code, E, out.concat(cont.out), cont.finished);
-            if (ok) maybeSendTurnPush(code, E, cont.finished).catch((e) => log("push check failed", code, (e as Error).message));
-          } else {
-            seat = -1; // nothing converted - don't touch seatOwners below
-          }
-          // Invalidate this player's session for THIS room permanently (covers leaving mid-lobby
-          // too, before any seat/engine exists) and null out the seatOwners slot if converted -
-          // done in a follow-up commit so it lands even when commitAndBroadcast above already
-          // persisted a fresh meta.G that this read predates.
-          await touchRoom(code, (m) => {
-            const p = m.players.find((pp) => pp.id === playerId);
-            if (p) p.leftForGood = true;
-            if (seat >= 0 && m.seatOwners) m.seatOwners[seat] = null;
-            return {};
-          });
-          send(socket, { type: "leftForGood" });
-          log("player left for good", code, playerId, converted ? "(seat converted to CPU)" : "(no active seat)");
+        const converted = await leaveSeatForGoodInternal(code, playerId, socket);
+        log("player left for good", code, playerId, converted ? "(seat converted to CPU)" : "(no active seat)");
+        return;
+      }
+
+      case "surrender": {
+        // v0.27: {type:'surrender'} — twin of server.js's case. Blake's ask: the topbar Quit
+        // button, "Leave without saving" and "Have a computer take over my seat" (both under
+        // Pause/Save's sheet), and deleting a saved-game tile for a room you're in, ALL
+        // permanently abandon an unfinished game now and count as a loss on the leaderboard (see
+        // index.html's doSurrenderCurrentGame()/surrenderOnlineTile(), HANDOFF.md v0.27 for the
+        // full design). Records exactly one hg<mode>+1 for THIS seat's stored name — no
+        // hw<mode>, no points, the same per-seat loss shape buildResultEntriesServer() already
+        // writes for a real finish, just recorded without G.over ever becoming true — then
+        // reuses the EXACT SAME conversion/lockout machinery as "leaveForGood" via
+        // leaveSeatForGoodInternal() above. Additive-safe by construction: old clients simply
+        // never send this message type.
+        if (!ctx) return;
+        const { code, playerId } = ctx;
+        const converted = await leaveSeatForGoodInternal(code, playerId, socket, async (G, seat) => {
+          if (G.over || G.seats[seat].type !== "human") return;   // already finished, or not actually a human seat — nothing to surrender
+          const mode = (G.n === 4 ? "4" : "6") + (G.teams ? "t" : "s");
+          const delta: Record<string, number> = {}; delta["hg" + mode] = 1;
+          await applyLeaderboardEntry(G.seats[seat].name, delta);
+          log("surrender recorded", code, "seat=" + seat, "name=" + G.seats[seat].name, "mode=" + mode);
         });
+        log("player surrendered", code, playerId, converted ? "(seat converted to CPU)" : "(no active seat)");
         return;
       }
 
