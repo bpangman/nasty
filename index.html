@@ -4346,8 +4346,9 @@ const NET={
   recalStartedAt:null,     // Date.now() of the FIRST attempt in the current streak - anchors
                            // the failure window (RECAL_FAIL_MS) without resetting on every
                            // additional foreground/reopen event while already recalibrating.
-  recalFailed:false,       // true once RECAL_FAIL_MS has elapsed with no fresh snapshot yet -
-                           // shows the "couldn't restore the connection" message + tap-to-reset.
+  recalFailed:false,       // v0.25 item 8: no longer drives any UI (the failure copy is gone -
+                           // Recalibrating is the only in-game state); kept as an inert field
+                           // so older test tooling reading it sees a stable false.
   seatedSent:false,        // v0.22 P0b: this game-boot has told the server "my board is
                            // actually on screen, no overlays in the way" - see
                            // maybeSendSeated(); reset by both boot functions.
@@ -4539,16 +4540,16 @@ function updateConnIndicator(){
   // no-op tap: even mid-"Recalibrating..." it's a legitimate way to force a fresh attempt.
   el.classList.add('tappable');
   el.onclick=()=>hardResetConnection();
-  if(NET.recalFailed){
-    el.textContent="Couldn't restore the connection. Tap here to try again, or close and reopen the app if that doesn't help.";
-    el.classList.add('connLost'); el.classList.remove('reconnecting');
-  }else if(NET.recalActive&&NET.recalKind==='recalibrating'){
-    el.textContent='Recalibrating...';
-    el.classList.add('reconnecting'); el.classList.remove('connLost');
-  }else{
-    el.textContent='Reconnecting...';
-    el.classList.add('reconnecting'); el.classList.remove('connLost');
-  }
+  // v0.25 item 8 (Blake): during a live game the ONLY user-facing state is "Recalibrating...".
+  // The v0.20 "Couldn't restore the connection..." failure copy is GONE - retries, including
+  // automatic hard resets (see armRecalWatchdog()), just keep going under the hood for as
+  // long as it takes, and the manual reset stays reachable (this chip, or the Pause/Save
+  // sheet's Reset connection). If the server is truly unreachable for a long stretch,
+  // Recalibrating simply persists; the player can always leave via Menu. A pre-game lobby
+  // still says "Reconnecting..." - there's no board to recalibrate there, and that word was
+  // never the scary one.
+  el.textContent=(G&&!G.over)?'Recalibrating...':'Reconnecting...';
+  el.classList.add('reconnecting'); el.classList.remove('connLost');
   positionConnIndicator();
 }
 /* v0.16: centers #connIndicator in the real, MEASURED gap between the bottom of #gameLogo and
@@ -4700,12 +4701,16 @@ function endRecalibration(){
 function armRecalWatchdog(){
   const startedAt=NET.recalStartedAt;
   setTimeout(()=>{
-    // Only flips to "failed" if THIS SAME attempt (same startedAt stamp) is still unresolved -
-    // a newer streak that already reset the clock (or a success that cleared it to null) means
-    // this particular watchdog's job is done, one way or another.
+    // Only acts if THIS SAME attempt (same startedAt stamp) is still unresolved - a newer
+    // streak that already reset the clock (or a success that cleared it to null) means this
+    // particular watchdog's job is done, one way or another.
+    // v0.25 item 8: no more failure copy - past the window this forces an automatic hard
+    // reset (fresh socket, fresh clock, this watchdog re-armed by the new attempt) and the
+    // chip just keeps saying "Recalibrating...". A genuinely unreachable server cycles
+    // quietly until it comes back or the player leaves via Menu. RESYNC_ACK_MS (2s) usually
+    // beats this for the zombie-socket shape; this is the belt-and-suspenders layer.
     if(NET.recalActive&&NET.recalStartedAt===startedAt&&Date.now()-startedAt>=RECAL_FAIL_MS){
-      NET.recalFailed=true;
-      updateConnIndicator();
+      hardResetConnection();
     }
   },RECAL_FAIL_MS+50);
 }
