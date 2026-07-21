@@ -27,3 +27,4 @@ server/apns-key.p8
 server/apns-key-id.txt
 server/ci-keychain-pass.txt
 server/ci-dist-key.pem
+.beta_watch_done

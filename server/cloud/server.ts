@@ -1292,13 +1292,17 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         })) : [];
         const firstHuman = seats.findIndex((s) => s.type === "human");
         if (firstHuman >= 0) { seats[firstHuman].claimedBy = playerId; seats[firstHuman].name = hostName; }
+        // v0.25 item 2: the host's chosen table speed seeds tableSpeed at creation - twin of
+        // server.js's validation (the v0.19-flagged "never seeded" gap).
+        const hostSpeed = Number(msg.speed);
+        const seededSpeed = Number.isFinite(hostSpeed) && hostSpeed > 0 && hostSpeed <= 4 ? hostSpeed : 1;
         const meta: RoomMeta = {
           code, createdAt: Date.now(), lastActivity: Date.now(),
           hostPlayerId: playerId, nextPlayerId: 2,
           players: [{ id: playerId, token, name: hostName, isHost: true, connected: true }],
           lobby: { n: msg.n === 6 ? 6 : 4, teams: !!msg.teams, seats },
           started: false, seatOwners: null, readyCheck: null, paused: false, logCount: 0,
-          G: null, tableSpeed: 1, recorded: false, nextSeq: 0,
+          G: null, tableSpeed: seededSpeed, recorded: false, nextSeq: 0,
         };
         await kv.set(roomKey(code), meta, { expireIn: ROOM_TTL_MS });
         identify(code, playerId);

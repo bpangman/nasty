@@ -1300,6 +1300,12 @@ wss.on("connection", (ws, req) => {
         const firstHuman = seats.findIndex(s => s.type === "human");
         if (firstHuman >= 0) { seats[firstHuman].claimedBy = playerId; seats[firstHuman].name = room.players.get(playerId).name; }
         room.lobby = { n: msg.n === 6 ? 6 : 4, teams: !!msg.teams, seats };
+        // v0.25 item 2: the host's chosen table speed seeds room.tableSpeed at creation (the
+        // v0.19-flagged gap - it used to always start at the 1.0 default until the host found
+        // the in-game Speed button). Validated against the client's real SPEED_OPTS range;
+        // anything missing/odd just keeps the old default.
+        const hostSpeed = Number(msg.speed);
+        if (Number.isFinite(hostSpeed) && hostSpeed > 0 && hostSpeed <= 4) room.tableSpeed = hostSpeed;
         identify(room, playerId);
         touch(room);
         send(ws, { type: "created", code, playerId, token, lobby: lobbySnapshot(room), protocolVersion: PROTOCOL_VERSION });

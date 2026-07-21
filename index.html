@@ -1203,6 +1203,20 @@ button{font:inherit;cursor:pointer}
   </div>
 </div>
 
+<!-- v0.25 item 2: the host picks the TABLE speed before the room (and the invite) even
+     exists - this seeds the server's shared tableSpeed, closing the v0.19-flagged gap where
+     an online table always started at the server default no matter what the host wanted.
+     Defaults to the host's own speed choice; the in-game Speed button still changes it live
+     (host-only), exactly as before. -->
+<div id="hostSpeedOverlay" class="overlay hidden">
+  <div class="modalCard">
+    <h3>How fast should the table play?</h3>
+    <p>This sets the game speed for everyone at your table. You can change it anytime during the game with the Speed button.</p>
+    <div class="bigBtns" id="hostSpeedBtns"></div>
+    <div class="bigBtns"><button class="btn ghost" id="btnHostSpeedCancel">Cancel</button></div>
+  </div>
+</div>
+
 <!-- § REUNION (v0.9 refinement) - shown only to whoever tapped "Resume Saved Game" on an
      online room, so a comeback game doesn't just drop one lone player onto a moving board.
      See HANDOFF.md "Resuming an online game" for the full writeup. -->
@@ -5507,14 +5521,30 @@ function handleNetMessage(m){
 }
 
 /* ---- Host a game ---- */
-function hostCreateRoom(){
+// v0.25 item 2: the host picks the table's speed BEFORE the room is created - the chosen
+// value rides the 'host' message and seeds the server's room.tableSpeed, so guests join a
+// table already running at the host's pace (the v0.19-flagged "NET.tableSpeed never seeded"
+// gap). Defaults to the host's own offline speed choice (USER_SPEED).
+function openHostSpeedOverlay(){
+  const wrap=$('hostSpeedBtns'); wrap.innerHTML='';
+  SPEED_OPTS.forEach(([val,label])=>{
+    const b=document.createElement('button');
+    b.className='btn primary';
+    b.textContent=label+(val===USER_SPEED?' ✓':'');
+    b.onclick=()=>{ $('hostSpeedOverlay').classList.add('hidden'); hostCreateRoom(val); };
+    wrap.appendChild(b);
+  });
+  $('hostSpeedOverlay').classList.remove('hidden');
+}
+$('btnHostSpeedCancel').onclick=()=>$('hostSpeedOverlay').classList.add('hidden');
+function hostCreateRoom(tableSpeed){
   $('onlineErr').textContent='';
   const cols=CFG.n===4?COLORS4:COLORS6;
   const seats=CFG.seatMeta[CFG.n].map((s,i)=>({name:s.name||cols[i].name,type:s.type,diff:s.diff}));
   const myName=(seats.find(s=>s.type==='human')||{}).name||'Host';
   NET.wantConnection=true;
   connectWs().then(()=>{
-    netSend({type:'host',protocolVersion:PROTOCOL_VERSION,name:myName,n:CFG.n,teams:CFG.teams,seats});
+    netSend({type:'host',protocolVersion:PROTOCOL_VERSION,name:myName,n:CFG.n,teams:CFG.teams,seats,speed:tableSpeed});
   }).catch(err=>{ $('onlineErr').textContent=err.message; NET.wantConnection=false; });
 }
 // v0.14: host seat choice + rename (Blake: "won't let me select my slot/player and doesn't
@@ -6041,7 +6071,7 @@ $('btnOnlineClose').onclick=()=>$('onlineOverlay').classList.add('hidden');
 // joined (see 'created'/'joined' in handleNetMessage), well before the game itself starts - so
 // the same overwrite warning applies here too, gated through the same confirmOverwriteThenRun().
 $('btnHostGame').onclick=()=>{ $('onlineOverlay').classList.add('hidden');
-  confirmOverwriteThenRun(hostCreateRoom); };
+  confirmOverwriteThenRun(openHostSpeedOverlay); };   // v0.25 item 2: speed first, then the room
 $('btnJoinGame').onclick=()=>{ $('onlineOverlay').classList.add('hidden');
   confirmOverwriteThenRun(()=>{ const qs=new URLSearchParams(location.search); openJoinOverlay(qs.get('join')); }); };
 $('btnJoinCodeNext').onclick=advanceJoinToNameStep;
