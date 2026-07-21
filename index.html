@@ -4414,21 +4414,42 @@ function sendPushToken(){
   if(!IS_APP||!PUSH_TOKEN||!NET.online||NET.playerId==null)return;
   netSend({type:'registerPush',token:PUSH_TOKEN,platform:'ios'});
 }
-/* Requests notification permission - called from exactly ONE place (see $('btnOnlineRulesOk')'s
-   click handler, § UI/MENU below): right after a player dismisses the one-time online-rules
-   popup for the FIRST TIME EVER, i.e. right after their first online game actually starts. NOT
-   at app launch, and not on every subsequent online game (nasty-push-asked gates it to once -
-   iOS itself would just silently re-resolve the already-decided status on a repeat call anyway,
-   but there's no reason to make that round trip every game). Best-effort throughout: a denied
+/* v0.25 item 3 - THE FIX for pushes never arriving in Blake's real games. The v0.16 design
+   only ever called PN.register() from inside the once-ever permission request below - so the
+   APNs device token existed only during that single first session (build 18 era). Every later
+   app launch left PUSH_TOKEN null, which made sendPushToken() a silent no-op on every connect,
+   which left every room's player record tokenless - confirmed in production logs: Blake's real
+   games show the away ladder reaching its nudge stage with ZERO [apns] send attempts (the only
+   token ever registered in prod was a test probe's fake one). Registration is now re-done on
+   EVERY launch when permission is already granted - Apple explicitly allows the token to
+   rotate, and register() is silent/cheap once granted. Called from the boot sequence (bottom
+   of this file) and from maybeRequestPushPermission()'s already-granted path. */
+async function registerPushIfGranted(){
+  if(!IS_APP)return;
+  const PN=CAP&&CAP.Plugins&&CAP.Plugins.PushNotifications;
+  if(!PN)return;
+  try{
+    const st=await PN.checkPermissions();
+    if(st&&st.receive==='granted')await PN.register();   // token arrives via onPushRegistered -> sendPushToken
+  }catch(e){ /* best effort - push must never affect the game */ }
+}
+/* Requests notification permission at the player's first entry into an ONLINE game (the
+   moment they dismiss the one-time online rules popup - a moment where "so we can tell you
+   it's your turn" makes obvious sense). v0.25 item 3: now permission-STATE-driven instead of
+   purely flag-driven: already granted just (re)registers, denied never nags, and only a
+   genuinely never-asked device consumes the one-time ask. Best-effort throughout: a denied
    permission, an unsupported plugin, or any thrown error just means push never activates for
    this player - never anything that could break or interrupt the game itself. */
 async function maybeRequestPushPermission(){
   if(!IS_APP)return;
-  try{ if(localStorage.getItem('nasty-push-asked'))return; }catch(e){}
-  try{ localStorage.setItem('nasty-push-asked','1'); }catch(e){}
   const PN=CAP&&CAP.Plugins&&CAP.Plugins.PushNotifications;
   if(!PN)return;
   try{
+    const st=await PN.checkPermissions();
+    if(st&&st.receive==='granted'){ await PN.register(); return; }
+    if(st&&st.receive==='denied')return;
+    try{ if(localStorage.getItem('nasty-push-asked'))return; }catch(e){}
+    try{ localStorage.setItem('nasty-push-asked','1'); }catch(e){}
     const perm=await PN.requestPermissions();
     if(perm&&perm.receive==='granted')await PN.register();
   }catch(e){ /* permission flow unsupported/denied - never let this affect the game */ }
@@ -6718,6 +6739,7 @@ async function refreshAdminPanel(){
         <div style="flex-basis:100%;display:flex;flex-direction:column;gap:4px;margin-top:4px">
         ${(r.players||[]).map(p=>`<div style="display:flex;gap:6px;align-items:center">
           <span class="st" style="min-width:70px">${esc(p.name)}${p.isHost?' (host)':''}</span>
+          <span class="st" style="min-width:64px;color:${p.push?'#7ee68f':'#ff8a8a'}">push: ${p.push?'yes':'no'}</span>
           <input class="adminRenameInput" data-code="${r.code}" data-pid="${p.id}" value="${esc(p.name)}"
             style="width:110px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.2);border-radius:6px;color:var(--cream);padding:4px 6px">
           <button data-code="${r.code}" data-pid="${p.id}" class="adminRenameBtn">Rename</button>
@@ -6792,6 +6814,10 @@ function autotest(n,teams){
 }
 migrateLegacySaves();   // v0.17: old single-key offline save becomes save slot 1 - must run
 // before anything reads the slots (updateMenuResumeButtons below / syncOfflineSaveFromIdb).
+registerPushIfGranted();   // v0.25 item 3: refresh the APNs device token on EVERY app launch
+// (no-op on the website / when permission was never granted) - see § PUSH for the field
+// failure this fixes; the token lands via onPushRegistered() -> sendPushToken() and is then
+// (re)sent to the server on every online connect/rejoin.
 renderMenu();
 syncOfflineSaveFromIdb();   // v0.10.3: async self-heal - see "IndexedDB mirror" above. Runs
 // after the synchronous first paint below; re-renders the resume tiles if it finds

@@ -791,7 +791,13 @@ function maybeSendTurnPush(room, seat) {
   // (TCP alive, app frozen - reports connected but hasn't produced an app-level message in
   // AWAY_SILENT_MS) also counts as "not right there" and still gets its phone buzzed.
   if (!player || !playerLooksAway(player)) return;   // they're right there - no need to buzz their phone
-  if (!player.pushToken) return;             // never registered (web player, or app player before granting permission)
+  if (!player.pushToken) {
+    // v0.25 item 3: this exact silent return was where the field failure hid (no device ever
+    // registered a token, so every push attempt vanished without a trace in the logs) - log
+    // it, so a future "no push arrived" report is diagnosable from the server log alone.
+    log("turn push skipped - no token registered", room.code, "playerId=" + ownerId, "name=" + player.name);
+    return;
+  }
   sendTurnPush({
     token: player.pushToken, playerName: G.seats[seat].name,
     title: "NASTY", body: "It's your turn in NASTY",
@@ -1079,7 +1085,9 @@ async function handleAdminRoute(req, res, url) {
       code: r.code, started: r.started,
       paused: !!r.paused,   // v0.22: lets the lifecycle test assert "never paused" server-side
       playerCount: r.players.size,
-      players: Array.from(r.players.values()).map(p => ({ id: p.id, name: p.name, isHost: p.isHost, connected: p.connected })),
+      // v0.25 item 3: `push` - does this player have a registered APNs token? Surfaced in the
+      // god-mode panel so "why did nobody get a push" is debuggable at the table next time.
+      players: Array.from(r.players.values()).map(p => ({ id: p.id, name: p.name, isHost: p.isHost, connected: p.connected, push: !!p.pushToken })),
     }));
     sendJson(res, 200, list);
     return true;

@@ -740,7 +740,12 @@ async function maybeSendTurnPush(code: string, E: any, finished: boolean): Promi
   // v0.22: was `player.connected` alone - now the shared away test (twin of server.js), so a
   // silent zombie socket also counts as "not right there" and still gets buzzed.
   if (!player || !playerLooksAway(code, player)) return;   // they're right there - no need to buzz their phone
-  if (!player.pushToken) return;             // never registered (web player, or app player before granting permission)
+  if (!player.pushToken) {
+    // v0.25 item 3: twin of server.js - the tokenless case was the field failure's hiding
+    // place; log it so a "no push arrived" report is diagnosable from the deploy logs alone.
+    log("turn push skipped - no token registered", code, "playerId=" + ownerId, "name=" + player.name);
+    return;
+  }
   await sendTurnPush({
     token: player.pushToken, playerName: G.seats[seat].name,
     title: "NASTY", body: "It's your turn in NASTY",
@@ -1179,7 +1184,8 @@ async function handleAdminRoute(req: Request, url: URL): Promise<Response> {
       out.push({
         code: meta.code, started: meta.started, playerCount: meta.players.length,
         paused: !!meta.paused,   // v0.22: lets the lifecycle test assert "never paused" server-side
-        players: meta.players.map((p) => ({ id: p.id, name: p.name, isHost: p.isHost, connected: !!p.connected })),
+        // v0.25 item 3: `push` - twin of server.js's per-player token diagnostic for the panel.
+        players: meta.players.map((p) => ({ id: p.id, name: p.name, isHost: p.isHost, connected: !!p.connected, push: !!p.pushToken })),
       });
     }
     return json(200, out);
