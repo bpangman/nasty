@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=68784181-e29d-486c-b6b2-aa2f61571941&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=56e08258-c621-4001-9222-86dfb410ddf1&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -61,15 +61,18 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 34 reached the family</h1>
+<h1 style="color:#1a5c38">🎉 Build 35 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
 <p>What changed in this one:</p>
 <ul>
-<li>Fixed a bug where the little status bubble (like "your turn" or "waiting for someone") could
-sometimes get stuck on the main menu after tapping Menu to leave a game. It always clears now.</li>
-<li>The host speed picker (choosing Normal, Quick, Fast, or Turbo before inviting people) now
-shows all four options in a tidy 2 by 2 grid, and each one shows how much faster it is than
-Normal (for example Fast 2.8x).</li>
+<li>The top bar's Menu button is now called Quit. Quitting a game that is still in progress now
+asks first, "are you sure you want to surrender? This will count as a loss on the leaderboard,"
+so it is never an accident.</li>
+<li>The same warning now shows up if you delete a saved game from the menu, choose to let a
+computer take over your seat mid game, or give up a saved game to start a new one when both save
+spots are full - all of those now count as a loss too, once confirmed.</li>
+<li>Just saving your place and coming back later (Save and leave, under Pause and Save) still
+works exactly the same as before - no consequence at all.</li>
 </ul>
 <h3>📱 The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -84,7 +87,7 @@ Normal (for example Fast 2.8x).</li>
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 34 is live for the family 🎉', body], check=True)
+                    'NASTY: build 35 is live for the family 🎉', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED - email sent, watcher done')
 except Exception as e:
