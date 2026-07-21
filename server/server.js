@@ -84,7 +84,16 @@ const CODE_ALPHABET = "BCDFGHJKMNPQRSTVWXZ";
  * moves and sits passively on "Catching up..." while THIS server waits forever for that
  * player's move - a softlock, so old clients are NOT safe and the gate must turn them away
  * with the same friendly update message. */
-const PROTOCOL_VERSION = 4;
+/* v0.25 (2026-07-21): 4 -> 5. The online START flow changed shape: readiness is now collected
+ * IN THE LOBBY (a guest's "Ready up" on the seat screen, the host's Start acting as their own
+ * ready) and the whole post-Start readyCheck phase is GONE from the wire. A protocol-4 client
+ * (build 32 / v0.24 website) would (a) as a guest, never ready up in the lobby - it waits for
+ * a 'readyCheck' broadcast that never comes, so a new host could never start with them seated;
+ * (b) as a host, tap Start expecting the readyCheck phase and deal immediately under guests
+ * who were never asked anything; and (c) never understands the v0.25 rejoin-lobby flow
+ * (takeOverSeat). Not safe either direction - protocol-4 clients get the same friendly
+ * update message at host/join/rejoin/reclaim. */
+const PROTOCOL_VERSION = 5;
 const PROTOCOL_MISMATCH_MESSAGE =
   "This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.";
 function protocolOk(msg) {
@@ -501,8 +510,9 @@ function roomToDisk(room) {
       pushToken: p.pushToken || null, pushPlatform: p.pushPlatform || null,
     })),
     lobby: room.lobby, started: room.started, seatOwners: room.seatOwners, log: room.log,
-    // v0.16 item 4: Sets aren't JSON-serializable directly - flatten readyPlayerIds to an array.
-    readyCheck: room.readyCheck ? { requiredPlayerIds: room.readyCheck.requiredPlayerIds, readyPlayerIds: Array.from(room.readyCheck.ready) } : null,
+    // v0.25 item 1: lobby-phase readiness (replaces the v0.16 post-Start readyCheck phase).
+    // Sets aren't JSON-serializable directly - flatten to an array.
+    readyPlayerIds: Array.from(room.ready || []),
     paused: !!room.paused,
     G: room.engine ? room.engine.getG() : null, tableSpeed: room.tableSpeed || 1,
     recorded: !!room.recorded, nextSeq: room.nextSeq || 0,
@@ -514,7 +524,7 @@ function roomFromDisk(obj) {
     hostPlayerId: obj.hostPlayerId, nextPlayerId: obj.nextPlayerId || 1,
     players: new Map(), lobby: obj.lobby || null, started: !!obj.started,
     seatOwners: obj.seatOwners || null, log: Array.isArray(obj.log) ? obj.log : [],
-    readyCheck: obj.readyCheck ? { requiredPlayerIds: obj.readyCheck.requiredPlayerIds || [], ready: new Set(obj.readyCheck.readyPlayerIds || []) } : null,
+    ready: new Set(obj.readyPlayerIds || []),   // v0.25 item 1: lobby-phase readiness
     paused: !!obj.paused, engine: null, tableSpeed: obj.tableSpeed || 1,
     recorded: !!obj.recorded, nextSeq: obj.nextSeq || 0,
     away: null,   // v0.22: transient - a restart just restarts the ladder clock
@@ -630,10 +640,11 @@ function makeRoom(code) {
     lobby: null,
     started: false,
     seatOwners: null,
-    // v0.16 item 4: {requiredPlayerIds:[...], readyPlayerIds:[...]} while the host has tapped
-    // Start but the table hasn't all confirmed ready yet - null the rest of the time (plain
-    // lobby, or already started). See "start"/"readyUp"/"cancelReadyCheck" below.
-    readyCheck: null,
+    // v0.25 item 1: lobby-phase readiness (REPLACES v0.16's post-Start readyCheck phase - the
+    // separate "everyone ready?" page is gone). playerIds of guests who tapped "Ready up" on
+    // the seat screen; the host never appears here (their Start tap IS their ready). Cleared
+    // when the game actually starts. See "readyUp"/"start" below.
+    ready: new Set(),
     log: [],
     paused: false,
     engine: null,        // v0.15: createEngine() instance, set at Start — the authoritative G
@@ -669,6 +680,9 @@ function lobbySnapshot(room) {
   if (!room.lobby) return null;
   const snap = JSON.parse(JSON.stringify(room.lobby));
   snap.hostSeatIndex = snap.seats.findIndex(s => s.claimedBy === room.hostPlayerId);
+  // v0.25 item 1: readiness rides every lobby snapshot so both the host's room screen and a
+  // guest's seat screen can render per-seat "Ready" states live.
+  snap.readyPlayerIds = Array.from(room.ready || []);
   return snap;
 }
 function roomIsFullyDisconnected(room) {
@@ -936,22 +950,15 @@ function driveTurnLoop(room) {
 }
 
 /* ---------------------------------------------------------------------------------------
- * v0.16 item 4 § READY CHECK — host taps Start -> every HUMAN seat must confirm ready before
- * the server actually deals. CPU seats never block this (they have no one to ready up).
+ * v0.25 item 1 § LOBBY READINESS - readiness is collected ON THE SEAT SCREEN now (a guest's
+ * "Ready up" button locks their seat choice in), not on a separate post-Start page. The host
+ * never readies up: their Start tap IS their ready. Start only proceeds once every claimed
+ * NON-HOST seat's player is ready - guestsAllReady() is the single source of that rule,
+ * checked both client-side (Start button disabled) and here (the authoritative gate).
  * ------------------------------------------------------------------------------------- */
-function startReadyCheck(room) {
-  const requiredPlayerIds = Array.from(new Set(room.lobby.seats.filter(s => s.claimedBy != null).map(s => s.claimedBy)));
-  room.readyCheck = { requiredPlayerIds, ready: new Set() };
-  touch(room);
-  broadcast(room, { type: "readyCheck", requiredPlayerIds, readyPlayerIds: [], lobby: lobbySnapshot(room) });
-  log("room entered ready check", room.code, "required=" + requiredPlayerIds.length);
-  maybeAdvanceReadyCheck(room);   // covers the zero-humans case (an all-CPU table) - proceeds immediately
-}
-function maybeAdvanceReadyCheck(room) {
-  if (!room.readyCheck) return;
-  const { requiredPlayerIds, ready } = room.readyCheck;
-  if (!requiredPlayerIds.every(id => ready.has(id))) return;
-  actuallyStartGame(room);
+function guestsAllReady(room) {
+  if (!room.lobby) return false;
+  return room.lobby.seats.every(s => s.claimedBy == null || s.claimedBy === room.hostPlayerId || (room.ready && room.ready.has(s.claimedBy)));
 }
 /* ---------------------------------------------------------------------------------------
  * v0.22 P0b § SEAT GATE - hold the FIRST deal until every human is actually LOOKING at the
@@ -982,10 +989,10 @@ function releaseSeatGateSlot(room, playerId, why) {
   }
 }
 
-// The old "start" case's body, unchanged in substance - now triggered once the ready check
-// clears instead of directly from the host's "start" message. See that case's comment.
+// The actual game start - since v0.25 triggered directly from the host's "start" message
+// (once guestsAllReady() holds); the v0.16-v0.24 readyCheck phase between the two is gone.
 function actuallyStartGame(room) {
-  room.readyCheck = null;
+  room.ready = new Set();
   room.started = true;
   room.seatOwners = room.lobby.seats.map(s => s.claimedBy);
   const n = room.lobby.n === 6 ? 6 : 4;
@@ -1320,9 +1327,6 @@ wss.on("connection", (ws, req) => {
         const room = rooms.get(code);
         if (!room) { send(ws, { type: "joinError", message: "That room code doesn't exist. Double check it with the host." }); return; }
         if (room.started) { send(ws, { type: "joinError", message: "That game already started. Ask the host to send a new code, or reconnect if you were already playing.", reason: "started" }); return; }
-        // v0.16 item 4: mid ready-check, the seat list is locked in - a brand new guest joining
-        // right now would land on a stale seat-picker with no idea a ready check is happening.
-        if (room.readyCheck) { send(ws, { type: "joinError", message: "The host is starting the game - try again in a moment." }); return; }
         if (isBadName(msg.name)) { send(ws, { type: "joinError", message: "Pick a nicer name." }); return; }
         const playerId = room.nextPlayerId++;
         const token = newToken();
@@ -1375,12 +1379,9 @@ wss.on("connection", (ws, req) => {
         const isHost = playerId === room.hostPlayerId;
         if (room.started) {
           send(ws, Object.assign({ type: "sync", lobby: lobbySnapshot(room), seatOwners: room.seatOwners }, gameSnapshotFields(room, isHost)));
-        } else if (room.readyCheck) {
-          // v0.16 item 4: reconnecting mid ready-check should land back on the ready-check
-          // screen, not a stale plain-lobby seat picker.
-          send(ws, { type: "lobby", lobby: lobbySnapshot(room), isHost, protocolVersion: PROTOCOL_VERSION });
-          send(ws, { type: "readyCheck", requiredPlayerIds: room.readyCheck.requiredPlayerIds, readyPlayerIds: Array.from(room.readyCheck.ready), lobby: lobbySnapshot(room) });
         } else {
+          // v0.25 item 1: the lobby snapshot carries readyPlayerIds now, so a mid-lobby
+          // reconnect lands back on the seat screen with everyone's ready state intact.
           send(ws, { type: "lobby", lobby: lobbySnapshot(room), isHost, protocolVersion: PROTOCOL_VERSION });
         }
         broadcast(room, { type: "presence", playerId, connected: true }, playerId);
@@ -1475,9 +1476,9 @@ wss.on("connection", (ws, req) => {
       case "claimSeat": {
         if (!ctx) return;
         const { room, playerId } = ctx;
-        // v0.16 item 4: the seat list is locked in for the duration of a ready check - the
-        // host must cancel back to the plain lobby (cancelReadyCheck) before anyone can move.
-        if (!room.lobby || room.started || room.readyCheck) return;
+        if (!room.lobby || room.started) return;
+        // v0.25 item 1: "Ready up" locks the seat choice in - a ready player can't move seats.
+        if (room.ready && room.ready.has(playerId)) return;
         const seat = room.lobby.seats[msg.seatIndex];
         if (!seat) return;
         if (seat.claimedBy === room.hostPlayerId) return;
@@ -1494,14 +1495,14 @@ wss.on("connection", (ws, req) => {
       case "setSeat": {
         if (!ctx) return;
         const { room, playerId } = ctx;
-        // v0.16 item 4: same lock as claimSeat above.
-        if (playerId !== room.hostPlayerId || !room.lobby || room.started || room.readyCheck) return;
+        if (playerId !== room.hostPlayerId || !room.lobby || room.started) return;
         const seat = room.lobby.seats[msg.seatIndex];
         if (!seat) return;
         const patch = msg.patch || {};
         if (patch.type === "cpu" && seat.claimedBy != null) {
           const kicked = seat.claimedBy;
           seat.claimedBy = null;
+          if (room.ready) room.ready.delete(kicked);   // v0.25 item 1: a kicked guest's ready mark goes with them
           const kp = room.players.get(kicked);
           if (kp) send(kp.ws, { type: "kicked", message: "The host turned your seat into a CPU." });
         }
@@ -1514,45 +1515,37 @@ wss.on("connection", (ws, req) => {
       }
 
       case "start": {
-        // v0.16 item 4: {type:'start'} used to deal immediately; it now only opens the READY
-        // CHECK gate (see startReadyCheck()/maybeAdvanceReadyCheck() below) - the actual deal
-        // happens once every human seat has confirmed ready (or immediately if there are none,
-        // e.g. an all-CPU table). See HANDOFF.md v0.16 for the full design.
+        // v0.25 item 1: {type:'start', willSeat} - host-only, and only once every claimed
+        // NON-HOST seat's player has readied up on the seat screen (guestsAllReady() - the
+        // client disables the Start button until then too; this is the authoritative gate).
+        // The v0.16-v0.24 post-Start readyCheck phase is GONE: readiness already happened in
+        // the lobby, so this deals (via the v0.22 seat gate) immediately. The host's own
+        // willSeat rides this message - their Start tap is their ready-up.
         if (!ctx) return;
         const { room, playerId } = ctx;
-        if (playerId !== room.hostPlayerId || room.started || !room.lobby || room.readyCheck) return;
-        startReadyCheck(room);
+        if (playerId !== room.hostPlayerId || room.started || !room.lobby) return;
+        if (!guestsAllReady(room)) {
+          send(ws, { type: "error", message: "Waiting for everyone to tap Ready up first." });
+          return;
+        }
+        if (msg.willSeat) room.willSeat.add(playerId);
+        actuallyStartGame(room);
         return;
       }
 
       case "readyUp": {
-        // v0.16 item 4: {type:'readyUp'} - a human at the table confirms ready. CPU seats never
-        // need this (only human `claimedBy` playerIds are ever in requiredPlayerIds).
+        // v0.25 item 1: {type:'readyUp', willSeat} - a guest on the seat screen locks their
+        // seat choice in. Valid any time in the lobby (there is no separate ready phase
+        // anymore); requires an actually-claimed seat. willSeat carries the v0.22 seat-gate
+        // promise exactly as before (a 'seated' will follow once their board is visible).
         if (!ctx) return;
         const { room, playerId } = ctx;
-        if (!room.readyCheck || room.started) return;
-        if (!room.readyCheck.requiredPlayerIds.includes(playerId)) return;
-        // v0.22 P0b: a new client's readyUp announces it will send {type:'seated'} once its
-        // board is actually visible - see § SEAT GATE. Old clients never set this.
+        if (!room.lobby || room.started) return;
+        if (!room.lobby.seats.some(s => s.claimedBy === playerId)) return;
         if (msg.willSeat) room.willSeat.add(playerId);
-        room.readyCheck.ready.add(playerId);
+        room.ready.add(playerId);
         touch(room);
-        broadcast(room, { type: "readyCheck", requiredPlayerIds: room.readyCheck.requiredPlayerIds, readyPlayerIds: Array.from(room.readyCheck.ready), lobby: lobbySnapshot(room) });
-        maybeAdvanceReadyCheck(room);
-        return;
-      }
-
-      case "cancelReadyCheck": {
-        // v0.16 item 4: {type:'cancelReadyCheck'} - host-only, backs out to the plain lobby so
-        // seats can be edited again.
-        if (!ctx) return;
-        const { room, playerId } = ctx;
-        if (playerId !== room.hostPlayerId || !room.readyCheck || room.started) return;
-        room.readyCheck = null;
-        room.willSeat = new Set();   // v0.22 P0b: promises reset with the check - re-announced on the next readyUp
-        touch(room);
-        broadcast(room, { type: "readyCheckCancelled", lobby: lobbySnapshot(room) });
-        log("room ready check cancelled", room.code);
+        broadcast(room, { type: "lobby", lobby: lobbySnapshot(room) });
         return;
       }
 

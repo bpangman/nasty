@@ -1138,6 +1138,9 @@ button{font:inherit;cursor:pointer}
       <p>Pick an open seat.</p>
       <div id="joinSeatList"></div>
       <div id="joinNote" style="font-size:13px;color:#ffe9a8;min-height:34px;margin-top:6px"></div>
+      <!-- v0.25 item 1: readiness lives right here on the seat screen now - no separate
+           "everyone ready?" page. Shown once a seat is claimed; tapping it locks the seat in. -->
+      <div class="bigBtns"><button class="btn primary hidden" id="btnJoinReady">Ready up</button></div>
     </div>
     <div id="joinErr" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
     <div class="bigBtns"><button class="btn ghost" id="btnJoinClose">Cancel</button></div>
@@ -1151,26 +1154,14 @@ button{font:inherit;cursor:pointer}
      a disconnected player's name plate dims (see updatePresenceUI(), § NET) plus a small
      non-blocking toast. The server still broadcasts hostStatus for old app builds. -->
 
-<!-- v0.16 item 4: the host tapping "Start game" no longer deals right away - every HUMAN seat
-     has to confirm ready first (CPU seats auto-count). See renderReadyCheckOverlay()/§ NET. -->
-<div id="readyCheckOverlay" class="overlay hidden">
-  <div class="modalCard">
-    <h3>Everyone ready?</h3>
-    <p>The game deals as soon as everyone at the table has tapped ready.</p>
-    <div id="readyCheckList"></div>
-    <div id="readyCheckNote" style="font-size:13px;color:#ffe9a8;min-height:18px;margin-top:6px"></div>
-    <div class="bigBtns">
-      <button class="btn primary hidden" id="btnReadyUp">I'm ready</button>
-      <button class="btn ghost hidden" id="btnReadyCancel">Cancel</button>
-    </div>
-  </div>
-</div>
+<!-- v0.25 item 1: the v0.16 "Everyone ready?" page (#readyCheckOverlay) is GONE - readiness
+     is collected right on the seat screens now (a guest's "Ready up" button on the join seat
+     step; the host's Start button, which stays disabled until every guest is ready). -->
 
-<!-- v0.16 item 4: shown ONCE per fresh online game instance, right as the deal lands - see
-     bootGameFromNetwork(), the one place this is opened from (never on a reconnect/rejoin/
-     reclaim, which uses bootGameFromSnapshot() instead - so a late joiner mid-game never sees
-     this, and a genuinely new game later shows it again). Sits on top of the freshly dealt
-     board; dismissing just hides it. -->
+<!-- v0.25 item 1: shown once per fresh online room, BEFORE seat selection - the host sees it
+     the moment their room opens, a guest sees it on reaching the seat step (it sits on top of
+     that screen; dismissing reveals the seats). Never on a reconnect/rejoin into a running
+     game (bootGameFromSnapshot() never shows it). See maybeShowOnlineRules(), § NET. -->
 <div id="onlineRulesOverlay" class="overlay hidden">
   <div class="modalCard">
     <h3>Online games work a little differently</h3>
@@ -4292,7 +4283,14 @@ function clearSelection(keepTurn){
 // decide whether to show a tappable hand; in the forced-partner-landing spot it would find
 // ZERO moves and wait on "Catching up..." forever while the new server waits for its move -
 // a softlock, so old clients get the friendly update message instead.
-const PROTOCOL_VERSION=4;
+// v0.25 (2026-07-21): bumped 4 -> 5. The online START flow changed shape: readiness is
+// collected IN THE LOBBY now (a guest's "Ready up" on the seat screen locks their seat in;
+// the host's Start tap is their own ready) and the v0.16 post-Start readyCheck phase is gone
+// from the wire entirely, plus the new rejoin-lobby flow (takeOverSeat). A protocol-4 client
+// (build 32 / the v0.24 website) would wait forever for a 'readyCheck' broadcast that never
+// comes (guest) or expect Start to open one (host) - not safe either direction, so old
+// clients get the friendly update message instead.
+const PROTOCOL_VERSION=5;
 const NET={
   ws:null, online:false, isHost:false, wantConnection:false,
   code:null, playerId:null, token:null, mySeat:-1,
@@ -4325,8 +4323,10 @@ const NET={
                            // and kept current by the existing 'presence' broadcast - powers
                            // the reunion lobby's green/gray dots.
   reunionOpen:false,       // v0.9: true while the reunion lobby overlay is on screen.
-  readyCheck:null,         // v0.16 item 4: {requiredPlayerIds,readyPlayerIds} while the host's
-                           // Start tap is waiting on the table - see § READY CHECK.
+  rulesShown:false,        // v0.25 item 1: the once-per-room online rules popup (shown BEFORE
+                           // seat selection - host: when the room opens; guest: on reaching
+                           // the seat step) has been shown for THIS room session. Reset by
+                           // leaveOnlineToMenu(). See maybeShowOnlineRules().
   recalActive:false,       // v0.20: true from the moment ANY recalibration attempt starts
                            // (a foreground event, a websocket reopen, or a manual "Reset
                            // connection" tap) until a fresh authoritative snapshot actually
@@ -4864,11 +4864,11 @@ function bootGameFromNetwork(action){
   clearAwayUI();   // v0.22 P3: a fresh game can never inherit a stale away-ladder line
   sendPushToken();   // v0.16 item 5: in case permission was already granted from an earlier game this session - see § PUSH
   toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts`,2600);
-  // v0.22 P0b: the one-time rules popup no longer shows here - it moved to the READY CHECK
-  // phase (see openReadyCheckOverlay()), where reading it can't cost anyone their first hand.
-  // By the time this boot runs, every required human has already dismissed it (the popup sat
-  // above the "I'm ready" button). Announce that this screen is genuinely looking at the
-  // board so the server can release the first deal (see maybeSendSeated()).
+  // v0.25 item 1: the one-time rules popup shows in the LOBBY now (before seat selection -
+  // see maybeShowOnlineRules(), § LOBBY READY), so by the time this boot runs every human
+  // has already dismissed it before they could even ready up. Announce that this screen is
+  // genuinely looking at the board so the server can release the first deal (seat gate).
+  CONVERTED_SEATS=new Set();   // v0.25 items 6+7: a fresh game has no converted seats
   NET.seatedSent=false;
   maybeSendSeated();
   runOnlineTurnLoop();
@@ -4912,6 +4912,7 @@ function bootGameFromSnapshot(snapshotG,paused,tableSpeed,appliedSeq){
   // v0.22 P0b: a rejoin/reclaim/resync shows no popups, so this screen is looking at the
   // board right now - if the room happens to still be holding its first deal (this phone
   // reconnected mid seat gate), this is what releases our slot.
+  CONVERTED_SEATS=new Set();   // v0.25 items 6+7: the snapshot's G.seats already reflect any conversion
   NET.seatedSent=false;
   maybeSendSeated();
   if(NET.actionQueue.length)INSTANT=true;   // see the function comment above - a tiny live race, not a replay
@@ -5144,11 +5145,23 @@ function onSync(m){
    same honest limitation as the rest of § NET); once every human seat shows connected, the
    HOST gets a "Resume game" button that unpauses for everyone at once (plain lockstep
    pauseToggle, same mechanism the topbar's Pause button already uses). */
+/* v0.25 items 6+7: seats converted to a CPU by a LIVE broadcast this session (a leaveForGood
+   or a rejoin-lobby takeover). The authoritative G.seats mutation applies through the normal
+   action queue - which is deliberately held behind the pause gate while the rejoin lobby is
+   up - so this eager, display-only set is what lets the lobby (and the pause overlay's
+   "everyone's back" math) reflect the conversion the moment the server broadcasts it.
+   Reset on every (re)boot and on leaving (the fresh snapshot/lobby is then the truth). */
+let CONVERTED_SEATS=new Set();
+function markSeatConverted(seat){
+  CONVERTED_SEATS.add(seat);
+  if(NET.reunionOpen)renderReunionOverlay();
+  else updatePauseUI();
+}
 function humanSeatList(){
   // {seat, playerId, name} for every seat a human owns - CPU seats have no owner.
   if(!NET.seatOwners||!G)return[];
   return NET.seatOwners.map((pid,seat)=>({seat,playerId:pid,name:G.seats[seat].name}))
-    .filter(x=>x.playerId!=null);
+    .filter(x=>x.playerId!=null&&!CONVERTED_SEATS.has(x.seat)&&G.seats[x.seat].type==='human');
 }
 function renderReunionOverlay(){
   const humans=humanSeatList();
@@ -5230,14 +5243,14 @@ function leaveOnlineToMenu(msg,keepRoom){
   NET.wantConnection=false;
   if(NET.ws){ try{NET.ws.close();}catch(e){} }
   Object.assign(NET,{ws:null,online:false,isHost:false,code:null,playerId:null,token:null,mySeat:-1,
-    lobby:null,seatOwners:null,actionQueue:[],pendingActionResolvers:[],pendingStateCheck:null,appliedSeq:-1,readyCheck:null,
+    lobby:null,seatOwners:null,actionQueue:[],pendingActionResolvers:[],pendingStateCheck:null,appliedSeq:-1,rulesShown:false,
     recalActive:false,recalKind:null,recalStartedAt:null,recalFailed:false,silentAutoResume:false});
   if(!keepRoom)clearLastRoom();   // v0.8: leaving is a deliberate choice - don't auto-rejoin this one later
+  CONVERTED_SEATS=new Set();      // v0.25 items 6+7: display state, never outlives the session
   updateConnIndicator();
   clearAwayUI();   // v0.22 P3: never leave a stale away-ladder line/button behind
   resetNetUiFlow();
   $('pauseOverlay').classList.add('hidden');
-  $('readyCheckOverlay').classList.add('hidden');   // v0.16 item 4: defensive - see § READY CHECK
   $('onlineRulesOverlay').classList.add('hidden');  // v0.16 item 4: defensive - never linger past a leave
   $('game').classList.add('hidden'); $('menu').classList.remove('hidden');
   clearToasts();   // v0.11.3: wipe any leftover in-game toast before landing on the menu
@@ -5260,7 +5273,8 @@ function leaveOnlineToMenu(msg,keepRoom){
    only permanent seat conversion, and it remains the player's OWN choice. */
 /* v0.22 P0b: "seated" - tells the server this screen is ACTUALLY showing the board with no
    pre-game overlay (rules popup, speed picker) in the way. The server holds a fresh game's
-   FIRST deal until every player who announced willSeat (see btnReadyUp) has sent this - so
+   FIRST deal until every player who announced willSeat (a guest's Ready up / the host's
+   Start, § LOBBY READY) has sent this - so
    nobody's opening hand can ever again be dealt, bowed out and played away behind a popup
    they were still reading (Blake's four-card-hand report). Sent at most once per game boot;
    re-checked from every overlay-dismiss point. */
@@ -5329,11 +5343,14 @@ function handleNetMessage(m){
       NET.code=m.code; NET.playerId=m.playerId; NET.token=m.token; NET.lobby=m.lobby;
       saveNetSession(); saveLastRoom(m.code,false); updateConnIndicator(); renderRoomScreen();
       $('onlineOverlay').classList.add('hidden'); $('roomOverlay').classList.remove('hidden');
+      maybeShowOnlineRules();   // v0.25 item 1: rules BEFORE seat/invite work - see § LOBBY READY
+      sendPushToken();          // v0.25 item 3: register the push token as soon as an online identity exists
       return;
     case 'joined':
       NET.online=true; NET.isHost=false; NET.wantConnection=true;
       NET.code=m.code; NET.playerId=m.playerId; NET.token=m.token; NET.lobby=m.lobby;
       saveNetSession(); saveLastRoom(m.code,false); updateConnIndicator(); advanceJoinToSeatStep();
+      sendPushToken();          // v0.25 item 3: register the push token as soon as an online identity exists
       return;
     case 'joinError':
       // v0.10.3: a code that turns out to belong to an ALREADY-STARTED game - the code+name
@@ -5390,23 +5407,6 @@ function handleNetMessage(m){
         else advanceJoinToSeatStep();
       } else if(NET.isHost)renderRoomScreen(); else renderJoinSeatStep();
       return;
-    case 'readyCheck':
-      // v0.16 item 4: host tapped Start - every human seat now needs to confirm ready before
-      // the real deal happens (see § READY CHECK). Replaces whichever lobby screen was up.
-      NET.lobby=m.lobby||NET.lobby;
-      NET.readyCheck={requiredPlayerIds:m.requiredPlayerIds,readyPlayerIds:m.readyPlayerIds};
-      openReadyCheckOverlay();
-      return;
-    case 'readyCheckCancelled':
-      // v0.16 item 4: host backed out to the plain lobby - go back to whichever lobby screen
-      // this client normally sees (host's room screen or a guest's seat step).
-      NET.lobby=m.lobby||NET.lobby;
-      NET.readyCheck=null;
-      closeReadyCheckOverlay();
-      $('onlineRulesOverlay').classList.add('hidden');   // v0.22 P0b: the popup rides the ready check now - never linger past a cancel
-      if(NET.isHost){ renderRoomScreen(); $('roomOverlay').classList.remove('hidden'); }
-      else { $('joinOverlay').classList.remove('hidden'); advanceJoinToSeatStep(); }
-      return;
     case 'kicked':
       leaveOnlineToMenu(m.message||'The host removed your seat.');
       return;
@@ -5459,10 +5459,17 @@ function handleNetMessage(m){
       return;
     case 'gameAction':
       if(m.action.kind==='start'){
-        NET.readyCheck=null; closeReadyCheckOverlay();   // v0.16 item 4: the deal just landed
         NET.seatOwners=m.seatOwners; NET.mySeat=NET.seatOwners.indexOf(NET.playerId);
         bootGameFromNetwork(m.action);
-      }else feedAction({seq:m.seq,action:m.action});
+      }else{
+        // v0.25 items 6+7: a seatToCpu broadcast ALSO eagerly marks the seat converted for
+        // the rejoin lobby's "accounted for" math (see NET.convertedSeats / § REJOIN LOBBY) -
+        // the action itself still applies in order through the normal queue (it may sit
+        // behind the pause gate while the lobby is up, which is exactly why this eager
+        // mark exists: the lobby needs to reflect the conversion NOW).
+        if(m.action.kind==='seatToCpu')markSeatConverted(m.action.seat);
+        feedAction({seq:m.seq,action:m.action});
+      }
       return;
     case 'sync': onSync(m); return;
     case 'ping':
@@ -5515,6 +5522,11 @@ function handleNetMessage(m){
       // v0.8: pause/resume broadcast - applies the SAME way on every phone, including
       // whichever one requested it (see requestPause()/setPaused() in § TURNS).
       if(G)setPaused(!!m.paused);
+      return;
+    case 'error':
+      // v0.25: generic server-side rejection with a human-readable message (e.g. Start tapped
+      // before every guest readied up - a race the disabled button can't fully prevent).
+      if(m.message)toast(m.message,3200);
       return;
     default: return;
   }
@@ -5582,6 +5594,8 @@ function renderRoomScreen(){
   $('roomCode').textContent=NET.code||'----';
   const list=$('roomSeatList'); list.innerHTML='';
   const cols=NET.lobby.n===4?COLORS4:COLORS6;
+  // v0.25 item 1: per-seat readiness (guests ready up on their own seat screens now).
+  const ready=new Set(NET.lobby.readyPlayerIds||[]);
   NET.lobby.seats.forEach((s,i)=>{
     const mine=s.claimedBy===NET.playerId;
     const open=!mine&&s.claimedBy==null;
@@ -5602,7 +5616,7 @@ function renderRoomScreen(){
       row.appendChild(cancel);
     }else{
       const statusTxt=mine?'You'
-        :s.claimedBy!=null?'Joined ✓'
+        :s.claimedBy!=null?(ready.has(s.claimedBy)?'Ready ✓':'Joined - not ready yet')
         :s.type==='cpu'?'CPU - tap to join'
         :'Tap to sit here';
       row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(s.name)}</span><span class="st">${statusTxt}</span>`;
@@ -5627,12 +5641,16 @@ function renderRoomScreen(){
     }
     list.appendChild(row);
   });
-  // v0.8: Start is never blocked on empty seats anymore - any seat nobody's sitting in when
-  // you tap Start just plays as a computer (see btnRoomStart.onclick below). Host no longer
-  // has to pre-flip a CPU seat to human before texting the invite - a guest can claim ANY
-  // open seat, CPU-marked or not (see claimSeat handling on the server / renderJoinSeatStep).
-  $('btnRoomStart').disabled=false;
-  $('roomNote').textContent='Tap any open seat to sit there, or Rename to change your name. Open seats become computer players when you start.';
+  // v0.8: Start is never blocked on EMPTY seats - any seat nobody's sitting in when you tap
+  // Start just plays as a computer. v0.25 item 1: it IS blocked on claimed-but-not-ready
+  // guests now - every guest locks their seat in with "Ready up" on their own screen, and
+  // Start (the host's own ready) only lights up once they all have. Server enforces the same
+  // rule (guestsAllReady(), both servers) - this is just the honest button state.
+  const allReady=NET.lobby.seats.every(s=>s.claimedBy==null||s.claimedBy===NET.playerId||ready.has(s.claimedBy));
+  $('btnRoomStart').disabled=!allReady;
+  $('roomNote').textContent=allReady
+    ?'Tap any open seat to sit there, or Rename to change your name. Open seats become computer players when you start.'
+    :'Waiting for everyone to tap Ready up on their phone. Open seats become computer players when you start.';
 }
 
 /* ---- Join a game ---- */
@@ -5674,11 +5692,17 @@ function advanceJoinToSeatStep(){
   $('joinNameStep').classList.add('hidden');
   $('joinSeatStep').classList.remove('hidden');
   renderJoinSeatStep();
+  // v0.25 item 1: the one-time online rules explanation comes BEFORE seat selection now -
+  // it sits on top of this screen; dismissing it reveals the seats. See § LOBBY READY.
+  maybeShowOnlineRules();
 }
 function renderJoinSeatStep(){
   if(!NET.lobby)return;
   const list=$('joinSeatList'); list.innerHTML='';
   const cols=NET.lobby.n===4?COLORS4:COLORS6;
+  // v0.25 item 1: readiness rides the lobby snapshot - render it live, per seat.
+  const ready=new Set(NET.lobby.readyPlayerIds||[]);
+  const iAmReady=ready.has(NET.playerId);
   NET.lobby.seats.forEach((s,i)=>{
     // v0.8: any seat nobody's claimed is fair game - including ones still marked CPU
     // (claiming converts it to human, see server.js claimSeat). The host's own seat is
@@ -5687,70 +5711,45 @@ function renderJoinSeatStep(){
     const open=!mine&&!isHostSeat&&s.claimedBy==null;
     const row=document.createElement('div'); row.className='lobbySeat'+(mine?' mine':'')+(open?' open':'');
     const statusTxt=isHostSeat?'Host'
-      :mine?'You'
-      :s.claimedBy!=null?'Taken'
+      :mine?(iAmReady?'You - Ready ✓':'You')
+      :s.claimedBy!=null?(ready.has(s.claimedBy)?'Ready ✓':'Taken')
       :s.type==='cpu'?'CPU - tap to join':'Tap to sit here';
     row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(s.name)}</span><span class="st">${statusTxt}</span>`;
-    if(open)row.onclick=()=>netSend({type:'claimSeat',seatIndex:i,name:JOIN.name});
+    // v0.25 item 1: "Ready up" locks the seat choice in - no more seat hopping after it
+    // (the server enforces the same rule; this just stops offering the tap).
+    if(open&&!iAmReady)row.onclick=()=>netSend({type:'claimSeat',seatIndex:i,name:JOIN.name});
     list.appendChild(row);
   });
   const haveSeat=NET.lobby.seats.some(s=>s.claimedBy===NET.playerId);
-  $('joinNote').textContent=haveSeat?"You're in! Waiting for the host to start the game…":'Pick any open seat above - even ones marked CPU.';
+  $('joinNote').textContent=iAmReady?"You're ready! The game starts as soon as the host starts it."
+    :haveSeat?'Tap Ready up to lock your seat in.'
+    :'Pick any open seat above - even ones marked CPU.';
+  const btn=$('btnJoinReady');
+  btn.classList.toggle('hidden',!haveSeat||iAmReady);
+  btn.disabled=false;
 }
 
-/* ============================= § READY CHECK (v0.16 item 4) =============================
-   Host taps "Start game" -> the server opens a ready-check gate instead of dealing right away
-   (see server.js/server.ts's "start"/"readyUp"/"cancelReadyCheck") - shown to EVERY client
-   still sitting in the lobby, host and guests alike, replacing whichever lobby screen
-   (roomOverlay/joinOverlay) they were looking at. NET.readyCheck holds the server's latest
-   {requiredPlayerIds, readyPlayerIds} (only human seats are ever required - CPU seats need no
-   one to ready up). Cleared the moment the real deal lands (see the 'gameAction' kind==='start'
-   handler) or the host cancels back to the plain lobby (readyCheckCancelled). */
-function renderReadyCheckOverlay(){
-  if(!NET.lobby||!NET.readyCheck)return;
-  const cols=NET.lobby.n===4?COLORS4:COLORS6;
-  const required=NET.readyCheck.requiredPlayerIds||[];
-  const ready=new Set(NET.readyCheck.readyPlayerIds||[]);
-  const list=$('readyCheckList'); list.innerHTML='';
-  NET.lobby.seats.forEach((s,i)=>{
-    const isCpu=s.claimedBy==null;
-    const isReady=!isCpu&&ready.has(s.claimedBy);
-    const statusTxt=isCpu?'Computer':isReady?'Ready ✓':'Waiting…';
-    const dotColor=isCpu?'#888':isReady?'#3fae5c':cols[i].c;
-    const row=document.createElement('div'); row.className='lobbySeat';
-    row.innerHTML=`<span class="dot" style="background:${dotColor}"></span><span class="nm">${esc(s.name)}</span><span class="st">${statusTxt}</span>`;
-    list.appendChild(row);
-  });
-  const allReady=required.every(id=>ready.has(id));
-  $('readyCheckNote').textContent=allReady?"Everyone's ready - starting…":'Waiting for everyone to tap ready.';
-  const iAmRequired=required.includes(NET.playerId), iAmReady=ready.has(NET.playerId);
-  $('btnReadyUp').classList.toggle('hidden',!iAmRequired||iAmReady);
-  $('btnReadyCancel').classList.toggle('hidden',!NET.isHost);
+/* ============================= § LOBBY READY (v0.25 item 1) =============================
+   Readiness is collected right on the seat screens now - the v0.16 "Everyone ready?" page is
+   GONE. A guest claims a seat and taps "Ready up" (btnJoinReady, on the join seat step) to
+   lock the choice in; the host's Start button stays disabled until every claimed guest is
+   ready, and tapping it is the host's own ready. The server carries readyPlayerIds on every
+   lobby snapshot (see lobbySnapshot(), both servers), so both screens render live.
+   The one-time online rules popup now shows BEFORE seat selection (Blake's v0.25 flow:
+   invite link -> rules -> seat screen): the host sees it the moment their room opens, a
+   guest on first reaching the seat step - it sits on top; dismissing reveals the seats.
+   willSeat semantics are unchanged from v0.22: a readyUp (guest) or start (host) carries the
+   promise that a {type:'seated'} follows once the board is genuinely visible, and the server
+   holds the first deal for exactly those players (the P0b seat gate). */
+function maybeShowOnlineRules(){
+  if(NET.rulesShown)return;
+  NET.rulesShown=true;
+  $('onlineRulesOverlay').classList.remove('hidden');
 }
-function openReadyCheckOverlay(){
-  resetNetUiFlow();
-  const firstOpen=$('readyCheckOverlay').classList.contains('hidden');
-  renderReadyCheckOverlay();
-  $('readyCheckOverlay').classList.remove('hidden');
-  // v0.22 P0b: the one-time online rules popup now shows HERE - on top of the ready check,
-  // BEFORE the player can tap "I'm ready" - instead of over the live board after the deal
-  // (its old spot in bootGameFromNetwork()). Blake's report: while his group was reading the
-  // popup, the server had already dealt hand 1, auto-bowed-out every human with no legal
-  // move, let the CPUs play the whole hand and dealt hand 2 - they never saw their 5-card
-  // hand. Since the popup sits above this overlay, dismissing it is now a precondition of
-  // readying up, so a fresh game's deal can no longer land behind it. Shown only on the
-  // FIRST open of a given ready check (every readyUp re-broadcast re-calls this function).
-  if(firstOpen)$('onlineRulesOverlay').classList.remove('hidden');
-}
-function closeReadyCheckOverlay(){
-  $('readyCheckOverlay').classList.add('hidden');
-}
-// v0.22 P0b: willSeat tells the server this client understands the seat gate (it will send
-// {type:'seated'} once its board is actually visible with no overlays in the way) - the
-// server holds the FIRST deal for exactly the players who announced this. Old builds 16-28
-// never send the flag and are treated as seated immediately, so nothing changes for them.
-$('btnReadyUp').onclick=()=>netSend({type:'readyUp',willSeat:true});
-$('btnReadyCancel').onclick=()=>netSend({type:'cancelReadyCheck'});
+$('btnJoinReady').onclick=()=>{
+  netSend({type:'readyUp',willSeat:true});
+  $('btnJoinReady').disabled=true;   // one send is enough - the lobby echo re-renders this screen
+};
 
 /* ============================= § NAMES (limits + decency, v0.9 item 9) =============================
    Shared by the setup screen, the online join flow, and (duplicated, since the server is a
@@ -6087,7 +6086,9 @@ $('btnRoomStart').onclick=()=>{
   // becomes CPU" rule - see server.js's "start" handler) from room.lobby, which it already
   // has - Start is just a signal, no game-config payload needed anymore. Host-only on the
   // server side; the button is only ever shown to the host client to begin with.
-  netSend({type:'start',protocolVersion:PROTOCOL_VERSION});
+  // v0.25 item 1: willSeat rides Start - the host's tap is their own ready-up, and this is
+  // their v0.22 seat-gate promise (a {type:'seated'} follows once the board is visible).
+  netSend({type:'start',protocolVersion:PROTOCOL_VERSION,willSeat:true});
 };
 $('btnRoomText').onclick=()=>{
   sendInvite(inviteLink(NET.code));

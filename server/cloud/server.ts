@@ -96,7 +96,13 @@ const KV_PATH = Deno.env.get("NASTY_KV_PATH") || undefined; // undefined = Deplo
    of bowing out); a protocol-3 client (build 30 / v0.23 website) would find zero local moves
    in that situation and softlock on "Catching up..." while this server waits for its move, so
    protocol-3 clients get the same friendly update message. */
-const PROTOCOL_VERSION = 4;
+/* v0.25 (2026-07-21): 4 -> 5 - twin of server.js's matching comment. The online START flow
+   changed shape: readiness is collected IN THE LOBBY now (a guest's "Ready up" on the seat
+   screen; the host's Start acting as their own ready) and the post-Start readyCheck phase is
+   gone from the wire, plus the new v0.25 rejoin-lobby flow (takeOverSeat). A protocol-4
+   client (build 32 / v0.24 website) is not safe in either direction, so it gets the same
+   friendly update message at host/join/rejoin/reclaim. */
+const PROTOCOL_VERSION = 5;
 const PROTOCOL_MISMATCH_MESSAGE =
   "This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.";
 function protocolOk(msg: Record<string, unknown>): boolean {
@@ -443,9 +449,12 @@ type RoomMeta = {
   players: Player[];
   lobby: { n: number; teams: boolean; seats: Seat[] } | null;
   started: boolean; seatOwners: (number | null)[] | null;
-  // v0.16 item 4: twin of server.js's room.readyCheck - set while the host has tapped Start
-  // but not every human seat has confirmed ready yet; null the rest of the time.
-  readyCheck: { requiredPlayerIds: number[]; readyPlayerIds: number[] } | null;
+  // v0.25 item 1: twin of server.js's room.ready - lobby-phase readiness (guests who tapped
+  // "Ready up" on the seat screen; the host never appears here - their Start IS their ready).
+  // The v0.16-v0.24 readyCheck phase field is gone. Optional for old persisted metas.
+  ready?: number[];
+  // Legacy (pre-v0.25) field kept optional purely so an old persisted meta still parses.
+  readyCheck?: { requiredPlayerIds: number[]; readyPlayerIds: number[] } | null;
   paused: boolean; logCount: number;
   // v0.15 authoritative fields (twin of server.js's room object additions):
   G: unknown | null;        // full serialized authoritative game state snapshot
@@ -507,7 +516,15 @@ function lobbySnapshot(meta: RoomMeta) {
   if (!meta.lobby) return null;
   const snap = JSON.parse(JSON.stringify(meta.lobby));
   snap.hostSeatIndex = snap.seats.findIndex((s: Seat) => s.claimedBy === meta.hostPlayerId);
+  // v0.25 item 1: readiness rides every lobby snapshot - twin of server.js.
+  snap.readyPlayerIds = Array.from(meta.ready || []);
   return snap;
+}
+// v0.25 item 1: twin of server.js's guestsAllReady() - the single source of "can Start proceed."
+function guestsAllReady(meta: RoomMeta): boolean {
+  if (!meta.lobby) return false;
+  const ready = meta.ready || [];
+  return meta.lobby.seats.every((s) => s.claimedBy == null || s.claimedBy === meta.hostPlayerId || ready.includes(s.claimedBy));
 }
 function presenceSnapshot(meta: RoomMeta) {
   const out: Record<number, boolean> = {};
@@ -731,20 +748,11 @@ async function maybeSendTurnPush(code: string, E: any, finished: boolean): Promi
 }
 
 /* ---------------------------------------------------------------------------------------
- * v0.16 item 4 § READY CHECK — twin of server.js's startReadyCheck()/maybeAdvanceReadyCheck()/
- * actuallyStartGame(). The host tapping Start now only opens this gate; the real deal happens
- * once every HUMAN seat has confirmed ready (or immediately for an all-CPU table). Always
- * called from inside withRoomChain(code, ...) by its two callers below ("start"/"readyUp").
+ * v0.25 item 1 § LOBBY READINESS - twin of server.js's design: readiness is collected ON THE
+ * SEAT SCREEN (a guest's "Ready up" locks their seat in); the host's Start tap is their own
+ * ready. The v0.16-v0.24 post-Start readyCheck phase is gone. actuallyStartGame() is now
+ * triggered directly from the "start" case once guestsAllReady() holds.
  * ------------------------------------------------------------------------------------- */
-async function maybeAdvanceReadyCheck(code: string): Promise<void> {
-  const cur = await kv.get<RoomMeta>(roomKey(code));
-  if (!cur.value || !cur.value.readyCheck || cur.value.started || !cur.value.lobby) return;
-  const { requiredPlayerIds, readyPlayerIds } = cur.value.readyCheck;
-  if (!requiredPlayerIds.every((id) => readyPlayerIds.includes(id))) return;
-  await actuallyStartGame(code, cur.value);
-}
-// The old "start" case's body, unchanged in substance - now triggered once the ready check
-// clears instead of directly from the host's "start" message. Twin of server.js's function.
 async function actuallyStartGame(code: string, pre: RoomMeta): Promise<void> {
   if (!pre.lobby) return;
   const lobby = pre.lobby;
@@ -759,7 +767,7 @@ async function actuallyStartGame(code: string, pre: RoomMeta): Promise<void> {
   const r = await touchRoom(code, (meta) => {
     if (meta.started || !meta.lobby) return false;
     meta.started = true;
-    meta.readyCheck = null;
+    meta.ready = [];   // v0.25 item 1: lobby readiness is consumed by the start
     meta.seatOwners = meta.lobby.seats.map((s) => s.claimedBy);
     meta.G = G;
     meta.recorded = false;
@@ -1301,7 +1309,7 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           hostPlayerId: playerId, nextPlayerId: 2,
           players: [{ id: playerId, token, name: hostName, isHost: true, connected: true }],
           lobby: { n: msg.n === 6 ? 6 : 4, teams: !!msg.teams, seats },
-          started: false, seatOwners: null, readyCheck: null, paused: false, logCount: 0,
+          started: false, seatOwners: null, ready: [], paused: false, logCount: 0,
           G: null, tableSpeed: seededSpeed, recorded: false, nextSeq: 0,
         };
         await kv.set(roomKey(code), meta, { expireIn: ROOM_TTL_MS });
@@ -1320,11 +1328,9 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         // v0.10.3: `reason:"started"` lets the client fall back to "reclaim" automatically
         // (see the "reclaim" case below) instead of dead-ending — same reasoning as server.js.
         if (preCheck.value.started) { send(socket, { type: "joinError", message: "That game already started. Ask the host to send a new code, or reconnect if you were already playing.", reason: "started" }); return; }
-        // v0.16 item 4: twin of server.js's guard - the seat list is locked in mid ready-check.
-        if (preCheck.value.readyCheck) { send(socket, { type: "joinError", message: "The host is starting the game - try again in a moment." }); return; }
         if (isBadName(msg.name)) { send(socket, { type: "joinError", message: "Pick a nicer name." }); return; }
         const r = await touchRoom(code, (meta) => {
-          if (meta.started || meta.readyCheck) return false;
+          if (meta.started) return false;
           const playerId = meta.nextPlayerId++;
           const token = newToken();
           meta.players.push({ id: playerId, token, name: cleanName(msg.name, "Player"), isHost: false, connected: true });
@@ -1387,12 +1393,9 @@ function handleWsUpgrade(req: Request, ip: string): Response {
             type: "sync", lobby: lobbySnapshot(r.meta), seatOwners: r.meta.seatOwners,
             ...gameSnapshotFields(r.meta, isHost),
           });
-        } else if (r.meta.readyCheck) {
-          // v0.16 item 4: reconnecting mid ready-check lands back on the ready-check screen,
-          // not a stale plain-lobby seat picker - twin of server.js's matching branch.
-          send(socket, { type: "lobby", lobby: lobbySnapshot(r.meta), isHost, protocolVersion: PROTOCOL_VERSION });
-          send(socket, { type: "readyCheck", requiredPlayerIds: r.meta.readyCheck.requiredPlayerIds, readyPlayerIds: r.meta.readyCheck.readyPlayerIds, lobby: lobbySnapshot(r.meta) });
         } else {
+          // v0.25 item 1: the lobby snapshot carries readyPlayerIds, so a mid-lobby reconnect
+          // lands back on the seat screen with everyone's ready state intact.
           send(socket, { type: "lobby", lobby: lobbySnapshot(r.meta), isHost, protocolVersion: PROTOCOL_VERSION });
         }
         broadcastRoom(code, { type: "presence", playerId, connected: true }, playerId);
@@ -1521,8 +1524,9 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         if (!ctx) return;
         const { code, playerId } = ctx;
         const r = await touchRoom(code, (meta) => {
-          // v0.16 item 4: the seat list is locked in for the duration of a ready check.
-          if (!meta.lobby || meta.started || meta.readyCheck) return false;
+          if (!meta.lobby || meta.started) return false;
+          // v0.25 item 1: "Ready up" locks the seat choice in - a ready player can't move.
+          if ((meta.ready || []).includes(playerId)) return false;
           const seat = meta.lobby.seats[msg.seatIndex as number];
           if (!seat) return false;
           if (seat.claimedBy === meta.hostPlayerId) return false;
@@ -1542,12 +1546,15 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         const { code, playerId } = ctx;
         let kicked: number | null = null;
         const r = await touchRoom(code, (meta) => {
-          // v0.16 item 4: same lock as claimSeat above.
-          if (playerId !== meta.hostPlayerId || !meta.lobby || meta.started || meta.readyCheck) return false;
+          if (playerId !== meta.hostPlayerId || !meta.lobby || meta.started) return false;
           const seat = meta.lobby.seats[msg.seatIndex as number];
           if (!seat) return false;
           const patch = (msg.patch as Record<string, unknown>) || {};
-          if (patch.type === "cpu" && seat.claimedBy != null) { kicked = seat.claimedBy; seat.claimedBy = null; }
+          if (patch.type === "cpu" && seat.claimedBy != null) {
+            kicked = seat.claimedBy; seat.claimedBy = null;
+            // v0.25 item 1: a kicked guest's ready mark goes with them - twin of server.js.
+            if (meta.ready) meta.ready = meta.ready.filter((id) => id !== kicked);
+          }
           if (patch.type) seat.type = patch.type === "cpu" ? "cpu" : "human";
           if (patch.diff) seat.diff = patch.diff as string;
           if (patch.name != null && !isBadName(patch.name)) seat.name = cleanName(patch.name, seat.name);
@@ -1561,34 +1568,37 @@ function handleWsUpgrade(req: Request, ip: string): Response {
       }
 
       case "start": {
-        // v0.16 item 4: {type:'start'} used to deal immediately; it now only opens the READY
-        // CHECK gate (see maybeAdvanceReadyCheck()/actuallyStartGame() above) - twin of
-        // server.js's "start" case. The actual deal happens once every human seat has
-        // confirmed ready (or immediately if there are none, e.g. an all-CPU table).
+        // v0.25 item 1: {type:'start', willSeat} - host-only, and only once every claimed
+        // NON-HOST seat's player is ready (guestsAllReady()). Twin of server.js's case: the
+        // v0.16-v0.24 readyCheck phase is gone; this starts (via the v0.22 seat gate)
+        // directly. The host's own willSeat rides this message - Start is their ready-up.
         if (!ctx) return;
         const { code, playerId } = ctx;
         await withRoomChain(code, async () => {
-          const r = await touchRoom(code, (meta) => {
-            if (playerId !== meta.hostPlayerId || meta.started || !meta.lobby || meta.readyCheck) return false;
-            const requiredPlayerIds = Array.from(new Set(meta.lobby.seats.filter((s) => s.claimedBy != null).map((s) => s.claimedBy as number)));
-            meta.readyCheck = { requiredPlayerIds, readyPlayerIds: [] };
-            return {};
-          });
-          if (!r.ok) return;
-          broadcastRoom(code, { type: "readyCheck", requiredPlayerIds: r.meta.readyCheck!.requiredPlayerIds, readyPlayerIds: r.meta.readyCheck!.readyPlayerIds, lobby: lobbySnapshot(r.meta) });
-          log("room entered ready check", code, "required=" + r.meta.readyCheck!.requiredPlayerIds.length);
-          await maybeAdvanceReadyCheck(code);   // covers the zero-humans case - proceeds immediately
+          const cur = await kv.get<RoomMeta>(roomKey(code));
+          if (!cur.value) return;
+          const meta = cur.value;
+          if (playerId !== meta.hostPlayerId || meta.started || !meta.lobby) return;
+          if (!guestsAllReady(meta)) {
+            send(socket, { type: "error", message: "Waiting for everyone to tap Ready up first." });
+            return;
+          }
+          if (msg.willSeat) {
+            let s = willSeatMap.get(code);
+            if (!s) { s = new Set(); willSeatMap.set(code, s); }
+            s.add(playerId);
+          }
+          await actuallyStartGame(code, meta);
         });
         return;
       }
 
       case "readyUp": {
-        // v0.16 item 4: {type:'readyUp'} - a human at the table confirms ready. Twin of
-        // server.js's case.
+        // v0.25 item 1: {type:'readyUp', willSeat} - a guest on the seat screen locks their
+        // seat choice in. Twin of server.js's case: valid any time in the lobby, requires an
+        // actually-claimed seat. willSeat still carries the v0.22 seat-gate promise.
         if (!ctx) return;
         const { code, playerId } = ctx;
-        // v0.22 P0b: a new client's readyUp announces it will send {type:'seated'} once its
-        // board is actually visible - see § SEAT GATE. Old clients never set this.
         if (msg.willSeat) {
           let s = willSeatMap.get(code);
           if (!s) { s = new Set(); willSeatMap.set(code, s); }
@@ -1596,33 +1606,14 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         }
         await withRoomChain(code, async () => {
           const r = await touchRoom(code, (meta) => {
-            if (!meta.readyCheck || meta.started) return false;
-            if (!meta.readyCheck.requiredPlayerIds.includes(playerId)) return false;
-            if (!meta.readyCheck.readyPlayerIds.includes(playerId)) meta.readyCheck.readyPlayerIds.push(playerId);
+            if (!meta.lobby || meta.started) return false;
+            if (!meta.lobby.seats.some((s) => s.claimedBy === playerId)) return false;
+            if (!meta.ready) meta.ready = [];
+            if (!meta.ready.includes(playerId)) meta.ready.push(playerId);
             return {};
           });
           if (!r.ok) return;
-          broadcastRoom(code, { type: "readyCheck", requiredPlayerIds: r.meta.readyCheck!.requiredPlayerIds, readyPlayerIds: r.meta.readyCheck!.readyPlayerIds, lobby: lobbySnapshot(r.meta) });
-          await maybeAdvanceReadyCheck(code);
-        });
-        return;
-      }
-
-      case "cancelReadyCheck": {
-        // v0.16 item 4: {type:'cancelReadyCheck'} - host-only, backs out to the plain lobby.
-        // Twin of server.js's case.
-        if (!ctx) return;
-        const { code, playerId } = ctx;
-        await withRoomChain(code, async () => {
-          const r = await touchRoom(code, (meta) => {
-            if (playerId !== meta.hostPlayerId || !meta.readyCheck || meta.started) return false;
-            meta.readyCheck = null;
-            return {};
-          });
-          if (r.ok) {
-            willSeatMap.delete(code);   // v0.22 P0b: promises reset with the check - re-announced on the next readyUp
-            broadcastRoom(code, { type: "readyCheckCancelled", lobby: lobbySnapshot(r.meta) });
-          }
+          broadcastRoom(code, { type: "lobby", lobby: lobbySnapshot(r.meta) });
         });
         return;
       }
