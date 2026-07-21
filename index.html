@@ -1212,13 +1212,16 @@ button{font:inherit;cursor:pointer}
   </div>
 </div>
 
-<!-- § REUNION (v0.9 refinement) - shown only to whoever tapped "Resume Saved Game" on an
-     online room, so a comeback game doesn't just drop one lone player onto a moving board.
-     See HANDOFF.md "Resuming an online game" for the full writeup. -->
+<!-- § REJOIN LOBBY (v0.25 items 6+7, evolving v0.9's reunion screen) - shown to whoever taps
+     the online saved-game tile while other humans are still missing, and to anyone else who
+     opens the game mid-wait. Per missing player: "Send rejoin link" (share sheet with the
+     room's invite link) and "Have a computer take over" with an Easy/Tricky/Nasty picker
+     (server converts the seat to a real CPU - takeOverSeat, same seatToCpu machinery as
+     leave-for-good). Once every seat is accounted for, ANY player here can tap Resume. -->
 <div id="reunionOverlay" class="overlay hidden">
   <div class="modalCard">
     <h3>Getting the table back together</h3>
-    <p>Everyone needs to be back before play picks up again.</p>
+    <p>Send a rejoin link to anyone missing, or hand their seat to a computer. Play picks back up once every seat is covered.</p>
     <div id="reunionSeats"></div>
     <div id="reunionNote" style="font-size:13px;color:#ffe9a8;min-height:18px;margin-top:6px"></div>
     <div class="bigBtns">
@@ -1382,8 +1385,8 @@ function handleIncomingJoinLink(url,cold){
   // While already running (app was open, foregrounded by a NEW link tap): route through the
   // same confirmOverwriteThenRun() guard the manual "Join a game" button uses, so an
   // in-progress local save can't get silently clobbered by an accidental/stale link tap.
-  if(cold)tryJoinOrRejoin(code,false);
-  else confirmOverwriteThenRun(()=>tryJoinOrRejoin(code,false));
+  if(cold)tryJoinOrRejoin(code);
+  else confirmOverwriteThenRun(()=>tryJoinOrRejoin(code));
 }
 if(IS_APP){
   document.documentElement.classList.add('capacitor-app');
@@ -4317,8 +4320,8 @@ const NET={
                            // integrity digest, NOT G.actionSeq (see checkStateDigest()'s
                            // comment for why G.actionSeq is ambiguous for this purpose)
   tableSpeed:1,            // v0.15: shared table pacing - see applySpeed(), § UTIL
-  silentRejoin:false,   // v0.8: true only during boot()'s no-URL-param auto-rejoin attempt -
-                        // see 'rejoinError' above and boot()/tryJoinOrRejoin() below
+  // v0.25 items 6+7: silentRejoin is GONE along with the silent auto-rejoin paths - every
+  // rejoin is a deliberate tile/link tap now.
   moveSentForTurn:false,   // v0.8: double-tap guard - see commitMove()
   enteringViaResume:false, // v0.9: set right before rejoining from the menu's "Resume Saved
                            // Game" tile; onSync() checks it once (then clears it) to decide
@@ -4348,15 +4351,9 @@ const NET={
   seatedSent:false,        // v0.22 P0b: this game-boot has told the server "my board is
                            // actually on screen, no overlays in the way" - see
                            // maybeSendSeated(); reset by both boot functions.
-  silentAutoResume:false,  // v0.22 P2 cold-reload path: set only by boot()'s silent auto-rejoin
-                           // attempt (a fresh page load with a recent, STARTED last-room record
-                           // - the iOS memory-kill relaunch shape). onSync() checks it once: a
-                           // LIVE game (not paused, not over) drops straight onto the board with
-                           // NO table pause and NO reunion lobby (one phone's memory kill must
-                           // never pause the family); anything else quietly falls back to the
-                           // menu tile. Completely separate from enteringViaResume (the
-                           // deliberate "Resume Saved Game" tap, which pauses + reunions by
-                           // design).
+  // v0.25 items 6+7: silentAutoResume (v0.22's cold-reload silent rejoin) is GONE - launching
+  // the app ALWAYS lands on the menu now; the saved-game tile is the only way back into an
+  // online game (Blake's decision - see § REJOIN LOBBY and the boot sequence).
 };
 window.NET=NET; // exposed for testing/debugging, same spirit as window.G/window.LAY
 applySpeed();   // v0.15: the real bootstrap call - deferred to here from § UTIL now that
@@ -5130,47 +5127,43 @@ function onSync(m){
   updateConnIndicator();
   sendPushToken();   // v0.16 item 5: re-register on every reconnect (rejoin/reclaim both land here) - see § PUSH
   if(m.G){
-    // v0.22 P2 cold-reload path: this sync answers boot()'s SILENT auto-rejoin (an iOS
-    // memory-kill relaunch - see the boot sequence at the bottom of this file). Only a game
-    // that is genuinely LIVE right now (not paused, not over) gets silently rejoined straight
-    // to the board; a paused or finished game quietly falls back to the menu tile instead
-    // (keepRoom:true - the tile stays, the deliberate resume path still works). Critically,
-    // this path never touches enteringViaResume, so it can never pause the table or open the
-    // reunion lobby - one phone's memory kill must never interrupt the family's game.
-    if(NET.silentAutoResume){
-      NET.silentAutoResume=false;
-      if(m.G.over||m.paused){ leaveOnlineToMenu(null,true); return; }
-      NET.silentRejoin=false;
-      bootGameFromSnapshot(m.G,m.paused,m.tableSpeed,m.appliedSeq);
-      toast('Welcome back - picking up right where you were',2400);
-      return;
-    }
     bootGameFromSnapshot(m.G,m.paused,m.tableSpeed,m.appliedSeq);
-    // v0.9 refinement: coming back via the menu's "Resume Saved Game" tile (as opposed to a
-    // normal brief mid-session reconnect blip) shows the reunion lobby instead of dropping
-    // straight onto a possibly-moving board - see § REUNION below.
+    // v0.25 items 6+7: coming back via the menu's saved-game tile (as opposed to a normal
+    // brief mid-session reconnect blip) has two shapes now:
+    //  (a) every OTHER human from the table is already connected -> auto-rejoin straight to
+    //      the live board, no pause, no lobby (they were only ever waiting on YOU);
+    //  (b) anyone still missing -> pause the table and open the REJOIN LOBBY (see § REJOIN
+    //      LOBBY below) - a lone returning player must never sit at a running table waiting
+    //      on absent humans (Blake's exact field report).
     if(NET.enteringViaResume){
       NET.enteringViaResume=false;
-      if(!G.paused)requestPause(true);
-      // v0.10.2 origin, narrowed by v0.15's snapshot reconnect: don't open the "you're back!"
-      // reunion lobby until THIS client's own (now much shorter) catch-up window has actually
-      // cleared (waitForCatchup(), not just bootGameFromSnapshot()'s own synchronous setup
-      // returning above). NETGEN-guarded in case a newer reconnect supersedes this one while
-      // we're waiting.
-      const myGen=NETGEN;
-      waitForCatchup().then(()=>{ if(myGen===NETGEN)openReunionOverlay(); });
+      const missing=humanSeatList().filter(h=>h.playerId!==NET.playerId&&!NET.presence[h.playerId]);
+      if(missing.length===0){
+        toast('Welcome back - everyone is here. Picking up where you left off.',2600);
+      }else{
+        if(!G.paused)requestPause(true);
+        // v0.10.2 origin, narrowed by v0.15's snapshot reconnect: don't open the lobby until
+        // THIS client's own (now much shorter) catch-up window has actually cleared
+        // (waitForCatchup()). NETGEN-guarded in case a newer reconnect supersedes this one.
+        const myGen=NETGEN;
+        waitForCatchup().then(()=>{ if(myGen===NETGEN)openReunionOverlay(); });
+      }
     }
   }
 }
 
-/* ============================= § REUNION (v0.9 refinement) =============================
-   "Getting the table back together" - shown only to whoever resumed an online game from the
-   menu's saved-game tile. Lists every HUMAN seat with a live green/gray presence dot; anyone
-   can nudge an absent seat (SMS/share-sheet invite + a server-relayed live nudge, best-effort
-   - it only reaches a friend who still has the app open SOMEWHERE with a live connection,
-   same honest limitation as the rest of § NET); once every human seat shows connected, the
-   HOST gets a "Resume game" button that unpauses for everyone at once (plain lockstep
-   pauseToggle, same mechanism the topbar's Pause button already uses). */
+/* ============================= § REJOIN LOBBY (v0.25 items 6+7, evolving v0.9's reunion) ====
+   "Getting the table back together" - shown to whoever tapped the online saved-game tile
+   while other humans are missing (a tile tap with everyone already back skips this entirely
+   and lands straight on the board - see onSync()'s enteringViaResume branch). The table is
+   paused while this is up. Per missing player, two options:
+   - "Send rejoin link": native share sheet with the room's invite link (the existing invite
+     machinery) plus a best-effort live nudge through the server.
+   - "Have a computer take over": an Easy/Tricky/Nasty picker, then {type:'takeOverSeat'} -
+     the server converts the seat to a REAL CPU (same seatToCpu broadcast as leave-for-good)
+     and locks the original player out of it for the rest of the game.
+   Once every human seat is accounted for (back, or converted), ANY player at this lobby can
+   tap Resume - a plain pauseToggle, so everyone unpauses together. */
 /* v0.25 items 6+7: seats converted to a CPU by a LIVE broadcast this session (a leaveForGood
    or a rejoin-lobby takeover). The authoritative G.seats mutation applies through the normal
    action queue - which is deliberately held behind the pause gate while the rejoin lobby is
@@ -5189,21 +5182,54 @@ function humanSeatList(){
   return NET.seatOwners.map((pid,seat)=>({seat,playerId:pid,name:G.seats[seat].name}))
     .filter(x=>x.playerId!=null&&!CONVERTED_SEATS.has(x.seat)&&G.seats[x.seat].type==='human');
 }
+let REUNION_PICKING=null;   // seat index whose "Have a computer take over" difficulty picker is open
 function renderReunionOverlay(){
   const humans=humanSeatList();
-  const allHere=humans.every(h=>NET.presence[h.playerId]);
-  $('reunionSeats').innerHTML=humans.map(h=>{
-    const here=!!NET.presence[h.playerId];
-    return `<div class="lobbySeat"><span class="dot" style="background:${here?'#3fae5c':'#888'}"></span>
-      <span class="nm">${esc(h.name)}</span><span class="st">${here?'Here':'Not back yet'}</span>
-      ${here?'':`<button data-pid="${h.playerId}" data-name="${esc(h.name)}" class="btnNudge">Nudge</button>`}</div>`;
-  }).join('');
-  $('reunionSeats').querySelectorAll('.btnNudge').forEach(b=>b.onclick=()=>nudgePlayer(+b.dataset.pid,b.dataset.name));
-  $('reunionNote').textContent=allHere?'Everyone\'s back!':'Waiting on everyone to be back before play picks up again.';
-  $('btnReunionResume').classList.toggle('hidden', !(allHere&&NET.isHost));
+  const here=h=>h.playerId===NET.playerId||!!NET.presence[h.playerId];
+  const allHere=humans.every(here);
+  const seatsEl=$('reunionSeats'); seatsEl.innerHTML='';
+  humans.forEach(h=>{
+    const back=here(h);
+    const row=document.createElement('div'); row.className='lobbySeat'; row.style.flexWrap='wrap';
+    row.innerHTML=`<span class="dot" style="background:${back?'#3fae5c':'#ff5449'}"></span>
+      <span class="nm">${esc(h.name)}</span><span class="st">${back?'Back ✓':'Not back yet'}</span>`;
+    if(!back){
+      const btns=document.createElement('div');
+      btns.style.cssText='flex-basis:100%;display:flex;gap:6px;flex-wrap:wrap;margin-top:4px';
+      if(REUNION_PICKING===h.seat){
+        // Difficulty picker: tapping one hands the seat to a real CPU at that level.
+        [['easy','Easy'],['medium','Tricky'],['hard','Nasty']].forEach(([d,label])=>{
+          const b=document.createElement('button'); b.textContent=label;
+          b.onclick=()=>{ REUNION_PICKING=null; netSend({type:'takeOverSeat',seat:h.seat,diff:d}); renderReunionOverlay(); };
+          btns.appendChild(b);
+        });
+        const back2=document.createElement('button'); back2.textContent='Never mind';
+        back2.onclick=()=>{ REUNION_PICKING=null; renderReunionOverlay(); };
+        btns.appendChild(back2);
+      }else{
+        const link=document.createElement('button'); link.textContent='Send rejoin link';
+        link.onclick=()=>{
+          netSend({type:'nudge',targetPlayerId:h.playerId});
+          sendInvite(`We're starting NASTY back up - come rejoin! ${inviteLink(NET.code)}`);
+        };
+        const cpu=document.createElement('button'); cpu.textContent='Have a computer take over';
+        cpu.onclick=()=>{ REUNION_PICKING=h.seat; renderReunionOverlay(); };
+        btns.appendChild(link); btns.appendChild(cpu);
+      }
+      row.appendChild(btns);
+    }
+    seatsEl.appendChild(row);
+  });
+  $('reunionNote').textContent=allHere
+    ?'Every seat is covered - tap Resume to keep playing.'
+    :'Play picks back up once everyone is back or their seat is handed to a computer.';
+  // v0.25 items 6+7: ANY player at this lobby may resume once every seat is accounted for -
+  // no more host-only gate (the host may be exactly who's missing).
+  $('btnReunionResume').classList.toggle('hidden',!allHere);
 }
 function openReunionOverlay(){
   NET.reunionOpen=true;
+  REUNION_PICKING=null;
   $('pauseOverlay').classList.add('hidden');
   renderReunionOverlay();
   $('reunionOverlay').classList.remove('hidden');
@@ -5211,10 +5237,6 @@ function openReunionOverlay(){
 function closeReunionOverlay(){
   NET.reunionOpen=false;
   $('reunionOverlay').classList.add('hidden');
-}
-function nudgePlayer(playerId,name){
-  netSend({type:'nudge',targetPlayerId:playerId});
-  sendInvite(`We're starting NASTY back up - come rejoin! ${inviteLink(NET.code)}`);
 }
 $('btnReunionClose').onclick=()=>{ closeReunionOverlay(); updatePauseUI(); };
 $('btnReunionResume').onclick=()=>{ requestPause(false); };
@@ -5270,7 +5292,7 @@ function leaveOnlineToMenu(msg,keepRoom){
   if(NET.ws){ try{NET.ws.close();}catch(e){} }
   Object.assign(NET,{ws:null,online:false,isHost:false,code:null,playerId:null,token:null,mySeat:-1,
     lobby:null,seatOwners:null,actionQueue:[],pendingActionResolvers:[],pendingStateCheck:null,appliedSeq:-1,rulesShown:false,
-    recalActive:false,recalKind:null,recalStartedAt:null,recalFailed:false,silentAutoResume:false});
+    recalActive:false,recalKind:null,recalStartedAt:null,recalFailed:false});
   if(!keepRoom)clearLastRoom();   // v0.8: leaving is a deliberate choice - don't auto-rejoin this one later
   CONVERTED_SEATS=new Set();      // v0.25 items 6+7: display state, never outlives the session
   updateConnIndicator();
@@ -5420,9 +5442,8 @@ function handleNetMessage(m){
       if(G){
         toast(m.message||'Lost the room connection.');
       }else{
-        leaveOnlineToMenu(NET.silentRejoin?null:(m.message||'Lost the room connection.'));
+        leaveOnlineToMenu(m.message||'Lost the room connection.');
       }
-      NET.silentRejoin=false;
       return;
     case 'lobby':
       NET.lobby=m.lobby;
@@ -6604,7 +6625,7 @@ function onSavedTileClick(i){
     // reunion lobby (see § REUNION below) instead of dropping straight onto the board -
     // onSync() checks this flag once, then clears it.
     NET.enteringViaResume=true;
-    tryJoinOrRejoin(e.last.code,false);
+    tryJoinOrRejoin(e.last.code);
   }
 }
 TILE_IDS.forEach(([row,content,main,detail,trash,confirm,delBtn,cancelBtn],i)=>{
@@ -6645,27 +6666,16 @@ function resumeOfflineGame(slot){
   runTurn();
 }
 
-/* ---- Join/rejoin helper (v0.8) - shared by the ?join=CODE URL path and the silent
-   no-URL-param auto-rejoin path below. `silent` means "don't pop the join overlay or any
-   error toast if this fails, just fall back to offering an offline resume instead" - used
-   only for the iOS-full-eviction case where the user didn't ask for anything, the app is
-   just trying to get them back where they were. */
-function tryJoinOrRejoin(code,silent){
+/* ---- Join/rejoin helper (v0.8; simplified v0.25) - shared by the ?join=CODE URL path, the
+   saved-game tile, and Universal Links. Every rejoin is a deliberate tap now (the silent
+   auto-rejoin paths are gone - items 6+7), so a failure always falls back to the visible
+   join overlay. */
+function tryJoinOrRejoin(code){
   const saved=loadNetSession(code);
   if(saved){
-    NET.silentRejoin=!!silent;
     NET.wantConnection=true; NET.code=code; NET.playerId=saved.playerId; NET.token=saved.token;
     connectWs().then(()=>{ netSend({type:'rejoin',code,playerId:saved.playerId,token:saved.token,protocolVersion:PROTOCOL_VERSION}); })
-      .catch(()=>{
-        NET.wantConnection=false; NET.silentRejoin=false;
-        // v0.22 P2: a silent attempt failing to even CONNECT (server unreachable, airplane
-        // mode at launch) says nothing about whether the room is dead - keep the record and
-        // just land on the normal menu with its resume tile intact. Only a real rejoinError
-        // (the room is verifiably gone) clears the record, via its own handler.
-        if(silent){ NET.silentAutoResume=false; updateMenuResumeButtons(); } else openJoinOverlay(code);
-      });
-  }else if(silent){
-    updateMenuResumeButtons();
+      .catch(()=>{ NET.wantConnection=false; openJoinOverlay(code); });
   }else{
     openJoinOverlay(code);
   }
@@ -6888,7 +6898,7 @@ else{
   // BOOT" below). A real join link always wins over a stale pending hold.
   const pendingStart=(!joinCode&&!speedChoiceMade())?loadPendingOfflineStart():null;
   if(joinCode){
-    tryJoinOrRejoin(joinCode.toUpperCase(),false);
+    tryJoinOrRejoin(joinCode.toUpperCase());
   }else if(pendingStart&&pendingStart.n&&pendingStart.seatMeta){
     clearPendingOfflineStart();
     CFG.n=pendingStart.n; CFG.teams=pendingStart.teams; CFG.seatMeta=pendingStart.seatMeta;
@@ -6904,24 +6914,11 @@ else{
     // same single, deliberate "▶ Resume Saved Game" tile on the menu; tapping it is what
     // actually rejoins (and, for an online game, opens the reunion lobby).
     //
-    // v0.22 P2 cold-reload refinement: ONE narrow, deliberate exception to the v0.9 rule. iOS
-    // can memory-kill the webview of a backgrounded app mid-game; the app then relaunches cold
-    // to this exact code path with no foreground event ever firing - and the FAMILY'S game is
-    // still running without this phone. For that shape only - a STARTED room touched within
-    // the last 30 minutes, with a stored session - quietly TRY to rejoin; onSync() then only
-    // actually drops onto the board if the game is genuinely live RIGHT NOW (not paused, not
-    // over - see the silentAutoResume branch there), and never pauses the table or opens the
-    // reunion lobby doing it. Anything else (paused game, finished game, dead room, unreachable
-    // server, stale record) falls back to this same menu + tile, exactly as v0.9 designed.
-    // This does not re-litigate v0.9's call: that complaint was about days-old games bouncing
-    // a LONE player onto a stale board; the 30-minute liveness gate + the server-checked
-    // "still live" gate mean this only ever fires while the family is actively mid-game.
-    const last=loadLastRoom();
-    const RESUME_SILENT_WINDOW_MS=30*60*1000;
-    if(last&&last.wasStarted&&loadNetSession(last.code)&&Date.now()-(last.ts||0)<RESUME_SILENT_WINDOW_MS){
-      NET.silentAutoResume=true;
-      tryJoinOrRejoin(last.code,true);
-    }
+    // v0.25 items 6+7 (Blake's decision, supersedes v0.22's cold-reload silent rejoin, which
+    // is REMOVED): launching the app ALWAYS lands on the menu. The online saved-game tile is
+    // the one way back in - tapping it either drops straight onto the board (everyone else
+    // already back) or opens the rejoin lobby (see onSync()'s enteringViaResume branch and
+    // § REJOIN LOBBY). No more surprise landings of any kind.
     updateMenuResumeButtons();
   }
 }

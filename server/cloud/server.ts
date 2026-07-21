@@ -1723,6 +1723,50 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         return;
       }
 
+      case "takeOverSeat": {
+        // v0.25 items 6+7 § REJOIN LOBBY - twin of server.js's case: any seated player may
+        // hand an ABSENT human's seat to a real CPU from the rejoin lobby. Same conversion
+        // machinery and permanence as "leaveForGood" (seatToCpu broadcast + lockout).
+        if (!ctx) return;
+        const { code, playerId } = ctx;
+        const seat = Number(msg.seat);
+        const diff = ["easy", "medium", "hard"].includes(msg.diff as string) ? (msg.diff as string) : "medium";
+        await withRoomChain(code, async () => {
+          const pre = await kv.get<RoomMeta>(roomKey(code));
+          if (!pre.value || !pre.value.started || !pre.value.seatOwners) return;
+          const meta = pre.value;
+          if (!meta.seatOwners!.includes(playerId)) return;      // only a seated player may ask
+          const ownerId = meta.seatOwners![seat];
+          if (ownerId == null || ownerId === playerId) return;   // your own seat has "leaveForGood"
+          const owner = meta.players.find((p) => p.id === ownerId);
+          if (!playerLooksAway(code, owner)) return;             // they're right there - hands off
+          const E = getEngine(code, meta);
+          if (!E) return;
+          const G = E.getG();
+          if (!G || G.over) return;
+          const seatCfg = G.seats[seat];
+          if (!seatCfg || seatCfg.type !== "human") return;
+          const takenName = seatCfg.name;
+          seatCfg.type = "cpu";
+          seatCfg.diff = diff;
+          const out: Broadcastable[] = [{ payload: { type: "gameAction", seq: meta.nextSeq++, action: { kind: "seatToCpu", seat, diff, name: takenName } } }];
+          // The seat may be the on-turn seat everyone has been waiting on - drive forward now.
+          const cont = driveTurnLoopCollect(E, meta);
+          const ok = await commitAndBroadcast(code, E, out.concat(cont.out), cont.finished);
+          if (ok) maybeSendTurnPush(code, E, cont.finished).catch((e) => log("push check failed", code, (e as Error).message));
+          // Follow-up commit for the lockout + seatOwners slot - same pattern as leaveForGood
+          // (it must land even though commitAndBroadcast just persisted a fresh meta.G).
+          await touchRoom(code, (m) => {
+            const p = m.players.find((pp) => pp.id === ownerId);
+            if (p) p.leftForGood = true;
+            if (m.seatOwners) m.seatOwners[seat] = null;
+            return {};
+          });
+          log("rejoin lobby: seat handed to a computer", code, "seat=" + seat, "diff=" + diff, "by playerId=" + playerId);
+        });
+        return;
+      }
+
       case "requestStateCheck": {
         // v0.15: the server answers directly (it IS the authority) — no more relaying to the
         // host's phone. Tagged with the most recent broadcast seq, same as server.js.

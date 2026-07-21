@@ -1636,6 +1636,42 @@ wss.on("connection", (ws, req) => {
         return;
       }
 
+      case "takeOverSeat": {
+        // v0.25 items 6+7 § REJOIN LOBBY: {type:'takeOverSeat', seat, diff} - any seated
+        // player may hand an ABSENT human's seat to a real CPU (Easy/Tricky/Nasty) from the
+        // rejoin lobby. Same conversion machinery and same permanence as "leaveForGood"
+        // (seatToCpu broadcast; the original player is locked out of the seat) - the only
+        // difference is who asks: the table, about a player who is not there. Guards: the
+        // sender must own a seat here; the target must be a live human seat whose owner is
+        // genuinely away (disconnected or app-silent) - never converted under a player who
+        // is actually present.
+        if (!ctx) return;
+        const { room, playerId } = ctx;
+        if (!room.started || !room.engine || !room.seatOwners) return;
+        const seat = Number(msg.seat);
+        const diff = ["easy", "medium", "hard"].includes(msg.diff) ? msg.diff : "medium";
+        const G = room.engine.getG();
+        if (!G || G.over) return;
+        if (!room.seatOwners.includes(playerId)) return;      // only a seated player may ask
+        const seatCfg = G.seats[seat];
+        if (!seatCfg || seatCfg.type !== "human") return;
+        const ownerId = room.seatOwners[seat];
+        if (ownerId == null || ownerId === playerId) return;  // your own seat has "leaveForGood"
+        const owner = room.players.get(ownerId);
+        if (!playerLooksAway(owner)) return;                  // they're right there - hands off
+        if (owner) owner.leftForGood = true;                  // same permanent lockout as leaveForGood
+        const takenName = seatCfg.name;
+        seatCfg.type = "cpu";
+        seatCfg.diff = diff;
+        room.seatOwners[seat] = null;
+        touch(room);
+        appendAction(room, { kind: "seatToCpu", seat, diff, name: takenName });
+        // The seat may be the on-turn seat everyone has been waiting on - drive forward now.
+        driveTurnLoop(room);
+        log("rejoin lobby: seat handed to a computer", room.code, "seat=" + seat, "diff=" + diff, "by playerId=" + playerId);
+        return;
+      }
+
       case "requestStateCheck": {
         // v0.15: simplified — the server IS the authority now, so it can just answer directly
         // instead of relaying to the host (v0.14's design, back when only the host's phone
