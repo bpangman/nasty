@@ -825,8 +825,8 @@ button{font:inherit;cursor:pointer}
    the entire screen and then some"). .confirmCard caps at max-height:90vh with its own scroll,
    and the media query below shrinks the giant 56px .sign banner text + tightens spacing on short
    screens (max-height:660px catches iPhone SE-class screens specifically). */
-.confirmCard{width:100%;max-width:440px;max-height:90vh;overflow-y:auto;display:flex;
-  flex-direction:column;align-items:center;padding:2px}
+.confirmCard{width:100%;max-width:440px;display:flex;
+  flex-direction:column;align-items:center;padding:2px;transform-origin:center center}
 .confirmCard .bigBtns{width:100%}
 @media (max-height:660px){
   .confirmCard .sign{padding:9px 20px 7px}
@@ -1692,6 +1692,17 @@ if(IS_APP){
 }
 /* ============================= § UTIL ============================= */
 const $=id=>document.getElementById(id);
+// scales a .confirmCard down (rather than letting it overflow/scroll) if its content is taller
+// than the viewport - see the .confirmCard CSS comment above for why overflow-y:auto was dropped.
+function fitConfirmCard(overlay){
+  const card=overlay.querySelector('.confirmCard');
+  if(!card)return;
+  card.style.transform='';
+  requestAnimationFrame(()=>{
+    const ch=card.scrollHeight,vh=window.innerHeight*0.9;
+    if(ch>vh)card.style.transform='scale('+vh/ch+')';
+  });
+}
 /* INSTANT (fix, 2026-07-09): reconnect catch-up used to just run the normal animated
    performMove() pipeline at a 30x-compressed SKIP speed - every animation duration has a
    hardcoded floor (see D() below), so a long history (a whole game's worth of moves, if you
@@ -3405,10 +3416,10 @@ function pauseGate(){
 let PAUSE_TAP_ALLOWED=true;
 function updatePauseUI(){
   const ov=$('pauseOverlay');
-  if(!G||!G.paused){ ov.classList.add('hidden'); closeReunionOverlay(); return; }
+  if(!G||!G.paused){ ov.classList.add('hidden'); { const cc=ov.querySelector('.confirmCard'); if(cc) cc.style.transform=''; } closeReunionOverlay(); return; }
   // v0.9: the reunion lobby (see § REUNION) is its OWN overlay with its own "we're paused,
   // waiting on people" story - don't stack the plain pause overlay on top of it too.
-  if(NET.reunionOpen){ ov.classList.add('hidden'); return; }
+  if(NET.reunionOpen){ ov.classList.add('hidden'); { const cc=ov.querySelector('.confirmCard'); if(cc) cc.style.transform=''; } return; }
   if(NET.online){
     // v0.10.2: a real gap this session's testing surfaced - the reunion lobby's force-pause
     // (someone resuming a saved online game, see onSync()'s NET.enteringViaResume branch)
@@ -3447,6 +3458,7 @@ function updatePauseUI(){
     $('pauseText').textContent='Everyone can walk away - your game is saved. Tap anywhere to keep playing.';
   }
   ov.classList.remove('hidden');
+  fitConfirmCard(ov);
 }
 // setPaused() is the ONLY thing that actually flips G.paused and wakes the gate - both the
 // local (offline) pause button and the online 'paused' broadcast funnel through here, so
@@ -5375,6 +5387,7 @@ function openReunionOverlay(){
   NET.reunionOpen=true;
   REUNION_PICKING=null;
   $('pauseOverlay').classList.add('hidden');
+  { const cc=$('pauseOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   renderReunionOverlay();
   $('reunionOverlay').classList.remove('hidden');
 }
@@ -5454,6 +5467,7 @@ function leaveOnlineToMenu(msg,keepRoom){
   clearAwayUI();   // v0.22 P3: never leave a stale away-ladder line/button behind
   resetNetUiFlow();
   $('pauseOverlay').classList.add('hidden');
+  { const cc=$('pauseOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   $('onlineRulesOverlay').classList.add('hidden');  // v0.16 item 4: defensive - never linger past a leave
   $('game').classList.add('hidden'); $('menu').classList.remove('hidden');
   clearToasts();   // v0.11.3: wipe any leftover in-game toast before landing on the menu
@@ -6145,15 +6159,16 @@ let PENDING_OVERWRITE_ACTION=null;
 function confirmOverwriteThenRun(action){
   const last=loadLastRoom();
   const canRejoin=!!(last&&loadNetSession(last.code));
-  if(canRejoin){ PENDING_OVERWRITE_ACTION=action; $('overwriteWarnOverlay').classList.remove('hidden'); }
+  if(canRejoin){ PENDING_OVERWRITE_ACTION=action; $('overwriteWarnOverlay').classList.remove('hidden'); fitConfirmCard($('overwriteWarnOverlay')); }
   else action();
 }
 $('btnOverwriteConfirm').onclick=()=>{
   $('overwriteWarnOverlay').classList.add('hidden');
+  { const cc=$('overwriteWarnOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   const action=PENDING_OVERWRITE_ACTION; PENDING_OVERWRITE_ACTION=null;
   if(action)action();
 };
-$('btnOverwriteCancel').onclick=()=>{ $('overwriteWarnOverlay').classList.add('hidden'); PENDING_OVERWRITE_ACTION=null; };
+$('btnOverwriteCancel').onclick=()=>{ $('overwriteWarnOverlay').classList.add('hidden'); { const cc=$('overwriteWarnOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; } PENDING_OVERWRITE_ACTION=null; };
 /* v0.17: starting a NEW offline game binds it to a save spot up front (SAVE_SLOT, § TURNS'
    offline-save block) so its autosave always has a home that is provably not another game's.
    Free spot available: bind it and go, zero extra taps - the common case. Both spots full:
@@ -6169,9 +6184,11 @@ function startOfflineGameGate(action){
     $('btnReplaceSlot'+k).textContent='Replace: '+(s?saveSlotLabel(s):'(empty)');
   }
   $('slotReplaceOverlay').classList.remove('hidden');
+  fitConfirmCard($('slotReplaceOverlay'));
 }
 function chooseReplaceSlot(k){
   $('slotReplaceOverlay').classList.add('hidden');
+  { const cc=$('slotReplaceOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   const action=PENDING_SLOT_ACTION; PENDING_SLOT_ACTION=null;
   if(!action)return;
   // v0.27: giving up this slot is a surrender of whatever unfinished game was saved there -
@@ -6184,7 +6201,7 @@ function chooseReplaceSlot(k){
 }
 $('btnReplaceSlot1').onclick=()=>chooseReplaceSlot(1);
 $('btnReplaceSlot2').onclick=()=>chooseReplaceSlot(2);
-$('btnReplaceCancel').onclick=()=>{ $('slotReplaceOverlay').classList.add('hidden'); PENDING_SLOT_ACTION=null; };
+$('btnReplaceCancel').onclick=()=>{ $('slotReplaceOverlay').classList.add('hidden'); { const cc=$('slotReplaceOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; } PENDING_SLOT_ACTION=null; };
 $('btnStart').onclick=()=>startOfflineGameGate(startGame);
 $('btnAgain').onclick=()=>{$('winOverlay').classList.add('hidden');
   if(NET.online)leaveOnlineToMenu(); else{clearOfflineSave();startGame();}};
@@ -6218,6 +6235,7 @@ function openLeaveConfirm(){
   // § RECALIBRATION. Same online-only gating as "Leave for good."
   $('btnResetConnection').classList.toggle('hidden',!NET.online);
   $('leaveConfirmOverlay').classList.remove('hidden');
+  fitConfirmCard($('leaveConfirmOverlay'));
 }
 /* v0.25 item 4: "Pause/Save" goes STRAIGHT to the options sheet - the old intermediate
    paused screen (with its separate "Leave game" step) is no longer part of the tapper's own
@@ -6239,7 +6257,9 @@ function releaseSheetPause(){
 }
 function doLeaveGame(saveIt){
   $('leaveConfirmOverlay').classList.add('hidden');
+  { const cc=$('leaveConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   $('pauseOverlay').classList.add('hidden');
+  { const cc=$('pauseOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   releaseSheetPause();   // v0.25 item 4: leaving through the sheet never leaves the table paused
   if(NET.online){
     // keepRoom=saveIt: true = "Save & leave" (same as the old "Save & quit to menu"),
@@ -6261,12 +6281,15 @@ function doLeaveGame(saveIt){
 $('btnLeaveSave').onclick=()=>doLeaveGame(true);
 $('btnResetConnection').onclick=()=>{
   $('leaveConfirmOverlay').classList.add('hidden');
+  { const cc=$('leaveConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   $('pauseOverlay').classList.add('hidden');
+  { const cc=$('pauseOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   releaseSheetPause();   // v0.25 item 4: they're staying at the table - resume it too
   hardResetConnection();
 };
 $('btnLeaveCancel').onclick=()=>{
   $('leaveConfirmOverlay').classList.add('hidden');
+  { const cc=$('leaveConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   releaseSheetPause();   // v0.25 item 4: cancelling the sheet resumes a pause the sheet started
 };
 /* v0.27 § SURRENDER - Blake's original ask (replace the topbar Menu button with a Quit button
@@ -6301,6 +6324,7 @@ $('btnLeaveCancel').onclick=()=>{
 function openSurrenderConfirm(){
   if(!G||G.over)return;
   $('leaveConfirmOverlay').classList.add('hidden');   // defensive: hide the sheet if this came from it
+  { const cc=$('leaveConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   const noFault=NET.online&&NET.anySurrenderOccurred;
   $('surrenderConfirmHeading').textContent=noFault?'LEAVE GAME?':'CONCEDE?';
   $('surrenderConfirmText').textContent=noFault
@@ -6308,6 +6332,7 @@ function openSurrenderConfirm(){
     :'Are you sure you want to concede? This will count as a loss on the leaderboard.';
   $('btnSurrenderConfirm').textContent=noFault?'Leave':'Concede';
   $('surrenderConfirmOverlay').classList.remove('hidden');
+  fitConfirmCard($('surrenderConfirmOverlay'));
 }
 $('btnMenu').onclick=()=>openSurrenderConfirm();
 $('btnLeaveDiscard').onclick=()=>openSurrenderConfirm();
@@ -6318,6 +6343,7 @@ $('btnSurrenderCancel').onclick=()=>{
   // for the topbar Quit path, which never pauses) - same never-leave-it-paused rule as
   // btnLeaveCancel above.
   $('surrenderConfirmOverlay').classList.add('hidden');
+  { const cc=$('surrenderConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   releaseSheetPause();
 };
 /* Confirmed surrender - permanently abandons the CURRENT unfinished game and records a loss.
@@ -6332,7 +6358,9 @@ $('btnSurrenderCancel').onclick=()=>{
 let LEAVE_FOR_GOOD_TIMER=null;
 function doSurrenderCurrentGame(){
   $('surrenderConfirmOverlay').classList.add('hidden');
+  { const cc=$('surrenderConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   $('pauseOverlay').classList.add('hidden');
+  { const cc=$('pauseOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   releaseSheetPause();   // in case this came from a sheet-initiated pause
   if(!G||G.over)return;
   if(NET.online){
