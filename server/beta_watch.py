@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=d41b0467-e1c0-461a-be29-f7b9a3b2db1b&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=099d0d04-a8be-442d-a67d-a23edc60476c&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -61,20 +61,13 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 36 reached the family</h1>
+<h1 style="color:#1a5c38">🎉 Build 38 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
 <p>What changed in this one:</p>
 <ul>
-<li>If someone else already leaves an online game partway through (quits, deletes it, or hands
-their seat to a computer), everyone else who leaves that same game afterward no longer counts as
-a loss on the leaderboard, since the game everyone agreed to play already changed the moment
-someone left first. The popup tells you this before you leave.</li>
-<li>The word Surrender was renamed to Concede everywhere you see it. The Quit button itself still
-just says Quit.</li>
-<li>The Pause and Save screen now has a clear Return to Game button right at the top, so it is
-obvious how to get back into your game.</li>
-<li>Fixed a display bug where some of these confirmation popups could run off the bottom of the
-screen on smaller phones.</li>
+<li>Confirmation dialogs (Concede, Leave Game, etc.) now shrink proportionally to fit your screen
+instead of getting cut off. The whole card scales down so you always see every button no matter
+what phone you're on.</li>
 </ul>
 <h3>📱 The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -89,7 +82,7 @@ screen on smaller phones.</li>
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 36 is live for the family 🎉', body], check=True)
+                    'NASTY: build 38 is live for the family 🎉', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED - email sent, watcher done')
 except Exception as e:
