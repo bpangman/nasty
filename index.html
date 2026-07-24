@@ -940,15 +940,49 @@ button{font:inherit;cursor:pointer}
    Scoped to .confirmCard .sign / .confirmCard .sign b ONLY - the NASTY! takeout stamp
    (.nastyStamp .sign) and the menu game logo (#gameLogo .sign) share the same base .sign rule
    and are completely untouched (confirmed by direct computed-style checks, not just reading the
-   CSS - see server/tests/test_overlay_sizing.js). */
+   CSS - see server/tests/test_overlay_sizing.js).
+
+   2026-07-24 follow-up (Blake, same day, after the clip fix above shipped): "you fixed the cut
+   off issue! Now please double them in size so they fill up more of the screen. Still leave some
+   room on the ends though! Just needs to be bigger." So this second pass ENLARGES the numbers
+   above - same clamp() structure, bigger bounds - while keeping a real, measured, non-zero margin
+   on every side at every size. Measured directly (Playwright, real rendered pixel checks, the
+   same method the clip-bug fix above used), not just eyeballed:
+   - The true worst case for wrapping turned out to be "REPLACE A SAVE?" (slotReplaceOverlay), not
+     "SAVE & LEAVE?" - it is the widest heading once actually rendered, even though it is not the
+     most letters. At the narrowest phone (320px wide, the short-screen tier below), this rule was
+     sized so "REPLACE A SAVE?" keeps about 5 to 10 percent of the screen width as empty margin on
+     each side - real room, not zero, per Blake's "still leave some room on the ends."
+   - At the tall-screen tier (this rule, taller phones/no Dynamic Type squeeze), "REPLACE A SAVE?"
+     and "REPLACE GAME?" (overwriteWarnOverlay) are close enough to their own wrap limit that
+     growing them by the SAME amount as the other three headings would wrap them - so those two
+     overlays get their OWN smaller override (below), sized to their own safe limit, while
+     CONCEDE?/LEAVE GAME?/SAVE & LEAVE? (the three Blake actually named) get the full enlargement.
+     This is why the numbers below are not identical across all five confirm overlays - each is
+     sized to the most room it can safely take without ever wrapping to a second line.
+   Every combination (5 headings x the 5-viewport matrix in test_overlay_sizing.js) was verified to
+   stay a single line, never touch a screen edge, and keep a real positive margin - see Part F/G
+   there for the exact numbers. */
 .confirmCard .sign{box-sizing:border-box;max-width:100%;
-  padding:clamp(6px,1.8vw,9px) clamp(8px,2.8vw,14px) clamp(5px,1.5vw,7px);
-  border-width:clamp(2px,0.8vw,3px);outline-width:2px;
+  padding:clamp(7px,2.07vw,10px) clamp(9px,3.22vw,16px) clamp(6px,1.73vw,8px);
+  border-width:clamp(2px,0.92vw,3.5px);outline-width:2px;
   box-shadow:0 6px 16px rgba(0,0,0,.4), inset 0 2px 0 rgba(255,255,255,.25)}
-.confirmCard .sign b{font-size:clamp(19px,6.2vw,34px)}
+.confirmCard .sign b{font-size:clamp(22px,7.13vw,39px)}
+/* Narrower override for the two "replace" warnings (overwriteWarnOverlay/slotReplaceOverlay) -
+   their headings ("REPLACE GAME?"/"REPLACE A SAVE?") are the widest text in any confirm badge, so
+   they get their own smaller-but-still-bigger-than-before clamp instead of sharing the enlarged
+   rule above, which would wrap them. See the dated comment above this whole block. */
+#overwriteWarnOverlay .confirmCard .sign, #slotReplaceOverlay .confirmCard .sign{
+  padding:clamp(6px,1.84vw,9px) clamp(8px,2.86vw,14px) clamp(5px,1.53vw,7px)}
+#overwriteWarnOverlay .confirmCard .sign b, #slotReplaceOverlay .confirmCard .sign b{
+  font-size:clamp(19px,6.32vw,35px)}
 @media (max-height:660px){
-  .confirmCard .sign{padding:clamp(4px,1.3vw,6px) clamp(6px,2.1vw,11px) clamp(3px,1.1vw,5px)}
-  .confirmCard .sign b{font-size:clamp(15px,4.9vw,22px)}
+  .confirmCard .sign{padding:clamp(5px,1.5vw,7px) clamp(7px,2.42vw,13px) clamp(3px,1.27vw,6px)}
+  .confirmCard .sign b{font-size:clamp(17px,5.64vw,25px)}
+  #overwriteWarnOverlay .confirmCard .sign, #slotReplaceOverlay .confirmCard .sign{
+    padding:clamp(5px,1.5vw,7px) clamp(7px,2.42vw,13px) clamp(3px,1.27vw,6px)}
+  #overwriteWarnOverlay .confirmCard .sign b, #slotReplaceOverlay .confirmCard .sign b{
+    font-size:clamp(17px,5.64vw,25px)}
   .confirmCard p{font-size:14px;line-height:1.4;margin:10px 0}
   .confirmCard .bigBtns{gap:8px;margin-top:12px}
   .confirmCard .bigBtns .btn{padding:10px 16px;font-size:14.5px;min-height:44px}
@@ -1133,7 +1167,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.28.2</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.28.3</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->

@@ -321,10 +321,29 @@ async function partE_confirmCardSignScopedSmaller(browser) {
 // (2) an ACTUAL PIXEL check - a real screenshot, decoded and sampled just outside that margin, to
 // confirm those pixels are the dark overlay background and not badge green/white/shadow bleeding
 // to the edge. Geometry alone cannot catch a css clip-box bug like this one; pixels can.
+//
+// 2026-07-24 follow-up (Blake, same day: "double them in size so they fill up more of the screen,
+// still leave some room on the ends though"): the badge itself grew a lot (see the dated CSS
+// comment right above .confirmCard .sign, index.html, § STYLE), so the margins this suite checks
+// are INTENTIONALLY smaller than the huge ones the clip-bug fix above shipped with - that is the
+// whole point of making the badge bigger. MIN_NET_MARGIN is raised from a bare float-safety "not
+// zero" floor to a real, meaningful floor (still comfortably below every measured case, so this
+// does not become a flaky test, but high enough that a future regression back toward zero margin
+// or a clipped badge trips it immediately). A single-line check is added here too (Range.
+// getClientRects().length === 1) - the enlargement was tuned close enough to some headings' real
+// wrap limit that "did it wrap" needs to be a permanent, per-viewport check, not just a one-time
+// measurement. Part G below locks in the specific 5-10 percent margin band Blake asked for at the
+// narrowest phone width for the longest heading.
 const SIGN_BOX_SHADOW_BLUR = 16; // px - must match .confirmCard .sign's box-shadow blur radius (index.html, § STYLE)
 const PIXEL_BLEED_PROBE = SIGN_BOX_SHADOW_BLUR + 2; // sample just past the shadow's real reach
-const MIN_NET_MARGIN = 2; // px - genuinely non-zero, not just "not negative" (float-safety floor)
-const MAX_BG_COLOR_DIST = 30; // background felt/vignette drifts a little; badge green/white is 100+ away
+const MIN_NET_MARGIN = 5; // px - a real floor (smallest real case across the full matrix is ~10.7px)
+// 2026-07-24 follow-up: raised from 30 to 45. The overlay backdrop is only 90% opaque
+// (rgba(5,15,9,.9)), so on the busier confirm dialogs (the online leaveConfirmOverlay sits over
+// the full board plus top bar) a probe point can occasionally land over a bright board element or
+// button showing faintly through - measured up to ~35 even on the unmodified v0.28.2 code, nothing
+// to do with badge size. Real badge/shadow bleed reads 100+, so 45 still leaves a wide, safe gap
+// between "background noise" and "the badge is actually clipped."
+const MAX_BG_COLOR_DIST = 45;
 
 const CONFIRM_OVERLAYS = [
   { id: 'surrenderConfirmOverlay', label: 'CONCEDE?', open: () => window.openSurrenderConfirm() },
@@ -352,11 +371,20 @@ async function partF_badgeMarginNeverClipped(browser) {
         const ov = document.getElementById(id);
         const cc = ov.querySelector('.confirmCard');
         const sign = cc.querySelector('.sign');
+        const b = cc.querySelector('.sign b');
         const sr = sign.getBoundingClientRect();
         const cr = cc.getBoundingClientRect();
-        return { top: sr.top, bottom: sr.bottom, left: sr.left, right: sr.right, cardBottom: cr.bottom, w: window.innerWidth, h: window.innerHeight };
+        const range = document.createRange();
+        range.selectNodeContents(b);
+        return { top: sr.top, bottom: sr.bottom, left: sr.left, right: sr.right, cardBottom: cr.bottom, w: window.innerWidth, h: window.innerHeight, numLines: range.getClientRects().length };
       }, o.id);
       const label = `${m.name}, ${o.label}`;
+      // 2026-07-24 follow-up: the enlarged badge is close enough to some headings' natural wrap
+      // limit (see the dated CSS comment, index.html § STYLE) that "never wraps to a second line"
+      // is now its own permanent check, using Range.getClientRects() (one ClientRect per real line
+      // box - not a height heuristic, which false-positives because a single line's own rendered
+      // box is already taller than its nominal font-size).
+      ok(geo.numLines === 1, `${label}: heading stays on ONE line (numLines=${geo.numLines})`);
       // Geometry: net margin (raw gap to the real screen edge, minus the shadow's blur radius)
       // must be genuinely positive on all four sides. LEFT/RIGHT/TOP use the SIGN's own rect
       // (nothing else in the card sits beside or above it); BOTTOM uses the whole CARD's rect
@@ -398,6 +426,41 @@ async function partF_badgeMarginNeverClipped(browser) {
   }
 }
 
+// 2026-07-24 PERMANENT regression check - Blake's follow-up to the clip fix: "double them in size
+// so they fill up more of the screen. Still leave some room on the ends though!" This quantifies
+// the specific "room on the ends" band he asked for at the narrowest supported phone (320px wide,
+// the short-screen tier) for the longest heading. Measured directly (Playwright), "REPLACE A
+// SAVE?" (slotReplaceOverlay) - not "SAVE & LEAVE?" - turned out to be the true widest-rendered
+// heading, so it is the one this check targets; see the dated CSS comment above .confirmCard .sign
+// (index.html, § STYLE) for the full writeup on why the two "replace" overlays get their own
+// smaller override instead of sharing the bigger enlargement the other three headings got.
+async function partG_320pxMarginBand(browser) {
+  console.log('\n=== Part G: PERMANENT - at the narrowest supported phone (320px), the longest heading keeps a real 5-10 percent margin band on each side (Blake\'s "room on the ends") ===');
+  const MIN_PCT = 4, MAX_PCT = 12; // a little slack around the 5-10% target for font-render variance
+  const ctx = await browser.newContext({ viewport: { width: 320, height: 568 }, deviceScaleFactor: 1 });
+  const page = await ctx.newPage();
+  await ctx.newCDPSession(page).then((c) => c.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, left: 0, bottom: 0, right: 0 } }));
+  await page.goto(URL);
+  await page.waitForFunction(() => window.G && window.G.n, { timeout: 20000 });
+  await page.evaluate(() => document.getElementById('slotReplaceOverlay').classList.remove('hidden'));
+  await page.waitForTimeout(200);
+  const geo = await page.evaluate(() => {
+    const sign = document.querySelector('#slotReplaceOverlay .confirmCard .sign');
+    const b = document.querySelector('#slotReplaceOverlay .confirmCard .sign b');
+    const sr = sign.getBoundingClientRect();
+    const range = document.createRange();
+    range.selectNodeContents(b);
+    return { left: sr.left, right: sr.right, w: window.innerWidth, numLines: range.getClientRects().length };
+  });
+  const netLeft = geo.left - SIGN_BOX_SHADOW_BLUR;
+  const netRight = (geo.w - geo.right) - SIGN_BOX_SHADOW_BLUR;
+  const pctLeft = netLeft / geo.w * 100, pctRight = netRight / geo.w * 100;
+  ok(geo.numLines === 1, `320x568 REPLACE A SAVE?: stays on one line`);
+  ok(pctLeft >= MIN_PCT && pctLeft <= MAX_PCT, `320x568 REPLACE A SAVE?: left margin ${pctLeft.toFixed(1)}% of screen width (target ${MIN_PCT}-${MAX_PCT}%, real ask was 5-10%)`);
+  ok(pctRight >= MIN_PCT && pctRight <= MAX_PCT, `320x568 REPLACE A SAVE?: right margin ${pctRight.toFixed(1)}% of screen width`);
+  await ctx.close();
+}
+
 async function main() {
   const browser = await chromium.launch();
   await partA_smallDialogNotFullScreen(browser);
@@ -406,6 +469,7 @@ async function main() {
   await partD_reactiveToResize(browser);
   await partE_confirmCardSignScopedSmaller(browser);
   await partF_badgeMarginNeverClipped(browser);
+  await partG_320pxMarginBand(browser);
   await browser.close();
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
