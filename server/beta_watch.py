@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=099d0d04-a8be-442d-a67d-a23edc60476c&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=c3bc3351-4dcf-4d7e-84ae-c3d5a0e77e6b&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -61,13 +61,20 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 38 reached the family</h1>
+<h1 style="color:#1a5c38">🎉 Build 39 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>What changed in this one:</p>
+<p>This one covers your whole latest wish list:</p>
 <ul>
-<li>Confirmation dialogs (Concede, Leave Game, etc.) now shrink proportionally to fit your screen
-instead of getting cut off. The whole card scales down so you always see every button no matter
-what phone you're on.</li>
+<li>Online games now reconnect and catch back up on their own, no more closing and reopening the app.</li>
+<li>Coming back to a game shows a ready up screen so everyone is confirmed at the table before play resumes.</li>
+<li>Everyone at the table now plays at the exact same speed, and the host can change it anytime.</li>
+<li>Pause and Save are now two separate, simpler buttons.</li>
+<li>The Concede and Leave popups always fit your screen now, with scrolling as a backup so nothing is ever cut off.</li>
+<li>The last card played stays on the table until the next card is played, with bigger, easier to read numbers.</li>
+<li>Every button across the top of the screen is now plain capital letters with no icons.</li>
+<li>Added a new Knockouts tab to the leaderboard showing knockouts dealt, knockouts taken, and your ratio.</li>
+<li>You can now choose to host a Teams game online, with a clear partner preview before you start.</li>
+<li>Fixed a real bug where the Jack could swap the wrong one of your own pegs instead of the one you tapped.</li>
 </ul>
 <h3>📱 The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -82,7 +89,7 @@ what phone you're on.</li>
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 38 is live for the family 🎉', body], check=True)
+                    'NASTY: build 39 is live for the family 🎉', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED - email sent, watcher done')
 except Exception as e:
