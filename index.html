@@ -858,8 +858,21 @@ button{font:inherit;cursor:pointer}
    bubble no longer shares that animation, only the at-rest gold-outline look. */
 .toast.myTurn{border:2px solid var(--gold);background:rgba(244,197,66,.22);color:var(--gold);
   box-shadow:0 6px 18px rgba(0,0,0,.45);animation:toastIn .25s ease-out}
+/* 2026-07-24 (Blake's 3rd-attempt follow-up, see the .confirmCard comment below for the full
+   diagnosis): overflow-y:auto moved here from .confirmCard so a genuinely tall dialog can still
+   scroll, without the scroll/clip box ever being the thing that clips a normal dialog's own
+   decorative sign. margin:auto on the direct .confirmCard/.modalCard child (below) is the safe
+   "center when it fits, scroll from the top when it does not" flex trick - auto margins on the
+   main axis eat all the free space when the item fits (so it centers exactly like
+   justify-content:center already did), and collapse to 0 when the item is taller than the
+   overlay (so the item sits flush at the top and the overflow is reachable by scrolling instead
+   of being sliced off/inaccessible, which is what a plain justify-content:center would do).
+   passOverlay/winOverlay have no such single wrapper child (their .sign/p/bigBtns are direct
+   overlay children) so they keep relying on justify-content:center exactly as before - untouched. */
 .overlay{position:fixed;inset:0;background:rgba(5,15,9,.9);z-index:80;display:flex;flex-direction:column;
-  align-items:center;justify-content:center;padding:22px;text-align:center}
+  align-items:center;justify-content:center;padding:22px;text-align:center;
+  overflow-y:auto;-webkit-overflow-scrolling:touch}
+.overlay>.confirmCard,.overlay>.modalCard{margin:auto}
 .overlay h2{margin:16px 0 6px;font-size:26px}
 .overlay p{color:#cfe8d6;max-width:420px;line-height:1.55;font-size:15.5px}
 /* v0.27.1: confirm-style overlays (pause / leave-game sheet / concede confirm / overwrite /
@@ -899,23 +912,43 @@ button{font:inherit;cursor:pointer}
    session might have left behind) so none of the ~15 existing call sites needed to change. */
 .confirmCard{width:100%;max-width:440px;display:flex;
   flex-direction:column;align-items:center;padding:2px;transform-origin:center center;
-  max-height:calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 44px);
-  overflow-y:auto;-webkit-overflow-scrolling:touch}
+  overflow:visible}
 .confirmCard .bigBtns{width:100%}
-/* 2026-07-24 follow-up to item 6 (Blake): "the concede leave game and save and leave badges
-   that pop up when you press those buttons still are too big for the panel that you've given
-   them. Please make them about 65% of the size that you currently have." Scoped to
-   .confirmCard .sign ONLY, on top of the base .sign rule above - the NASTY! takeout stamp
-   (.nastyStamp .sign) and the menu game logo (#gameLogo .sign) are untouched, they have their
-   own separate sizing already and this is a size reduction, not a restyle. Tall-screen tier:
-   font-size 36px (65% of the base 56px), padding 9px 20px 8px (65% of 14/30/12), border 3px
-   (65% of 5px), outline 2px (65% of 3px, rounded up so the ring stays visible). The existing
-   max-height:660px tier below is scaled the same way, 65% of its own 34px/9-20-7 values. */
-.confirmCard .sign{padding:9px 20px 8px;border-width:3px;outline-width:2px}
-.confirmCard .sign b{font-size:36px}
+/* 2026-07-24 (Blake's 3rd-attempt follow-up to item 6 - the 65% font shrink in the prior
+   attempt was NOT the fix, this is). Blake's exact words: "I think the issue is the actual space
+   that you have allotted for the badge itself because the edges and the top and the bottom keep
+   getting cut off by some invisible barrier... The entirety of the badge needs to fit well
+   within the parameters of the iPhone screen... with a lot of empty space to the left and right
+   and top and bottom." Measured directly (Playwright + real safe-area insets), TWO compounding
+   bugs, neither of which is font size:
+   1. CLIPPING: .confirmCard used to carry overflow-y:auto, which per the CSS spec forces
+      overflow-x:auto too, turning the whole card into a clip/scroll box. .sign is rotated
+      (transform:rotate(-2deg)) and carries a big box-shadow - the rotation lifts the sign's top
+      corner ABOVE the card's own tiny padding box, and the soft shadow around all four sides got
+      hard-cut at that same clip boundary. That was Blake's "invisible barrier." Fixed above: the
+      height cap + overflow-y:auto moved OFF .confirmCard and ONTO .overlay (see .overlay comment),
+      so a normal dialog's sign renders in full and only a genuinely tall dialog scrolls. This rule
+      is now overflow:visible with no max-height of its own.
+   2. OVERSIZE: even without the clip, the badge box was ~78% of a 390px-wide screen with almost
+      no side margin - not the "lots of empty space all around" Blake asked for. Fixed below: a
+      clamp() tied to viewport width (not a flat px value) so the longest heading ("SAVE & LEAVE?")
+      always leaves real margin on every side even at a 320px-wide screen, while still getting
+      noticeably bigger than a flat-shrink approach on larger phones. box-sizing:border-box plus
+      max-width:100% stop the sign's own padding/border from ever pushing it wider than the card's
+      content box. Padding and box-shadow are trimmed too (scoped to .confirmCard .sign only) so
+      the halo itself fits inside the margin, not just the lettering.
+   Scoped to .confirmCard .sign / .confirmCard .sign b ONLY - the NASTY! takeout stamp
+   (.nastyStamp .sign) and the menu game logo (#gameLogo .sign) share the same base .sign rule
+   and are completely untouched (confirmed by direct computed-style checks, not just reading the
+   CSS - see server/tests/test_overlay_sizing.js). */
+.confirmCard .sign{box-sizing:border-box;max-width:100%;
+  padding:clamp(6px,1.8vw,9px) clamp(8px,2.8vw,14px) clamp(5px,1.5vw,7px);
+  border-width:clamp(2px,0.8vw,3px);outline-width:2px;
+  box-shadow:0 6px 16px rgba(0,0,0,.4), inset 0 2px 0 rgba(255,255,255,.25)}
+.confirmCard .sign b{font-size:clamp(19px,6.2vw,34px)}
 @media (max-height:660px){
-  .confirmCard .sign{padding:6px 13px 5px;border-width:3px;outline-width:2px}
-  .confirmCard .sign b{font-size:22px}
+  .confirmCard .sign{padding:clamp(4px,1.3vw,6px) clamp(6px,2.1vw,11px) clamp(3px,1.1vw,5px)}
+  .confirmCard .sign b{font-size:clamp(15px,4.9vw,22px)}
   .confirmCard p{font-size:14px;line-height:1.4;margin:10px 0}
   .confirmCard .bigBtns{gap:8px;margin-top:12px}
   .confirmCard .bigBtns .btn{padding:10px 16px;font-size:14.5px;min-height:44px}
@@ -1100,7 +1133,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.28.1</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.28.2</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->

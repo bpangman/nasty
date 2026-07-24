@@ -16,17 +16,91 @@
 // something the existing OVERFLOW checks in test_surrender.js do NOT do (they only check plain
 // viewport bounds) - because that's exactly the dimension the prior two fix attempts missed.
 //
+// 2026-07-24 - Blake's 3RD attempt at this same badge problem, root-caused for real this time
+// (see Part F below and the .confirmCard/.overlay CSS comments, index.html, § STYLE). The first
+// attempt (this file's original Part A-D) verified the CARD's geometry; the second attempt
+// (Part E) verified a computed font-size ratio. Neither ever measured the SIGN itself (rotated,
+// with its own box-shadow) against the real screen edges, and neither took an actual screenshot -
+// which is exactly why both missed the true bug (an overflow-y:auto on .confirmCard forcing
+// overflow-x too, clipping the rotated sign's corner and its own shadow). Part F fixes that with
+// real per-pixel screenshot verification, permanently, for all five confirm overlays.
+//
 // Fully offline (file://) - no server needed.
 // Run: node test_overlay_sizing.js
 
 const { chromium } = require('/Users/jarvis/clawd/node_modules/playwright');
 const path = require('path');
+const zlib = require('zlib');
 
 const URL = 'file://' + path.resolve(__dirname, '..', '..', 'index.html') + '#autotest';
 let pass = 0, fail = 0;
 function ok(cond, label) {
   if (cond) { pass++; console.log('  OK  ', label); }
   else { fail++; console.log('  FAIL ', label); }
+}
+
+// Minimal, dependency-free PNG decoder (8-bit, non-interlaced RGB/RGBA - exactly what
+// Playwright's page.screenshot({type:'png'}) produces) so Part F below can sample REAL rendered
+// pixels rather than trusting layout geometry alone. Only Node's built-in zlib is used - no new
+// package dependency, matching this file's existing "just require playwright" convention.
+function decodePNG(buf) {
+  let off = 8; // skip the 8-byte PNG signature
+  let width, height, bitDepth, colorType;
+  const idat = [];
+  while (off < buf.length) {
+    const len = buf.readUInt32BE(off);
+    const type = buf.toString('ascii', off + 4, off + 8);
+    const data = buf.slice(off + 8, off + 8 + len);
+    if (type === 'IHDR') {
+      width = data.readUInt32BE(0); height = data.readUInt32BE(4);
+      bitDepth = data.readUInt8(8); colorType = data.readUInt8(9);
+    } else if (type === 'IDAT') idat.push(data);
+    else if (type === 'IEND') break;
+    off += 12 + len;
+  }
+  if (bitDepth !== 8) throw new Error('decodePNG: only 8-bit PNGs supported');
+  const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : (() => { throw new Error('decodePNG: unsupported colorType ' + colorType); })();
+  const raw = zlib.inflateSync(Buffer.concat(idat));
+  const stride = width * channels;
+  const out = Buffer.alloc(width * height * 4);
+  let pos = 0;
+  let prevRow = Buffer.alloc(stride);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[pos]; pos++;
+    const row = raw.slice(pos, pos + stride); pos += stride;
+    const cur = Buffer.alloc(stride);
+    for (let x = 0; x < stride; x++) {
+      const a = x >= channels ? cur[x - channels] : 0;
+      const b = prevRow[x];
+      const c = x >= channels ? prevRow[x - channels] : 0;
+      let val = row[x];
+      if (filter === 1) val = (val + a) & 0xff;
+      else if (filter === 2) val = (val + b) & 0xff;
+      else if (filter === 3) val = (val + Math.floor((a + b) / 2)) & 0xff;
+      else if (filter === 4) {
+        const p = a + b - c;
+        const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+        val = (val + (pa <= pb && pa <= pc ? a : (pb <= pc ? b : c))) & 0xff;
+      }
+      cur[x] = val;
+    }
+    for (let px = 0; px < width; px++) {
+      const si = px * channels, di = (y * width + px) * 4;
+      out[di] = cur[si]; out[di + 1] = cur[si + 1]; out[di + 2] = cur[si + 2];
+      out[di + 3] = channels === 4 ? cur[si + 3] : 255;
+    }
+    prevRow = cur;
+  }
+  return { width, height, data: out };
+}
+function pixelAt(png, x, y) {
+  x = Math.round(x); y = Math.round(y);
+  if (x < 0 || y < 0 || x >= png.width || y >= png.height) return null;
+  const i = (png.width * y + x) * 4;
+  return [png.data[i], png.data[i + 1], png.data[i + 2]];
+}
+function colorDist(a, b) {
+  return Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2);
 }
 
 // Real device-shaped safe-area insets per viewport, matching Blake's own test matrix.
@@ -100,6 +174,15 @@ async function partB_bigDialogFitsWithRealSafeArea(browser) {
 
 async function partC_pathologicalTinyViewport(browser) {
   console.log('\n=== Part C: pathological viewport (way too short for ANY sizing scheme) - scroll must reach every button ===');
+  // 2026-07-24 update (Blake's 3rd-attempt follow-up): the height-cap-and-scroll safety net moved
+  // OFF .confirmCard and ONTO .overlay (see the .overlay/.confirmCard CSS comments, index.html,
+  // § STYLE, for why - the old cap on .confirmCard was exactly what clipped the sign's own tilt +
+  // shadow). So the scrollable element in a pathological case is now the OVERLAY
+  // (#leaveConfirmOverlay itself), not .confirmCard - .confirmCard is allowed to be its full
+  // natural size and simply extend past the overlay's own viewport-sized box, same as any normal
+  // over-tall content inside a scroll container. This part now checks that the OVERLAY scrolls,
+  // and that scrolling it all the way actually brings the last button into view (real
+  // reachability, not just a scrollHeight>clientHeight boolean).
   const ctx = await browser.newContext({ viewport: { width: 320, height: 280 } });
   const page = await ctx.newPage();
   const client = await ctx.newCDPSession(page);
@@ -111,17 +194,23 @@ async function partC_pathologicalTinyViewport(browser) {
   await page.evaluate(() => { window.NET.online = true; window.openLeaveConfirm(); });
   await page.waitForTimeout(200);
   const r = await page.evaluate(() => {
-    const cc = document.getElementById('leaveConfirmOverlay').querySelector('.confirmCard');
-    const rect = cc.getBoundingClientRect();
+    const ov = document.getElementById('leaveConfirmOverlay');
     return {
-      top: rect.top, bottom: rect.bottom, innerH: window.innerHeight,
-      scrollHeight: cc.scrollHeight, clientHeight: cc.clientHeight,
-      canScroll: cc.scrollHeight > cc.clientHeight + 1,
+      scrollHeight: ov.scrollHeight, clientHeight: ov.clientHeight,
+      canScroll: ov.scrollHeight > ov.clientHeight + 1,
       btnCount: document.querySelectorAll('#leaveConfirmOverlay .bigBtns .btn:not(.hidden)').length,
     };
   });
-  ok(r.top >= -0.5 && r.bottom <= r.innerH + 0.5, `card container itself never exceeds the tiny viewport (top=${r.top.toFixed(1)}, bottom=${r.bottom.toFixed(1)}, innerH=${r.innerH})`);
-  ok(r.canScroll, 'content taller than the card CAN scroll internally - the real fallback (no content is ever silently unreachable)');
+  ok(r.canScroll, 'content taller than the overlay CAN scroll (the overlay itself, not the card - the real fallback, no content is ever silently unreachable)');
+  const scrolled = await page.evaluate(() => {
+    const ov = document.getElementById('leaveConfirmOverlay');
+    ov.scrollTop = ov.scrollHeight;
+    const btns = [...document.querySelectorAll('#leaveConfirmOverlay .bigBtns .btn:not(.hidden)')];
+    const last = btns[btns.length - 1];
+    const r = last.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom, innerH: window.innerHeight };
+  });
+  ok(scrolled.bottom <= scrolled.innerH + 0.5 && scrolled.top >= -0.5, `scrolling the overlay all the way DOES bring the last button fully into view (top=${scrolled.top.toFixed(1)}, bottom=${scrolled.bottom.toFixed(1)}, innerH=${scrolled.innerH}) - nothing is unreachable`);
   ok(r.btnCount >= 5, `every button is still present in the DOM, reachable by scrolling (found ${r.btnCount})`);
   ok(errors.length === 0, 'zero page errors even in a pathological viewport');
   await ctx.close();
@@ -216,6 +305,99 @@ async function partE_confirmCardSignScopedSmaller(browser) {
   }
 }
 
+// 2026-07-24 PERMANENT regression check - Blake's 3RD attempt at this same badge problem. The
+// first attempt (this file's original Part A-D) only checked geometry - the .confirmCard
+// bounding rect vs the viewport - and the second attempt (Part E) only checked a computed
+// font-size ratio. NEITHER caught the real bug Blake kept seeing, because the badge (.sign) is
+// rotated and carries its own box-shadow, so its true visual footprint is neither the same as
+// .confirmCard's own box NOR something a font-size number alone can describe. Root cause (see the
+// .confirmCard/.overlay CSS comments, index.html, § STYLE, for the full writeup): .confirmCard
+// used to carry overflow-y:auto, which (per spec) forces overflow-x:auto too, turning the card
+// into a clip box that sliced the rotated sign's top corner and hard-cut its soft shadow on all
+// sides - a bug pure geometry-vs-card checks can never see, because the CARD's own rect is what
+// was doing the clipping in the first place. This Part F fixes that blind spot two ways: (1) a
+// real geometry check of the SIGN's own rect (not the card's) against the actual viewport edges,
+// requiring a genuinely non-zero net margin after accounting for the shadow's blur radius, and
+// (2) an ACTUAL PIXEL check - a real screenshot, decoded and sampled just outside that margin, to
+// confirm those pixels are the dark overlay background and not badge green/white/shadow bleeding
+// to the edge. Geometry alone cannot catch a css clip-box bug like this one; pixels can.
+const SIGN_BOX_SHADOW_BLUR = 16; // px - must match .confirmCard .sign's box-shadow blur radius (index.html, § STYLE)
+const PIXEL_BLEED_PROBE = SIGN_BOX_SHADOW_BLUR + 2; // sample just past the shadow's real reach
+const MIN_NET_MARGIN = 2; // px - genuinely non-zero, not just "not negative" (float-safety floor)
+const MAX_BG_COLOR_DIST = 30; // background felt/vignette drifts a little; badge green/white is 100+ away
+
+const CONFIRM_OVERLAYS = [
+  { id: 'surrenderConfirmOverlay', label: 'CONCEDE?', open: () => window.openSurrenderConfirm() },
+  { id: 'leaveConfirmOverlay', label: 'LEAVE GAME? (6-button online list)', open: () => { window.NET.online = true; window.openLeaveConfirm(); } },
+  { id: 'saveLeaveConfirmOverlay', label: 'SAVE & LEAVE?', open: () => window.openSaveConfirm() },
+  { id: 'overwriteWarnOverlay', label: 'REPLACE GAME?', open: () => document.getElementById('overwriteWarnOverlay').classList.remove('hidden') },
+  { id: 'slotReplaceOverlay', label: 'REPLACE A SAVE?', open: () => document.getElementById('slotReplaceOverlay').classList.remove('hidden') },
+];
+
+async function partF_badgeMarginNeverClipped(browser) {
+  console.log('\n=== Part F: PERMANENT - the confirm-card badge (plus its shadow) keeps a real, non-zero empty margin from all four screen edges, verified against actual rendered pixels ===');
+  for (const m of MATRIX) {
+    for (const o of CONFIRM_OVERLAYS) {
+      const ctx = await browser.newContext({ viewport: { width: m.w, height: m.h }, deviceScaleFactor: 1 });
+      const page = await ctx.newPage();
+      const client = await ctx.newCDPSession(page);
+      await client.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: m.top, left: 0, bottom: m.bottom, right: 0 } });
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(String(e)));
+      await page.goto(URL);
+      await page.waitForFunction(() => window.G && window.G.n, { timeout: 20000 });
+      await page.evaluate(o.open);
+      await page.waitForTimeout(200);
+      const geo = await page.evaluate((id) => {
+        const ov = document.getElementById(id);
+        const cc = ov.querySelector('.confirmCard');
+        const sign = cc.querySelector('.sign');
+        const sr = sign.getBoundingClientRect();
+        const cr = cc.getBoundingClientRect();
+        return { top: sr.top, bottom: sr.bottom, left: sr.left, right: sr.right, cardBottom: cr.bottom, w: window.innerWidth, h: window.innerHeight };
+      }, o.id);
+      const label = `${m.name}, ${o.label}`;
+      // Geometry: net margin (raw gap to the real screen edge, minus the shadow's blur radius)
+      // must be genuinely positive on all four sides. LEFT/RIGHT/TOP use the SIGN's own rect
+      // (nothing else in the card sits beside or above it); BOTTOM uses the whole CARD's rect
+      // (the paragraph + buttons legitimately sit below the sign inside the card - that is normal
+      // UI, not a clip bug, so the meaningful "does it reach the real bottom edge" question is
+      // about the card as a whole, not the sign alone).
+      const netLeft = geo.left - SIGN_BOX_SHADOW_BLUR;
+      const netRight = (geo.w - geo.right) - SIGN_BOX_SHADOW_BLUR;
+      const netTop = geo.top - SIGN_BOX_SHADOW_BLUR;
+      const netBottom = geo.h - geo.cardBottom; // no shadow bleed to net out here - see above
+      ok(netLeft >= MIN_NET_MARGIN, `${label}: real left margin ${netLeft.toFixed(1)}px (badge left=${geo.left.toFixed(1)}, minus ${SIGN_BOX_SHADOW_BLUR}px shadow reach)`);
+      ok(netRight >= MIN_NET_MARGIN, `${label}: real right margin ${netRight.toFixed(1)}px`);
+      ok(netTop >= MIN_NET_MARGIN, `${label}: real top margin ${netTop.toFixed(1)}px`);
+      ok(netBottom >= MIN_NET_MARGIN, `${label}: real bottom margin ${netBottom.toFixed(1)}px (whole card bottom=${geo.cardBottom.toFixed(1)} vs viewport ${geo.h})`);
+      // Pixels: an ACTUAL screenshot, decoded, sampled just past the margin above. This is the
+      // check the first two fix attempts never did - both prior "fixes" verified the CARD's
+      // geometry (or a font-size ratio) and missed that the SIGN itself, rotated with a shadow,
+      // was the thing actually getting clipped by the card's own overflow box.
+      const buf = await page.screenshot();
+      const png = decodePNG(buf);
+      const bg = pixelAt(png, 3, 3); // a corner of the screen, always outside the centered card
+      const cx = Math.round((geo.left + geo.right) / 2);
+      const cy = Math.round((geo.top + geo.bottom) / 2);
+      const probes = {
+        left: pixelAt(png, geo.left - PIXEL_BLEED_PROBE, cy),
+        right: pixelAt(png, geo.right + PIXEL_BLEED_PROBE, cy),
+        top: pixelAt(png, cx, geo.top - PIXEL_BLEED_PROBE),
+        bottom: pixelAt(png, cx, Math.min(geo.cardBottom + PIXEL_BLEED_PROBE, png.height - 2)),
+      };
+      for (const side of ['left', 'right', 'top', 'bottom']) {
+        const p = probes[side];
+        if (!p) { ok(true, `${label}: ${side} probe point is off-screen (only possible with even MORE margin than required - fine)`); continue; }
+        const d = colorDist(p, bg);
+        ok(d <= MAX_BG_COLOR_DIST, `${label}: ${side} pixel just past the badge/card reads as background (color distance ${d.toFixed(1)}, badge/shadow would read 100+)`);
+      }
+      ok(errors.length === 0, `${label}: zero page errors`);
+      await ctx.close();
+    }
+  }
+}
+
 async function main() {
   const browser = await chromium.launch();
   await partA_smallDialogNotFullScreen(browser);
@@ -223,6 +405,7 @@ async function main() {
   await partC_pathologicalTinyViewport(browser);
   await partD_reactiveToResize(browser);
   await partE_confirmCardSignScopedSmaller(browser);
+  await partF_badgeMarginNeverClipped(browser);
   await browser.close();
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
