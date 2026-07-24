@@ -93,6 +93,15 @@ const CODE_ALPHABET = "BCDFGHJKMNPQRSTVWXZ";
  * who were never asked anything; and (c) never understands the v0.25 rejoin-lobby flow
  * (takeOverSeat). Not safe either direction - protocol-4 clients get the same friendly
  * update message at host/join/rejoin/reclaim. */
+/* 2026-07-24 (Blake's items 9+14, "2026-07-23 list"): STAYS at 5, not bumped. Item 9's two new
+ * leaderboard stat keys (hkoDealt/hkoTaken) ride the EXISTING /solo-result body shape and the
+ * server's own internal result recording - no new message type, no changed shape of any existing
+ * one; an old server just ignores the two new keys (not in its own NUMERIC_STAT_KEY yet), an old
+ * client just never sends them - same additive pattern as the hptsS/hptsT split (see HANDOFF.md
+ * v0.21). Item 14 (choosing Teams for an online game) needed ZERO server changes at all - `teams`
+ * has ridden the `host` message and `room.lobby.teams` since this field existed; this session's
+ * fix is exposing/displaying it client-side, not adding to the wire. See index.html's
+ * PROTOCOL_VERSION comment for the full reasoning on both. */
 const PROTOCOL_VERSION = 5;
 const PROTOCOL_MISMATCH_MESSAGE =
   "This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.";
@@ -272,7 +281,13 @@ function persistLeaderboardNow() {
 // below for how an OLD client's plain "hpts" delta still gets accepted and redirected into the
 // correct split key, and migrateLegacyLeaderboardPoints() further below for the one-time boot
 // migration of points already on disk from before this split.
-const NUMERIC_STAT_KEY = /^(hg[46][st]|hw[46][st]|hptsS|hptsT)$/;
+// 2026-07-24 (Blake's item 9, "2026-07-23 list"): hkoDealt/hkoTaken added - lifetime, human-only
+// knockout stats (see the § KNOCKOUT TALLY block below, right before buildResultEntriesServer()).
+// Unlike hptsS/hptsT these have no legacy predecessor to migrate - a brand-new key simply reads
+// as 0 for any entry that's never had one written (see applyLeaderboardEntry()'s own `r[key]||0`
+// below), so no boot-time migration function was needed for these two, unlike
+// migrateLegacyLeaderboardPoints() just below.
+const NUMERIC_STAT_KEY = /^(hg[46][st]|hw[46][st]|hptsS|hptsT|hkoDealt|hkoTaken)$/;
 function applyLeaderboardEntry(name, delta) {
   const clean = cleanName(name, "");
   if (!clean || isBadName(clean) || !delta || typeof delta !== "object") return;
@@ -397,6 +412,47 @@ function pointsForWinServer(G, winSet) {
   G.seats.forEach((opp, j) => { if (winSet.has(j)) return; pts += opp.type === "human" ? 3 : (DIFF_POINTS[opp.diff] || 0); });
   return pts;
 }
+/* ---------------------------------------------------------------------------------------
+ * 2026-07-24 § KNOCKOUT TALLY (Blake's item 9, "2026-07-23 list") - twin of index.html's
+ * tallyKnockout() (see that function's comment for the full design/reasoning; kept in sync by
+ * hand, same category as pointsForWinServer/buildResultEntriesServer just above - pure
+ * game-result arithmetic, not a rules change, so § ENGINE was never touched).
+ *
+ * A "Nasty!" takeout (a peg lands on an opponent's peg and sends it back to base) counts toward
+ * two lifetime, human-only leaderboard stats: hkoDealt (knockouts dealt) and hkoTaken (times
+ * knocked out) - Blake's own words: "how many times they've knocked out another peg, how many
+ * times they've been knocked out". Deliberately LIFETIME, not split by mode/board size like
+ * hg/hw/hpts are - flagged rather than silently decided, per the task's own instruction, since
+ * no strong reason turned up to split a "fun" stat like this one the same way the competitive
+ * win/loss stats are split.
+ *
+ * A FORCED partner-kick (the last-resort "landing on your own partner's peg" rule, teams only -
+ * see legalMoves()'s `pk` flag, § ENGINE) is NOT a knockout by this task's own definition -
+ * Blake's ask was specifically about "the Nasty! takeout", and the game's own toast text already
+ * distinguishes the two ("😬 Ouch!" for a partner kick vs. "💥 NASTY!" for a real one - see
+ * index.html's performMoveInner()) - so sameTeam() excludes it here the same way.
+ *
+ * G.koDealt/G.koTaken are plain extra arrays hung on the engine's G object from HERE, lazily
+ * created on first use - this is deliberately OUTSIDE § ENGINE/newGame() (the kick event itself,
+ * m.kick, already exists there - this is pure result-bookkeeping) so no engine regeneration was
+ * needed for this feature. They ride along inside G exactly like any other G field wherever G
+ * itself is persisted/broadcast (roomToDisk, sync, rejoin, reclaimed) - migration-safe by
+ * construction: an in-flight room's G from before this code existed simply has no koDealt/
+ * koTaken yet, and the lazy `G.koDealt||(...)` below creates them the first real kick after this
+ * change, no destructive reset, no special migration step needed.
+ *
+ * Called from all three places this file ever runs a real applyMove() against a live room: the
+ * CPU branch of driveTurnLoop(), the human "action" handler, and the away-ladder assist - see
+ * each call site's own comment. */
+function tallyKnockout(E, m) {
+  if (!m.kick) return;
+  if (E.sameTeam(m.owner, m.kick.seat)) return; // forced partner-kick ("Ouch!") - not a "Nasty!" knockout
+  const G = E.getG();
+  if (!G.koDealt) G.koDealt = new Array(G.n).fill(0);
+  if (!G.koTaken) G.koTaken = new Array(G.n).fill(0);
+  if (G.seats[m.owner] && G.seats[m.owner].type === "human") G.koDealt[m.owner] = (G.koDealt[m.owner] || 0) + 1;
+  if (G.seats[m.kick.seat] && G.seats[m.kick.seat].type === "human") G.koTaken[m.kick.seat] = (G.koTaken[m.kick.seat] || 0) + 1;
+}
 function buildResultEntriesServer(G, mode, winSet) {
   const entries = [];
   const isTeam = mode.endsWith("t");
@@ -404,6 +460,10 @@ function buildResultEntriesServer(G, mode, winSet) {
     if (seat.type !== "human") return;
     const delta = {}; delta["hg" + mode] = 1;
     if (winSet.has(i)) { delta["hw" + mode] = 1; delta[isTeam ? "hptsT" : "hptsS"] = pointsForWinServer(G, winSet); }
+    // 2026-07-24 item 9: lifetime knockout stats, accrued all game long by tallyKnockout() above -
+    // only included when nonzero, same "don't write a no-op delta" convention hw<mode>/hpts* use.
+    if (G.koDealt && G.koDealt[i]) delta.hkoDealt = G.koDealt[i];
+    if (G.koTaken && G.koTaken[i]) delta.hkoTaken = G.koTaken[i];
     entries.push({ name: seat.name, delta });
   });
   return entries;
@@ -567,6 +627,13 @@ function roomToDisk(room) {
     // comment below - persisted alongside `recorded` so a server restart mid-game doesn't lose
     // whether a no-fault exit is already in effect.
     anySurrenderOccurred: !!room.anySurrenderOccurred,
+    // 2026-07-23 (item 2) § REUNION READY GATE - persisted (unlike `willSeat`/`seatGate`/`away`
+    // above) on purpose: those are all fine to lose on a restart (worst case, a slightly less
+    // polite first deal or a restarted away-ladder clock), but losing an OPEN reunion gate mid
+    // ready-up would strand the table paused with no way to auto-resume and any already-tapped
+    // "Ready up" taps silently forgotten - a real regression, not a harmless degrade. Persisting
+    // it means a restart mid-reunion comes back exactly as it was.
+    reunionActive: !!room.reunionActive, tableReadyIds: Array.from(room.tableReady || []),
   };
 }
 function roomFromDisk(obj) {
@@ -581,6 +648,9 @@ function roomFromDisk(obj) {
     anySurrenderOccurred: !!obj.anySurrenderOccurred,   // v0.27.1
     away: null,   // v0.22: transient - a restart just restarts the ladder clock
     willSeat: new Set(), seatGate: null,   // v0.22 P0b: transient - see loadRoomsFromDisk's boot re-drive
+    // 2026-07-23 (item 2): PERSISTED (see roomToDisk's matching comment) - restored exactly as
+    // it was, not reset.
+    reunionActive: !!obj.reunionActive, tableReady: new Set(obj.tableReadyIds || []),
   };
   for (const p of (obj.players || []))
     room.players.set(p.id, {
@@ -711,6 +781,11 @@ function makeRoom(code) {
     away: null,           // v0.22: transient away-ladder state, never persisted - see § AWAY LADDER
     willSeat: new Set(),  // v0.22 P0b: playerIds whose readyUp carried willSeat:true - see § SEAT GATE
     seatGate: null,       // v0.22 P0b: {waiting:Set, timer} while the first deal is being held
+    // 2026-07-23 (Blake's item 2) § REUNION READY GATE - PERSISTED (unlike `away`/`willSeat`/
+    // `seatGate` above - see roomToDisk()'s matching comment for why), so a restart mid-reunion
+    // comes back exactly as it was instead of stranding a paused table.
+    reunionActive: false, // true while a "getting the table back together" ready-up gate is open
+    tableReady: new Set(),// playerIds who have tapped Ready up during the CURRENT reunion
   };
   rooms.set(code, room);
   return room;
@@ -819,7 +894,22 @@ function maybeStateCheck(room, afterSeq) {
 function sameMove(legal, submitted) {
   if (!legal || !submitted) return false;
   if (legal.ci !== submitted.ci || legal.type !== submitted.type || legal.owner !== submitted.owner) return false;
-  if (legal.type === "swap") return legal.ts === submitted.ts && legal.tpi === submitted.tpi;
+  // THE JACK BUG (found 2026-07-24, Blake's item 13): this used to skip the `pi` check for
+  // swap moves entirely - only comparing `ts`/`tpi` (the TARGET tee). legalMoves() generates
+  // one swap move per (owner's own track piece) x (every other track tee), so whenever the
+  // owner has 2+ of their own tees on the track, several legal moves share the exact same
+  // {ci,type,owner,ts,tpi} and differ ONLY in `pi` - which of the owner's OWN pieces is doing
+  // the swapping. Array.prototype.find() below always returns the FIRST such match, and
+  // legalMoves() builds its list with `pi` as the OUTER loop - so that first match is always
+  // whichever of the owner's track pieces happens to have the lowest array index, regardless
+  // of which one the player actually tapped. The server (authoritative for online games) would
+  // then apply THAT wrong piece's swap instead of the submitted one - a completely different
+  // tee, anywhere on the board, silently swapped instead of the one the player picked. Since
+  // online moves are only applied locally after the server's echo (see index.html's
+  // commitMove()), this corrupted the tapping player's OWN phone too, not just everyone else's -
+  // matching Blake's report exactly ("switches the wrong piece, nowhere near the ones they
+  // clicked", "even on the acting phone"). Fix: also require `pi` to match.
+  if (legal.type === "swap") return legal.pi === submitted.pi && legal.ts === submitted.ts && legal.tpi === submitted.tpi;
   if (legal.pi !== submitted.pi || legal.to !== submitted.to) return false;
   const a = legal.kick, b = submitted.kick;
   if (!!a !== !!b) return false;
@@ -978,6 +1068,7 @@ function driveTurnLoop(room) {
     if (seatCfg.type === "cpu") {
       const m = E.chooseAI(seat, moves);
       E.applyMove(seat, m);
+      tallyKnockout(E, m);   // 2026-07-24 item 9 - see that function's comment
       if (E.getG().over) { appendAction(room, { kind: "move", seat, m, turn: G.turn }); finishGame(room); return; }
       E.advanceTurn();
       // v0.15 bug fix: every action carries the RESULTING turn number explicitly (computed
@@ -1074,6 +1165,7 @@ function actuallyStartGame(room) {
   room.engine = engine;
   room.recorded = false;
   room.anySurrenderOccurred = false;   // v0.27.1: a genuinely new game/rematch resets the no-fault-exit flag
+  room.reunionActive = false; room.tableReady = new Set();   // 2026-07-23: defensive reset, same lifecycle as `recorded`
   const G = engine.getG();
   const startAction = { kind: "start", n: G.n, teams: G.teams, seats: seatsCfg, dealer: G.dealer, deck: [], tableSpeed: room.tableSpeed || 1 };
   room.log = [{ seq: 0, action: startAction }];
@@ -1099,6 +1191,55 @@ function actuallyStartGame(room) {
     }, SEAT_GATE_CAP_MS),
   };
   log("holding the first deal until everyone is seated", room.code, "waiting=" + waiting.size);
+}
+
+/* ---------------------------------------------------------------------------------------
+ * 2026-07-23 § REUNION READY GATE (Blake's items 1-4, "when we come back" batch)
+ *
+ * Item 2: "it didn't let me see that everyone was there when I came back - it just threw us
+ * all in since we were all there. Can you still make there be a lobby that says we're all
+ * there and we click 'ready up' to start when we come back?"
+ *
+ * Before this, tapping the saved-game tile SKIPPED the rejoin lobby entirely whenever every
+ * other human already looked connected (see the old onSync() "missing.length===0" branch,
+ * index.html - now removed) - "presence" (a socket is open) silently stood in for "actually at
+ * the table, paying attention," which is exactly what Blake reported. Now: tapping the tile
+ * ALWAYS opens a ready-up gate, reusing the SAME lobby-seat pattern v0.25 built for the very
+ * first deal (readyPlayerIds/readyUp) rather than inventing a second mechanism - just applied
+ * post-start instead of pre-start. EVERY currently-connected human seat (not just the one who
+ * tapped the tile - anyone else still sitting at the table too) must tap "Ready up" before play
+ * resumes; a seat that's still genuinely missing doesn't block it (send a rejoin link, or hand
+ * it to a computer via the existing takeOverSeat - unchanged).
+ *
+ * Deliberately does NOT touch plain pauseToggle (an ordinary Pause/Save tap, or its own
+ * Cancel/"Return to Game") - that stays instant, exactly as it always has (index.html's
+ * releaseSheetPause() depends on this: cancelling YOUR OWN sheet-initiated pause must never
+ * require a ready-up dance). This gate is a SEPARATE, additive mechanism the client opts into
+ * (requestReunion) only when deliberately coming back to a game, never applied automatically to
+ * every pause.
+ * ------------------------------------------------------------------------------------- */
+function maybeResolveReunion(room) {
+  if (!room.reunionActive || !room.engine) return;
+  const G = room.engine.getG();
+  if (!G) return;
+  const required = (room.seatOwners || []).filter((pid, seat) => {
+    if (pid == null) return false;
+    if (!G.seats[seat] || G.seats[seat].type !== "human") return false;   // converted to CPU since the gate opened
+    const p = room.players.get(pid);
+    return !!(p && p.connected);   // only players CURRENTLY at the table are required to ready up
+  });
+  // Never auto-resolve with nobody required (e.g. everyone momentarily disconnected at once) -
+  // sit tight until someone's actually back to tap ready, rather than silently resuming an
+  // unattended table.
+  if (required.length === 0) return;
+  if (!required.every((pid) => room.tableReady.has(pid))) return;
+  room.paused = false;
+  room.reunionActive = false;
+  room.tableReady = new Set();
+  touch(room);
+  broadcast(room, { type: "paused", paused: false });
+  broadcast(room, { type: "reunionStatus", active: false, readyPlayerIds: [] });
+  log("reunion resolved - table resuming", room.code);
 }
 
 /* ---- tiny HTTP helpers (no framework, matches the rest of this file's style) ---- */
@@ -1289,6 +1430,11 @@ function gameSnapshotFields(room, isHost) {
     // missed the live 'surrenderOccurred' broadcast (see the "surrender" case below). Additive -
     // old clients simply never read this field.
     anySurrenderOccurred: !!room.anySurrenderOccurred,
+    // 2026-07-23 (Blake's item 2) § REUNION READY GATE - rides every sync so ANY reconnect
+    // (not just the deliberate tile-tap that may have started it) lands already knowing whether
+    // a ready-up gate is open and who's already readied. Additive - old clients never read these.
+    reunionActive: !!room.reunionActive,
+    tableReadyIds: Array.from(room.tableReady || []),
   };
 }
 
@@ -1328,6 +1474,10 @@ wss.on("connection", (ws, req) => {
       // v0.22 P0b: never hold the first deal for a phone that's gone - its overlays are moot.
       // (The cap would cover this anyway; this just resolves it sooner.)
       releaseSeatGateSlot(room, playerId, "unseated player disconnected");
+      // 2026-07-23: a disconnect can complete an open reunion gate too - a player who was
+      // "required but hasn't readied up yet" stops being required the instant they're gone
+      // (mirrors the seat gate's own release-on-disconnect above, same reasoning).
+      maybeResolveReunion(room);
       broadcast(room, { type: "presence", playerId, connected: false });
       if (playerId === room.hostPlayerId) broadcast(room, { type: "hostStatus", connected: false });
       // v0.16 item 5: covers the OTHER real trigger shape beyond driveTurnLoop's own turn-start
@@ -1648,6 +1798,7 @@ wss.on("connection", (ws, req) => {
           return;
         }
         E.applyMove(action.seat, match);
+        tallyKnockout(E, match);   // 2026-07-24 item 9 - see that function's comment
         if (E.getG().over) { appendAction(room, { kind: "move", seat: action.seat, m: match, turn: G.turn }); finishGame(room); return; }
         E.advanceTurn();
         // v0.15 bug fix: send the resulting turn number explicitly - see driveTurnLoop()'s
@@ -1712,6 +1863,10 @@ wss.on("connection", (ws, req) => {
             return;
           }
           const delta = {}; delta["hg" + mode] = 1;
+          // 2026-07-24 item 9: whatever knockouts already happened THIS game before the surrender
+          // are real and should still count - a knockout isn't gated on who eventually wins/quits.
+          if (G.koDealt && G.koDealt[seat]) delta.hkoDealt = G.koDealt[seat];
+          if (G.koTaken && G.koTaken[seat]) delta.hkoTaken = G.koTaken[seat];
           applyLeaderboardEntry(G.seats[seat].name, delta);
           room.anySurrenderOccurred = true;
           broadcast(room, { type: "surrenderOccurred" });
@@ -1753,6 +1908,9 @@ wss.on("connection", (ws, req) => {
         appendAction(room, { kind: "seatToCpu", seat, diff, name: takenName });
         // The seat may be the on-turn seat everyone has been waiting on - drive forward now.
         driveTurnLoop(room);
+        // 2026-07-23: converting the last missing seat can complete an open reunion gate on its
+        // own (nobody left to ready up for) - re-check.
+        maybeResolveReunion(room);
         log("rejoin lobby: seat handed to a computer", room.code, "seat=" + seat, "diff=" + diff, "by playerId=" + playerId);
         return;
       }
@@ -1827,6 +1985,45 @@ wss.on("connection", (ws, req) => {
         return;
       }
 
+      case "requestReunion": {
+        // 2026-07-23 (Blake's item 2) § REUNION READY GATE - a client sends this the moment it
+        // deliberately comes back to a game (index.html's onSync() enteringViaResume branch),
+        // ALWAYS, regardless of whether anyone else looks missing - that's the whole point (see
+        // the big comment above this section). Idempotent: if a reunion is already open (someone
+        // else's return already started one, or the table just happened to already be paused),
+        // this is a no-op - the caller just opens the SAME lobby via the reunionActive/
+        // tableReadyIds fields already riding the 'sync' they got, not a second one.
+        if (!ctx) return;
+        const { room, playerId } = ctx;
+        if (!room.started || !room.engine) return;
+        if (!room.reunionActive) {
+          room.paused = true;
+          room.reunionActive = true;
+          room.tableReady = new Set();
+          touch(room);
+          broadcast(room, { type: "paused", paused: true });
+          broadcast(room, { type: "reunionStatus", active: true, readyPlayerIds: [] });
+          log("reunion opened", room.code, "by playerId=" + playerId);
+        }
+        return;
+      }
+
+      case "tableReadyUp": {
+        // 2026-07-23 (Blake's item 2): {type:'tableReadyUp'} - a connected human seat owner
+        // checking in during an open reunion gate. Requires an actually-seated human (mirrors
+        // "readyUp"'s pre-start seat check) and an ACTIVE gate - harmless no-op otherwise (a
+        // stale/late tap after the table already resumed on its own).
+        if (!ctx) return;
+        const { room, playerId } = ctx;
+        if (!room.started || !room.engine || !room.reunionActive) return;
+        if (!room.seatOwners || !room.seatOwners.includes(playerId)) return;
+        room.tableReady.add(playerId);
+        touch(room);
+        broadcast(room, { type: "reunionStatus", active: true, readyPlayerIds: Array.from(room.tableReady) });
+        maybeResolveReunion(room);
+        return;
+      }
+
       case "setTableSpeed": {
         // v0.15: {type:'setTableSpeed', speed} — host-only (mirrors the CPU-move/reshuffle
         // authorization pattern this file has always used for "one player's phone is briefly
@@ -1896,6 +2093,7 @@ wss.on("connection", (ws, req) => {
         const m = E.chooseAI(seat, moves);
         G.seats[seat].diff = savedDiff;
         E.applyMove(seat, m);
+        tallyKnockout(E, m);   // 2026-07-24 item 9 - see that function's comment
         log("away ladder: computer played one turn for seat", seat, "room", room.code);
         broadcastAwayClear(room);
         if (E.getG().over) { appendAction(room, { kind: "move", seat, m, turn: G.turn }); finishGame(room); return; }

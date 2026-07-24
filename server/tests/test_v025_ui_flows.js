@@ -382,14 +382,18 @@ async function main() {
       return true;
     });
     check(pickedTricky, "C: picked Tricky via a real button click (takeOverSeat sent)");
+    // 2026-07-23 (item 2): converting Guest1's seat removes them from humanSeatList() entirely -
+    // the host is now the ONLY human seat, and still has to tap "I'm ready" themselves (readying
+    // up IS the resume trigger now, not a separate "every seat covered, tap Resume" step).
     await host.waitForFunction(() => {
       const btn = document.getElementById("btnReunionResume");
       return btn && !btn.classList.contains("hidden");
     }, { timeout: 5000 });
-    const everyoneCovered = await host.evaluate(() => document.getElementById("reunionNote").textContent);
-    check(/Every seat is covered/.test(everyoneCovered), "C: with Guest1 converted, the rejoin lobby says every seat is covered");
+    const readyBtnText = await host.evaluate(() => document.getElementById("btnReunionResume").textContent);
+    check(/ready/i.test(readyBtnText), `C: the ready-up button reads "I'm ready" now that Guest1 is converted (got "${readyBtnText}")`);
 
-    // Resume - a real click.
+    // Tap "I'm ready" - a real click. The server auto-resumes the instant the (now sole) human
+    // seat has readied up.
     await host.evaluate(() => document.getElementById("btnReunionResume").click());
     await host.waitForFunction(() => window.NET.reunionOpen !== true, { timeout: 5000 });
     const seatConverted = await host.evaluate(() => window.G.seats[1].type);
@@ -408,10 +412,14 @@ async function main() {
   }
 
   /* ===================================================================================
-   * Scenario D: counterpart - if the other human never actually left, tapping the tile goes
-   * straight to the live board. No rejoin lobby ever appears.
+   * Scenario D (rewritten 2026-07-23 for item 2): counterpart to C - even when the other human
+   * never actually left, tapping the tile now ALWAYS opens the ready-up lobby (the old "everyone
+   * already looks connected -> skip straight to the board" shortcut is exactly what Blake
+   * reported and is gone). BOTH the returning player and the player who never left must tap
+   * "I'm ready" - the still-connected Guest1 gets the SAME lobby live via 'reunionStatus'. Once
+   * both have readied, play resumes automatically with no separate "Resume" tap.
    * =================================================================================== */
-  log("--- Scenario D: the other human never left - tile tap auto-rejoins straight to the board ---");
+  log("--- Scenario D: even when the other human never left, the tile tap opens the ready-up lobby for both ---");
   {
     const ctxH = await browser.newContext({ reducedMotion: "reduce" });
     const ctxG = await browser.newContext({ reducedMotion: "reduce" });
@@ -453,12 +461,36 @@ async function main() {
 
     await host.evaluate(() => document.getElementById("savedGameMain").click());
     await host.waitForFunction(() => window.G != null, { timeout: 8000 });
-    await sleep(800); // give a false-positive reunion overlay every chance to show up if it were going to
-    const reunionShown = await host.evaluate(() => window.NET.reunionOpen === true || !document.getElementById("reunionOverlay").classList.contains("hidden"));
-    check(!reunionShown, "D: with Guest1 already back, the rejoin lobby never appears");
+    await host.waitForFunction(() => window.NET.reunionOpen === true, { timeout: 8000 });
+    check(true, "D: even with Guest1 already back, tapping the tile opens the ready-up lobby (the old auto-skip is gone)");
+
+    // Guest1 - who never left - gets the SAME lobby live, via the 'reunionStatus' broadcast.
+    await guest.waitForFunction(() => window.NET.reunionOpen === true, { timeout: 5000 });
+    check(true, "D: Guest1 (who never left) also sees the SAME ready-up lobby, not just the returning host");
+    const guestRow = await guest.evaluate(() => document.getElementById("reunionSeats").textContent);
+    check(/Host/.test(guestRow) && /Not.*ready|ready/i.test(guestRow), "D: Guest1's own lobby view lists the host, not yet ready");
+
+    // Neither has readied yet - the table must stay paused, no auto-resume from presence alone.
+    await sleep(500);
+    const stillPaused = await host.evaluate(() => window.G && window.G.paused === true);
+    check(stillPaused, "D: the table stays paused - presence alone is NOT enough to resume anymore");
+
+    // Both tap "I'm ready" - real clicks.
+    await host.evaluate(() => document.getElementById("btnReunionResume").click());
+    await sleep(300);
+    const stillPausedAfterOne = await guest.evaluate(() => window.G && window.G.paused === true);
+    check(stillPausedAfterOne, "D: still paused after only ONE of the two humans has readied up");
+    await guest.evaluate(() => document.getElementById("btnReunionResume").click());
+
+    // Once BOTH have readied, the server resumes automatically - no manual "Resume" tap at all.
+    await host.waitForFunction(() => window.NET.reunionOpen !== true, { timeout: 5000 });
+    await guest.waitForFunction(() => window.NET.reunionOpen !== true, { timeout: 5000 });
+    const bothUnpaused = await Promise.all([host, guest].map((p) => p.evaluate(() => window.G && window.G.paused === false)));
+    check(bothUnpaused.every(Boolean), "D: once both readied up, play resumed automatically for both - no manual Resume tap");
+
     const onBoard = await host.evaluate(() => !document.getElementById("game").classList.contains("hidden"));
-    check(onBoard, "D: the tile tap dropped the host straight onto the live board");
-    check(!(host.__errors || []).length, "D: zero page errors on the auto-rejoin path");
+    check(onBoard, "D: the host is on the live board after readying up");
+    check(!(host.__errors || []).length && !(guest.__errors || []).length, "D: zero page errors on either side");
 
     await ctxH.close(); await ctxG.close();
   }

@@ -102,6 +102,11 @@ const KV_PATH = Deno.env.get("NASTY_KV_PATH") || undefined; // undefined = Deplo
    gone from the wire, plus the new v0.25 rejoin-lobby flow (takeOverSeat). A protocol-4
    client (build 32 / v0.24 website) is not safe in either direction, so it gets the same
    friendly update message at host/join/rejoin/reclaim. */
+/* 2026-07-24 (Blake's items 9+14, "2026-07-23 list") - twin of server.js's matching comment.
+   STAYS at 5, not bumped. Item 9's two new stat keys ride the existing result-recording shape,
+   no new message/changed shape. Item 14 needed zero server changes - `teams` already rode the
+   `host` message and RoomMeta since it existed; this session's fix is client-side display only.
+   See index.html's PROTOCOL_VERSION comment for the full reasoning. */
 const PROTOCOL_VERSION = 5;
 const PROTOCOL_MISMATCH_MESSAGE =
   "This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.";
@@ -255,7 +260,10 @@ function checkAdminToken(req: Request, url: URL): boolean {
 // redirected into the correct split key, and migrateLegacyLeaderboardPoints() further below
 // for the one-time startup migration of points already in KV from before this split. Twin of
 // server.js's matching block - keep both in sync.
-const NUMERIC_STAT_KEY = /^(hg[46][st]|hw[46][st]|hptsS|hptsT)$/;
+// 2026-07-24 (Blake's item 9): hkoDealt/hkoTaken added - lifetime, human-only knockout stats, no
+// legacy predecessor so no migration function needed (a missing key just reads as 0) - see
+// server.js's matching comment + the § KNOCKOUT TALLY block below.
+const NUMERIC_STAT_KEY = /^(hg[46][st]|hw[46][st]|hptsS|hptsT|hkoDealt|hkoTaken)$/;
 async function applyLeaderboardEntry(name: unknown, delta: unknown) {
   const clean = cleanName(name, "");
   if (!clean || isBadName(clean) || !delta || typeof delta !== "object") return;
@@ -467,6 +475,13 @@ type RoomMeta = {
   // as `recorded`. Optional purely so an old persisted meta (from before this field existed)
   // still parses - treated as false wherever read.
   anySurrenderOccurred?: boolean;
+  // 2026-07-23 (Blake's item 2) § REUNION READY GATE - twin of server.js's room.reunionActive/
+  // room.tableReady, persisted here for the same reason server.js persists it (see that file's
+  // roomToDisk() comment: losing an OPEN gate mid ready-up would strand the table paused with
+  // no way to auto-resume). Optional so an old persisted meta still parses - treated as
+  // false/empty wherever read.
+  reunionActive?: boolean;
+  tableReadyIds?: number[];
 };
 
 function roomKey(code: string): Deno.KvKey { return ["room", code]; }
@@ -589,7 +604,13 @@ function gDigestServer(G: any): string {
 function sameMove(legal: any, submitted: any): boolean {
   if (!legal || !submitted) return false;
   if (legal.ci !== submitted.ci || legal.type !== submitted.type || legal.owner !== submitted.owner) return false;
-  if (legal.type === "swap") return legal.ts === submitted.ts && legal.tpi === submitted.tpi;
+  // THE JACK BUG (found 2026-07-24, Blake's item 13) - see server.js's twin copy of this
+  // function for the full root-cause writeup: this used to skip the `pi` check for swap moves
+  // entirely, so whenever the owner had 2+ of their own tees on the track, the server could
+  // silently apply a swap using the WRONG one of the owner's own pieces (always the
+  // lowest-array-index eligible one) instead of the one actually tapped. Fix: also require
+  // `pi` to match.
+  if (legal.type === "swap") return legal.pi === submitted.pi && legal.ts === submitted.ts && legal.tpi === submitted.tpi;
   if (legal.pi !== submitted.pi || legal.to !== submitted.to) return false;
   const a = legal.kick, b = submitted.kick;
   if (!!a !== !!b) return false;
@@ -610,6 +631,20 @@ function pointsForWinServer(G: any, winSet: Set<number>): number {
   G.seats.forEach((opp: any, j: number) => { if (winSet.has(j)) return; pts += opp.type === "human" ? 3 : (DIFF_POINTS[opp.diff] || 0); });
   return pts;
 }
+/* 2026-07-24 § KNOCKOUT TALLY (Blake's item 9) - twin of server.js's tallyKnockout(); see that
+ * function's comment for the full design (why lifetime not per-mode, why a forced partner-kick
+ * doesn't count, why this lives outside § ENGINE). Called from every place this file runs a real
+ * E.applyMove() against a live room: driveTurnLoopCollect()'s CPU branch, the human "action"
+ * case, and the away-ladder assist - see each call site's own comment. */
+function tallyKnockout(E: any, m: any) {
+  if (!m.kick) return;
+  if (E.sameTeam(m.owner, m.kick.seat)) return; // forced partner-kick ("Ouch!") - not a "Nasty!" knockout
+  const G = E.getG();
+  if (!G.koDealt) G.koDealt = new Array(G.n).fill(0);
+  if (!G.koTaken) G.koTaken = new Array(G.n).fill(0);
+  if (G.seats[m.owner] && G.seats[m.owner].type === "human") G.koDealt[m.owner] = (G.koDealt[m.owner] || 0) + 1;
+  if (G.seats[m.kick.seat] && G.seats[m.kick.seat].type === "human") G.koTaken[m.kick.seat] = (G.koTaken[m.kick.seat] || 0) + 1;
+}
 function buildResultEntriesServer(G: any): { name: string; delta: Record<string, number> }[] {
   const mode = (G.n === 4 ? "4" : "6") + (G.teams ? "t" : "s");
   const isTeam = mode.endsWith("t");
@@ -619,6 +654,9 @@ function buildResultEntriesServer(G: any): { name: string; delta: Record<string,
     if (seat.type !== "human") return;
     const delta: Record<string, number> = {}; delta["hg" + mode] = 1;
     if (winSet.has(i)) { delta["hw" + mode] = 1; delta[isTeam ? "hptsT" : "hptsS"] = pointsForWinServer(G, winSet); }
+    // 2026-07-24 item 9: lifetime knockout stats, accrued all game long by tallyKnockout() above.
+    if (G.koDealt && G.koDealt[i]) delta.hkoDealt = G.koDealt[i];
+    if (G.koTaken && G.koTaken[i]) delta.hkoTaken = G.koTaken[i];
     entries.push({ name: seat.name, delta });
   });
   return entries;
@@ -747,6 +785,7 @@ function driveTurnLoopCollect(E: any, meta: RoomMeta): { out: Broadcastable[]; f
     if (G.seats[seat].type === "cpu") {
       const m = E.chooseAI(seat, moves);
       E.applyMove(seat, m);
+      tallyKnockout(E, m);   // 2026-07-24 item 9 - see that function's comment
       if (E.getG().over) { append({ kind: "move", seat, m, turn: G.turn }); return { out, finished: true }; }
       E.advanceTurn();
       const seq = append({ kind: "move", seat, m, turn: E.getG().turn });
@@ -847,6 +886,7 @@ async function actuallyStartGame(code: string, pre: RoomMeta): Promise<void> {
     meta.G = G;
     meta.recorded = false;
     meta.anySurrenderOccurred = false;   // v0.27.1: a genuinely new game/rematch resets the no-fault-exit flag
+    meta.reunionActive = false; meta.tableReadyIds = [];   // 2026-07-23: defensive reset, same lifecycle as `recorded`
     meta.nextSeq = 1;   // 'start' is broadcast seq 0
     meta.logCount = 1;
     return { seatOwners: meta.seatOwners };
@@ -880,6 +920,38 @@ async function actuallyStartGame(code: string, pre: RoomMeta): Promise<void> {
   log("holding the first deal until everyone is seated", code, "waiting=" + waiting.size);
 }
 
+// 2026-07-23 (Blake's item 2) § REUNION READY GATE - twin of server.js's maybeResolveReunion(),
+// see the big comment block above that function for the full design. Async/KV-shaped: reads a
+// fresh meta and only commits when the gate is genuinely ready to resolve (touchRoom's mutate
+// returning `false` is a clean no-op, no write, no broadcast - exactly "not resolved yet").
+async function maybeResolveReunion(code: string): Promise<void> {
+  const r = await touchRoom(code, (meta) => {
+    if (!meta.reunionActive || !meta.G) return false;
+    const G = meta.G as { seats: { type: string }[] };
+    const seatOwners = meta.seatOwners || [];
+    const readySet = new Set(meta.tableReadyIds || []);
+    const required = seatOwners.filter((pid, seat) => {
+      if (pid == null) return false;
+      if (!G.seats[seat] || G.seats[seat].type !== "human") return false;   // converted to CPU since the gate opened
+      const p = meta.players.find((pp) => pp.id === pid);
+      return !!(p && p.connected);   // only players CURRENTLY at the table are required to ready up
+    });
+    // Never auto-resolve with nobody required - sit tight rather than silently resume an
+    // unattended table (mirrors server.js's own guard).
+    if (required.length === 0) return false;
+    if (!required.every((pid) => readySet.has(pid as number))) return false;
+    meta.paused = false;
+    meta.reunionActive = false;
+    meta.tableReadyIds = [];
+    return {};
+  });
+  if (r.ok) {
+    broadcastRoom(code, { type: "paused", paused: false });
+    broadcastRoom(code, { type: "reunionStatus", active: false, readyPlayerIds: [] });
+    log("reunion resolved - table resuming", code);
+  }
+}
+
 // v0.15 snapshot fields for sync/reclaimed — twin of server.js's gameSnapshotFields().
 function gameSnapshotFields(meta: RoomMeta, isHost: boolean) {
   const hostP = meta.players.find((p) => p.id === meta.hostPlayerId);
@@ -894,6 +966,9 @@ function gameSnapshotFields(meta: RoomMeta, isHost: boolean) {
     protocolVersion: PROTOCOL_VERSION,
     // v0.27.1: twin of server.js's field - see that file's gameSnapshotFields() comment.
     anySurrenderOccurred: !!meta.anySurrenderOccurred,
+    // 2026-07-23: twin of server.js's fields - see that file's gameSnapshotFields() comment.
+    reunionActive: !!meta.reunionActive,
+    tableReadyIds: meta.tableReadyIds || [],
   };
 }
 
@@ -1391,6 +1466,7 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           started: false, seatOwners: null, ready: [], paused: false, logCount: 0,
           G: null, tableSpeed: seededSpeed, recorded: false, nextSeq: 0,
           anySurrenderOccurred: false,   // v0.27.1
+          reunionActive: false, tableReadyIds: [],   // 2026-07-23
         };
         await kv.set(roomKey(code), meta, { expireIn: ROOM_TTL_MS });
         identify(code, playerId);
@@ -1731,6 +1807,7 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           }
           const out: Broadcastable[] = [];
           E.applyMove(seat, match);
+          tallyKnockout(E, match);   // 2026-07-24 item 9 - see that function's comment
           if (E.getG().over) {
             out.push({ payload: { type: "gameAction", seq: meta.nextSeq++, action: { kind: "move", seat, m: match, turn: G.turn } } });
             await commitAndBroadcast(code, E, out, true);
@@ -1797,6 +1874,10 @@ function handleWsUpgrade(req: Request, ip: string): Response {
             return;
           }
           const delta: Record<string, number> = {}; delta["hg" + mode] = 1;
+          // 2026-07-24 item 9: knockouts already dealt/suffered THIS game before the surrender are
+          // real and still count - see server.js's matching comment.
+          if (G.koDealt && G.koDealt[seat]) delta.hkoDealt = G.koDealt[seat];
+          if (G.koTaken && G.koTaken[seat]) delta.hkoTaken = G.koTaken[seat];
           await applyLeaderboardEntry(G.seats[seat].name, delta);
           log("surrender recorded", code, "seat=" + seat, "name=" + G.seats[seat].name, "mode=" + mode);
           return { setSurrenderFlag: true };
@@ -1846,6 +1927,10 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           });
           log("rejoin lobby: seat handed to a computer", code, "seat=" + seat, "diff=" + diff, "by playerId=" + playerId);
         });
+        // 2026-07-23: converting the last missing seat can complete an open reunion gate on its
+        // own (nobody left to ready up for) - re-check, outside the chain (maybeResolveReunion
+        // does its own touchRoom, same pattern as every other post-withRoomChain follow-up here).
+        await maybeResolveReunion(code);
         return;
       }
 
@@ -1930,6 +2015,52 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         return;
       }
 
+      case "requestReunion": {
+        // 2026-07-23 (Blake's item 2) § REUNION READY GATE - twin of server.js's case, see the
+        // big comment above that file's maybeResolveReunion() for the full design. A client
+        // sends this the moment it deliberately comes back to a game (index.html's onSync()
+        // enteringViaResume branch), ALWAYS, not just when someone looks missing - "presence"
+        // alone silently standing in for "actually at the table" was Blake's exact report.
+        // Idempotent: if a reunion is already open, this is a no-op - the caller gets the SAME
+        // gate's state via the reunionActive/tableReadyIds fields already riding their own sync.
+        if (!ctx) return;
+        const { code, playerId } = ctx;
+        const r = await touchRoom(code, (meta) => {
+          if (!meta.started || meta.reunionActive) return false;
+          meta.paused = true;
+          meta.reunionActive = true;
+          meta.tableReadyIds = [];
+          return {};
+        });
+        if (r.ok) {
+          broadcastRoom(code, { type: "paused", paused: true });
+          broadcastRoom(code, { type: "reunionStatus", active: true, readyPlayerIds: [] });
+          log("reunion opened", code, "by playerId=" + playerId);
+        }
+        return;
+      }
+
+      case "tableReadyUp": {
+        // 2026-07-23 (Blake's item 2): {type:'tableReadyUp'} - twin of server.js's case. Requires
+        // an actually-seated human and an ACTIVE gate; a stale/late tap after the table already
+        // resumed on its own is a harmless no-op.
+        if (!ctx) return;
+        const { code, playerId } = ctx;
+        const r = await touchRoom(code, (meta) => {
+          if (!meta.started || !meta.reunionActive) return false;
+          if (!meta.seatOwners || !meta.seatOwners.includes(playerId)) return false;
+          const s = new Set(meta.tableReadyIds || []);
+          s.add(playerId);
+          meta.tableReadyIds = Array.from(s);
+          return {};
+        });
+        if (r.ok) {
+          broadcastRoom(code, { type: "reunionStatus", active: true, readyPlayerIds: r.meta.tableReadyIds || [] });
+          await maybeResolveReunion(code);
+        }
+        return;
+      }
+
       // v0.15: "recordResult" is RETIRED — the server records a finished online game itself
       // (recordFinishedGame(), called from commitAndBroadcast() when G.over flips) instead of
       // waiting for the host's phone to notice the win screen. An old client that still sends
@@ -1991,6 +2122,7 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           const m = E.chooseAI(wantSeat, moves);
           G.seats[wantSeat].diff = savedDiff;
           E.applyMove(wantSeat, m);
+          tallyKnockout(E, m);   // 2026-07-24 item 9 - see that function's comment
           log("away ladder: computer played one turn for seat", wantSeat, "room", code);
           clearAwayState(code);
           const out: Broadcastable[] = [];
@@ -2088,6 +2220,9 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         return {};
       }).catch(() => ({ ok: false as const, reason: "error" }));
       if (r.ok) {
+        // 2026-07-23: a disconnect can complete an open reunion gate too - twin of server.js's
+        // matching close-handler addition (see maybeResolveReunion()'s own comment).
+        await maybeResolveReunion(code);
         broadcastRoom(code, { type: "presence", playerId, connected: false });
         if (playerId === r.meta.hostPlayerId) broadcastRoom(code, { type: "hostStatus", connected: false });
         // v0.16 item 5: twin of server.js's matching close-handler addition - covers a player

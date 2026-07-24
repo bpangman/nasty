@@ -449,7 +449,10 @@ button{font:inherit;cursor:pointer}
 
 /* ---------- Game chrome ---------- */
 #game{position:fixed;inset:0;display:flex;flex-direction:column}
-#topbar{display:flex;align-items:center;gap:5px;padding:calc(8px + env(safe-area-inset-top)) 8px 8px;
+/* 2026-07-23 (fix, item 12 follow-up): gap/side-padding tightened (5px->4px, 8px->5px) as part
+   of fitting all 6 buttons with ZERO horizontal scroll on every current iPhone - see the
+   #topbar .iconBtn rule below for the rest of that fix and the full before/after measurements. */
+#topbar{display:flex;align-items:center;gap:4px;padding:calc(8px + env(safe-area-inset-top)) 5px 8px;
   flex:none;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
 #topbar::-webkit-scrollbar{display:none}
 /* one row, always the same height - the deal chip shrinks/ellipsizes instead of wrapping.
@@ -476,8 +479,44 @@ button{font:inherit;cursor:pointer}
    auto never kicked in - the text just visually spilled over the neighboring buttons instead
    (caught on the 320px viewport check). shrink:0 means it only ever grows to fill spare room
    and never shrinks past its natural content size; if that ever doesn't fit, the row's existing
-   overflow-x:auto scrolls it like everything else, which is the correct fallback. */
-#topbar #btnPause{flex:1 0 auto;font-size:14px;font-weight:800;min-height:48px}
+   overflow-x:auto scrolls it like everything else, which is the correct fallback.
+   2026-07-23 (Blake's item 5): the old single "Pause/Save" button split into two (#btnPause +
+   the new #btnSave) - both keep the same grow-not-shrink treatment so the pair still reads as
+   the row's visual center, same as the one combined button used to. */
+#topbar #btnPause,#topbar #btnSave{flex:1 0 auto;font-weight:800;min-height:48px}
+/* 2026-07-23 (Blake's item 12): "Make Quit all caps with no x on the button. Same with Pause
+   but no pause emoji. Same with Save in all caps - same for all the buttons at the top
+   actually!" Scoped to `#topbar .iconBtn` specifically (not a blanket .iconBtn rule) so the
+   fixed-position ⏩ Skip button below the board - visually a DIFFERENT row, never part of this
+   one - is untouched, matching Blake's own "leave Skip alone" framing for anything not actually
+   IN the top row. text-transform is purely a DISPLAY change - every button's underlying
+   textContent (read by updateSpeedButtonLabel()/the mute toggle/etc.) keeps its normal
+   mixed-case string; only the rendered glyphs are capitalized, so nothing downstream that reads
+   these buttons' text has to change. The literal ✕/⏸/🔊/🔇 emoji glyphs are separately removed
+   from the HTML/JS below (text-transform cannot touch or reflow around an emoji character - the
+   only fix for those is to stop writing them into the string at all).
+   2026-07-23 FOLLOW-UP fix (a 6th topbar button, #btnSave, first shipped this same session made
+   the row wider than every current iPhone - a real regression this batch could not leave in
+   place, given item 6 in this very batch was itself a complaint about something being bigger
+   than the screen): three changes together, not one blunt one, get the whole row - all 6
+   buttons, fully visible, ZERO horizontal scroll - onto every iPhone from a 320px SE up through
+   a 430pt Pro Max, verified by Playwright measuring the row's actual scrollWidth against its
+   clientWidth (see test_topbar_buttons.js's own permanent width-matrix check):
+   (1) speedLabel() (§ MENU) dropped its "Speed: " prefix - just the level name now (NORMAL /
+   QUICK / FAST / TURBO), still a complete, un-clipped word, which happened to be the single
+   widest button in the row by a wide margin.
+   (2) #btnPause/#btnSave's old fixed 14px/font-weight override (a leftover from the ORIGINAL
+   single wide "Pause/Save" button, back when it was the one button that needed to visually
+   read as bigger) is gone - every topbar button, including these two, now shares ONE responsive
+   font-size clamp, so nothing is arbitrarily wider than it needs to be, and the row reads as
+   deliberately uniform rather than two different button styles bolted together.
+   (3) the shared clamp(10.5px,3.1vw,13px) below scales the text down a little further on the
+   very narrowest phones (where 6 short-but-real words genuinely need every spare pixel) while
+   staying at the old familiar 13px on anything roomier - together with the #topbar row's own
+   tightened gap/padding (see that rule above), this keeps every label a single unclipped word,
+   above the 44px tap-target floor (48px min-height, untouched), and never forces the sideways
+   scroll a real family member would notice and dislike. */
+#topbar .iconBtn{text-transform:uppercase;padding:6px 5px;font-size:clamp(10.5px,3.1vw,13px)}
 @keyframes netPulse{50%{opacity:.4}}
 /* v0.16: problem-only connection indicator (see updateConnIndicator()) - USED to be a small
    always-on "🟢 online" chip in the topbar, which read as a meaningless bare dot on a phone
@@ -713,9 +752,18 @@ button{font:inherit;cursor:pointer}
    animation call sites that used to hardcode the old 64x90 "native" size. */
 .card{width:clamp(46px,16vw,76px);aspect-ratio:64/90;border-radius:8px;background:var(--cream);color:#232323;
   border:1px solid #c9bfa8;box-shadow:0 4px 10px rgba(0,0,0,.35);position:relative;flex:none}
+/* 2026-07-23 (Blake's item 11): "make the number (includes jacks, kings, queens, etc) slightly
+   larger on the card - don't change the card size - so it's easier to read." Card size (.card's
+   own width/aspect-ratio, above) is untouched; only the rank glyph clamp grew a couple px at
+   every point on its curve (13/17 -> 14/19 here, and the matching fixed-size .tableCard rule
+   below, 17 -> 19). The suit-letter <small> under the rank grew proportionally too, so "10" (the
+   only two-character rank) still reads as one unit, not lopsided. Checked against the smallest
+   clamp floor: at a 320px-wide phone (.card's own narrowest real width, ~51px) "10" at the new
+   14px Georgia still leaves comfortable margin inside the card's 6px left inset before it would
+   ever reach the center pip - verified visually, see the item 11 screenshots. */
 .card .rk{position:absolute;top:4px;left:6px;font-family:Georgia,serif;font-weight:700;
-  font-size:clamp(13px,4.25vw,17px);line-height:1}
-.card .rk small{display:block;font-size:clamp(10px,3.25vw,13px);text-align:center}
+  font-size:clamp(14px,4.6vw,19px);line-height:1}
+.card .rk small{display:block;font-size:clamp(11px,3.5vw,15px);text-align:center}
 .card .rk2{position:absolute;bottom:4px;right:6px;transform:rotate(180deg)}
 .card .pip{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   font-size:clamp(26px,8.5vw,34px)}
@@ -733,8 +781,8 @@ button{font:inherit;cursor:pointer}
 /* deck/discard cards are fixed board-space objects (scaled only by the board's own zoom, never
    by hand ergonomics) - pin their rank text back to the original flat size so #handRow's new
    viewport-responsive .card .rk (above) doesn't also shrink these on a narrow phone. */
-.tableCard .card .rk{font-size:17px}
-.tableCard .card .rk small{font-size:13px}
+.tableCard .card .rk{font-size:19px}   /* 2026-07-23 item 11: matches the hand-card clamp's new ceiling */
+.tableCard .card .rk small{font-size:15px}
 /* per-seat discard: one .tableCard per player (see buildTable), faded out when quiet */
 .discardCard{opacity:0;transition:opacity .35s ease-in-out}
 .discardCard.show{opacity:1}
@@ -815,18 +863,44 @@ button{font:inherit;cursor:pointer}
 .overlay h2{margin:16px 0 6px;font-size:26px}
 .overlay p{color:#cfe8d6;max-width:420px;line-height:1.55;font-size:15.5px}
 /* v0.27.1: confirm-style overlays (pause / leave-game sheet / concede confirm / overwrite /
-   slot-replace) wrap their sign+paragraph+buttons in .confirmCard - a centered, height-capped
-   card, same discipline .modalCard already uses (v0.19.1 leaderboard fit-any-iPhone fix) and
-   #hostSpeedBtns' grid already uses (v0.26 item 2). Before this fix these overlays had NO
-   max-height/overflow constraint at all - just raw children directly inside .overlay
-   (position:fixed;inset:0, no scroll of its own) - so a longer button list (leaveConfirmOverlay
-   grew to up to 6 buttons this same release) could genuinely overflow past a short phone's
-   viewport with no way to scroll down to the rest (Blake's report: "the surrender badge takes up
-   the entire screen and then some"). .confirmCard caps at max-height:90vh with its own scroll,
-   and the media query below shrinks the giant 56px .sign banner text + tightens spacing on short
-   screens (max-height:660px catches iPhone SE-class screens specifically). */
+   slot-replace / the new save-leave confirm) wrap their sign+paragraph+buttons in .confirmCard -
+   a centered, height-capped card, same discipline .modalCard already uses (v0.19.1 leaderboard
+   fit-any-iPhone fix) and #hostSpeedBtns' grid already uses (v0.26 item 2).
+   2026-07-23 fix (Blake's item 6, "the concede badge is still way bigger than my screen and cuts
+   off"): v0.27.1's own fix was a max-height:90vh CAP but no overflow-y - overflow was still
+   possible on a long button list (leaveConfirmOverlay's 6 buttons), so iOS build 38 patched THAT
+   by replacing the CSS cap with a JS one (fitConfirmCard(), § UTIL - measured the card, then
+   applied a uniform transform:scale() down to fit). Root-caused why Blake could still see it cut
+   off after build 38, tracing through both prior attempts rather than layering a third guess on
+   top: that JS scale had two real bugs, either one of which reproduces exactly "cuts off, no way
+   to see the rest" -
+   (1) `vh = innerHeight*0.9` budgeted a flat 10% margin with NO awareness of the iOS safe area
+   (this page runs edge-to-edge, viewport-fit=cover - see the <meta name="viewport"> tag) - on a
+   notched/Dynamic-Island iPhone the status-bar strip plus the home-indicator strip together can
+   eat close to that same ~10%, so a card sized to "fit in 90% of the full screen" could still
+   land its top or bottom edge UNDER the rounded-corner/home-indicator zone - exactly a "cuts off"
+   look even though the raw math said it fit inside innerHeight.
+   (2) the scale was computed ONCE, at open time, with no resize listener - mobile Safari's
+   address bar showing/hiding (or a device rotation) changes innerHeight AFTER that, and a
+   stale/now-too-large scale from before is what Blake would actually see the dialog rendered at.
+   Neither bug can be fixed by tuning the percentage tighter - a percentage-based JS scale with no
+   scroll fallback has no recovery if it's ever wrong, which is the literal complaint ("cuts off",
+   not "a little tight"). Fix: back to a CSS max-height, done right this time - explicitly
+   SUBTRACTS the real safe-area insets (not a flat guess) and, critically, keeps overflow-y:auto
+   as the actual safety net - pure CSS recomputes on every resize/rotation/Dynamic-Type-size-
+   change with zero JS and zero race window, and even in a genuinely pathological case (huge
+   Dynamic Type text, a truly enormous button list) the user can always scroll to reach every
+   button instead of it being silently unreachable. The "-44px" mirrors .overlay's own 22px
+   top+bottom padding, so the card never rides flush against that padding's edges even at its
+   largest. This also means .confirmCard is back to sizing to its OWN natural content when that
+   content is small (2-button dialogs, the common case) instead of Blake's other complaint ("must
+   not fill the whole screen either") - max-height only ever CAPS, it doesn't stretch anything.
+   fitConfirmCard() (§ UTIL) is kept as a harmless no-op (just clears any transform a pre-fix
+   session might have left behind) so none of the ~15 existing call sites needed to change. */
 .confirmCard{width:100%;max-width:440px;display:flex;
-  flex-direction:column;align-items:center;padding:2px;transform-origin:center center}
+  flex-direction:column;align-items:center;padding:2px;transform-origin:center center;
+  max-height:calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 44px);
+  overflow-y:auto;-webkit-overflow-scrolling:touch}
 .confirmCard .bigBtns{width:100%}
 @media (max-height:660px){
   .confirmCard .sign{padding:9px 20px 7px}
@@ -853,6 +927,14 @@ button{font:inherit;cursor:pointer}
 .lbTable th:nth-child(4),.lbTable td:nth-child(4){width:18%}
 .lbTable th:nth-child(5),.lbTable td:nth-child(5){width:21%}
 .lbTable td:last-child{font-weight:800;color:var(--gold)}
+/* 2026-07-24 (Blake's item 9): the KOs tab has only 4 columns (Player/KOs/KO'd/Ratio), not 5 -
+   its own width set, higher specificity (.lbTable.lbKo) than the 5-column rules above so it
+   wins regardless of source order. Ratio still lands on td:last-child above (bold gold), same
+   "the number that matters most is the eye-catching one" treatment Points got. */
+.lbTable.lbKo th:first-child,.lbTable.lbKo td:first-child{width:38%}
+.lbTable.lbKo th:nth-child(2),.lbTable.lbKo td:nth-child(2){width:19%}
+.lbTable.lbKo th:nth-child(3),.lbTable.lbKo td:nth-child(3){width:20%}
+.lbTable.lbKo th:nth-child(4),.lbTable.lbKo td:nth-child(4){width:23%}
 @media (prefers-reduced-motion: reduce){ .plaque.turn,.tee.selectable,.tee.targetable,#btnSkip.active,.toast.myTurn{animation:none} }
 
 /* v0.10: a phone rotated into landscape (short viewport height - the web version has no
@@ -1007,17 +1089,23 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.27.1</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.28</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
 <div id="game" class="hidden">
   <div id="topbar">
-    <button class="iconBtn" id="btnMenu">✕ Quit</button>
-    <button class="iconBtn" id="btnPause">⏸ Pause/Save</button>
+    <!-- 2026-07-23: Quit/Pause/Save/Mute all had their leading emoji dropped (Blake's item 12 -
+         "no x on the button", "no pause emoji", same for every top button) - #topbar .iconBtn's
+         new text-transform:uppercase (§ STYLE) handles the all-caps display for every one of
+         these, so the literal strings below stay plain mixed-case. Pause/Save split into two
+         buttons this same session (item 5) - see openSaveConfirm()/openPauseSheet(), § MENU. -->
+    <button class="iconBtn" id="btnMenu">Quit</button>
+    <button class="iconBtn" id="btnPause">Pause</button>
+    <button class="iconBtn" id="btnSave">Save</button>
     <button class="iconBtn" id="btnSpeed">Speed: Normal</button>
     <button class="iconBtn" id="btnRules2">Rules</button>
-    <button class="iconBtn" id="btnMute">🔊</button>
+    <button class="iconBtn" id="btnMute">Mute</button>
   </div>
   <div id="boardWrap">
     <div id="gameLogo">
@@ -1119,12 +1207,17 @@ button{font:inherit;cursor:pointer}
 <div id="lbOverlay" class="overlay hidden">
   <div class="modalCard">
     <h3>🏆 Leaderboard</h3>
+    <!-- 2026-07-24 (Blake's item 9): 3rd tab, "KOs" - lifetime knockouts dealt/suffered, see
+         renderLbKo() below. Same .seg visual style as Solo/Teams, just one more button in the
+         same flex row - "KOs" kept deliberately short (not "Knockouts") so 3 tabs fit as
+         comfortably on a narrow phone as 2 did (see .seg's CSS, § STYLE). -->
     <div class="segs" style="margin-bottom:8px">
       <button class="seg on" id="lbTabSolo">Solo</button>
       <button class="seg" id="lbTabTeams">Teams</button>
+      <button class="seg" id="lbTabKo">KOs</button>
     </div>
     <div id="lbBody"></div>
-    <p style="font-size:12.5px;color:#9ec7aa">Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a human - humans only, CPUs never show up here.</p>
+    <p id="lbCaption" style="font-size:12.5px;color:#9ec7aa">Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a human - humans only, CPUs never show up here.</p>
     <div class="bigBtns"><button class="btn primary" id="btnLbClose">Close</button></div>
   </div>
 </div>
@@ -1153,6 +1246,10 @@ button{font:inherit;cursor:pointer}
     </div>
     <div class="bigBtns"><button class="btn primary" id="btnRoomText">📱 Text an invite</button></div>
     <h4>Seats</h4>
+    <!-- 2026-07-24 (Blake's item 14): plain-language mode line + (Teams only) a live partner
+         pairing note - see lobbyModeText()/lobbyPairingText(), § NET, and renderRoomScreen(). -->
+    <div id="roomModeNote" style="font-size:13px;color:#cfe8d6;margin:2px 2px 4px"></div>
+    <div id="roomTeamNote" style="font-size:13px;color:#ffe9a8;margin:0 2px 8px;min-height:16px"></div>
     <div id="roomSeatList"></div>
     <div id="roomNote" style="font-size:13px;color:#ffe9a8;min-height:18px;margin-top:6px"></div>
     <div class="bigBtns">
@@ -1184,6 +1281,10 @@ button{font:inherit;cursor:pointer}
     </div>
     <div id="joinSeatStep" class="hidden">
       <p>Pick an open seat.</p>
+      <!-- 2026-07-24 (Blake's item 14): same mode line + partner pairing note as the host's
+           room screen - see renderJoinSeatStep(). -->
+      <div id="joinModeNote" style="font-size:13px;color:#cfe8d6;margin:2px 2px 4px"></div>
+      <div id="joinTeamNote" style="font-size:13px;color:#ffe9a8;margin:0 2px 8px;min-height:16px"></div>
       <div id="joinSeatList"></div>
       <div id="joinNote" style="font-size:13px;color:#ffe9a8;min-height:34px;margin-top:6px"></div>
       <!-- v0.25 item 1: readiness lives right here on the seat screen now - no separate
@@ -1219,7 +1320,7 @@ button{font:inherit;cursor:pointer}
       <li>Anyone can pause for everyone.</li>
       <li>You can switch apps anytime. The game keeps going and catches you up when you return. If your board ever looks stuck, close and reopen the app.</li>
       <li>When a player's name turns red, they are offline. The game keeps going and they catch up when they come back.</li>
-      <li>Need to leave for good? Have a computer take over your seat (under Pause/Save).</li>
+      <li>Need to leave for good? Have a computer take over your seat (under Pause).</li>
     </ul>
     <div class="bigBtns"><button class="btn primary" id="btnOnlineRulesOk">Got it, let's play</button></div>
   </div>
@@ -1250,27 +1351,49 @@ button{font:inherit;cursor:pointer}
      (host-only), exactly as before. -->
 <div id="hostSpeedOverlay" class="overlay hidden">
   <div class="modalCard">
-    <h3>How fast should the table play?</h3>
+    <h3>Set up your online game</h3>
+    <!-- 2026-07-24 (Blake's item 14): "can you set it up so I can choose to play a team game
+         online as well?" - Players + Game type were already fully wired end to end (the SAME
+         CFG.n/CFG.teams the offline setup screen uses, already sent in the 'host' message,
+         already paired server-side) - the real gap was that choosing them was invisible and
+         easy to lose track of on the way to hosting an online game. This screen (shown right
+         before the room is created - the one screen every host flow already passes through)
+         now shows and lets you change both, live partner-pairing preview included, so the
+         choice is obvious and can never be accidentally stale. See renderHostSetup(), § MENU. -->
+    <div class="optRow"><label>Players</label>
+      <div class="segs"><button class="seg" id="hostP4">4 players</button><button class="seg" id="hostP6">6 players</button></div>
+    </div>
+    <div class="optRow"><label>Game type</label>
+      <div class="segs"><button class="seg" id="hostFFA">Everyone for themselves</button><button class="seg" id="hostTeams">Teams</button></div>
+    </div>
+    <div id="hostTeamNote" style="font-size:13px;color:#ffe9a8;margin:2px 2px 10px;min-height:18px"></div>
+    <h4 style="margin:14px 0 4px;color:var(--gold);font-size:15px">How fast should the table play?</h4>
     <p>This sets the game speed for everyone at your table. You can change it anytime during the game with the Speed button.</p>
     <div class="bigBtns" id="hostSpeedBtns"></div>
     <div class="bigBtns"><button class="btn ghost" id="btnHostSpeedCancel">Cancel</button></div>
   </div>
 </div>
 
-<!-- § REJOIN LOBBY (v0.25 items 6+7, evolving v0.9's reunion screen) - shown to whoever taps
-     the online saved-game tile while other humans are still missing, and to anyone else who
-     opens the game mid-wait. Per missing player: "Send rejoin link" (share sheet with the
-     room's invite link) and "Have a computer take over" with an Easy/Tricky/Nasty picker
-     (server converts the seat to a real CPU - takeOverSeat, same seatToCpu machinery as
-     leave-for-good). Once every seat is accounted for, ANY player here can tap Resume. -->
+<!-- § REJOIN LOBBY (v0.25 items 6+7; ready-up gate added 2026-07-23, Blake's item 2) - opens
+     EVERY time a player deliberately comes back via the saved-game tile, no exceptions, and
+     also opens live for every OTHER player already at the table (see 'reunionStatus' in
+     handleNetMessage) - nobody's return silently resumes the game out from under someone else.
+     Per MISSING player: "Send rejoin link" (share sheet with the room's invite link) and "Have
+     a computer take over" with an Easy/Tricky/Nasty picker (server converts the seat to a real
+     CPU - takeOverSeat, same seatToCpu machinery as leave-for-good). Everyone who IS present
+     taps "I'm ready" - play resumes automatically, on its own, once every connected human has. -->
 <div id="reunionOverlay" class="overlay hidden">
   <div class="modalCard">
     <h3>Getting the table back together</h3>
-    <p>Send a rejoin link to anyone missing, or hand their seat to a computer. Play picks back up once every seat is covered.</p>
+    <p>Tap Ready up when you're at the table - play picks back up on its own once everyone connected is ready. Missing someone? Send them a rejoin link, or hand their seat to a computer.</p>
+    <!-- 2026-07-24 (Blake's item 14): if this game is Teams, say so - a rejoin already
+         correctly restores the real team pairing (it's just part of the same saved game state
+         every reconnect already restores), this just makes that visible. -->
+    <div id="reunionTeamNote" style="font-size:13px;color:#cfe8d6;margin:2px 2px 8px;min-height:16px"></div>
     <div id="reunionSeats"></div>
     <div id="reunionNote" style="font-size:13px;color:#ffe9a8;min-height:18px;margin-top:6px"></div>
     <div class="bigBtns">
-      <button class="btn primary hidden" id="btnReunionResume">▶ Resume game</button>
+      <button class="btn primary" id="btnReunionResume">✓ I'm ready</button>
       <button class="btn ghost" id="btnReunionClose">Keep waiting in background</button>
     </div>
   </div>
@@ -1354,6 +1477,28 @@ button{font:inherit;cursor:pointer}
     <div class="bigBtns">
       <button class="btn danger" id="btnSurrenderConfirm">Concede</button>
       <button class="btn ghost" id="btnSurrenderCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- 2026-07-23 (Blake's item 5): the new standalone Save button's own tiny confirm. Saving
+     already happened the instant Save was tapped, before this dialog even opens - see
+     openSaveConfirm(), § MENU - Blake's own words: "Save would just auto save the game and ask
+     if they're sure they want to save and leave - but the game is saved regardless (this is just
+     a confirmation message in case they accidentally pressed it)". This is NOT a surrender path -
+     confirming reuses doLeaveGame(true), the exact same "Save & leave" the Pause sheet's own
+     button already does, so it means exactly what it always has: completely consequence-free,
+     never a concede/loss (contrast surrenderConfirmOverlay above, which IS one). "Keep Playing"
+     is the primary/first button, same lesson v0.27.1 already learned from "Return to Game" -
+     a bare "Cancel" in a dialog about LEAVING doesn't obviously read as "get me back in the
+     game," so the safe way back is spelled out and put first. -->
+<div id="saveLeaveConfirmOverlay" class="overlay hidden">
+  <div class="confirmCard">
+    <div class="sign"><b>SAVE &amp; LEAVE?</b></div>
+    <p>Your game is saved - you can come back to it anytime. Leave to the menu now?</p>
+    <div class="bigBtns">
+      <button class="btn primary" id="btnSaveLeaveCancel">Keep Playing</button>
+      <button class="btn ghost" id="btnSaveLeaveConfirm">Leave</button>
     </div>
   </div>
 </div>
@@ -1692,16 +1837,19 @@ if(IS_APP){
 }
 /* ============================= § UTIL ============================= */
 const $=id=>document.getElementById(id);
-// scales a .confirmCard down (rather than letting it overflow/scroll) if its content is taller
-// than the viewport - see the .confirmCard CSS comment above for why overflow-y:auto was dropped.
+// 2026-07-23 (Blake's item 6): this USED to compute+apply a transform:scale() to shrink a
+// .confirmCard that overflowed the viewport - see the .confirmCard CSS comment (§ STYLE) for the
+// full root-cause writeup on why that JS approach could still visibly "cut off" content on a
+// real notched iPhone. Sizing is back to pure CSS (max-height + overflow-y:auto there, safe-area
+// aware and reactive to resize with no JS at all) - this function is kept only so its ~15
+// existing call sites (every overlay open/close path) don't all need touching: it just clears
+// any leftover transform from before this fix (a stale scale from an OLDER build's localStorage-
+// free in-memory state is not actually possible, but this keeps every call site a guaranteed
+// no-op/safe reset rather than deleting them one by one).
 function fitConfirmCard(overlay){
   const card=overlay.querySelector('.confirmCard');
   if(!card)return;
   card.style.transform='';
-  requestAnimationFrame(()=>{
-    const ch=card.scrollHeight,vh=window.innerHeight*0.9;
-    if(ch>vh)card.style.transform='scale('+vh/ch+')';
-  });
 }
 /* INSTANT (fix, 2026-07-09): reconnect catch-up used to just run the normal animated
    performMove() pipeline at a 30x-compressed SKIP speed - every animation duration has a
@@ -2937,15 +3085,35 @@ function cardHTML(card){
   return `<div class="card ${red?'red':''}"><div class="rk">${card.r}<small>${card.s}</small></div>
     <div class="pip">${card.s}</div><div class="rk rk2">${card.r}<small>${card.s}</small></div></div>`;
 }
+// 2026-07-23 (Blake's item 11): "have the card someone just used linger on the screen until the
+// next person uses their next card." Before this, fadeAllDiscards() ran unconditionally at the
+// TOP of every turn-loop iteration (offline runTurnInner() and online runOnlineTurnLoop()), so
+// the just-played card vanished the moment the NEXT player's turn merely STARTED - often before
+// they'd even looked at the board, and even on a turn nobody actually played a card on (a bow-
+// out with no legal move). Fix: fadeAllDiscards() is no longer called on every turn start at
+// all - it's called from exactly two places now: right here, at the top of showDiscard() itself
+// (so showing a NEW played card is also the only thing that ever clears the previous one - the
+// literal "linger until the next person uses their next card"), and once at the start of a fresh
+// deal (doDeal() / applyDealAction(), § TURNS - a new hand's discard is unrelated to the last
+// hand's last play, so that's still the right moment to clear it). Both the offline and online
+// turn loops, plus INSTANT reconnect catch-up and pass-and-phone, all funnel through this same
+// performMove() -> animCardPlay() -> showDiscard() choke point (see performMoveInner(), §
+// TURNS), so this one change covers every mode without touching either turn loop. No private-
+// hand-info risk: a played card is already public information the instant it's played, lingering
+// it changes nothing about what's visible to whom (see visibleHandSeat() for the actual hand-
+// privacy boundary, untouched by this).
 function showDiscard(seat,card){
+  fadeAllDiscards();   // exactly one "last played" card visible at a time, see the comment above
   const d=$(`discard-${seat}`);
   d.querySelector('.dFace').innerHTML=cardHTML(card);
   const lb=d.querySelector('.dLabel'); lb.classList.remove('hidden');
   lb.textContent=`${G.seats[seat].name} · ${card.r}${card.s}`;
   d.classList.add('show');
 }
-// every seat's played-card visual fades at the start of the next turn (or next deal) - keeps
-// the table from cluttering up with stale cards; a seat's own next play just shows again
+// Clears every seat's played-card visual - called at the START of a fresh deal (doDeal()/
+// applyDealAction()) and from the top of showDiscard() itself (see its comment above). No longer
+// called on every plain turn-loop iteration - that was the pre-2026-07-23 behavior that made a
+// played card disappear as soon as the NEXT turn merely began, not when it was actually replaced.
 function fadeAllDiscards(){
   for(let s=0;s<G.n;s++){ const d=$(`discard-${s}`); if(d)d.classList.remove('show'); }
 }
@@ -3421,36 +3589,36 @@ function updatePauseUI(){
   // waiting on people" story - don't stack the plain pause overlay on top of it too.
   if(NET.reunionOpen){ ov.classList.add('hidden'); { const cc=ov.querySelector('.confirmCard'); if(cc) cc.style.transform=''; } return; }
   if(NET.online){
-    // v0.10.2: a real gap this session's testing surfaced - the reunion lobby's force-pause
-    // (someone resuming a saved online game, see onSync()'s NET.enteringViaResume branch)
-    // shares this SAME G.paused/pauseOverlay machinery with a casual "walk away" pause. This
-    // screen is shown to anyone who did NOT themselves open the reunion overlay (typically the
-    // host, since the returning player sees the dedicated reunion lobby instead) - and it used
-    // to let ANY player tap-to-resume unconditionally, even while someone was still visibly
-    // missing, defeating the reunion lobby's whole point ("wait for everyone to be back"
-    // before play continues). Can't tell a reunion-triggered pause apart from a manual one
-    // without a new server-relayed field (a server change, out of scope for this client-side
-    // fix) - approximate it instead from data already broadcast with zero protocol change:
-    // NET.presence (kept current by the server's existing 'presence' broadcast). Every human
-    // seat connected reads as an ordinary walk-away pause - unchanged, any player can tap to
-    // resume. Someone missing reads as a regroup in progress - require the dedicated reunion
-    // "Resume" flow instead (shown on the RECONNECTED player's own screen once it's genuinely
-    // caught up and every seat shows present, see renderReunionOverlay()).
-    // h.seat===NET.mySeat short-circuits MY OWN seat as always-present: NET.presence only
-    // ever gets populated for OTHER players (via 'sync's presenceSnapshot, for whoever just
-    // reconnected, or the 'presence' broadcast, which explicitly excludes its own sender) - a
-    // client that's been continuously connected since it created/joined the room (typically
-    // the host) never receives an entry for its OWN playerId, which would otherwise make this
-    // permanently false for them even when everyone genuinely IS here.
-    const humans=humanSeatList();
-    const allHere=humans.length===0||humans.every(h=>h.seat===NET.mySeat||NET.presence[h.playerId]);
-    PAUSE_TAP_ALLOWED=allHere;
-    if(allHere){
-      $('pauseSub').textContent='tap Resume to keep playing';
-      $('pauseText').textContent='Someone hit pause - everyone\'s game is holding here. Any player can tap below to resume.';
+    // 2026-07-23 (item 2): NET.reunionActive is now a real, server-authoritative flag (see
+    // 'reunionStatus' in handleNetMessage) - no more guessing from presence alone. This branch
+    // is reached only in the brief moment before the 'reunionStatus' broadcast that ALWAYS
+    // accompanies an open reunion has landed and auto-opened the dedicated lobby overlay for
+    // every client (see openReunionOverlay() there) - so it barely shows, but stays correct
+    // either way: a reunion in progress must never let a stray tap here bypass the ready-up
+    // gate, so it points back to that screen instead of resuming.
+    if(NET.reunionActive){
+      PAUSE_TAP_ALLOWED=false;
+      $('pauseSub').textContent='tap to check in';
+      $('pauseText').textContent='Getting the table back together - tap below to see who\'s here and ready up.';
     }else{
-      $('pauseSub').textContent='waiting for everyone to be back';
-      $('pauseText').textContent='Someone\'s getting back to the table - hang tight, play resumes once everyone\'s here.';
+      // An ordinary walk-away pause (someone tapped Pause/Save, or a sheet-initiated pause -
+      // unchanged since v0.10.2): any player who's actually still at the table can tap Resume.
+      // h.seat===NET.mySeat short-circuits MY OWN seat as always-present: NET.presence only
+      // ever gets populated for OTHER players (via 'sync's presenceSnapshot, for whoever just
+      // reconnected, or the 'presence' broadcast, which explicitly excludes its own sender) - a
+      // client that's been continuously connected since it created/joined the room (typically
+      // the host) never receives an entry for its OWN playerId, which would otherwise make this
+      // permanently false for them even when everyone genuinely IS here.
+      const humans=humanSeatList();
+      const allHere=humans.length===0||humans.every(h=>h.seat===NET.mySeat||NET.presence[h.playerId]);
+      PAUSE_TAP_ALLOWED=allHere;
+      if(allHere){
+        $('pauseSub').textContent='tap Resume to keep playing';
+        $('pauseText').textContent='Someone hit pause - everyone\'s game is holding here. Any player can tap below to resume.';
+      }else{
+        $('pauseSub').textContent='waiting for everyone to be back';
+        $('pauseText').textContent='Someone\'s getting back to the table - hang tight, play resumes once everyone\'s here.';
+      }
     }
   }else{
     PAUSE_TAP_ALLOWED=true;
@@ -3679,6 +3847,8 @@ async function doDeal(){
   // toast() call isn't suppressed, it still shows normally right after - this only removes what
   // would otherwise be a stale leftover from a previous hand.
   clearToasts();
+  fadeAllDiscards();   // 2026-07-23 (Blake's item 11): a new hand's last play has nothing to do
+                        // with the previous hand's - see the big comment above showDiscard().
   G.dealSeq++;
   G.bowedOut=G.seats.map(()=>false);   // fresh hand - everyone's back in (RULES.md 2026-07-08)
   if(G.schedRound>=G.schedule.length){
@@ -3751,6 +3921,37 @@ async function handleTurnLoopError(e){
 // *Inner) so every call - including every recursive one, since the recursive calls below still
 // go through the wrapped names - gets its own try/catch; handleTurnLoopError() resyncs instead
 // of leaving the game dead.
+/* 2026-07-24 (Blake's item 9, "2026-07-23 list") - lifetime, human-only knockout stats: how many
+   times a player's own peg has landed on someone and sent it back to base ("KOs", hkoDealt), and
+   how many times one of THEIR pegs got sent back ("KO'd", hkoTaken) - see the leaderboard's new
+   3rd tab, § LEADERBOARD below.
+   Deliberately OUTSIDE § ENGINE - the kick event itself (m.kick) already exists there; this is
+   pure result-bookkeeping, same category as buildResultEntries() further below, so no engine
+   change/regeneration was needed. G.koDealt/G.koTaken are plain extra arrays hung on G from HERE,
+   lazily created on first use - they ride along inside G exactly like any other field wherever G
+   itself travels (offline save/resume, online sync/rejoin/reunion snapshot), so an old save/room
+   from before this feature just has neither array yet and the lazy `G.koDealt||(...)` below
+   creates them on the first real kick after the fact - no destructive migration needed.
+   Called from performMoveInner() below, which already runs for EVERY move (CPU or human, online
+   or offline) through this exact one code path - so a single call site covers every mode, and a
+   reconnect's INSTANT replay naturally rebuilds the same running totals by re-walking the same
+   action log through this same function (G.koDealt/koTaken simply aren't there yet on a fresh
+   `G` from bootGameFromNetwork() until replay recreates them kick by kick).
+   A FORCED partner-kick (the last-resort "landing on your own partner's peg" rule, teams only -
+   `pk`-flagged in legalMoves(), § ENGINE) is NOT a knockout by this task's own definition - Blake
+   asked specifically about "the Nasty! takeout", and the toast text right below already
+   distinguishes the two ("😬 Ouch!" vs "💥 NASTY!") - sameTeam() excludes it here the same way.
+   Only the HUMAN side of each seat is credited - a kick touching a CPU only ever credits whichever
+   side (attacker or victim) is actually human, exactly like every other human-only stat here;
+   CPU-vs-CPU kicks credit nobody. */
+function tallyKnockout(owner,kick){
+  if(!kick)return;
+  if(sameTeam(owner,kick.seat))return;   // forced partner-kick ("Ouch!") - not a "Nasty!" knockout
+  if(!G.koDealt)G.koDealt=new Array(G.n).fill(0);
+  if(!G.koTaken)G.koTaken=new Array(G.n).fill(0);
+  if(G.seats[owner].type==='human')G.koDealt[owner]=(G.koDealt[owner]||0)+1;
+  if(G.seats[kick.seat].type==='human')G.koTaken[kick.seat]=(G.koTaken[kick.seat]||0)+1;
+}
 async function performMove(seat,m,cardEl){
   try{ await performMoveInner(seat,m,cardEl); }
   catch(e){ await handleTurnLoopError(e); }
@@ -3774,6 +3975,7 @@ async function performMoveInner(seat,m,cardEl){
   const kicked=m.kick?{seat:m.kick.seat,pi:m.kick.pi,pos:teePos(m.kick.seat,m.kick.pi)}:null;
   const preSnug=G.pieces[owner].map((_,i)=>isSnug(owner,i));
   applyMove(seat,m);   // may throw ImpossibleStateError (swap guard) - caught by the wrapper above
+  tallyKnockout(owner,m.kick);   // 2026-07-24 item 9 - see that function's comment above
   // v0.15: the server now originates the post-kick/swap integrity digest itself (see
   // server.js's maybeStateCheck(), called right after applyMove() for exactly these two action
   // types) - this client just waits for the resulting 'stateCheck' broadcast, same as always
@@ -3920,7 +4122,10 @@ async function runTurnInner(){
   if(G.paused){ await pauseGate(); if(myGen!==NETGEN||!G||G.over)return; }
   NET.moveSentForTurn=false;   // fresh turn attempt - the double-tap guard re-arms (see commitMove)
   scheduleSaveOffline();   // v0.8: cheap debounced snapshot after every turn-loop entry
-  fadeAllDiscards();                                                 // clear stale played-card visuals each turn
+  // 2026-07-23 (Blake's item 11): fadeAllDiscards() no longer runs on every turn-loop entry - a
+  // played card now lingers until the NEXT card is actually played (showDiscard() itself fades
+  // the previous one, see its comment) or a fresh deal starts (doDeal(), below). See the big
+  // comment above showDiscard()/fadeAllDiscards() (§ RENDER) for the full reasoning.
   if(handOver()){   // every seat played out or bowed out - sweep bowed-out seats' dead cards
     for(let s=0;s<G.n;s++){ if(G.hands[s].length){ G.discard.push(...G.hands[s]); G.hands[s].length=0; } }
     endSkip(); await doDeal();   // skip stops at the next hand
@@ -4081,7 +4286,30 @@ function enableSelection(seat,moves){
    this function computes must stay ABOVE (smaller y than) the tee it points at, never below. A
    4P tee's art box is 34x44 with its top at pos.y-37 (28x38 / pos.y-31 for 6P, see .tee/.tee.sel6),
    and the visible head top sits ~1.5px below the box top - so "tip touching the head" means an
-   anchor of pos.y-47 (4P) / pos.y-42 (6P). */
+   anchor of pos.y-47 (4P) / pos.y-42 (6P).
+   2026-07-23 (Blake's item 8): "for the pegs still in the stable please just always make these
+   button tabs symmetrical (sometimes it becomes a weird string of buttons to accommodate other
+   things), but just have these close to where the stable pegs are." Root cause: the formation
+   pass (below) used to bail out for a SEAT WITH ONLY ONE pickable base tee ("one pickable base
+   tee: falls through, old exact behavior" - see the removed early return) - that lone bubble
+   then fell all the way through to the GENERAL sweep at the bottom of this function, which
+   (unlike the formation pass since v0.19.4) still avoids every OTHER tee on the board - so a
+   single stable pick sitting near a busy part of the board could get swept upward 6px at a time,
+   same as a crowded TRACK bubble, landing anywhere up to the sweep's own ceiling. That is
+   Blake's literal "weird string of buttons" - a stable bubble behaving like a dodging track
+   bubble instead of staying anchored to its own stable cluster.
+   Fix: formation now runs for ANY size base group, including exactly 1 - a solo group's own
+   groupPegPenalty() has no other member to check against, so it always resolves at k=0 (the
+   tightest column), landing at the same touching height a lone tee always used
+   (`pos.y-tipGap`), just x-anchored to the cluster center like every other formation member -
+   "always symmetrical, close to the stable," and immune to unrelated board congestion the same
+   way v0.19.4 already made every 2+ formation group immune to it. One structural consequence,
+   confirmed by reading the rest of this function: EVERY base-state pickable tee now lands in
+   `formationKeys` regardless of group size, so a base-state item can never reach the general
+   sweep below anymore - that sweep is now exclusively a TRACK-bubble concern (uncrowded track
+   picks + each crowd's one above-keeper), completely untouched by this fix, still avoiding every
+   tee on the board exactly as before. Per Blake's own framing, this ask was specifically about
+   pegs "still in the stable" - track bubbles keep their existing dodge behavior unchanged. */
 function showBubbles(list,cls){
   clearBubbles();
   const layer=$('bubbleLayer');
@@ -4120,7 +4348,11 @@ function showBubbles(list,cls){
     layer.appendChild(b);
   };
 
-  // --- formation pass: seats with 2+ pickable BASE pieces get the quincunx layout ---
+  // --- formation pass: EVERY seat's pickable BASE piece(s) get the quincunx layout, 1 or more
+  // (2026-07-23, Blake's item 8 - see the big comment above showBubbles() for the full before/
+  // after: a solo base pick used to bail out of this pass entirely and fall through to the
+  // general board-wide-avoidance sweep, which is exactly how it could end up far from the
+  // stable). ---
   const baseBySeat={};
   list.forEach(it=>{
     const st=G.pieces[it.s][it.pi]&&G.pieces[it.s][it.pi].state;
@@ -4129,7 +4361,6 @@ function showBubbles(list,cls){
   const formationKeys=new Set();
   Object.keys(baseBySeat).forEach(sKey=>{
     const group=baseBySeat[sKey];
-    if(group.length<2)return;                // one pickable base tee: falls through, old exact behavior
     const s=+sKey;
     const bc=LAY.base[s][0];
     const items=group.map(it=>{
@@ -4225,8 +4456,10 @@ function showBubbles(list,cls){
     c.forEach(o=>{if(o!==keeper)crowded.set(o.it.s+'-'+o.it.pi,{o,cenX});});
   });
 
-  // --- original v0.19 sweep for everything else (single base picks, uncrowded track picks,
-  // and each crowd's one above-keeper) ---
+  // --- original v0.19 sweep for everything else: uncrowded track picks and each crowd's one
+  // above-keeper. (2026-07-23: a single pickable base tee used to also land here - see the big
+  // comment above showBubbles() - but every base-state tee now goes through the formation pass
+  // above regardless of group size, so this sweep is TRACK-bubbles only from here down.) ---
   const sorted=rest.filter(it=>!crowded.has(it.s+'-'+it.pi))
     .slice().sort((a,b)=>teePos(a.s,a.pi).x-teePos(b.s,b.pi).x);
   sorted.forEach(it=>{
@@ -4434,6 +4667,48 @@ function clearSelection(keepTurn){
 // (build 32 / the v0.24 website) would wait forever for a 'readyCheck' broadcast that never
 // comes (guest) or expect Start to open one (host) - not safe either direction, so old
 // clients get the friendly update message instead.
+// 2026-07-23 (Blake's items 1-4 batch): STAYS at 5, deliberately NOT bumped. Every wire change
+// this batch made is purely additive, following the exact reasoning v0.27/v0.27.1 already used
+// for their own "no bump" decisions:
+//  - Item 1 (auto-resync reliability): connectWs()'s timeout and tryJoinOrRejoin()'s retry loop
+//    are 100% client-internal - they still only ever send the EXISTING 'rejoin' message, in the
+//    exact existing shape, just retried instead of given up on after one try. Nothing about the
+//    wire changed at all.
+//  - Item 2 (reunion ready-up gate): two NEW message types, 'requestReunion' and
+//    'tableReadyUp', plus a NEW 'reunionStatus' broadcast and two NEW sync/lobby-snapshot
+//    fields (reunionActive/tableReadyIds). An OLD client (build <=38) simply never sends the
+//    new messages and never reads the new fields - its own rejoin/reunion flow keeps working
+//    EXACTLY as it did (the old "skip the lobby if everyone already looks connected" shortcut,
+//    still present in old client code), it just doesn't get the new ready-up experience until
+//    it updates. Critically, nothing about any EXISTING message's MEANING changed - 'paused',
+//    'pauseToggle', 'takeOverSeat', 'nudge', 'sync', 'lobby' all mean exactly what they meant
+//    before. An old client can never get stuck waiting on a reply it doesn't know how to
+//    interpret, which is the actual bar for a bump (see v0.25's own reasoning above, and
+//    v0.27/v0.27.1's matching "no bump" writeups in HANDOFF.md).
+//  - Items 3+4 (table speed persistence/host control): no wire change at all - tableSpeed and
+//    setTableSpeed already existed and already worked correctly (see this batch's HANDOFF.md
+//    section for the verification); this batch only closes a UI-only side door (the offline
+//    speed picker showing up mid-reconnect, see openJoinOverlay()'s skipSpeedGate) that could
+//    make it LOOK broken.
+// 2026-07-24 (Blake's items 9+14, same "2026-07-23 list"): STAYS at 5, still not bumped.
+//  - Item 9 (knockout leaderboard stats): the only wire-visible change is two NEW keys
+//    (hkoDealt/hkoTaken) that MAY appear inside a delta object already carried by the EXISTING
+//    /solo-result POST body - server-recorded ONLINE games don't even involve the client in
+//    recording at all (see recordWin()'s comment). An old (unpatched) server's NUMERIC_STAT_KEY
+//    regex simply doesn't recognize these two keys yet, so it silently drops just those two
+//    numbers and keeps recording everything else exactly as before - a new client talking to an
+//    old server degrades gracefully, never breaks. An old client never sends these keys at all -
+//    same additive shape as the hptsS/hptsT split (v0.21), which also didn't bump.
+//  - Item 14 (choosing Teams for an online game): NO wire change whatsoever. `teams` has ridden
+//    the `host` message and `room.lobby.teams`/lobbySnapshot() since before this session - the
+//    server already stored it and already paired seats via the same § ENGINE code the offline
+//    path uses. This session's fix is entirely client-side: a new place to SET CFG.n/CFG.teams
+//    before hosting (hostSpeedOverlay, see renderHostSetup()) and new places to DISPLAY fields
+//    (lobby.n/lobby.teams/lobby.seats) the server has always sent but no screen ever read
+//    (lobbyModeText()/lobbyPairingText(), used by renderRoomScreen()/renderJoinSeatStep(), and
+//    reunionPairingText()). An old client already sends/receives `teams` correctly; it just never
+//    showed it - nothing here changes what any message means or requires a new field to exist
+//    for anything to keep working.
 const PROTOCOL_VERSION=5;
 const NET={
   ws:null, online:false, isHost:false, wantConnection:false,
@@ -4501,6 +4776,13 @@ const NET={
   // v0.25 items 6+7: silentAutoResume (v0.22's cold-reload silent rejoin) is GONE - launching
   // the app ALWAYS lands on the menu now; the saved-game tile is the only way back into an
   // online game (Blake's decision - see § REJOIN LOBBY and the boot sequence).
+  reunionActive:false,     // 2026-07-23 (item 2): true while a server-driven "getting the table
+                           // back together" ready-up gate is open - see § REUNION LOBBY below
+                           // and server.js/server.ts's matching room.reunionActive. Kept live via
+                           // onSync() (every sync/reconnect) and the 'reunionStatus' broadcast.
+  tableReadyIds:[],        // 2026-07-23: playerIds who have tapped Ready up during the CURRENT
+                           // reunion (server-authoritative, mirrors NET.lobby.readyPlayerIds'
+                           // pre-start twin).
 };
 window.NET=NET; // exposed for testing/debugging, same spirit as window.G/window.LAY
 applySpeed();   // v0.15: the real bootstrap call - deferred to here from § UTIL now that
@@ -4733,19 +5015,37 @@ function positionConnIndicator(){
   }
   el.style.top=Math.round(top)+'px';
 }
+// 2026-07-23 fix (Blake's item 1): a WebSocket connection attempt has NO built-in timeout - on
+// a genuinely bad network (the exact "just reopened the app, cell signal hasn't settled yet"
+// moment a returning player is most likely to be in) the browser can sit for a long stretch
+// with neither onopen NOR onclose/onerror ever firing, so this promise used to just hang with
+// ZERO visible feedback. Confirmed by direct reproduction (see the session's scratch repro):
+// a single failed/hung attempt from the saved-game tile silently dumped the player onto the
+// "Join a game" code-entry screen with no explanation - the only recovery a non-technical
+// player could find on their own was force-quitting and reopening the app, exactly Blake's
+// report ("had to close and reopen a few times"). CONNECT_TIMEOUT_MS forces a slow/hung attempt
+// to fail fast and cleanly into the SAME retry machinery a fast failure already used, instead of
+// silently starving it.
+const CONNECT_TIMEOUT_MS=7000;
 function connectWs(){
   return resolveWsUrl().then(url=>new Promise((resolve,reject)=>{
     let settled=false;
     const ws=new WebSocket(url);
     NET.ws=ws;
-    ws.onopen=()=>{ NET.connected=true; NET.reconnecting=false; NET.reconnectingSince=null; NET.backoff=1000;
+    const timeoutTimer=setTimeout(()=>{
+      if(settled)return;
+      settled=true;
+      try{ws.close();}catch(e){}
+      reject(new Error("Couldn't reach the game server."));
+    },CONNECT_TIMEOUT_MS);
+    ws.onopen=()=>{ clearTimeout(timeoutTimer); NET.connected=true; NET.reconnecting=false; NET.reconnectingSince=null; NET.backoff=1000;
       NET.lastMsgAt=Date.now(); updateConnIndicator();
       if(!settled){settled=true;resolve(ws);} };
     ws.onmessage=e=>{ NET.lastMsgAt=Date.now(); let m; try{m=JSON.parse(e.data);}catch(err){return;} handleNetMessage(m); };
-    ws.onclose=()=>{ NET.connected=false; updateConnIndicator();
+    ws.onclose=()=>{ clearTimeout(timeoutTimer); NET.connected=false; updateConnIndicator();
       if(!settled){settled=true;reject(new Error("Couldn't reach the game server."));}
       else if(NET.online&&NET.wantConnection)scheduleReconnect(); };
-    ws.onerror=()=>{ if(!settled){settled=true;reject(new Error("Couldn't reach the game server."));} };
+    ws.onerror=()=>{ clearTimeout(timeoutTimer); if(!settled){settled=true;reject(new Error("Couldn't reach the game server."));} };
   }));
 }
 function scheduleReconnect(){
@@ -5021,6 +5321,22 @@ function bootGameFromNetwork(action){
   LAY=buildLayout(action.n,computeViewSeat(action.n,seats));
   newGame({n:action.n,teams:action.teams,seats},{deck:action.deck,dealer:action.dealer});
   NET.tableSpeed=action.tableSpeed||1;
+  // 2026-07-23 fix (Blake's items 3+4) - THE REAL ROOT CAUSE of "I was on fast but my friend
+  // was on normal" and "changing the speed wouldn't let me": setting NET.tableSpeed alone never
+  // actually applied it. applySpeed() (§ UTIL) is what sets the real SPEED variable every
+  // animation duration in § ANIM/§ TURNS is computed from - and neither this function nor
+  // bootGameFromSnapshot() below ever called it. Confirmed by direct reproduction: after a
+  // fresh deal at a host-chosen table speed of 2.6 (Turbo), a phone whose own last-known local
+  // SPEED happened to be 0.6 (Normal - e.g. its own earlier offline preference, or simply
+  // whatever applySpeed()'s one-time page-load bootstrap call left it at) stayed at SPEED===0.6
+  // for the ENTIRE game - NET.tableSpeed was correct, but the actual rendered pacing was every
+  // player's own stale leftover value, completely unsynced, exactly matching Blake's report.
+  // (The Speed button's LIVE mid-game change path, case 'tableSpeed' in handleNetMessage, was
+  // ALWAYS correct - it already calls applySpeed() - which is exactly why the host COULD nudge
+  // it into working by tapping Speed again, just never landing on the actually-intended value
+  // from the start.) updateSpeedButtonLabel() is called alongside it so the topbar text is
+  // never stale either.
+  applySpeed(); updateSpeedButtonLabel();
   NET.anySurrenderOccurred=false;   // v0.27.1: a genuinely new game/rematch resets the no-fault-exit flag, same lifecycle as the server's actuallyStartGame()
   NET.appliedSeq=0;   // v0.15: the 'start' action is always broadcast seq 0 - see checkStateDigest()'s comment
   saveLastRoom(NET.code,true);   // v0.8: remember this is a STARTED game - see boot()'s silent auto-rejoin
@@ -5063,6 +5379,14 @@ function bootGameFromSnapshot(snapshotG,paused,tableSpeed,appliedSeq){
   G=snapshotG;
   G.paused=!!paused;
   NET.tableSpeed=tableSpeed||1;
+  // 2026-07-23 fix (Blake's items 3+4) - see bootGameFromNetwork()'s matching comment for the
+  // full root-cause writeup (the real bug: setting NET.tableSpeed alone never actually applied
+  // it - applySpeed() does that, and this function never called it). Doubly important HERE:
+  // this is the RECONNECT path, i.e. every single "later in the day" return Blake described -
+  // without this, a reconnecting phone would keep rendering at whatever SPEED it happened to
+  // have from BEFORE this reconnect (its own prior game, or the page-load default), regardless
+  // of the table's actual persisted speed it just correctly received in `tableSpeed` above.
+  applySpeed(); updateSpeedButtonLabel();
   // v0.15: baseline the integrity-digest checkpoint to what the server says is already
   // reflected in this snapshot (see gameSnapshotFields()'s `appliedSeq` field, server.js) -
   // see checkStateDigest()'s comment for why this matters.
@@ -5119,7 +5443,9 @@ async function runOnlineTurnLoop(){
     }
     if(G.paused){ await pauseGate(); if(myGen!==NETGEN||!G||G.over)return; }
     NET.moveSentForTurn=false;
-    fadeAllDiscards();
+    // 2026-07-23 (Blake's item 11): no more unconditional fadeAllDiscards() every turn-loop
+    // iteration here either - see the big comment above showDiscard()/fadeAllDiscards() (§
+    // RENDER). The offline turn loop's matching removal has the same reasoning.
     const seat=G.turn;
     syncAll();
     const seatCfg=G.seats[seat];
@@ -5204,6 +5530,8 @@ async function applyServerAction(action,myGen){
 async function applyDealAction(action){
   const myGen=NETGEN;
   clearToasts();
+  fadeAllDiscards();   // 2026-07-23 (Blake's item 11): mirrors doDeal()'s own new-hand clear -
+                        // see the big comment above showDiscard() (§ RENDER).
   // Bug found via instrumented reproduction (v0.15): the SERVER sweeps any leftover hand cards
   // (a bowed-out seat's unplayed cards, or - in principle - anyone's, matching the sweep this
   // engine's own offline runTurnInner() has always done at the same point) into discard BEFORE
@@ -5280,46 +5608,56 @@ function onSync(m){
   // current value (gameSnapshotFields()), so a reconnect/rejoin/reclaim always lands with the
   // right no-fault-exit state even if this device missed the live 'surrenderOccurred' broadcast.
   NET.anySurrenderOccurred=!!m.anySurrenderOccurred;
+  // 2026-07-23 (item 2): same idea as anySurrenderOccurred above - every sync carries the
+  // reunion gate's current state, so ANY reconnect (not just the one that may have opened it)
+  // lands already knowing whether a ready-up gate is open and who's already readied.
+  NET.reunionActive=!!m.reunionActive;
+  NET.tableReadyIds=m.tableReadyIds||[];
   updateConnIndicator();
   sendPushToken();   // v0.16 item 5: re-register on every reconnect (rejoin/reclaim both land here) - see § PUSH
   if(m.G){
     bootGameFromSnapshot(m.G,m.paused,m.tableSpeed,m.appliedSeq);
-    // v0.25 items 6+7: coming back via the menu's saved-game tile (as opposed to a normal
-    // brief mid-session reconnect blip) has two shapes now:
-    //  (a) every OTHER human from the table is already connected -> auto-rejoin straight to
-    //      the live board, no pause, no lobby (they were only ever waiting on YOU);
-    //  (b) anyone still missing -> pause the table and open the REJOIN LOBBY (see § REJOIN
-    //      LOBBY below) - a lone returning player must never sit at a running table waiting
-    //      on absent humans (Blake's exact field report).
+    // 2026-07-23 fix (Blake's item 2): "it didn't let me see that everyone was there when I
+    // came back - it just threw us all in since we were all there." Coming back via the menu's
+    // saved-game tile used to SKIP the reunion lobby whenever every other human already looked
+    // connected - "presence" (a socket happens to be open) silently stood in for "actually at
+    // the table, ready to play," which is exactly what Blake reported. Now every deliberate
+    // return ALWAYS asks the server to open the ready-up gate (idempotent - a no-op if one's
+    // already open, see requestReunion/server.js), and this client always waits for its own
+    // catch-up to finish before opening the lobby (v0.10.2/v0.15 reasoning, unchanged) - reused
+    // below for ANY client (not just the one who tapped the tile) that learns the gate is open,
+    // whether that's from this branch or a live 'reunionStatus' broadcast (handleNetMessage).
     if(NET.enteringViaResume){
       NET.enteringViaResume=false;
-      const missing=humanSeatList().filter(h=>h.playerId!==NET.playerId&&!NET.presence[h.playerId]);
-      if(missing.length===0){
-        toast('Welcome back - everyone is here. Picking up where you left off.',2600);
-      }else{
-        if(!G.paused)requestPause(true);
-        // v0.10.2 origin, narrowed by v0.15's snapshot reconnect: don't open the lobby until
-        // THIS client's own (now much shorter) catch-up window has actually cleared
-        // (waitForCatchup()). NETGEN-guarded in case a newer reconnect supersedes this one.
-        const myGen=NETGEN;
-        waitForCatchup().then(()=>{ if(myGen===NETGEN)openReunionOverlay(); });
-      }
+      netSend({type:'requestReunion'});
+    }
+    if(NET.reunionActive){
+      const myGen=NETGEN;
+      waitForCatchup().then(()=>{ if(myGen===NETGEN&&NET.reunionActive)openReunionOverlay(); });
     }
   }
 }
 
-/* ============================= § REJOIN LOBBY (v0.25 items 6+7, evolving v0.9's reunion) ====
-   "Getting the table back together" - shown to whoever tapped the online saved-game tile
-   while other humans are missing (a tile tap with everyone already back skips this entirely
-   and lands straight on the board - see onSync()'s enteringViaResume branch). The table is
-   paused while this is up. Per missing player, two options:
+/* ============================= § REJOIN LOBBY (v0.25 items 6+7; ready-up gate added
+   2026-07-23, Blake's item 2) ====
+   "Getting the table back together" - opens EVERY time a player deliberately comes back to a
+   game via the saved-game tile, no exceptions (see onSync()'s enteringViaResume branch) - and
+   ALSO opens live for every OTHER player still at the table via the 'reunionStatus' broadcast
+   (handleNetMessage), so nobody's return silently resumes a game out from under someone who
+   never left either. The table is paused the whole time this gate is open. Per MISSING player,
+   two options, unchanged since v0.25:
    - "Send rejoin link": native share sheet with the room's invite link (the existing invite
      machinery) plus a best-effort live nudge through the server.
    - "Have a computer take over": an Easy/Tricky/Nasty picker, then {type:'takeOverSeat'} -
      the server converts the seat to a REAL CPU (same seatToCpu broadcast as leave-for-good)
      and locks the original player out of it for the rest of the game.
-   Once every human seat is accounted for (back, or converted), ANY player at this lobby can
-   tap Resume - a plain pauseToggle, so everyone unpauses together. */
+   Every player who IS present must tap "Ready up" ({type:'tableReadyUp'}) - this is the actual
+   fix for Blake's report ("we click 'ready up' to start when we come back"): the server
+   (maybeResolveReunion(), server.js/server.ts) only ever auto-resumes once EVERY currently-
+   connected human seat has readied, reusing the exact same lobby-seat ready-up pattern v0.25
+   built for the very first deal (readyPlayerIds/readyUp) rather than inventing a second one -
+   just applied post-start instead of pre-start. There is no manual "Resume" tap anymore -
+   readying up IS what starts the game back up, automatically, the moment everyone present has. */
 /* v0.25 items 6+7: seats converted to a CPU by a LIVE broadcast this session (a leaveForGood
    or a rejoin-lobby takeover). The authoritative G.seats mutation applies through the normal
    action queue - which is deliberately held behind the pause gate while the rejoin lobby is
@@ -5339,16 +5677,35 @@ function humanSeatList(){
     .filter(x=>x.playerId!=null&&!CONVERTED_SEATS.has(x.seat)&&G.seats[x.seat].type==='human');
 }
 let REUNION_PICKING=null;   // seat index whose "Have a computer take over" difficulty picker is open
+function sendTableReadyUp(){ netSend({type:'tableReadyUp'}); }
+// 2026-07-24 (Blake's item 14): a rejoin/reunion already correctly restores the real team
+// pairing with NO new code - G.teams/G.seats/G.pieces are just part of the same saved/synced
+// game state every reconnect already restores byte-for-byte (see bootGameFromSnapshot()) - this
+// only makes that fact visible on the reunion screen itself.
+function reunionPairingText(){
+  if(!G||!G.teams)return'';
+  const pairs=[];
+  for(let i=0;i<G.n/2;i++)pairs.push(`${G.seats[i].name} + ${G.seats[i+G.n/2].name}`);
+  return 'Playing as teams - partners: '+pairs.join('  ·  ');
+}
 function renderReunionOverlay(){
+  $('reunionTeamNote').textContent=reunionPairingText();
   const humans=humanSeatList();
   const here=h=>h.playerId===NET.playerId||!!NET.presence[h.playerId];
-  const allHere=humans.every(here);
+  const readyIds=new Set(NET.tableReadyIds||[]);
+  const iAmReady=readyIds.has(NET.playerId);
   const seatsEl=$('reunionSeats'); seatsEl.innerHTML='';
   humans.forEach(h=>{
     const back=here(h);
+    const ready=readyIds.has(h.playerId);
     const row=document.createElement('div'); row.className='lobbySeat'; row.style.flexWrap='wrap';
-    row.innerHTML=`<span class="dot" style="background:${back?'#3fae5c':'#ff5449'}"></span>
-      <span class="nm">${esc(h.name)}</span><span class="st">${back?'Back ✓':'Not back yet'}</span>`;
+    // 2026-07-23 (item 2): three states now, not two - missing (red), back-but-not-ready-yet
+    // (amber), ready (green). "Back" alone used to be treated as good enough to auto-resume -
+    // that silent equating of presence with readiness was Blake's exact report.
+    const dotColor=!back?'#ff5449':(ready?'#3fae5c':'#e0a83f');
+    const statusTxt=!back?'Not back yet':(ready?'Ready ✓':'Back - not ready yet');
+    row.innerHTML=`<span class="dot" style="background:${dotColor}"></span>
+      <span class="nm">${esc(h.name)}</span><span class="st">${statusTxt}</span>`;
     if(!back){
       const btns=document.createElement('div');
       btns.style.cssText='flex-basis:100%;display:flex;gap:6px;flex-wrap:wrap;margin-top:4px';
@@ -5376,12 +5733,14 @@ function renderReunionOverlay(){
     }
     seatsEl.appendChild(row);
   });
-  $('reunionNote').textContent=allHere
-    ?'Every seat is covered - tap Resume to keep playing.'
-    :'Play picks back up once everyone is back or their seat is handed to a computer.';
-  // v0.25 items 6+7: ANY player at this lobby may resume once every seat is accounted for -
-  // no more host-only gate (the host may be exactly who's missing).
-  $('btnReunionResume').classList.toggle('hidden',!allHere);
+  // 2026-07-23: no more manual "Resume" tap - readying up IS the start trigger, and the server
+  // resumes automatically the instant everyone currently connected has readied (see
+  // maybeResolveReunion(), server.js/server.ts). The one button here is MY OWN ready-up tap,
+  // hidden once I've already tapped it (nothing left for me to do but wait on everyone else).
+  $('reunionNote').textContent=iAmReady
+    ?"Waiting for everyone else to tap Ready up…"
+    :"Tap Ready up when you're at the table - play picks back up on its own once everyone is.";
+  $('btnReunionResume').classList.toggle('hidden',iAmReady);
 }
 function openReunionOverlay(){
   NET.reunionOpen=true;
@@ -5396,7 +5755,11 @@ function closeReunionOverlay(){
   $('reunionOverlay').classList.add('hidden');
 }
 $('btnReunionClose').onclick=()=>{ closeReunionOverlay(); updatePauseUI(); };
-$('btnReunionResume').onclick=()=>{ requestPause(false); };
+// 2026-07-23 (item 2): this button used to unconditionally resume the table for everyone the
+// instant ANY player tapped it ("any player at this lobby can tap Resume" - v0.25's design,
+// exactly the "just threw us all in" shape Blake reported). It's my own "I'm ready" check-in
+// now - the actual resume is server-driven, once every connected human's own tap has landed.
+$('btnReunionResume').onclick=()=>{ sendTableReadyUp(); };
 
 /* ---- v0.10.3: host-side confirmation for a CONTESTED "reclaim by name" (see HANDOFF.md
    "Token-less online recovery"). Only ever shown to the host, since the server only ever
@@ -5755,6 +6118,19 @@ function handleNetMessage(m){
       // whichever one requested it (see requestPause()/setPaused() in § TURNS).
       if(G)setPaused(!!m.paused);
       return;
+    case 'reunionStatus':
+      // 2026-07-23 (item 2): the ready-up gate's live state - fires for EVERY player at the
+      // table (not just whoever's return opened it), so a player who never left also sees the
+      // SAME lobby the instant it opens, and must tap Ready up too - see § REUNION LOBBY.
+      NET.reunionActive=!!m.active;
+      NET.tableReadyIds=m.readyPlayerIds||[];
+      if(NET.reunionActive){
+        if(!NET.reunionOpen)openReunionOverlay(); else renderReunionOverlay();
+      }else if(NET.reunionOpen){
+        closeReunionOverlay();
+        updatePauseUI();
+      }
+      return;
     case 'error':
       // v0.25: generic server-side rejection with a human-readable message (e.g. Start tapped
       // before every guest readied up - a race the disabled button can't fully prevent).
@@ -5774,7 +6150,45 @@ function handleNetMessage(m){
 // multipliers, not naturally 1x/2x/3x/4x, so the displayed multiplier is computed fresh every
 // time relative to whichever entry is actually named 'Normal' (never hardcoded) - if SPEED_OPTS
 // itself is ever edited, these labels stay correct with no matching change needed here.
+/* 2026-07-24 (Blake's item 14) - "can you set it up so I can choose to play a team game online
+   as well?" Investigation: Players/Game type were ALREADY fully wired end to end for an online
+   game - hostCreateRoom() below already sends CFG.n/CFG.teams in the 'host' message, the server
+   already stores room.lobby.teams and pairs seats via the exact same partnerOf()/sameTeam()
+   § ENGINE code the OFFLINE path uses (see server.js's actuallyStartGame()). The real gap was
+   purely client-side visibility: CFG.n/CFG.teams are the SAME shared values the main menu's own
+   Players/Game-type toggle sets (and v0.9 item 5 deliberately resets to 4p/FFA on every fresh
+   page load) - so whether an online room came out FFA or Teams depended entirely on whatever was
+   left over on the main menu's panel, with nothing in the online flow itself confirming or
+   letting you change it. This screen (hostSpeedOverlay - already the one screen every host flow
+   passes through right before the room is created) now shows and lets the host set BOTH,
+   live, writing into that SAME CFG.n/CFG.teams (saveCfg() too - one shared source of truth, not
+   a second copy that could drift), plus a live "Partners sit across: X + Y" preview so it's
+   obvious who'd be paired before the room even exists. 6-player teams is included here too -
+   partnerOf()'s pairing formula (seat i with seat i+n/2) already works for n=6 exactly like it
+   does for n=4 (see RULES.md/HANDOFF.md's 6P teams soak testing - this was never 4-player-only). */
+function renderHostSetup(){
+  $('hostP4').classList.toggle('on',CFG.n===4);
+  $('hostP6').classList.toggle('on',CFG.n===6);
+  $('hostFFA').classList.toggle('on',!CFG.teams);
+  $('hostTeams').classList.toggle('on',CFG.teams);
+  if(CFG.teams){
+    const cols=CFG.n===4?COLORS4:COLORS6;
+    const seats=CFG.seatMeta[CFG.n]||[];
+    const pairs=[];
+    for(let i=0;i<CFG.n/2;i++){
+      const a=(seats[i]&&seats[i].name)||cols[i].name;
+      const b=(seats[i+CFG.n/2]&&seats[i+CFG.n/2].name)||cols[i+CFG.n/2].name;
+      pairs.push(`${a} + ${b}`);
+    }
+    $('hostTeamNote').textContent='Partners sit across: '+pairs.join('  ·  ');
+  }else $('hostTeamNote').textContent='';
+}
+$('hostP4').onclick=()=>{CFG.n=4;saveCfg();renderHostSetup();};
+$('hostP6').onclick=()=>{CFG.n=6;saveCfg();renderHostSetup();};
+$('hostFFA').onclick=()=>{CFG.teams=false;saveCfg();renderHostSetup();};
+$('hostTeams').onclick=()=>{CFG.teams=true;saveCfg();renderHostSetup();};
 function openHostSpeedOverlay(){
+  renderHostSetup();
   const wrap=$('hostSpeedBtns'); wrap.innerHTML='';
   const base=(SPEED_OPTS.find(o=>o[1]==='Normal')||SPEED_OPTS[0])[0];
   SPEED_OPTS.forEach(([val,label])=>{
@@ -5829,9 +6243,27 @@ function saveHostName(){
   // re-renders with the confirmed name, same wait-for-echo pattern used everywhere else in
   // § NET rather than an optimistic local update.
 }
+/* 2026-07-24 (Blake's item 14) - shared by the host's room screen (renderRoomScreen) and the
+   guest's seat screen (renderJoinSeatStep): NET.lobby already carries `n`/`teams`/`seats` (it's
+   the exact same lobbySnapshot() object the server has always sent - see both servers' matching
+   function) - this was already riding the wire, just never READ/shown by either screen. Uses the
+   real chosen seat names (NET.lobby.seats[i].name), not color placeholders, since online seats
+   already have real names the moment anyone's claimed them - more useful than the offline setup
+   panel's own color-name preview (teamNote, § MENU), which predates any real names existing. */
+function lobbyModeText(lobby){
+  return `${lobby.n} players · ${lobby.teams?'Teams':'Everyone for themselves'}`;
+}
+function lobbyPairingText(lobby){
+  if(!lobby.teams)return'';
+  const pairs=[];
+  for(let i=0;i<lobby.n/2;i++)pairs.push(`${lobby.seats[i].name} + ${lobby.seats[i+lobby.n/2].name}`);
+  return 'Partners sit across: '+pairs.join('  ·  ');
+}
 function renderRoomScreen(){
   if(!NET.lobby)return;
   $('roomCode').textContent=NET.code||'----';
+  $('roomModeNote').textContent=lobbyModeText(NET.lobby);
+  $('roomTeamNote').textContent=lobbyPairingText(NET.lobby);
   const list=$('roomSeatList'); list.innerHTML='';
   const cols=NET.lobby.n===4?COLORS4:COLORS6;
   // v0.25 item 1: per-seat readiness (guests ready up on their own seat screens now).
@@ -5900,8 +6332,18 @@ let JOIN={code:'',name:''};
 // resolves before this device can reach a live online table (see gateOnSpeedPicker(), § UTIL).
 // A no-op if the choice was already made, so this never double-prompts after $('btnOnline')'s
 // own gate already resolved it for the manual "Play online" -> "Join a game" path.
-function openJoinOverlay(prefillCode){
-  gateOnSpeedPicker(()=>{
+// 2026-07-23 fix (Blake's item 1, second half): `skipSpeedGate` - when this screen is reached
+// as a RECOVERY fallback for an existing room (tryJoinOrRejoin()'s last resort after several
+// failed reconnect attempts, see its comment), the one-time "how fast do you want to play"
+// picker must never interject. That picker only makes sense before a player's FIRST ever join;
+// injected into a reconnect attempt instead, on a device that happens to have never answered it
+// before, it looks exactly like "choose the game's speed" at the worst possible moment - a
+// real, confirmed contributor to Blake's speed-control confusion (item 3/4), even though the
+// online table's actual pace was never at risk (that's always NET.tableSpeed, host-controlled -
+// see § NET). A genuinely NEW join (the plain "Join a game" button, or a ?join=CODE link this
+// device has never opened before) still shows it exactly as before.
+function openJoinOverlay(prefillCode,skipSpeedGate){
+  const go=()=>{
     resetNetUiFlow();
     $('joinErr').textContent='';
     $('joinCodeStep').classList.remove('hidden');
@@ -5910,7 +6352,8 @@ function openJoinOverlay(prefillCode){
     $('joinCodeInput').value=prefillCode||'';
     $('joinOverlay').classList.remove('hidden');
     if(prefillCode&&prefillCode.length===4)advanceJoinToNameStep();
-  });
+  };
+  if(skipSpeedGate)go(); else gateOnSpeedPicker(go);
 }
 function advanceJoinToNameStep(){
   const code=$('joinCodeInput').value.trim().toUpperCase();
@@ -5938,6 +6381,8 @@ function advanceJoinToSeatStep(){
 }
 function renderJoinSeatStep(){
   if(!NET.lobby)return;
+  $('joinModeNote').textContent=lobbyModeText(NET.lobby);
+  $('joinTeamNote').textContent=lobbyPairingText(NET.lobby);
   const list=$('joinSeatList'); list.innerHTML='';
   const cols=NET.lobby.n===4?COLORS4:COLORS6;
   // v0.25 item 1: readiness rides the lobby snapshot - render it live, per seat.
@@ -6292,6 +6737,42 @@ $('btnLeaveCancel').onclick=()=>{
   { const cc=$('leaveConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   releaseSheetPause();   // v0.25 item 4: cancelling the sheet resumes a pause the sheet started
 };
+/* 2026-07-23 § SAVE (Blake's item 5) - "split up the pause and save button into 2 different
+   buttons. Pause would have all the options that dual button already has - while Save would
+   just auto save the game and ask if they're sure they want to save and leave - but the game is
+   saved regardless (this is just a confirmation message in case they accidentally pressed it)."
+   #btnPause above is completely UNCHANGED - still openPauseSheet(), still every option the
+   combined button ever had. #btnSave is new and deliberately much smaller: it does the actual
+   save FIRST, synchronously, before the confirm even opens (so the answer to the confirm can
+   never affect whether the save happened), then asks one plain yes/no question. Confirming
+   calls the EXACT SAME doLeaveGame(true) the Pause sheet's own "Save & leave" button already
+   uses - not a new/parallel implementation - so this is provably the identical safe, never-a-
+   loss meaning, not a lookalike that could quietly diverge later. Unlike openPauseSheet(), this
+   never calls requestPause() - a quick two-button "are you sure" doesn't need to freeze the
+   whole online table while it's open, the same no-pause precedent the topbar Quit/Concede
+   confirm already set (openSurrenderConfirm() below never pauses either). */
+function openSaveConfirm(){
+  if(!G||G.over)return;
+  // Offline: written to the save slot right now, regardless of what's tapped next.
+  // Online: doSaveOffline() itself no-ops (see its own `NET.online` guard) - there is nothing
+  // extra to trigger, the server has already been persisting this room continuously after every
+  // mutation since v0.8 (see HANDOFF.md's "Online persistence (server)" section), so "saved
+  // regardless" is already true the moment this function runs, before this comment even matters.
+  doSaveOffline();
+  $('saveLeaveConfirmOverlay').classList.remove('hidden');
+  fitConfirmCard($('saveLeaveConfirmOverlay'));
+}
+$('btnSave').onclick=openSaveConfirm;
+$('btnSaveLeaveConfirm').onclick=()=>{
+  $('saveLeaveConfirmOverlay').classList.add('hidden');
+  { const cc=$('saveLeaveConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
+  doLeaveGame(true);   // identical "Save & leave" meaning as the Pause sheet's own button - never a surrender/loss
+};
+$('btnSaveLeaveCancel').onclick=()=>{
+  $('saveLeaveConfirmOverlay').classList.add('hidden');
+  { const cc=$('saveLeaveConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
+  // no releaseSheetPause() here on purpose - this path never pauses the table, see the comment above
+};
 /* v0.27 § SURRENDER - Blake's original ask (replace the topbar Menu button with a Quit button
    that warns before ending an unfinished game), extended by a follow-up scope correction to
    cover every action that PERMANENTLY ends an unfinished game: the topbar Quit button, "Leave
@@ -6450,12 +6931,15 @@ $('btnRoomText').onclick=()=>{
    beat (teammates don't count) - a win over 3 Nasty CPUs is 3+3+3=9. Every human seat on the
    winning side earns the full total, not a split share.
    Storage: everything here is under NEW "h"-prefixed keys (hg4s/hw4s/hg4t/hw4t/hg6s/hw6s/
-   hg6t/hw6t/.../hptsS/hptsT) - deliberately NOT the old g4s/w4s keys (which used to include
-   CPU seats too). This means old data is never touched or destroyed, but the leaderboard
-   display only ever reads the new human-only keys, so any old CPU-tainted entries are
-   naturally filtered out of view. Online games are recorded to the SHARED SERVER leaderboard
+   hg6t/hw6t/.../hptsS/hptsT/hkoDealt/hkoTaken) - deliberately NOT the old g4s/w4s keys (which
+   used to include CPU seats too). This means old data is never touched or destroyed, but the
+   leaderboard display only ever reads the new human-only keys, so any old CPU-tainted entries
+   are naturally filtered out of view. Online games are recorded to the SHARED SERVER leaderboard
    instead of this device's local storage (see recordWin below) - otherwise a family game would
    get double-counted (once locally per phone, once globally).
+   2026-07-24 (item 9): a 3rd leaderboard tab, KOs, tracks two more lifetime (NOT split by mode,
+   unlike everything else here - see tallyKnockout()'s comment, § TURNS, for why) human-only
+   stats: hkoDealt (knockouts dealt) and hkoTaken (knockouts suffered). See renderLbKo() below.
    v0.21: points used to be one aggregate "hpts" field; the leaderboard overlay now has 2 tabs
    (Solo, Teams), so points are stored per mode-family instead: hptsS for solo/free-for-all
    wins, hptsT for team wins (see buildResultEntries() above). The old aggregate "hpts" key is
@@ -6504,6 +6988,9 @@ function pointsForWin(winSet){ return pointsBreakdown(winSet).pts; }
 // forward, so there's nothing left to drift out of sync with them (see HANDOFF.md for the
 // legacy-server-attribution + one-time migration that handles data already on disk from
 // before this split, and old app builds that still send plain hpts forever).
+// 2026-07-24 item 9: lifetime, human-only knockout stats (hkoDealt/hkoTaken) ride along in the
+// same per-seat delta, accrued all game long by tallyKnockout() above - only included when
+// nonzero, same "don't write a no-op delta" convention hw<mode>/hpts* already use.
 function buildResultEntries(mode,winSet){
   const entries=[];
   const isTeam=mode.endsWith('t');
@@ -6511,6 +6998,8 @@ function buildResultEntries(mode,winSet){
     if(seat.type!=='human')return;
     const delta={}; delta['hg'+mode]=1;
     if(winSet.has(i)){ delta['hw'+mode]=1; delta[isTeam?'hptsT':'hptsS']=pointsForWin(winSet); }
+    if(G.koDealt&&G.koDealt[i])delta.hkoDealt=G.koDealt[i];
+    if(G.koTaken&&G.koTaken[i])delta.hkoTaken=G.koTaken[i];
     entries.push({name:seat.name,delta});
   });
   return entries;
@@ -6567,9 +7056,13 @@ function recordOfflineSurrenderLoss(g){
   if(!g||g.over)return;
   const mode=(g.n===4?'4':'6')+(g.teams?'t':'s');
   const entries=[];
-  g.seats.forEach(seat=>{
+  g.seats.forEach((seat,i)=>{
     if(seat.type!=='human')return;
     const delta={}; delta['hg'+mode]=1;
+    // 2026-07-24 item 9: knockouts already dealt/suffered before this surrender are real and
+    // still count - a knockout isn't gated on how the game eventually ends.
+    if(g.koDealt&&g.koDealt[i])delta.hkoDealt=g.koDealt[i];
+    if(g.koTaken&&g.koTaken[i])delta.hkoTaken=g.koTaken[i];
     entries.push({name:seat.name,delta});
   });
   if(!entries.length)return;   // an all-CPU save (shouldn't exist, but matches recordWin's own guard)
@@ -6706,11 +7199,21 @@ function mergeQueuedIntoGlobal(global,queue){
    together. Same table shape either way (Player/Games/Wins/Win%/Points) - just a different
    pair of hg/hw keys and a different points key feeding it. lbLastStats holds whatever was most
    recently rendered (local-only or merged-global) so switching tabs re-renders instantly
-   without waiting on another network round trip. */
+   without waiting on another network round trip.
+   2026-07-24 (Blake's item 9): a 3rd tab, "KOs" (lbTab==='ko') - lifetime knockouts dealt/
+   suffered, NOT split by mode/board size like Solo/Teams are (a knockout is a "fun" stat across
+   every game a player's ever played - see tallyKnockout()'s comment above for the reasoning on
+   why this one deliberately does NOT split the way the competitive win/loss stats do). Routed
+   through the SAME renderLb() entry point (still called from the same two places - the initial
+   local render and the fetchGlobalLeaderboard().then() upgrade - so KOs gets the identical
+   "show local instantly, then upgrade to the shared board" treatment Solo/Teams already have)
+   but delegates to its own renderLbKo() below rather than reusing the Games/Wins/Win%/Points
+   shape, since knockouts are a genuinely different pair of numbers, not another mode filter. */
 let lbTab='solo';
 let lbLastStats={};
 function renderLb(st){
   lbLastStats=st;
+  if(lbTab==='ko'){ renderLbKo(st); return; }
   const names=Object.keys(st);
   const v=(n,k)=>st[n][k]||0;
   const isTeam=lbTab==='teams';
@@ -6729,18 +7232,58 @@ function renderLb(st){
     active.map(n=>`<tr><td>${esc(n)}</td><td>${games(n)}</td><td>${wins(n)}</td>
       <td>${pct(n)}</td><td>${pts(n)}</td></tr>`).join('')+`</table></div>`;
 }
+// 2026-07-24 item 9: the KOs tab. "KOs" = pegs this player has sent back to base (hkoDealt),
+// "KO'd" = times one of THEIR pegs got sent back (hkoTaken), "Ratio" = KOs per KO'd - the same
+// idea as a video-game K/D ratio, deliberately without ever writing the words "kill" or "death"
+// anywhere (Blake's explicit ask). Divide-by-zero handled cleanly: a player who's dealt
+// knockouts but never suffered one shows their KOs count as the ratio (not "Infinity"); a
+// player with zero of both (shouldn't reach this tab at all - see the `active` filter below,
+// belt-and-suspenders) would show "-", never "NaN".
+function koRatioStr(dealt,taken){
+  if(taken===0)return dealt>0?String(dealt):'-';
+  return (dealt/taken).toFixed(2);
+}
+function koRatioNum(dealt,taken){ return taken===0?dealt:dealt/taken; }
+function renderLbKo(st){
+  const names=Object.keys(st);
+  const v=(n,k)=>st[n][k]||0;
+  const dealt=n=>v(n,'hkoDealt');
+  const taken=n=>v(n,'hkoTaken');
+  const active=names.filter(n=>dealt(n)>0||taken(n)>0);
+  if(!active.length){
+    $('lbBody').innerHTML=`<p>No knockouts yet - go send somebody back to base!</p>`;
+    return;
+  }
+  // Ranked by ratio first (same convention a video-game K/D leaderboard uses), ties broken by
+  // total KOs dealt so a big lifetime knockout count still counts for something at an equal ratio.
+  active.sort((a,b)=>koRatioNum(dealt(b),taken(b))-koRatioNum(dealt(a),taken(a))||dealt(b)-dealt(a));
+  $('lbBody').innerHTML=`<div class="lbScroll"><table class="lbTable lbKo"><tr><th>Player</th>
+    <th>KOs</th><th>KO'd</th><th>Ratio</th></tr>`+
+    active.map(n=>`<tr><td>${esc(n)}</td><td>${dealt(n)}</td><td>${taken(n)}</td>
+      <td>${koRatioStr(dealt(n),taken(n))}</td></tr>`).join('')+`</table></div>`;
+}
+// Caption under the table changes per tab - the Solo/Teams points explainer doesn't apply to KOs.
+function updateLbCaption(){
+  $('lbCaption').textContent=lbTab==='ko'
+    ?"KOs = pegs you've sent back to base. KO'd = times your own peg got sent back. Ratio = KOs per KO'd - humans only, CPUs never show up here."
+    :'Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a human - humans only, CPUs never show up here.';
+}
 function setLbTab(tab){
   lbTab=tab;
   $('lbTabSolo').classList.toggle('on',tab==='solo');
   $('lbTabTeams').classList.toggle('on',tab==='teams');
+  $('lbTabKo').classList.toggle('on',tab==='ko');
+  updateLbCaption();
   renderLb(lbLastStats);
 }
 $('lbTabSolo').onclick=()=>setLbTab('solo');
 $('lbTabTeams').onclick=()=>setLbTab('teams');
+$('lbTabKo').onclick=()=>setLbTab('ko');
 $('btnLb').onclick=()=>{
   $('lbOverlay').classList.remove('hidden');
   lbTab='solo';   // v0.21: Solo is always the tab shown when the leaderboard is (re)opened
-  $('lbTabSolo').classList.add('on'); $('lbTabTeams').classList.remove('on');
+  $('lbTabSolo').classList.add('on'); $('lbTabTeams').classList.remove('on'); $('lbTabKo').classList.remove('on');
+  updateLbCaption();
   const local=loadStats();
   renderLb(local);   // show local instantly, then upgrade to the real shared board if the server answers
   fetchGlobalLeaderboard().then(g=>{
@@ -6752,17 +7295,26 @@ $('btnLb').onclick=()=>{
   });
 };
 $('btnLbClose').onclick=()=>$('lbOverlay').classList.add('hidden');
+// 2026-07-23 (Blake's item 12): plain text instead of the 🔊/🔇 emoji glyphs - text-transform
+// (§ STYLE) uppercases these for display; the stored strings stay plain mixed-case.
 $('btnMute').onclick=()=>{muted=!muted;localStorage.setItem('nasty-muted',muted?'1':'0');
-  $('btnMute').textContent=muted?'🔇':'🔊';};
-$('btnMute').textContent=muted?'🔇':'🔊';
+  $('btnMute').textContent=muted?'Unmute':'Mute';};
+$('btnMute').textContent=muted?'Unmute':'Mute';
 // v0.15: online, this is a SHARED table setting (NET.tableSpeed, host-controlled - see the
 // big § NET comment above for why Blake rejected per-viewer pacing) instead of each phone's
 // own local choice. Offline/pass-and-play is completely unchanged (still USER_SPEED,
 // localStorage-backed, every phone free to pick its own).
+// 2026-07-23 (fix, Blake's item 6/12 follow-up): dropped the "Speed: " prefix - just the level
+// name (Normal/Quick/Fast/Turbo) now, still a full un-clipped word, all-caps via CSS same as
+// every other topbar button. This was the single widest button in the row by a wide margin (a
+// 6th button, #btnSave, had made the whole row wider than the widest current iPhone, forcing a
+// horizontal scroll to reach Rules/Mute - unacceptable per item 6's own "nothing should be wider
+// than the screen" spirit and item 12's "the buttons at the top"). See the #topbar CSS comment
+// for the full before/after measurements.
 function speedLabel(){
   const cur=NET.online?NET.tableSpeed:USER_SPEED;
   const found=SPEED_OPTS.find(o=>o[0]===cur);
-  return 'Speed: '+(found?found[1]:cur);
+  return found?found[1]:String(cur);
 }
 function updateSpeedButtonLabel(){ $('btnSpeed').textContent=speedLabel(); }
 updateSpeedButtonLabel();
@@ -6803,7 +7355,13 @@ $('btnSkip').onclick=()=>{ if(!NET.online)startSkip(); };
 // second "Leave game" tap) is gone for the tapper; everyone else still sees the normal
 // paused overlay, and its own Leave game button still opens the same sheet.
 $('btnPause').onclick=openPauseSheet;
-$('pauseOverlay').addEventListener('pointerdown',()=>{ if(PAUSE_TAP_ALLOWED)requestPause(false); });
+$('pauseOverlay').addEventListener('pointerdown',()=>{
+  // 2026-07-23 (item 2): during an open reunion, tapping this screen reopens the real ready-up
+  // lobby instead of resuming - PAUSE_TAP_ALLOWED is already false here (see updatePauseUI()),
+  // this just makes the tap DO something useful instead of a dead tap.
+  if(NET.reunionActive){ openReunionOverlay(); return; }
+  if(PAUSE_TAP_ALLOWED)requestPause(false);
+});
 // v0.11 item 3: the pause overlay's "Leave game" button now opens the same two-choice
 // openLeaveConfirm() modal as the topbar's "‹ Menu" button (see doLeaveGame() above) instead
 // of silently always saving - stopPropagation still matters here so tapping the button itself
@@ -7032,11 +7590,11 @@ function onSavedTileClick(i){
   if(!e)return;
   if(e.kind==='offline')resumeOfflineGame(e.slot);
   else{
-    // v0.9 refinement: an online resume goes through the "getting the table back together"
-    // reunion lobby (see § REUNION below) instead of dropping straight onto the board -
-    // onSync() checks this flag once, then clears it.
+    // v0.9 refinement (evolved 2026-07-23, item 2): an online resume ALWAYS goes through the
+    // "getting the table back together" lobby now (see § REUNION below) - onSync() checks this
+    // flag once, then clears it.
     NET.enteringViaResume=true;
-    tryJoinOrRejoin(e.last.code);
+    tryJoinOrRejoin(e.last.code,i);
   }
 }
 TILE_IDS.forEach(([row,content,main,detail,trash,confirm,delBtn,cancelBtn],i)=>{
@@ -7077,19 +7635,70 @@ function resumeOfflineGame(slot){
   runTurn();
 }
 
-/* ---- Join/rejoin helper (v0.8; simplified v0.25) - shared by the ?join=CODE URL path, the
-   saved-game tile, and Universal Links. Every rejoin is a deliberate tap now (the silent
-   auto-rejoin paths are gone - items 6+7), so a failure always falls back to the visible
-   join overlay. */
-function tryJoinOrRejoin(code){
-  const saved=loadNetSession(code);
-  if(saved){
-    NET.wantConnection=true; NET.code=code; NET.playerId=saved.playerId; NET.token=saved.token;
-    connectWs().then(()=>{ netSend({type:'rejoin',code,playerId:saved.playerId,token:saved.token,protocolVersion:PROTOCOL_VERSION}); })
-      .catch(()=>{ NET.wantConnection=false; openJoinOverlay(code); });
-  }else{
-    openJoinOverlay(code);
+// 2026-07-23 fix (Blake's item 1): "when rejoining an online game, it should auto resync
+// automatically... I had to close and reopen my game a few times to get it to reconnect."
+// ROOT CAUSE, confirmed by direct reproduction (a scripted tile-tap against a connection that
+// fails once): tryJoinOrRejoin() used to make exactly ONE attempt. connectWs() has no shortage
+// of ways to fail once and then work fine moments later - a transient network hiccup, the app's
+// network stack not fully up yet right after a cold launch, or (before the connectWs() fix
+// above) a hung attempt with no timeout at all - and a single failure dumped the player onto the
+// "Join a game" code screen with zero explanation and no automatic retry. A non-technical player
+// in that spot has no way to know "just wait, it'll retry" is even an option - the only recovery
+// they could reasonably find on their own is exactly what Blake did: force-quit and reopen the
+// app and try the tile again. Fix: retry with the SAME backoff shape scheduleReconnect() already
+// uses for an in-session drop (1s -> 8s, +/-15% jitter), showing "Reconnecting…" directly on the
+// SAME tile the player tapped for immediate feedback, for RESUME_RETRY_MAX_MS before finally
+// falling back to the manual join screen as a genuine last resort - not the first response to
+// one blip. A definitive server reply (a real 'rejoinError' - the room is actually gone) is NOT
+// retried here; that already has its own correct handling in handleNetMessage's 'rejoinError'
+// case, unchanged by this fix.
+const RESUME_RETRY_MAX_MS=45000;
+function setTileReconnecting(tileIdx,active){
+  if(tileIdx==null)return;
+  const ids=TILE_IDS[tileIdx]; if(!ids)return;
+  const detail=$(ids[3]); if(!detail)return;
+  if(active){
+    if(detail.dataset.origText==null)detail.dataset.origText=detail.textContent;
+    detail.textContent='Reconnecting…';
+  }else if(detail.dataset.origText!=null){
+    detail.textContent=detail.dataset.origText;
+    delete detail.dataset.origText;
   }
+}
+/* ---- Join/rejoin helper (v0.8; simplified v0.25; hardened 2026-07-23) - shared by the
+   ?join=CODE URL path, the saved-game tile, and Universal Links. Every rejoin is a deliberate
+   tap now (the silent auto-rejoin paths are gone - items 6+7). `tileIdx` (only ever passed by
+   the saved-game tile's own click handler) is purely cosmetic - which tile to show
+   "Reconnecting…" on while this retries; omitted for the ?join=CODE/Universal Link paths, which
+   have no tile to update. */
+function tryJoinOrRejoin(code,tileIdx){
+  const saved=loadNetSession(code);
+  if(!saved){ openJoinOverlay(code); return; }
+  NET.wantConnection=true; NET.code=code; NET.playerId=saved.playerId; NET.token=saved.token;
+  const startedAt=Date.now();
+  let backoff=1000;
+  const stillMine=()=>NET.wantConnection&&NET.code===code;   // bail quietly if the player moved on to a different flow meanwhile
+  const attempt=()=>{
+    if(!stillMine())return;
+    setTileReconnecting(tileIdx,true);
+    connectWs().then(()=>{
+      if(!stillMine()){ setTileReconnecting(tileIdx,false); return; }
+      setTileReconnecting(tileIdx,false);
+      netSend({type:'rejoin',code,playerId:saved.playerId,token:saved.token,protocolVersion:PROTOCOL_VERSION});
+    }).catch(()=>{
+      if(!stillMine()){ setTileReconnecting(tileIdx,false); return; }
+      if(Date.now()-startedAt>=RESUME_RETRY_MAX_MS){
+        setTileReconnecting(tileIdx,false);
+        NET.wantConnection=false;
+        openJoinOverlay(code,true);   // last resort - skip the speed-picker gate, see its own comment
+        return;
+      }
+      const delay=Math.min(backoff,8000)*(0.85+Math.random()*0.3);
+      backoff=Math.min(backoff*1.7,8000);
+      setTimeout(attempt,delay);
+    });
+  };
+  attempt();
 }
 
 /* ---- App-lifecycle survival (v0.8; hardened v0.16; made unconditional v0.20) ----
