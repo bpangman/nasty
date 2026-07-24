@@ -156,12 +156,73 @@ async function partD_reactiveToResize(browser) {
   await ctx.close();
 }
 
+// 2026-07-24 permanent regression check - Blake's follow-up to item 6: "the concede leave game
+// and save and leave badges that pop up when you press those buttons still are too big for the
+// panel that you've given them. Please make them about 65% of the size that you currently have."
+// Scoped to .confirmCard .sign only (index.html, § STYLE, right below the .confirmCard block) -
+// the NASTY! takeout stamp (.nastyStamp .sign) and menu game logo (#gameLogo .sign) share the
+// same base .sign rule but must NOT shrink. This asserts the confirm-card sign is meaningfully
+// smaller than the base/stamp sign at BOTH size tiers, so a future edit that accidentally removes
+// or waters down the .confirmCard .sign scoping can't silently regress back to oversized badges.
+async function partE_confirmCardSignScopedSmaller(browser) {
+  console.log('\n=== Part E: .confirmCard sign is meaningfully smaller than the base/stamp sign (both tiers) ===');
+  // Tall tier (viewport height > 660, the max-height:660px block does NOT apply).
+  {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const page = await ctx.newPage();
+    await page.goto(URL);
+    await page.waitForFunction(() => window.G && window.G.n, { timeout: 20000 });
+    await page.evaluate(() => window.openSurrenderConfirm());
+    await page.waitForTimeout(200);
+    const r = await page.evaluate(() => {
+      const confirmB = document.querySelector('#surrenderConfirmOverlay .confirmCard .sign b');
+      // A bare, un-scoped .sign probe gets the BASE rule's computed style (56px) - the same base
+      // every one of .confirmCard/.nastyStamp/#gameLogo's own .sign rules starts from before its
+      // own scoped override applies. This is the one unambiguous "before shrinking" reference.
+      const probe = document.createElement('div');
+      probe.innerHTML = '<div class="sign"><b>NASTY!</b></div>';
+      document.body.appendChild(probe);
+      const baseB = probe.querySelector('.sign b');
+      const out = { confirmPx: parseFloat(getComputedStyle(confirmB).fontSize), basePx: parseFloat(getComputedStyle(baseB).fontSize) };
+      probe.remove();
+      return out;
+    });
+    ok(r.confirmPx < r.basePx, `tall tier: confirm-card sign font (${r.confirmPx}px) is smaller than the base sign font (${r.basePx}px)`);
+    ok(r.confirmPx <= r.basePx * 0.75, `tall tier: confirm-card sign font (${r.confirmPx}px) is at most 75% of the base sign font (${r.basePx}px - the real value is ~65%, 75% leaves headroom without allowing a regression back toward full size)`);
+    await ctx.close();
+  }
+  // Short tier (viewport height <= 660, the max-height:660px block DOES apply to both).
+  {
+    const ctx = await browser.newContext({ viewport: { width: 375, height: 600 } });
+    const page = await ctx.newPage();
+    await page.goto(URL);
+    await page.waitForFunction(() => window.G && window.G.n, { timeout: 20000 });
+    await page.evaluate(() => window.openSurrenderConfirm());
+    await page.waitForTimeout(200);
+    const r = await page.evaluate(() => {
+      const confirmB = document.querySelector('#surrenderConfirmOverlay .confirmCard .sign b');
+      // .nastyStamp itself has no max-height:660px override, so it stays at its own fixed 34px
+      // here regardless of viewport - a fair "stamp sign, unaffected by the media query" reference.
+      const probe = document.createElement('div');
+      probe.className = 'nastyStamp'; probe.innerHTML = '<div class="sign"><b>NASTY!</b></div>';
+      document.body.appendChild(probe);
+      const stampB = probe.querySelector('.sign b');
+      const out = { confirmPx: parseFloat(getComputedStyle(confirmB).fontSize), stampPx: parseFloat(getComputedStyle(stampB).fontSize) };
+      probe.remove();
+      return out;
+    });
+    ok(r.confirmPx < r.stampPx, `short tier (<=660h): confirm-card sign font (${r.confirmPx}px) is smaller than the stamp sign font (${r.stampPx}px, unaffected by the media query)`);
+    await ctx.close();
+  }
+}
+
 async function main() {
   const browser = await chromium.launch();
   await partA_smallDialogNotFullScreen(browser);
   await partB_bigDialogFitsWithRealSafeArea(browser);
   await partC_pathologicalTinyViewport(browser);
   await partD_reactiveToResize(browser);
+  await partE_confirmCardSignScopedSmaller(browser);
   await browser.close();
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

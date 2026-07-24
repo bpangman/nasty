@@ -902,9 +902,20 @@ button{font:inherit;cursor:pointer}
   max-height:calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 44px);
   overflow-y:auto;-webkit-overflow-scrolling:touch}
 .confirmCard .bigBtns{width:100%}
+/* 2026-07-24 follow-up to item 6 (Blake): "the concede leave game and save and leave badges
+   that pop up when you press those buttons still are too big for the panel that you've given
+   them. Please make them about 65% of the size that you currently have." Scoped to
+   .confirmCard .sign ONLY, on top of the base .sign rule above - the NASTY! takeout stamp
+   (.nastyStamp .sign) and the menu game logo (#gameLogo .sign) are untouched, they have their
+   own separate sizing already and this is a size reduction, not a restyle. Tall-screen tier:
+   font-size 36px (65% of the base 56px), padding 9px 20px 8px (65% of 14/30/12), border 3px
+   (65% of 5px), outline 2px (65% of 3px, rounded up so the ring stays visible). The existing
+   max-height:660px tier below is scaled the same way, 65% of its own 34px/9-20-7 values. */
+.confirmCard .sign{padding:9px 20px 8px;border-width:3px;outline-width:2px}
+.confirmCard .sign b{font-size:36px}
 @media (max-height:660px){
-  .confirmCard .sign{padding:9px 20px 7px}
-  .confirmCard .sign b{font-size:34px}
+  .confirmCard .sign{padding:6px 13px 5px;border-width:3px;outline-width:2px}
+  .confirmCard .sign b{font-size:22px}
   .confirmCard p{font-size:14px;line-height:1.4;margin:10px 0}
   .confirmCard .bigBtns{gap:8px;margin-top:12px}
   .confirmCard .bigBtns .btn{padding:10px 16px;font-size:14.5px;min-height:44px}
@@ -1089,7 +1100,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.28</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.28.1</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
