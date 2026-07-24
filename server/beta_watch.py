@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=c3bc3351-4dcf-4d7e-84ae-c3d5a0e77e6b&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=35120afc-d5e3-4c8e-aeda-10313e9da682&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -61,35 +61,26 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">🎉 Build 39 reached the family</h1>
+<h1 style="color:#1a5c38">Build 40 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>This one covers your whole latest wish list:</p>
+<p>This one is your follow up fix:</p>
 <ul>
-<li>Online games now reconnect and catch back up on their own, no more closing and reopening the app.</li>
-<li>Coming back to a game shows a ready up screen so everyone is confirmed at the table before play resumes.</li>
-<li>Everyone at the table now plays at the exact same speed, and the host can change it anytime.</li>
-<li>Pause and Save are now two separate, simpler buttons.</li>
-<li>The Concede and Leave popups always fit your screen now, with scrolling as a backup so nothing is ever cut off.</li>
-<li>The last card played stays on the table until the next card is played, with bigger, easier to read numbers.</li>
-<li>Every button across the top of the screen is now plain capital letters with no icons.</li>
-<li>Added a new Knockouts tab to the leaderboard showing knockouts dealt, knockouts taken, and your ratio.</li>
-<li>You can now choose to host a Teams game online, with a clear partner preview before you start.</li>
-<li>Fixed a real bug where the Jack could swap the wrong one of your own pegs instead of the one you tapped.</li>
+<li>The Concede, Leave Game, and Save and Leave popups now show a smaller badge that fits the panel properly instead of overflowing it.</li>
 </ul>
-<h3>📱 The link to text the family:</h3>
+<h3>The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
 <a href="https://testflight.apple.com/join/d79YpZea">https://testflight.apple.com/join/d79YpZea</a></p>
-<p>They tap it → install Apple's free "TestFlight" app if asked → tap Install → NASTY is on their phone. Works for up to 10,000 testers, so invite the whole clan.</p>
-<h3>💻 The browser link (no install, computers welcome):</h3>
+<p>They tap it, install Apple's free "TestFlight" app if asked, tap Install, and NASTY is on their phone. Works for up to 10,000 testers, so invite the whole clan.</p>
+<h3>The browser link (no install, computers welcome):</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
 <a href="https://nastyboardgame.com">nastyboardgame.com</a></p>
-<p>Same game, same online rooms - app players and browser players share tables with the 4-letter codes.</p>
-<p><b>Your own phone:</b> TestFlight will auto-update you to the new build if it hasn't already.</p>
+<p>Same game, same online rooms, app players and browser players share tables with the 4 letter codes.</p>
+<p><b>Your own phone:</b> TestFlight will auto update you to the new build if it hasn't already.</p>
 <p>Play hard for a week and send Cortana anything weird. After that: one command from her, one "Release" tap from you, and NASTY is on the App Store.</p>
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 39 is live for the family 🎉', body], check=True)
+                    'NASTY: build 40 is live for the family', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED - email sent, watcher done')
 except Exception as e:
