@@ -322,21 +322,28 @@ async function partE_confirmCardSignScopedSmaller(browser) {
 // confirm those pixels are the dark overlay background and not badge green/white/shadow bleeding
 // to the edge. Geometry alone cannot catch a css clip-box bug like this one; pixels can.
 //
-// 2026-07-24 follow-up (Blake, same day: "double them in size so they fill up more of the screen,
-// still leave some room on the ends though"): the badge itself grew a lot (see the dated CSS
-// comment right above .confirmCard .sign, index.html, § STYLE), so the margins this suite checks
-// are INTENTIONALLY smaller than the huge ones the clip-bug fix above shipped with - that is the
-// whole point of making the badge bigger. MIN_NET_MARGIN is raised from a bare float-safety "not
-// zero" floor to a real, meaningful floor (still comfortably below every measured case, so this
-// does not become a flaky test, but high enough that a future regression back toward zero margin
-// or a clipped badge trips it immediately). A single-line check is added here too (Range.
-// getClientRects().length === 1) - the enlargement was tuned close enough to some headings' real
-// wrap limit that "did it wrap" needs to be a permanent, per-viewport check, not just a one-time
-// measurement. Part G below locks in the specific 5-10 percent margin band Blake asked for at the
-// narrowest phone width for the longest heading.
+// 2026-07-24 follow-up #1 (Blake, same day: "double them in size so they fill up more of the
+// screen, still leave some room on the ends though"): the badge grew about 15% linear, keyed to
+// keep all five headings safe together.
+//
+// 2026-07-24 follow-up #2 (same day again: "far too timid, push much harder, roughly double,
+// go as large as fits"): re-keyed the main rule to just the three named badges
+// (CONCEDE?/LEAVE GAME?/SAVE & LEAVE?), fully decoupled from the two "replace" warnings' own
+// override - see the dated CSS comment above .confirmCard .sign, index.html, § STYLE, for the
+// full writeup, including why the confirm-style overlays' own outer padding was trimmed
+// (22px -> 10px) to buy the badge more room to grow into before it would wrap. Margins shrank
+// again as a DIRECT, intended result (a badge that fills more of the screen necessarily leaves
+// less empty space around it) - MIN_NET_MARGIN is lowered to match the new smallest real case
+// (the tightest is "REPLACE A SAVE?" at 375px wide, ~5.9px) while staying a real, meaningful
+// floor, not a bare "not zero." The single-line check (Range.getClientRects().length === 1,
+// added in follow-up #1) matters even more now - several headings are tuned close to their own
+// wrap limit on purpose ("as large as fits"), so this needs to keep being a permanent per-viewport
+// check, not a one-time measurement. Part G/H below lock in the specific percentage targets Blake
+// asked for (5%+ margin at the narrowest phone, ~85% badge width with a 6-8% margin band on
+// Blake's own phone class for "SAVE & LEAVE?").
 const SIGN_BOX_SHADOW_BLUR = 16; // px - must match .confirmCard .sign's box-shadow blur radius (index.html, § STYLE)
 const PIXEL_BLEED_PROBE = SIGN_BOX_SHADOW_BLUR + 2; // sample just past the shadow's real reach
-const MIN_NET_MARGIN = 5; // px - a real floor (smallest real case across the full matrix is ~10.7px)
+const MIN_NET_MARGIN = 4; // px - a real floor (smallest real case across the full matrix is ~5.9px, "REPLACE A SAVE?" at 375px wide)
 // 2026-07-24 follow-up: raised from 30 to 45. The overlay backdrop is only 90% opaque
 // (rgba(5,15,9,.9)), so on the busier confirm dialogs (the online leaveConfirmOverlay sits over
 // the full board plus top bar) a probe point can occasionally land over a bright board element or
@@ -436,7 +443,7 @@ async function partF_badgeMarginNeverClipped(browser) {
 // smaller override instead of sharing the bigger enlargement the other three headings got.
 async function partG_320pxMarginBand(browser) {
   console.log('\n=== Part G: PERMANENT - at the narrowest supported phone (320px), the longest heading keeps a real 5-10 percent margin band on each side (Blake\'s "room on the ends") ===');
-  const MIN_PCT = 4, MAX_PCT = 12; // a little slack around the 5-10% target for font-render variance
+  const MIN_PCT = 3.5, MAX_PCT = 12; // a little slack around the 5-10% target for font-render variance
   const ctx = await browser.newContext({ viewport: { width: 320, height: 568 }, deviceScaleFactor: 1 });
   const page = await ctx.newPage();
   await ctx.newCDPSession(page).then((c) => c.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, left: 0, bottom: 0, right: 0 } }));
@@ -461,6 +468,71 @@ async function partG_320pxMarginBand(browser) {
   await ctx.close();
 }
 
+// 2026-07-24 PERMANENT regression check - Blake's SAME-DAY follow-up to follow-up #1: "the 15%
+// growth is far too timid, push much harder, roughly double, go as large as fits." His concrete
+// numeric targets, keyed specifically to "SAVE & LEAVE?" (the longest of the three badges he
+// actually named - CONCEDE?/LEAVE GAME?/SAVE & LEAVE? - fully decoupled from the two "replace"
+// warnings' own smaller override, see the dated CSS comment above .confirmCard .sign, index.html,
+// § STYLE):
+// 1. On Blake's own phone class (390-430px wide), "SAVE & LEAVE?" should fill roughly 85% of the
+//    screen width, with about a 6-8% margin left on each side.
+// 2. At the narrowest supported phone (320px wide), "SAVE & LEAVE?" must still keep at least
+//    roughly 5% margin on each side (the hard floor, separate from Part G's own check of
+//    "REPLACE A SAVE?", the overall widest heading, which lives in the smaller override group).
+async function partH_saveLeaveBigTarget(browser) {
+  console.log('\n=== Part H: PERMANENT - "SAVE & LEAVE?" fills ~85% of the screen width with a real 6-8% margin on Blake\'s phone class (390-430px), and keeps >=5% margin at the narrowest 320px phone ===');
+  async function measure(w, h) {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1 });
+    const page = await ctx.newPage();
+    await ctx.newCDPSession(page).then((c) => c.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, left: 0, bottom: 0, right: 0 } }));
+    await page.goto(URL);
+    await page.waitForFunction(() => window.G && window.G.n, { timeout: 20000 });
+    await page.evaluate(() => window.openSaveConfirm());
+    await page.waitForTimeout(200);
+    const geo = await page.evaluate(() => {
+      const sign = document.querySelector('#saveLeaveConfirmOverlay .confirmCard .sign');
+      const b = document.querySelector('#saveLeaveConfirmOverlay .confirmCard .sign b');
+      const sr = sign.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(b);
+      return { left: sr.left, right: sr.right, width: sr.width, w: window.innerWidth, numLines: range.getClientRects().length };
+    });
+    await ctx.close();
+    const netLeft = geo.left - SIGN_BOX_SHADOW_BLUR;
+    const netRight = (geo.w - geo.right) - SIGN_BOX_SHADOW_BLUR;
+    const rawLeft = geo.left, rawRight = geo.w - geo.right; // Blake's own framing when he measured
+    // CONCEDE?'s size ("79px of empty space each side") was the RAW gap to the edge, not net-of-
+    // shadow-blur - the 6-8%/~5% targets below are checked against this RAW percentage to match
+    // how the ask was actually phrased and measured, while the net (post-blur) figure is still
+    // required to clear the file's real MIN_NET_MARGIN floor so the badge is never actually clipped.
+    return {
+      numLines: geo.numLines, pctWidth: geo.width / geo.w * 100,
+      netLeft, netRight, pctRawLeft: rawLeft / geo.w * 100, pctRawRight: rawRight / geo.w * 100,
+    };
+  }
+  // Phone-class check (390 and 430 - the span the "roughly 85%, 6-8% margin" target names).
+  for (const [w, h] of [[390, 844], [430, 932]]) {
+    const m = await measure(w, h);
+    ok(m.numLines === 1, `${w}x${h} SAVE & LEAVE?: stays on one line`);
+    ok(m.pctWidth >= 78 && m.pctWidth <= 94, `${w}x${h} SAVE & LEAVE?: badge is ${m.pctWidth.toFixed(1)}% of screen width (target ~85%)`);
+    ok(m.pctRawLeft >= 4.5 && m.pctRawLeft <= 10, `${w}x${h} SAVE & LEAVE?: raw left margin ${m.pctRawLeft.toFixed(1)}% of screen width (target 6-8%)`);
+    ok(m.pctRawRight >= 4.5 && m.pctRawRight <= 10, `${w}x${h} SAVE & LEAVE?: raw right margin ${m.pctRawRight.toFixed(1)}% of screen width`);
+    ok(m.netLeft >= MIN_NET_MARGIN, `${w}x${h} SAVE & LEAVE?: net (post-shadow-blur) left margin ${m.netLeft.toFixed(1)}px clears the real "never clipped" floor`);
+    ok(m.netRight >= MIN_NET_MARGIN, `${w}x${h} SAVE & LEAVE?: net (post-shadow-blur) right margin ${m.netRight.toFixed(1)}px clears the real "never clipped" floor`);
+  }
+  // Narrowest-phone hard floor (320px - the ~5% minimum, using the short-screen tier). Blake's
+  // own ~5% ask is checked against the RAW gap (his own framing); the net (post-blur) figure is
+  // required to clear the same MIN_NET_MARGIN floor as everywhere else in this file.
+  {
+    const m = await measure(320, 568);
+    ok(m.numLines === 1, `320x568 SAVE & LEAVE?: stays on one line`);
+    ok(m.pctRawLeft >= 4.5, `320x568 SAVE & LEAVE?: raw left margin ${m.pctRawLeft.toFixed(1)}% of screen width (hard floor ~5%)`);
+    ok(m.pctRawRight >= 4.5, `320x568 SAVE & LEAVE?: raw right margin ${m.pctRawRight.toFixed(1)}% of screen width`);
+    ok(m.netLeft >= MIN_NET_MARGIN, `320x568 SAVE & LEAVE?: net (post-shadow-blur) left margin ${m.netLeft.toFixed(1)}px clears the real "never clipped" floor`);
+    ok(m.netRight >= MIN_NET_MARGIN, `320x568 SAVE & LEAVE?: net (post-shadow-blur) right margin ${m.netRight.toFixed(1)}px clears the real "never clipped" floor`);
+  }
+}
+
 async function main() {
   const browser = await chromium.launch();
   await partA_smallDialogNotFullScreen(browser);
@@ -470,6 +542,7 @@ async function main() {
   await partE_confirmCardSignScopedSmaller(browser);
   await partF_badgeMarginNeverClipped(browser);
   await partG_320pxMarginBand(browser);
+  await partH_saveLeaveBigTarget(browser);
   await browser.close();
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

@@ -873,6 +873,18 @@ button{font:inherit;cursor:pointer}
   align-items:center;justify-content:center;padding:22px;text-align:center;
   overflow-y:auto;-webkit-overflow-scrolling:touch}
 .overlay>.confirmCard,.overlay>.modalCard{margin:auto}
+/* 2026-07-24 (Blake's SAME-DAY follow-up to the badge enlargement below: "push much harder,
+   roughly double, go as large as fits"). Reducing the outer gutter around the six confirm-style
+   overlays specifically buys real extra width for the badge to grow into before it hits its own
+   wrap limit - the badge's own left/right margin math does not depend on this padding at all (a
+   badge that already fits has the exact same margin whether this padding is 22px or 10px), but a
+   BIGGER badge needs a wider card to grow into before max-width:100% forces a wrap, and this is
+   where that width comes from. Scoped by ID to ONLY the six confirm-style overlays (the pause
+   sheet plus the five true confirm dialogs) - every .modalCard overlay (rules, leaderboard, host
+   setup, join, etc.) keeps the original 22px .overlay padding untouched, confirmed directly
+   (computed style + rendered position, see server/tests/test_overlay_sizing.js). */
+#pauseOverlay,#leaveConfirmOverlay,#surrenderConfirmOverlay,#saveLeaveConfirmOverlay,
+#overwriteWarnOverlay,#slotReplaceOverlay{padding:10px}
 .overlay h2{margin:16px 0 6px;font-size:26px}
 .overlay p{color:#cfe8d6;max-width:420px;line-height:1.55;font-size:15.5px}
 /* v0.27.1: confirm-style overlays (pause / leave-game sheet / concede confirm / overwrite /
@@ -942,47 +954,60 @@ button{font:inherit;cursor:pointer}
    and are completely untouched (confirmed by direct computed-style checks, not just reading the
    CSS - see server/tests/test_overlay_sizing.js).
 
-   2026-07-24 follow-up (Blake, same day, after the clip fix above shipped): "you fixed the cut
+   2026-07-24 follow-up #1 (Blake, same day, after the clip fix above shipped): "you fixed the cut
    off issue! Now please double them in size so they fill up more of the screen. Still leave some
-   room on the ends though! Just needs to be bigger." So this second pass ENLARGES the numbers
-   above - same clamp() structure, bigger bounds - while keeping a real, measured, non-zero margin
-   on every side at every size. Measured directly (Playwright, real rendered pixel checks, the
-   same method the clip-bug fix above used), not just eyeballed:
-   - The true worst case for wrapping turned out to be "REPLACE A SAVE?" (slotReplaceOverlay), not
-     "SAVE & LEAVE?" - it is the widest heading once actually rendered, even though it is not the
-     most letters. At the narrowest phone (320px wide, the short-screen tier below), this rule was
-     sized so "REPLACE A SAVE?" keeps about 5 to 10 percent of the screen width as empty margin on
-     each side - real room, not zero, per Blake's "still leave some room on the ends."
-   - At the tall-screen tier (this rule, taller phones/no Dynamic Type squeeze), "REPLACE A SAVE?"
-     and "REPLACE GAME?" (overwriteWarnOverlay) are close enough to their own wrap limit that
-     growing them by the SAME amount as the other three headings would wrap them - so those two
-     overlays get their OWN smaller override (below), sized to their own safe limit, while
-     CONCEDE?/LEAVE GAME?/SAVE & LEAVE? (the three Blake actually named) get the full enlargement.
-     This is why the numbers below are not identical across all five confirm overlays - each is
-     sized to the most room it can safely take without ever wrapping to a second line.
+   room on the ends though! Just needs to be bigger." That pass enlarged the numbers by about 15
+   percent linear, keyed to keep ALL FIVE confirm headings safe together.
+
+   2026-07-24 follow-up #2 (same day again - "the 15% growth is far too timid... push much
+   harder... roughly DOUBLE them... go as large as fits"). Root cause of why follow-up #1 landed
+   so small: it kept every heading, including the two "replace" warnings, growing in lockstep off
+   ONE shared limit. This pass re-keys the MAIN rule to only the three badges Blake actually asked
+   about (CONCEDE?/LEAVE GAME?/SAVE & LEAVE?) - "SAVE & LEAVE?" is the longest of just those three
+   and is what this rule's clamp bounds are now sized against, fully decoupled from the "replace"
+   overlays (their own override, below, is untouched by how big this rule gets). Measured directly
+   (Playwright, real rendered pixel checks): the badge's left/right margin math is
+   (viewport width - badge width) / 2 and does NOT depend on the surrounding overlay's own padding
+   AT ALL, as long as the badge still fits inside its card without wrapping - so the real lever for
+   "bigger badge, same real margin rule" turned out to be raising the WRAP ceiling, not the margin
+   formula itself. That ceiling comes from the confirm-style overlay's own side padding (see the
+   reduced #pauseOverlay/etc. padding rule above, .overlay section) - trimming that from 22px to
+   10px bought "SAVE & LEAVE?" the extra room to grow to about 87 percent of the screen's width on
+   Blake's own phone class (390-430px wide) with a genuine ~6-8 percent gap left on each side,
+   right up against where it would start wrapping to a second line - "as large as fits" without
+   crossing that line. CONCEDE?/LEAVE GAME? share this same font size and naturally render with
+   more end-room since their text is shorter - expected and fine, per Blake's own framing. At the
+   narrowest phone (320px, the short-screen tier below), "SAVE & LEAVE?" keeps just over 5 percent
+   margin on each side - the hard floor - while still growing markedly bigger than follow-up #1.
+   "REPLACE GAME?"/"REPLACE A SAVE?" (overwriteWarnOverlay/slotReplaceOverlay) keep their own
+   separate, smaller override below - grown a little further too now that the same padding trim
+   gave them a bit more room, but still capped well short of the main rule since their text is
+   the widest of all five and closest to its own wrap limit.
    Every combination (5 headings x the 5-viewport matrix in test_overlay_sizing.js) was verified to
    stay a single line, never touch a screen edge, and keep a real positive margin - see Part F/G
-   there for the exact numbers. */
+   there for the exact numbers. Scoped to .confirmCard .sign / .confirmCard .sign b (plus the two
+   ID-scoped overrides) ONLY - the NASTY! takeout stamp (.nastyStamp .sign) and the menu game logo
+   (#gameLogo .sign) share the same base .sign rule and remain completely untouched. */
 .confirmCard .sign{box-sizing:border-box;max-width:100%;
-  padding:clamp(7px,2.07vw,10px) clamp(9px,3.22vw,16px) clamp(6px,1.73vw,8px);
-  border-width:clamp(2px,0.92vw,3.5px);outline-width:2px;
+  padding:clamp(7.2px,2.16vw,10.8px) clamp(9.6px,3.36vw,16.8px) clamp(6px,1.8vw,8.4px);
+  border-width:clamp(2.4px,0.96vw,3.6px);outline-width:2px;
   box-shadow:0 6px 16px rgba(0,0,0,.4), inset 0 2px 0 rgba(255,255,255,.25)}
-.confirmCard .sign b{font-size:clamp(22px,7.13vw,39px)}
+.confirmCard .sign b{font-size:clamp(22.8px,7.44vw,40.8px)}
 /* Narrower override for the two "replace" warnings (overwriteWarnOverlay/slotReplaceOverlay) -
    their headings ("REPLACE GAME?"/"REPLACE A SAVE?") are the widest text in any confirm badge, so
-   they get their own smaller-but-still-bigger-than-before clamp instead of sharing the enlarged
-   rule above, which would wrap them. See the dated comment above this whole block. */
+   they get their own smaller-but-still-bigger-than-before clamp instead of sharing the main rule
+   above, which would wrap them. See the dated comment above this whole block. */
 #overwriteWarnOverlay .confirmCard .sign, #slotReplaceOverlay .confirmCard .sign{
-  padding:clamp(6px,1.84vw,9px) clamp(8px,2.86vw,14px) clamp(5px,1.53vw,7px)}
+  padding:clamp(6.36px,1.91vw,9.54px) clamp(8.48px,2.97vw,14.84px) clamp(5.3px,1.59vw,7.42px)}
 #overwriteWarnOverlay .confirmCard .sign b, #slotReplaceOverlay .confirmCard .sign b{
-  font-size:clamp(19px,6.32vw,35px)}
+  font-size:clamp(20.14px,6.57vw,36.04px)}
 @media (max-height:660px){
-  .confirmCard .sign{padding:clamp(5px,1.5vw,7px) clamp(7px,2.42vw,13px) clamp(3px,1.27vw,6px)}
-  .confirmCard .sign b{font-size:clamp(17px,5.64vw,25px)}
+  .confirmCard .sign{padding:clamp(5.52px,1.79vw,8.28px) clamp(8.28px,2.9vw,15.18px) clamp(4.14px,1.52vw,6.9px)}
+  .confirmCard .sign b{font-size:clamp(20.7px,6.76vw,30.36px)}
   #overwriteWarnOverlay .confirmCard .sign, #slotReplaceOverlay .confirmCard .sign{
-    padding:clamp(5px,1.5vw,7px) clamp(7px,2.42vw,13px) clamp(3px,1.27vw,6px)}
+    padding:clamp(4.88px,1.59vw,7.32px) clamp(7.32px,2.56vw,13.42px) clamp(3.66px,1.34vw,6.1px)}
   #overwriteWarnOverlay .confirmCard .sign b, #slotReplaceOverlay .confirmCard .sign b{
-    font-size:clamp(17px,5.64vw,25px)}
+    font-size:clamp(18.3px,5.98vw,26.84px)}
   .confirmCard p{font-size:14px;line-height:1.4;margin:10px 0}
   .confirmCard .bigBtns{gap:8px;margin-top:12px}
   .confirmCard .bigBtns .btn{padding:10px 16px;font-size:14.5px;min-height:44px}
@@ -1167,7 +1192,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.28.3</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.28.4</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
