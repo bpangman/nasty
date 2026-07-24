@@ -41,7 +41,7 @@ def api(path):
 
 try:
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=bbc0adbe-f754-4bd5-b874-93dbc409697d&limit=5')
+    d = api('/v1/betaAppReviewSubmissions?filter[build]=bad37c63-ed9f-4230-bcdc-34207b258cef&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -61,11 +61,11 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write('''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">Build 43 reached the family</h1>
+<h1 style="color:#1a5c38">Build 44 reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
 <p>This one is your follow up fix:</p>
 <ul>
-<li>Made the Concede, Leave Game, and Save and Leave popups much bigger and easier to read, still fully on screen.</li>
+<li>Made the Concede and Leave Game popups much bigger and easier to read, still fully on screen.</li>
 </ul>
 <h3>The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -80,7 +80,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 43 is live for the family', body], check=True)
+                    'NASTY: build 44 is live for the family', body], check=True)
     open(DONE, 'w').write('approved\n')
     log('APPROVED - email sent, watcher done')
 except Exception as e:
