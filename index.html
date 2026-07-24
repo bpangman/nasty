@@ -1001,6 +1001,35 @@ button{font:inherit;cursor:pointer}
   padding:clamp(6.36px,1.91vw,9.54px) clamp(8.48px,2.97vw,14.84px) clamp(5.3px,1.59vw,7.42px)}
 #overwriteWarnOverlay .confirmCard .sign b, #slotReplaceOverlay .confirmCard .sign b{
   font-size:clamp(20.14px,6.57vw,36.04px)}
+/* 2026-07-24 follow-up #3 (same day again - "still not big enough, and now I can see the real
+   blocker: all three badges share ONE font size, pinned down by the longest heading SAVE & LEAVE?,
+   so the short headings (CONCEDE especially, the one Blake sees most) stay small"). Correct
+   diagnosis: the main rule above sizes ONE font for all three named badges together, so it can
+   only ever grow as far as the WIDEST of the three lets it - "CONCEDE?" (8 characters) and
+   "LEAVE GAME?" (11 characters) were both left with tons of unused margin because "SAVE & LEAVE?"
+   (13 characters) was the thing capping the shared size. Fix: give "CONCEDE?" and "LEAVE GAME?"
+   their OWN independent per-overlay clamp, each tuned (Playwright, real rendered widths, the same
+   method every pass on this badge has used) so THAT heading alone fills roughly 86 to 88 percent
+   of the screen width on Blake's own phone class (390-430px) with its own real end-margin - not
+   sized off any other heading at all anymore. "SAVE & LEAVE?" keeps using the main rule above
+   unchanged (it was already at its own one-line wrap limit, per the follow-up #2 comment) - now
+   that CONCEDE?/LEAVE GAME? have their own rules, the main rule effectively only serves
+   saveLeaveConfirmOverlay and the pause sheet ("PAUSED", short enough to have plenty of room
+   either way). Font grew about 1.67x for "CONCEDE?" and about 1.32x for "LEAVE GAME?" relative to
+   the original v0.28.2 numbers - different multipliers because they are different lengths of
+   text, but the same real target (~86-88% of the screen) governs both, exactly like "SAVE & LEAVE?"
+   already had. Padding/border scaled right alongside each font so the whole badge grows as a unit,
+   not just the lettering. Every combination (5 headings x the 5-viewport matrix) was reverified to
+   stay a single line, never touch a screen edge, and keep a real positive margin - see
+   server/tests/test_overlay_sizing.js Part H for the exact per-heading numbers. */
+#surrenderConfirmOverlay .confirmCard .sign{
+  padding:clamp(10.02px,3.01vw,15.03px) clamp(13.36px,4.68vw,23.38px) clamp(8.35px,2.51vw,11.69px);
+  border-width:clamp(3.34px,1.34vw,5.01px)}
+#surrenderConfirmOverlay .confirmCard .sign b{font-size:clamp(31.73px,10.35vw,56.78px)}
+#leaveConfirmOverlay .confirmCard .sign{
+  padding:clamp(7.92px,2.38vw,11.88px) clamp(10.56px,3.7vw,18.48px) clamp(6.6px,1.98vw,9.24px);
+  border-width:clamp(2.64px,1.06vw,3.96px)}
+#leaveConfirmOverlay .confirmCard .sign b{font-size:clamp(25.08px,8.18vw,44.88px)}
 @media (max-height:660px){
   .confirmCard .sign{padding:clamp(5.52px,1.79vw,8.28px) clamp(8.28px,2.9vw,15.18px) clamp(4.14px,1.52vw,6.9px)}
   .confirmCard .sign b{font-size:clamp(20.7px,6.76vw,30.36px)}
@@ -1008,6 +1037,10 @@ button{font:inherit;cursor:pointer}
     padding:clamp(4.88px,1.59vw,7.32px) clamp(7.32px,2.56vw,13.42px) clamp(3.66px,1.34vw,6.1px)}
   #overwriteWarnOverlay .confirmCard .sign b, #slotReplaceOverlay .confirmCard .sign b{
     font-size:clamp(18.3px,5.98vw,26.84px)}
+  #surrenderConfirmOverlay .confirmCard .sign{padding:clamp(7.6px,2.47vw,11.4px) clamp(11.4px,3.99vw,20.9px) clamp(5.7px,2.09vw,9.5px)}
+  #surrenderConfirmOverlay .confirmCard .sign b{font-size:clamp(28.5px,9.31vw,41.8px)}
+  #leaveConfirmOverlay .confirmCard .sign{padding:clamp(6.08px,1.98vw,9.12px) clamp(9.12px,3.19vw,16.72px) clamp(4.56px,1.67vw,7.6px)}
+  #leaveConfirmOverlay .confirmCard .sign b{font-size:clamp(22.8px,7.45vw,33.44px)}
   .confirmCard p{font-size:14px;line-height:1.4;margin:10px 0}
   .confirmCard .bigBtns{gap:8px;margin-top:12px}
   .confirmCard .bigBtns .btn{padding:10px 16px;font-size:14.5px;min-height:44px}
@@ -1192,7 +1225,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.28.4</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.28.5</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->

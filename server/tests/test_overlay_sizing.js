@@ -253,6 +253,12 @@ async function partD_reactiveToResize(browser) {
 // same base .sign rule but must NOT shrink. This asserts the confirm-card sign is meaningfully
 // smaller than the base/stamp sign at BOTH size tiers, so a future edit that accidentally removes
 // or waters down the .confirmCard .sign scoping can't silently regress back to oversized badges.
+// 2026-07-24 follow-up #3 note: this probe now uses #pauseOverlay ("PAUSED") instead of
+// #surrenderConfirmOverlay ("CONCEDE?") - CONCEDE? got its own deliberately much-bigger per-
+// overlay override this session (see Part H and the dated CSS comment, index.html, § STYLE), so
+// it is EXPECTED to now approach or exceed the base/stamp sign's own size, which would trip this
+// check for the wrong reason. #pauseOverlay still uses the plain, un-overridden .confirmCard .sign
+// rule, so it remains the correct "has the shared rule regressed back toward full size" probe.
 async function partE_confirmCardSignScopedSmaller(browser) {
   console.log('\n=== Part E: .confirmCard sign is meaningfully smaller than the base/stamp sign (both tiers) ===');
   // Tall tier (viewport height > 660, the max-height:660px block does NOT apply).
@@ -261,10 +267,10 @@ async function partE_confirmCardSignScopedSmaller(browser) {
     const page = await ctx.newPage();
     await page.goto(URL);
     await page.waitForFunction(() => window.G && window.G.n, { timeout: 20000 });
-    await page.evaluate(() => window.openSurrenderConfirm());
+    await page.evaluate(() => document.getElementById('pauseOverlay').classList.remove('hidden'));
     await page.waitForTimeout(200);
     const r = await page.evaluate(() => {
-      const confirmB = document.querySelector('#surrenderConfirmOverlay .confirmCard .sign b');
+      const confirmB = document.querySelector('#pauseOverlay .confirmCard .sign b');
       // A bare, un-scoped .sign probe gets the BASE rule's computed style (56px) - the same base
       // every one of .confirmCard/.nastyStamp/#gameLogo's own .sign rules starts from before its
       // own scoped override applies. This is the one unambiguous "before shrinking" reference.
@@ -286,10 +292,10 @@ async function partE_confirmCardSignScopedSmaller(browser) {
     const page = await ctx.newPage();
     await page.goto(URL);
     await page.waitForFunction(() => window.G && window.G.n, { timeout: 20000 });
-    await page.evaluate(() => window.openSurrenderConfirm());
+    await page.evaluate(() => document.getElementById('pauseOverlay').classList.remove('hidden'));
     await page.waitForTimeout(200);
     const r = await page.evaluate(() => {
-      const confirmB = document.querySelector('#surrenderConfirmOverlay .confirmCard .sign b');
+      const confirmB = document.querySelector('#pauseOverlay .confirmCard .sign b');
       // .nastyStamp itself has no max-height:660px override, so it stays at its own fixed 34px
       // here regardless of viewport - a fair "stamp sign, unaffected by the media query" reference.
       const probe = document.createElement('div');
@@ -468,35 +474,41 @@ async function partG_320pxMarginBand(browser) {
   await ctx.close();
 }
 
-// 2026-07-24 PERMANENT regression check - Blake's SAME-DAY follow-up to follow-up #1: "the 15%
-// growth is far too timid, push much harder, roughly double, go as large as fits." His concrete
-// numeric targets, keyed specifically to "SAVE & LEAVE?" (the longest of the three badges he
-// actually named - CONCEDE?/LEAVE GAME?/SAVE & LEAVE? - fully decoupled from the two "replace"
-// warnings' own smaller override, see the dated CSS comment above .confirmCard .sign, index.html,
-// § STYLE):
-// 1. On Blake's own phone class (390-430px wide), "SAVE & LEAVE?" should fill roughly 85% of the
-//    screen width, with about a 6-8% margin left on each side.
-// 2. At the narrowest supported phone (320px wide), "SAVE & LEAVE?" must still keep at least
-//    roughly 5% margin on each side (the hard floor, separate from Part G's own check of
-//    "REPLACE A SAVE?", the overall widest heading, which lives in the smaller override group).
-async function partH_saveLeaveBigTarget(browser) {
-  console.log('\n=== Part H: PERMANENT - "SAVE & LEAVE?" fills ~85% of the screen width with a real 6-8% margin on Blake\'s phone class (390-430px), and keeps >=5% margin at the narrowest 320px phone ===');
-  async function measure(w, h) {
+// 2026-07-24 PERMANENT regression check - three rounds of the same-day follow-up, ending with:
+// "still not big enough, and now I can see the real blocker: all three badges share ONE font
+// size... Blake sees CONCEDE most, and it looks small. Fix it by sizing EACH of the three badges
+// INDEPENDENTLY." All three named badges (CONCEDE?/LEAVE GAME?/SAVE & LEAVE?) now have their own
+// per-overlay clamp (see the dated CSS comments above .confirmCard .sign, index.html, § STYLE),
+// each independently tuned to the SAME real target instead of one shared font sized off whichever
+// heading is longest:
+// 1. On Blake's own phone class (390-430px wide), EACH of the three should fill roughly 86-88% of
+//    the screen width, with a real few-percent margin left on each side.
+// 2. At the narrowest supported phone (320px wide), EACH must still keep at least roughly 5%
+//    margin on each side (the hard floor, separate from Part G's own check of "REPLACE A SAVE?",
+//    the overall widest heading, which lives in its own smaller override group).
+async function partH_perHeadingBigTarget(browser) {
+  console.log('\n=== Part H: PERMANENT - CONCEDE?/LEAVE GAME?/SAVE & LEAVE? each independently fill ~86-88% of the screen width on Blake\'s phone class (390-430px), and each keeps >=5% margin at the narrowest 320px phone ===');
+  const CASES = [
+    { id: 'surrenderConfirmOverlay', label: 'CONCEDE?', open: () => window.openSurrenderConfirm() },
+    { id: 'leaveConfirmOverlay', label: 'LEAVE GAME?', open: () => { window.NET.online = true; window.openLeaveConfirm(); } },
+    { id: 'saveLeaveConfirmOverlay', label: 'SAVE & LEAVE?', open: () => window.openSaveConfirm() },
+  ];
+  async function measure(id, open, w, h) {
     const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1 });
     const page = await ctx.newPage();
     await ctx.newCDPSession(page).then((c) => c.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, left: 0, bottom: 0, right: 0 } }));
     await page.goto(URL);
     await page.waitForFunction(() => window.G && window.G.n, { timeout: 20000 });
-    await page.evaluate(() => window.openSaveConfirm());
+    await page.evaluate(open);
     await page.waitForTimeout(200);
-    const geo = await page.evaluate(() => {
-      const sign = document.querySelector('#saveLeaveConfirmOverlay .confirmCard .sign');
-      const b = document.querySelector('#saveLeaveConfirmOverlay .confirmCard .sign b');
+    const geo = await page.evaluate((id) => {
+      const sign = document.querySelector(`#${id} .confirmCard .sign`);
+      const b = document.querySelector(`#${id} .confirmCard .sign b`);
       const sr = sign.getBoundingClientRect();
       const range = document.createRange();
       range.selectNodeContents(b);
       return { left: sr.left, right: sr.right, width: sr.width, w: window.innerWidth, numLines: range.getClientRects().length };
-    });
+    }, id);
     await ctx.close();
     const netLeft = geo.left - SIGN_BOX_SHADOW_BLUR;
     const netRight = (geo.w - geo.right) - SIGN_BOX_SHADOW_BLUR;
@@ -510,26 +522,28 @@ async function partH_saveLeaveBigTarget(browser) {
       netLeft, netRight, pctRawLeft: rawLeft / geo.w * 100, pctRawRight: rawRight / geo.w * 100,
     };
   }
-  // Phone-class check (390 and 430 - the span the "roughly 85%, 6-8% margin" target names).
-  for (const [w, h] of [[390, 844], [430, 932]]) {
-    const m = await measure(w, h);
-    ok(m.numLines === 1, `${w}x${h} SAVE & LEAVE?: stays on one line`);
-    ok(m.pctWidth >= 78 && m.pctWidth <= 94, `${w}x${h} SAVE & LEAVE?: badge is ${m.pctWidth.toFixed(1)}% of screen width (target ~85%)`);
-    ok(m.pctRawLeft >= 4.5 && m.pctRawLeft <= 10, `${w}x${h} SAVE & LEAVE?: raw left margin ${m.pctRawLeft.toFixed(1)}% of screen width (target 6-8%)`);
-    ok(m.pctRawRight >= 4.5 && m.pctRawRight <= 10, `${w}x${h} SAVE & LEAVE?: raw right margin ${m.pctRawRight.toFixed(1)}% of screen width`);
-    ok(m.netLeft >= MIN_NET_MARGIN, `${w}x${h} SAVE & LEAVE?: net (post-shadow-blur) left margin ${m.netLeft.toFixed(1)}px clears the real "never clipped" floor`);
-    ok(m.netRight >= MIN_NET_MARGIN, `${w}x${h} SAVE & LEAVE?: net (post-shadow-blur) right margin ${m.netRight.toFixed(1)}px clears the real "never clipped" floor`);
-  }
-  // Narrowest-phone hard floor (320px - the ~5% minimum, using the short-screen tier). Blake's
-  // own ~5% ask is checked against the RAW gap (his own framing); the net (post-blur) figure is
-  // required to clear the same MIN_NET_MARGIN floor as everywhere else in this file.
-  {
-    const m = await measure(320, 568);
-    ok(m.numLines === 1, `320x568 SAVE & LEAVE?: stays on one line`);
-    ok(m.pctRawLeft >= 4.5, `320x568 SAVE & LEAVE?: raw left margin ${m.pctRawLeft.toFixed(1)}% of screen width (hard floor ~5%)`);
-    ok(m.pctRawRight >= 4.5, `320x568 SAVE & LEAVE?: raw right margin ${m.pctRawRight.toFixed(1)}% of screen width`);
-    ok(m.netLeft >= MIN_NET_MARGIN, `320x568 SAVE & LEAVE?: net (post-shadow-blur) left margin ${m.netLeft.toFixed(1)}px clears the real "never clipped" floor`);
-    ok(m.netRight >= MIN_NET_MARGIN, `320x568 SAVE & LEAVE?: net (post-shadow-blur) right margin ${m.netRight.toFixed(1)}px clears the real "never clipped" floor`);
+  for (const c of CASES) {
+    // Phone-class check (390 and 430 - the span the "roughly 86-88%" target names).
+    for (const [w, h] of [[390, 844], [430, 932]]) {
+      const m = await measure(c.id, c.open, w, h);
+      ok(m.numLines === 1, `${w}x${h} ${c.label}: stays on one line`);
+      ok(m.pctWidth >= 78 && m.pctWidth <= 94, `${w}x${h} ${c.label}: badge is ${m.pctWidth.toFixed(1)}% of screen width (target ~86-88%, independent of the other two headings)`);
+      ok(m.pctRawLeft >= 4.5 && m.pctRawLeft <= 10, `${w}x${h} ${c.label}: raw left margin ${m.pctRawLeft.toFixed(1)}% of screen width (target ~6-8%)`);
+      ok(m.pctRawRight >= 4.5 && m.pctRawRight <= 10, `${w}x${h} ${c.label}: raw right margin ${m.pctRawRight.toFixed(1)}% of screen width`);
+      ok(m.netLeft >= MIN_NET_MARGIN, `${w}x${h} ${c.label}: net (post-shadow-blur) left margin ${m.netLeft.toFixed(1)}px clears the real "never clipped" floor`);
+      ok(m.netRight >= MIN_NET_MARGIN, `${w}x${h} ${c.label}: net (post-shadow-blur) right margin ${m.netRight.toFixed(1)}px clears the real "never clipped" floor`);
+    }
+    // Narrowest-phone hard floor (320px - the ~5% minimum, using the short-screen tier). Blake's
+    // own ~5% ask is checked against the RAW gap (his own framing); the net (post-blur) figure is
+    // required to clear the same MIN_NET_MARGIN floor as everywhere else in this file.
+    {
+      const m = await measure(c.id, c.open, 320, 568);
+      ok(m.numLines === 1, `320x568 ${c.label}: stays on one line`);
+      ok(m.pctRawLeft >= 4.5, `320x568 ${c.label}: raw left margin ${m.pctRawLeft.toFixed(1)}% of screen width (hard floor ~5%)`);
+      ok(m.pctRawRight >= 4.5, `320x568 ${c.label}: raw right margin ${m.pctRawRight.toFixed(1)}% of screen width`);
+      ok(m.netLeft >= MIN_NET_MARGIN, `320x568 ${c.label}: net (post-shadow-blur) left margin ${m.netLeft.toFixed(1)}px clears the real "never clipped" floor`);
+      ok(m.netRight >= MIN_NET_MARGIN, `320x568 ${c.label}: net (post-shadow-blur) right margin ${m.netRight.toFixed(1)}px clears the real "never clipped" floor`);
+    }
   }
 }
 
@@ -542,7 +556,7 @@ async function main() {
   await partE_confirmCardSignScopedSmaller(browser);
   await partF_badgeMarginNeverClipped(browser);
   await partG_320pxMarginBand(browser);
-  await partH_saveLeaveBigTarget(browser);
+  await partH_perHeadingBigTarget(browser);
   await browser.close();
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
