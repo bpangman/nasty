@@ -630,6 +630,16 @@ async function partG(kind, port, scratch) {
           let msg;
           try { msg = JSON.parse(raw.toString()); } catch (e) { return; }
           try {
+            // 2026-07-25 (found by another session working the same repo this session, flagged
+            // before it bit this file too): server/cloud/server.ts sends an app-level
+            // {type:'ping',t} heartbeat and force-closes any connection that never answers with
+            // {type:'pong',t} (Deno has no lower-level socket ping/pong the way Node's `ws`
+            // library does - see that file's own § HEARTBEAT comment). A raw-WebSocket harness
+            // that ignores this looks exactly like a hang once a game runs long enough to cross
+            // the heartbeat interval - the same likely explanation for this file's own
+            // historically-documented "flaky against Deno" gap. Answered here so a slower run
+            // never gets silently dropped mid-game.
+            if (msg.type === "ping") { c.ws.send(JSON.stringify({ type: "pong", t: msg.t })); return; }
             if (msg.type === "gameAction") {
               applyToShadow(shadows[ci], msg.action);
               const G = shadows[ci].getG();
