@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = 'd1488977-e689-46e2-a67e-c586b121059f'
+BUILD_SUBMISSION_ID = '86f64cf9-8331-4b98-8e25-9c71fc0bcb57'
 
 
 def current_build():
@@ -101,10 +101,11 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>This one has two of your asks:</p>
+<p>This one is the post-game changes you asked for:</p>
 <ul>
-<li>The buttons at the top of the board (Quit, Pause, Save, Speed, Rules, Mute) are all the same size now, so the row looks even and lined up instead of ragged.</li>
-<li>When you host an online game, you can now pick how tough each computer player is (Easy, Tricky, or Nasty) right from the lobby before the game starts - everyone at the table can see what they are up against.</li>
+<li>When the game ends you now see everyone's knockout numbers, with a ratio, right on the winner screen.</li>
+<li>You can close that winner popup with the X to look back at the finished board, then tap any player's name to see the cards they had left.</li>
+<li>There's a clear way to leave and get back to the menu from that screen, and a "Results" button to pull the winner popup back up if you closed it.</li>
 </ul>
 <h3>The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
