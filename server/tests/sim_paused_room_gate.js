@@ -236,8 +236,13 @@ async function main() {
   try {
     const ctlWs = await wsConnect(PORT);
     sendJ(ctlWs, { type: "rejoin", protocolVersion: 5, code, playerId: joined.playerId, token: joined.token });
-    const res = await nextMsg(ctlWs, (m) => m.type === "rejoined" || m.type === "joined" || m.type === "error", 8000).catch(() => null);
-    controlOk = !!(res && res.type !== "error");
+    // A successful token rejoin is answered with a snapshot `sync` (see server.js's
+    // `case "rejoin"`), NOT a "rejoined"/"joined" message - those do not exist on this wire.
+    const res = await nextMsg(ctlWs,
+      (m) => m.type === "sync" || m.type === "rejoinError" || m.type === "kicked" || m.type === "protocolMismatch",
+      8000).catch(() => null);
+    controlOk = !!(res && res.type === "sync");
+    if (!controlOk) log("control rejoin got:", res ? res.type : "(nothing within 8s)");
     ctlWs.close();
   } catch (e) { /* controlOk stays false */ }
   check(controlOk, `${KIND}: control - the very same stored credentials DO still work over a raw socket, so the phone's abstention was deliberate`);
