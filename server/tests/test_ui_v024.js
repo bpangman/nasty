@@ -177,6 +177,17 @@ async function partC_onlineLobby(browser) {
     { name: 'Jim', type: 'cpu', diff: 'medium' },
   ];
   await hostRoom(page, seatMeta, 4);
+  // 2026-07-25 (§ OVERLAY LAYER, Blake's pause-stacking fix): the one-time "how online games
+  // work" popup now REPLACES the screen underneath it instead of stacking on top of it - two
+  // full-screen pages at once is exactly the bug that fix removes. So a first-ever host sees the
+  // popup first and the room screen the moment they tap "Got it", which hands it straight back.
+  // Dismiss it here the way a real host would; everything this part actually tests (the lobby's
+  // per-seat Rename affordance) is unchanged.
+  await page.waitForTimeout(250);
+  await page.evaluate(() => {
+    const ov = document.getElementById('onlineRulesOverlay');
+    if (ov && !ov.classList.contains('hidden')) document.getElementById('btnOnlineRulesOk').click();
+  });
   await page.waitForSelector('#roomOverlay:not(.hidden)');
   await page.waitForTimeout(150);
   await page.screenshot({ path: '/tmp/v024_online_lobby_320.png' });

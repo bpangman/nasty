@@ -164,7 +164,7 @@ async function partA_smallDialogNotFullScreen(browser) {
 }
 
 async function partB_bigDialogFitsWithRealSafeArea(browser) {
-  console.log('\n=== Part B: the historically-overflowing 6-button online leave sheet, real safe-area insets ===');
+  console.log('\n=== Part B: the historically-overflowing online pause/leave sheet (headed PAUSED since 2026-07-25), real safe-area insets ===');
   for (const m of MATRIX) {
     await fitCheck(browser, m.w, m.h, m.top, m.bottom,
       () => window.openLeaveConfirm(), 'leaveConfirmOverlay',
@@ -211,7 +211,15 @@ async function partC_pathologicalTinyViewport(browser) {
     return { top: r.top, bottom: r.bottom, innerH: window.innerHeight };
   });
   ok(scrolled.bottom <= scrolled.innerH + 0.5 && scrolled.top >= -0.5, `scrolling the overlay all the way DOES bring the last button fully into view (top=${scrolled.top.toFixed(1)}, bottom=${scrolled.bottom.toFixed(1)}, innerH=${scrolled.innerH}) - nothing is unreachable`);
-  ok(r.btnCount >= 5, `every button is still present in the DOM, reachable by scrolling (found ${r.btnCount})`);
+  // 2026-07-25 (Blake's account-panel batch) - UPDATED from >=5 to >=4, deliberately, not
+  // weakened. The 5th button in this sheet was "Fix my connection", which Blake asked to be moved
+  // OUT of the leave/pause sheet and into the new account panel ("Reset connection ... currently
+  // buried in the Pause/leave sheet, where it does not belong"). The sheet's remaining four
+  // online buttons (Return to game / Save & leave / Leave without saving / Have a computer take
+  // over my seat) are all still asserted present and reachable by scrolling, which is what this
+  // check has always actually been about. The moved row has its own coverage in
+  // test_ui_account_panel_2026_07_25.js (it must exist in the account panel, online-only).
+  ok(r.btnCount >= 4, `every button is still present in the DOM, reachable by scrolling (found ${r.btnCount})`);
   ok(errors.length === 0, 'zero page errors even in a pathological viewport');
   await ctx.close();
 }
@@ -360,7 +368,10 @@ const MAX_BG_COLOR_DIST = 45;
 
 const CONFIRM_OVERLAYS = [
   { id: 'surrenderConfirmOverlay', label: 'CONCEDE?', open: () => window.openSurrenderConfirm() },
-  { id: 'leaveConfirmOverlay', label: 'LEAVE GAME? (6-button online list)', open: () => { window.NET.online = true; window.openLeaveConfirm(); } },
+  // 2026-07-25: this sheet is headed PAUSED now, not LEAVE GAME? (Blake: "replace the leave game
+  // badge with a pause message instead"), and it carries four online buttons instead of six.
+  // Label text only - every assertion below measures the rendered badge, not the wording.
+  { id: 'leaveConfirmOverlay', label: 'PAUSED (pause sheet, online button list)', open: () => { window.NET.online = true; window.openLeaveConfirm(); } },
   { id: 'saveLeaveConfirmOverlay', label: 'SAVE & LEAVE?', open: () => window.openSaveConfirm() },
   { id: 'overwriteWarnOverlay', label: 'REPLACE GAME?', open: () => document.getElementById('overwriteWarnOverlay').classList.remove('hidden') },
   { id: 'slotReplaceOverlay', label: 'REPLACE A SAVE?', open: () => document.getElementById('slotReplaceOverlay').classList.remove('hidden') },
@@ -490,7 +501,9 @@ async function partH_perHeadingBigTarget(browser) {
   console.log('\n=== Part H: PERMANENT - CONCEDE?/LEAVE GAME?/SAVE & LEAVE? each independently fill ~86-88% of the screen width on Blake\'s phone class (390-430px), and each keeps >=5% margin at the narrowest 320px phone ===');
   const CASES = [
     { id: 'surrenderConfirmOverlay', label: 'CONCEDE?', open: () => window.openSurrenderConfirm() },
-    { id: 'leaveConfirmOverlay', label: 'LEAVE GAME?', open: () => { window.NET.online = true; window.openLeaveConfirm(); } },
+    // 2026-07-25: heading is PAUSED now (see the CONFIRM_OVERLAYS note above). The badge was
+    // re-tuned for the shorter word so it still hits this part's own 86-88% target.
+    { id: 'leaveConfirmOverlay', label: 'PAUSED (pause sheet)', open: () => { window.NET.online = true; window.openLeaveConfirm(); } },
     { id: 'saveLeaveConfirmOverlay', label: 'SAVE & LEAVE?', open: () => window.openSaveConfirm() },
   ];
   async function measure(id, open, w, h) {

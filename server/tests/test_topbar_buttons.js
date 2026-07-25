@@ -6,6 +6,21 @@
 //       Speed, Rules, Mute) - the fixed-position Skip button below the board is OUT of scope
 //       (it lives outside #topbar entirely, see index.html's own topbar history).
 //
+// 2026-07-25 UPDATE (Blake's account-panel feedback, v0.33): RULES and MUTE are no longer topbar
+// buttons at all - they are rows in the new account panel, and a circular account button
+// (#btnAccount, showing the first letter of the player's chosen name in their seat colour) took
+// their place. The row is FOUR equal text buttons plus one circle now, so this file's checks were
+// updated rather than deleted:
+//   - the per-button label checks run over the four remaining text buttons; the circle gets its
+//     own checks (round, at/above the 44px tap floor, never blank, deliberately NOT an .iconBtn);
+//   - Part B3's "all six buttons are exactly the same width" became "all four TEXT buttons are
+//     exactly the same width, and the circle is deliberately a different shape and width" - the
+//     v0.31 symmetry contract is unchanged for the things it was ever about;
+//   - the mute-toggle checks moved to the account panel, where the toggle now lives.
+// The zero-horizontal-overflow guarantee is unchanged and still measured on the whole row,
+// circle included. Deeper coverage of the panel itself lives in
+// test_ui_account_panel_2026_07_25.js.
+//
 // Fully offline (file://) - no server needed for most of this; a couple of online-flavored
 // checks stub NET.online directly rather than spinning up a real room, since this suite is about
 // the BUTTON/DIALOG behavior, not server-side surrender/save semantics (already covered by
@@ -45,7 +60,7 @@ async function partA_labels(browser) {
   page.on('pageerror', (e) => console.log('  [pageerror]', String(e)));
   await newGame(page);
 
-  const ids = ['btnMenu', 'btnPause', 'btnSave', 'btnSpeed', 'btnRules2', 'btnMute'];
+  const ids = ['btnMenu', 'btnPause', 'btnSave', 'btnSpeed'];   // 2026-07-25: Rules/Mute left the row
   for (const id of ids) {
     const info = await page.evaluate((elId) => {
       const el = document.getElementById(elId);
@@ -65,13 +80,37 @@ async function partA_labels(browser) {
   ok(!skipInfo.inTopbar, 'Skip button is NOT inside #topbar (explicitly out of scope for item 12)');
   ok(skipInfo.transform !== 'uppercase', 'Skip button is untouched by the topbar all-caps rule');
 
-  // Mute toggle: label swaps between plain "Mute"/"Unmute", no emoji ever, in either state.
-  const muteBefore = await page.evaluate(() => document.getElementById('btnMute').textContent);
-  await page.click('#btnMute');
-  const muteAfter = await page.evaluate(() => document.getElementById('btnMute').textContent);
-  await page.click('#btnMute');   // toggle back, don't leave the game muted for later parts
-  ok(!EMOJI.test(muteBefore) && !EMOJI.test(muteAfter), `mute toggle text never uses emoji ("${muteBefore}" <-> "${muteAfter}")`);
-  ok(muteBefore !== muteAfter, 'mute toggle text actually changes on click');
+  // 2026-07-25: the sound toggle moved into the account panel. Same check, new home: the label
+  // says which way round it currently is, it changes on tap, and it never uses an emoji glyph.
+  await page.click('#btnAccount');
+  await page.waitForTimeout(150);
+  const muteBefore = await page.evaluate(() => document.getElementById('btnAcctSound').textContent);
+  await page.click('#btnAcctSound');
+  const muteAfter = await page.evaluate(() => document.getElementById('btnAcctSound').textContent);
+  await page.click('#btnAcctSound');   // toggle back, don't leave the game muted for later parts
+  await page.click('#btnAcctClose');
+  await page.waitForTimeout(150);
+  ok(!EMOJI.test(muteBefore) && !EMOJI.test(muteAfter), `sound toggle text never uses emoji ("${muteBefore}" <-> "${muteAfter}")`);
+  ok(muteBefore !== muteAfter, 'sound toggle text actually changes on tap');
+  ok(/on|off/i.test(muteBefore), `the sound row says which way round it is (got "${muteBefore}")`);
+
+  // The account circle itself: in the row, round, never blank, and NOT one of the equal-width
+  // text tabs (see the #topbar .acctBtn CSS comment for why that distinction is deliberate).
+  const circle = await page.evaluate(() => {
+    const b = document.getElementById('btnAccount');
+    const cs = getComputedStyle(b);
+    const r = b.getBoundingClientRect();
+    return { inTopbar: !!b.closest('#topbar'), isIconBtn: b.classList.contains('iconBtn'),
+      text: (b.textContent || '').trim(), radius: cs.borderRadius, w: r.width, h: r.height,
+      last: document.querySelector('#topbar > button:last-of-type').id };
+  });
+  ok(circle.inTopbar, 'the account circle lives inside #topbar');
+  ok(!circle.isIconBtn, 'the account circle is deliberately NOT an .iconBtn (it never joins the equal-width share)');
+  ok(circle.text.length >= 1, `the account circle is never blank (shows "${circle.text}")`);
+  ok(!EMOJI.test(circle.text), 'the account circle shows a letter, not an emoji');
+  ok(/50%|9999px|22px/.test(circle.radius), `the account circle is round (border-radius ${circle.radius})`);
+  ok(circle.w >= 44 && circle.h >= 44, `the account circle is a real tap target (${circle.w}x${circle.h})`);
+  ok(circle.last === 'btnAccount', 'the account circle is the last control in the row');
 
   // Visual: real rendered glyphs are uppercase on screen even though textContent is mixed case.
   const rendered = await page.evaluate(() => {
@@ -138,11 +177,11 @@ async function partB2_zeroHorizontalOverflowMatrix(browser) {
     // script-local `let` bindings, not window properties - bare-identifier assignment inside
     // evaluate() reaches the real top-level binding (see HANDOFF.md's window.SPEED note for why
     // `window.USER_SPEED=` would silently no-op instead).
+    // 2026-07-25: "Unmute" is no longer a label in this row (the sound toggle moved to the
+    // account panel), so the worst case is now Turbo, the longest speed word, on its own.
     await page.evaluate(() => {
       USER_SPEED = 2.6;
       updateSpeedButtonLabel();
-      muted = true;
-      document.getElementById('btnMute').textContent = 'Unmute';
     });
     await page.waitForTimeout(100);
     const info = await page.evaluate(() => {
@@ -151,17 +190,33 @@ async function partB2_zeroHorizontalOverflowMatrix(browser) {
         const r = b.getBoundingClientRect();
         return { id: b.id, text: b.textContent, h: r.height, left: r.left, right: r.right };
       });
-      return { clientWidth: tb.clientWidth, scrollWidth: tb.scrollWidth, btns };
+      // 2026-07-25: the circle is measured too - it is part of the row's width even though it is
+      // not one of the equal-width text tabs.
+      const c = document.getElementById('btnAccount').getBoundingClientRect();
+      return { clientWidth: tb.clientWidth, scrollWidth: tb.scrollWidth, btns,
+        circle: { h: c.height, left: c.left, right: c.right } };
     });
     ok(info.scrollWidth === info.clientWidth,
       `${m.w}x${m.h} (safe-area top=${m.top}/bottom=${m.bottom}): scrollWidth (${info.scrollWidth}) === clientWidth (${info.clientWidth}) - ZERO horizontal overflow, worst-case labels ${JSON.stringify(info.btns.map((b) => b.text))}`);
     ok(info.btns.every((b) => b.h >= 44), `${m.w}x${m.h}: every button stays at/above the 44px tap-target floor (heights: ${JSON.stringify(info.btns.map((b) => Math.round(b.h)))})`);
     ok(info.btns.every((b) => b.left >= -0.5 && b.right <= m.w + 0.5), `${m.w}x${m.h}: every button fully within the viewport, none clipped off-edge`);
+    ok(info.circle.left >= -0.5 && info.circle.right <= m.w + 0.5, `${m.w}x${m.h}: the account circle is fully within the viewport too (left=${info.circle.left.toFixed(1)}, right=${info.circle.right.toFixed(1)})`);
+    ok(info.circle.h >= 44, `${m.w}x${m.h}: the account circle clears the 44px tap-target floor (${info.circle.h.toFixed(1)}px)`);
     ok(errors.length === 0, `${m.w}x${m.h}: zero page errors`);
     await ctx.close();
   }
 }
 
+// 2026-07-25 UPDATE: this part used to assert all SIX buttons shared one width. RULES and MUTE
+// are gone from the row (Blake's account-panel ask) and the circle that replaced them is
+// deliberately a different shape and a different width - a 44px circle that joined the
+// equal-width share would either stop being a circle or drag the four text buttons narrower
+// again, which is the opposite of what Blake asked for ("it makes the row of buttons spacier up
+// top"). So the symmetry contract is asserted where it still means something - the four TEXT
+// buttons must be exactly equal to each other - plus an explicit check that the circle is NOT
+// equal to them (so nobody "fixes" it back into the row later), plus the unchanged zero-overflow
+// and 44px-floor checks over the whole row.
+//
 // 2026-07-24 (Blake's follow-up: "make the buttons at the top for quit, pause, etc.
 // symmetrical") - PERMANENT regression check for the fix: root cause was Pause/Save alone
 // getting flex:1 0 auto (grow to fill spare room) while the other four buttons sat at
@@ -173,7 +228,7 @@ async function partB2_zeroHorizontalOverflowMatrix(browser) {
 // ("Turbo") speed-button labels - the case most likely to silently break equal sizing again if
 // a future change reintroduces per-button width overrides.
 async function partB3_equalWidthMatrix(browser) {
-  console.log('\n=== Part B3: all six topbar buttons share ONE equal width (symmetry), full matrix ===');
+  console.log('\n=== Part B3: the four topbar TEXT buttons share ONE equal width (symmetry), the circle is deliberately its own shape, full matrix ===');
   const MATRIX = [
     { w: 320, h: 568, top: 0, bottom: 0 },
     { w: 375, h: 667, top: 0, bottom: 0 },
@@ -198,11 +253,15 @@ async function partB3_equalWidthMatrix(browser) {
           const r = b.getBoundingClientRect();
           return { id: b.id, text: b.textContent, w: r.width, h: r.height, scrollW: b.scrollWidth, clientW: b.clientWidth };
         });
-        return { clientWidth: tb.clientWidth, scrollWidth: tb.scrollWidth, btns };
+        const c = document.getElementById('btnAccount').getBoundingClientRect();
+        return { clientWidth: tb.clientWidth, scrollWidth: tb.scrollWidth, btns, circleW: c.width, circleH: c.height };
       });
       const widths = info.btns.map((b) => b.w);
       const uniform = widths.every((w) => Math.abs(w - widths[0]) < 1);
-      ok(uniform, `${m.w}x${m.h} speed="${info.btns.find((b) => b.id === 'btnSpeed').text}": all six buttons within 1px of the same width - ${JSON.stringify(widths.map((w) => Math.round(w * 100) / 100))}`);
+      ok(info.btns.length === 4, `${m.w}x${m.h}: the row has exactly four text buttons (${JSON.stringify(info.btns.map((b) => b.id))})`);
+      ok(uniform, `${m.w}x${m.h} speed="${info.btns.find((b) => b.id === 'btnSpeed').text}": all four text buttons within 1px of the same width - ${JSON.stringify(widths.map((w) => Math.round(w * 100) / 100))}`);
+      ok(Math.abs(info.circleW - info.circleH) < 1, `${m.w}x${m.h}: the account circle is square (${info.circleW.toFixed(1)}x${info.circleH.toFixed(1)}) - a circle, not a tab`);
+      ok(Math.abs(info.circleW - widths[0]) >= 1, `${m.w}x${m.h}: the circle is deliberately NOT the text buttons' width (circle ${info.circleW.toFixed(1)} vs text ${widths[0].toFixed(1)})`);
       ok(info.btns.every((b) => b.scrollW <= b.clientW), `${m.w}x${m.h}: no button's own label overflows its box (scrollWidth<=clientWidth per button) - ${JSON.stringify(info.btns.map((b) => `${b.id}:${b.scrollW}/${b.clientW}`))}`);
       ok(info.scrollWidth === info.clientWidth, `${m.w}x${m.h}: topbar itself has zero horizontal overflow (scrollWidth ${info.scrollWidth} === clientWidth ${info.clientWidth})`);
       ok(info.btns.every((b) => b.h >= 44), `${m.w}x${m.h}: every button still at/above the 44px tap-target floor`);

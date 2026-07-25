@@ -675,8 +675,39 @@ button{font:inherit;cursor:pointer}
    Verified with Playwright: at every width in the test matrix (320/375/390/393/430) and both the
    narrowest ("Normal") and widest ("Turbo") speed labels plus "Unmute" (the longest mute-toggle
    word), every button's own scrollWidth === clientWidth (nothing clipped) and all six buttons'
-   rendered widths match each other to within a fraction of a pixel (flex rounding only). */
-#topbar .iconBtn{text-transform:uppercase;padding:6px 4px;font-size:clamp(10px,3vw,13px)}
+   rendered widths match each other to within a fraction of a pixel (flex rounding only).
+   2026-07-25 (Blake's account-panel feedback - see the #topbar .acctBtn rule right below):
+   RULES and MUTE left this row for good, so the four text buttons that remain are sharing the
+   width that used to be split six ways. That is the whole point of the change ("it makes the
+   row of buttons spacier up top especially on smaller phones"), so the squeeze the six-button
+   row needed is handed straight back: side padding 4px -> 7px and the shared clamp
+   10/3vw/13 -> 11/3.5vw/14.5. Re-measured at every width in the matrix with the worst-case
+   labels (NORMAL is still the widest single word) - every label stays one unclipped word, all
+   four stay exactly equal to each other, and the row still has ZERO horizontal overflow with
+   the circle in it. Numbers in server/tests/test_ui_account_panel_2026_07_25.js. */
+#topbar .iconBtn{text-transform:uppercase;padding:6px 7px;font-size:clamp(11px,3.5vw,14.5px)}
+/* 2026-07-25 (Blake: "replace the 'rules' and 'mute' buttons with an account (circle icon) that
+   is the first letter of their chosen name. When clicked, this opens a mini window that offers
+   the rules and mute buttons as well as other settings and things that belong on this kind of
+   panel"). The circle is deliberately NOT an .iconBtn:
+   - .iconBtn means "one of the equal-width text tabs" (flex:1 1 0, see the rule above, the
+     v0.31 symmetry contract). A circle that joined that share would either stop being a circle
+     or drag the four text buttons narrower again - the exact opposite of what Blake asked for.
+   - So it is flex:0 0 auto at a fixed 44px square, which is the app's own tap-target floor
+     (v0.10), and it sits at the end of the row where a phone user's thumb already expects an
+     avatar. #topbar .iconBtn selectors elsewhere (CSS and tests alike) therefore keep meaning
+     exactly what they always meant: the text buttons, all equal, nothing else.
+   Colour comes from the player's own seat (--acctBg/--acctInk, written by updateAccountButton(),
+   § ACCOUNT) so the circle reads as THEM - the same colour as their tees and their name plaque.
+   The fallback values here are what a pre-game/unknown-seat state paints, so it can never
+   render as an invisible or half-styled control. */
+#topbar .acctBtn{flex:0 0 auto;width:44px;height:44px;min-height:44px;padding:0;
+  border-radius:50%;display:flex;align-items:center;justify-content:center;
+  background:var(--acctBg,rgba(0,0,0,.28));color:var(--acctInk,var(--cream));
+  border:2px solid rgba(255,255,255,.55);box-shadow:0 2px 6px rgba(0,0,0,.35);
+  font-weight:900;font-size:18px;line-height:1;letter-spacing:0;text-transform:uppercase;
+  font-family:inherit;cursor:pointer;overflow:hidden}
+#topbar .acctBtn>span{display:block;pointer-events:none}
 /* 2026-07-25 (Blake's post-game review request, item 4): once the game is over, the repurposed
    Save->Results button (see updateTopbarForGameOver(), § TURNS) gets a gold highlight so it
    reads as the obviously-important "look at the results again" button, not just another plain
@@ -1339,10 +1370,19 @@ button{font:inherit;cursor:pointer}
   padding:clamp(10.02px,3.01vw,15.03px) clamp(13.36px,4.68vw,23.38px) clamp(8.35px,2.51vw,11.69px);
   border-width:clamp(3.34px,1.34vw,5.01px)}
 #surrenderConfirmOverlay .confirmCard .sign b{font-size:clamp(31.73px,10.35vw,56.78px)}
+/* 2026-07-25: this badge now reads PAUSED, not LEAVE GAME? (Blake: "replace the leave game
+   badge with a pause message instead" - see the #leaveConfirmOverlay markup comment). Six
+   characters instead of eleven, so the whole badge is re-tuned by the same method every pass on
+   these badges has used (Playwright, real rendered widths): every number below is the previous
+   LEAVE GAME? value multiplied by 1.654, which is exactly what it takes for the shorter word to
+   hit the SAME target Blake set for the other badges - about 86-88% of the screen width on his
+   own phone class with a real end-margin - instead of sitting at the 52% a shorter word would
+   otherwise render at. Locked in by test_overlay_sizing.js Part H, which measures the rendered
+   badge rather than trusting these numbers. */
 #leaveConfirmOverlay .confirmCard .sign{
-  padding:clamp(7.92px,2.38vw,11.88px) clamp(10.56px,3.7vw,18.48px) clamp(6.6px,1.98vw,9.24px);
-  border-width:clamp(2.64px,1.06vw,3.96px)}
-#leaveConfirmOverlay .confirmCard .sign b{font-size:clamp(25.08px,8.18vw,44.88px)}
+  padding:clamp(13.1px,3.94vw,19.65px) clamp(17.47px,6.12vw,30.57px) clamp(10.92px,3.27vw,15.28px);
+  border-width:clamp(4.37px,1.75vw,6.55px)}
+#leaveConfirmOverlay .confirmCard .sign b{font-size:clamp(41.48px,13.53vw,74.23px)}
 @media (max-height:660px){
   .confirmCard .sign{padding:clamp(5.52px,1.79vw,8.28px) clamp(8.28px,2.9vw,15.18px) clamp(4.14px,1.52vw,6.9px)}
   .confirmCard .sign b{font-size:clamp(20.7px,6.76vw,30.36px)}
@@ -1352,8 +1392,11 @@ button{font:inherit;cursor:pointer}
     font-size:clamp(18.3px,5.98vw,26.84px)}
   #surrenderConfirmOverlay .confirmCard .sign{padding:clamp(7.6px,2.47vw,11.4px) clamp(11.4px,3.99vw,20.9px) clamp(5.7px,2.09vw,9.5px)}
   #surrenderConfirmOverlay .confirmCard .sign b{font-size:clamp(28.5px,9.31vw,41.8px)}
-  #leaveConfirmOverlay .confirmCard .sign{padding:clamp(6.08px,1.98vw,9.12px) clamp(9.12px,3.19vw,16.72px) clamp(4.56px,1.67vw,7.6px)}
-  #leaveConfirmOverlay .confirmCard .sign b{font-size:clamp(22.8px,7.45vw,33.44px)}
+  /* 2026-07-25: same PAUSED re-tune as the main rule above, on the short-screen tier's own
+     numbers (x1.79 here - the short tier starts from a smaller base, so it needs a slightly
+     bigger multiplier to land on the same share of a 320px screen). */
+  #leaveConfirmOverlay .confirmCard .sign{padding:clamp(10.88px,3.54vw,16.32px) clamp(16.32px,5.71vw,29.93px) clamp(8.16px,2.99vw,13.6px)}
+  #leaveConfirmOverlay .confirmCard .sign b{font-size:clamp(40.81px,13.33vw,59.86px)}
   .confirmCard p{font-size:14px;line-height:1.4;margin:10px 0}
   .confirmCard .bigBtns{gap:8px;margin-top:12px}
   .confirmCard .bigBtns .btn{padding:10px 16px;font-size:14.5px;min-height:44px}
@@ -1407,6 +1450,62 @@ button{font:inherit;cursor:pointer}
 .modalCard h4{margin:16px 0 4px;color:var(--gold);font-size:15px}
 .modalCard p,.modalCard li{font-size:14.5px;line-height:1.55;color:#dcefe1}
 .modalCard ul{padding-left:20px;margin:6px 0}
+/* ---------- 2026-07-25: the account panel (Blake's account-circle feedback) ----------
+   The "mini window" behind the top bar's circle - see #accountOverlay's markup and
+   openAccountPanel(), § ACCOUNT. Deliberately a .modalCard (not a .confirmCard): a confirmCard
+   is the app's language for "answer this one question", and this is a settings list, the same
+   shape the rules panel and leaderboard already use. Everything is a full-width row in one
+   column so it reads top to bottom on the narrowest phone and never has to reflow, and every
+   row clears the 44px tap-target floor.
+   The panel MUST fit 320px wide with no clipping: .modalCard already caps at 82vh and scrolls,
+   the rows are min-width:0 with wrapping labels, and the overlay itself scrolls as the final
+   backstop (see .overlay). Nothing here is position:absolute, so nothing can overhang. */
+.acctHead{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.acctAvatar{flex:0 0 auto;width:46px;height:46px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--acctBg,rgba(0,0,0,.28));color:var(--acctInk,var(--cream));
+  border:2px solid rgba(255,255,255,.55);font-weight:900;font-size:20px;text-transform:uppercase}
+.acctWho{min-width:0}
+.acctWho b{display:block;font-size:17px;color:var(--cream);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acctWho small{display:block;font-size:12.5px;color:#a9d2b5;margin-top:2px}
+.acctRows{display:grid;grid-template-columns:1fr;gap:8px}
+/* Rows are .btn ghost like every other secondary action in the app, but left-aligned with a
+   normal-weight label because a settings list is a list, not a row of shouty buttons. */
+.acctRow{width:100%;text-align:left;min-height:44px;padding:11px 14px;font-size:15px;
+  font-weight:700;letter-spacing:.01em;border-radius:12px;line-height:1.3}
+.acctRow small{display:block;font-weight:400;font-size:12.5px;color:#a9d2b5;margin-top:2px;white-space:normal}
+/* The dormant account block. Visible on purpose (Blake asked for these items, and keeping them
+   in place means the panel does not jump around the day accounts actually land) but genuinely
+   inert - see openAccountPanel()'s comment for why nothing here may call the server yet. */
+.acctSoon{margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.14);
+  display:grid;grid-template-columns:1fr;gap:8px}
+.acctSoon .acctRow:disabled{opacity:.45;cursor:default}
+.acctNote{font-size:12.5px;line-height:1.45;color:#a9d2b5;margin:2px 2px 0}
+/* The inline "change your name" editor - it opens INSIDE this panel rather than as a second
+   full-screen page, which is the whole point of the 2026-07-25 overlay-stacking fix (see
+   § OVERLAY LAYER): two full-screen layers must never be visible at once, so a settings panel
+   never opens another one. */
+.acctNameEdit{display:grid;grid-template-columns:1fr;gap:8px;margin-top:8px}
+.acctNameEdit input{width:100%;box-sizing:border-box;min-height:44px;font-size:16px;
+  padding:10px 12px;border-radius:12px;background:rgba(0,0,0,.3);color:var(--cream);
+  border:1px solid rgba(255,255,255,.25)}
+.acctNameEdit .acctNameBtns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.acctNameEdit .btn{min-height:44px;padding:11px 10px;font-size:15px}
+.acctWarn{font-size:12.5px;color:#ff9a9a;min-height:16px;margin:0 2px}
+/* Short screens: give the panel back a little of its own chrome so it needs less scrolling. The
+   rows themselves are NOT shrunk - they sit on the app's 44px tap-target floor and stay there.
+   At 375x667 this is the difference between a card that scrolls and one that does not; at
+   320x568 seven 44px rows plus a header simply cannot fit 568px of phone, so it scrolls there,
+   with item R's "more below - swipe up" hint painted on it (see .overlay.canScroll, § STYLE) -
+   the same answer the rules panel and the leaderboard already give at that size. */
+@media (max-height:700px){
+  #accountOverlay .modalCard{padding:14px}
+  .acctHead{margin-bottom:10px}
+  .acctRows,.acctSoon{gap:6px}
+  .acctSoon{margin-top:10px;padding-top:9px}
+  .acctNote{font-size:12px}
+  #accountOverlay .bigBtns{margin-top:12px}
+}
 .lbScroll{margin:6px 0 10px}
 .lbTable{width:100%;border-collapse:collapse;table-layout:fixed;font-variant-numeric:tabular-nums}
 .lbTable th,.lbTable td{box-sizing:border-box;padding:6px 3px;font-size:clamp(10.5px,3.1vw,13.5px);
@@ -1460,6 +1559,10 @@ button{font:inherit;cursor:pointer}
 @media (max-height:480px) and (orientation:landscape){
   #topbar{padding-top:4px;padding-bottom:4px}
   .iconBtn{min-height:36px;padding:5px 7px}
+  /* 2026-07-25: the account circle shrinks with the rest of the row on this one pathological
+     aspect ratio, so it stays the same height as the text buttons beside it instead of
+     standing 8px taller than everything else. Same deliberate 36px tradeoff as the line above. */
+  #topbar .acctBtn{width:36px;height:36px;min-height:36px;font-size:15px}
   #handBar{min-height:0;padding-top:2px;padding-bottom:calc(4px + env(safe-area-inset-bottom));gap:3px}
   #handInfo{font-size:12px;min-height:14px}
   #handRow{gap:4px}
@@ -1601,7 +1704,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.32</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.33</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -1616,8 +1719,16 @@ button{font:inherit;cursor:pointer}
     <button class="iconBtn" id="btnPause">Pause</button>
     <button class="iconBtn" id="btnSave">Save</button>
     <button class="iconBtn" id="btnSpeed">Speed: Normal</button>
-    <button class="iconBtn" id="btnRules2">Rules</button>
-    <button class="iconBtn" id="btnMute">Mute</button>
+    <!-- 2026-07-25 (Blake, after playing v0.32 on his phone): "replace the 'rules' and 'mute'
+         buttons with an account (circle icon) that is the first letter of their chosen name.
+         When clicked, this opens a mini window that offers the rules and mute buttons as well
+         as other settings and things that belong on this kind of panel (including option to
+         delete their account or change their name, stuff like that, but it makes the row of
+         buttons spacier up top especially on smaller phones)." RULES and MUTE are gone from
+         this row entirely - they are rows in #accountOverlay now (see § ACCOUNT). The circle
+         is the only non-.iconBtn in the top bar on purpose; see its CSS comment, § STYLE.
+         The letter and colour are written by updateAccountButton() - never left blank. -->
+    <button class="acctBtn" id="btnAccount" aria-label="Your settings"><span id="acctInitial">?</span></button>
   </div>
   <div id="boardWrap">
     <div id="gameLogo">
@@ -1940,6 +2051,52 @@ button{font:inherit;cursor:pointer}
   </div>
 </div>
 
+<!-- 2026-07-25 (Blake's account-panel feedback, see the #btnAccount markup comment above).
+     The "mini window" behind the top bar's circle. One overlay, one column, everything a
+     player might want that is not a live game action:
+       - How to play      -> the SAME #rulesOverlay the menu's own button opens (one panel, two
+                             doors, never a copy)
+       - Sound            -> the old MUTE button, now showing its current state in words
+       - Change your name -> edits the ONE name this device plays under (see setMyChosenName())
+       - Fix my connection-> MOVED here from the pause sheet (Blake: it does not belong there).
+                             Online-only, exactly as it was in the sheet.
+       - Sign in / Sign out / Delete account -> deliberately VISIBLE but DISABLED, see below.
+     Accounts: the server side exists but is dormant and unconfigured, so these three rows must
+     not pretend. They are real rows in their real final position with a plain-language note, so
+     (a) nobody taps a fake sign-in, and (b) the panel's layout will not shift the day accounts
+     actually land - the rows just stop being disabled. NOTHING in this panel calls any
+     /account/* endpoint, and no code here may be "helpfully" wired up to one later without the
+     accounts work actually being live. -->
+<div id="accountOverlay" class="overlay hidden">
+  <div class="modalCard">
+    <div class="acctHead">
+      <div class="acctAvatar" id="acctAvatar">?</div>
+      <div class="acctWho"><b id="acctWhoName">Player</b><small id="acctWhoSub">Playing on this phone</small></div>
+    </div>
+    <div class="acctRows">
+      <button class="btn ghost acctRow" id="btnAcctRules">How to play</button>
+      <button class="btn ghost acctRow" id="btnAcctSound">Sound: on</button>
+      <button class="btn ghost acctRow" id="btnAcctName">Change your name</button>
+      <button class="btn ghost acctRow hidden" id="btnAcctReset">Fix my connection<small>Reconnects this phone to the online game</small></button>
+    </div>
+    <div class="acctNameEdit hidden" id="acctNameEdit">
+      <input id="acctNameInput" maxlength="10" aria-label="Your name" autocomplete="off" autocapitalize="words">
+      <div class="acctWarn" id="acctNameWarn"></div>
+      <div class="acctNameBtns">
+        <button class="btn primary" id="btnAcctNameSave">Save name</button>
+        <button class="btn ghost" id="btnAcctNameCancel">Cancel</button>
+      </div>
+    </div>
+    <div class="acctSoon">
+      <button class="btn ghost acctRow" id="btnAcctSignIn" disabled>Sign in</button>
+      <button class="btn ghost acctRow" id="btnAcctSignOut" disabled>Sign out</button>
+      <button class="btn ghost acctRow" id="btnAcctDelete" disabled>Delete account</button>
+      <div class="acctNote" id="acctSoonNote">Accounts are coming soon. Your name and your games are saved on this phone in the meantime.</div>
+    </div>
+    <div class="bigBtns"><button class="btn primary" id="btnAcctClose">Close</button></div>
+  </div>
+</div>
+
 <div id="pauseOverlay" class="overlay hidden">
   <div class="confirmCard">
     <div class="sign"><b>PAUSED</b><small id="pauseSub">tap to resume</small></div>
@@ -1962,16 +2119,34 @@ button{font:inherit;cursor:pointer}
      tapping outside the sheet) just resumes play. Functionally IDENTICAL to before (same id,
      same handler, same behavior - dismiss the sheet, release a sheet-started pause, game
      continues exactly as it was, zero stat consequence) - only the label/prominence changed. -->
+<!-- 2026-07-25 (Blake, after playing v0.32 on his phone): "when the paused button is pressed you
+     can see the 'leave game' badge is over the top of the old 'paused' badge. Please replace the
+     leave game badge with a pause message instead and definitely don't stack those badges like
+     that." Follow-up: "It's actually the whole old page behind it (I can see the buttons too)."
+     Reproduced exactly: tapping PAUSE ran openPauseSheet(), which set G.paused (revealing
+     #pauseOverlay's own full-screen PAUSED page via updatePauseUI()) and THEN opened this second
+     full-screen page on top of it. The .overlay backdrop is 90% opaque, not 100%, so the page
+     underneath - its body text and its own "Leave game" button - ghosted through.
+     TWO changes, and the second is the real fix:
+     1. This page is now headed PAUSED with pause wording. It is what the person who tapped
+        PAUSE sees, so it should say what actually happened. Every button below is unchanged
+        (same ids, same handlers, same v0.31 safety ordering: the two consequence-free choices
+        first, the two that cost a leaderboard loss after them, styled danger).
+     2. Two full-screen .overlay layers can no longer be visible at once ANYWHERE in the app -
+        see § OVERLAY LAYER for the general guard, which is what actually stops the stacking
+        rather than this page's wording.
+     "Fix my connection" (btnResetConnection) MOVED OUT of this sheet to the account panel - it
+     was never a leave-the-game choice and did not belong in a list of ways to leave (Blake's
+     ask). Same online-only gating, same hardResetConnection() call, new home. -->
 <div id="leaveConfirmOverlay" class="overlay hidden">
   <div class="confirmCard">
-    <div class="sign"><b>LEAVE GAME?</b></div>
-    <p>Do you want to keep this game to come back to later, or leave it behind entirely?</p>
+    <div class="sign"><b>PAUSED</b></div>
+    <p id="leaveConfirmText">Your game is holding right here. Jump back in, or step away for now.</p>
     <div class="bigBtns">
       <button class="btn primary" id="btnLeaveCancel">Return to game</button>
       <button class="btn ghost" id="btnLeaveSave">Save &amp; leave</button>
       <button class="btn danger" id="btnLeaveDiscard">Leave without saving</button>
       <button class="btn danger hidden" id="btnLeaveForGood">Have a computer take over my seat</button>
-      <button class="btn ghost hidden" id="btnResetConnection">Fix my connection</button>
     </div>
   </div>
 </div>
@@ -2388,6 +2563,129 @@ function fitConfirmCard(overlay){
   if(!card)return;
   card.style.transform='';
 }
+/* ===================== § OVERLAY LAYER (2026-07-25, Blake's pause-stacking report) =====================
+   Blake, after playing v0.32: "when the paused button is pressed you can see the 'leave game'
+   badge is over the top of the old 'paused' badge. Please replace the leave game badge with a
+   pause message instead and definitely don't stack those badges like that." Then: "It's actually
+   the whole old page behind it (I can see the buttons too)."
+   Reproduced exactly. openPauseSheet() set G.paused - which makes updatePauseUI() reveal the
+   full-screen #pauseOverlay - and THEN opened #leaveConfirmOverlay, a SECOND full-screen
+   .overlay, on top of it. Every .overlay backdrop is rgba(5,15,9,.9): 90% opaque, not 100%, so
+   the page underneath genuinely shows through, buttons and all.
+   Fixing just that one call would have been a patch, not a fix - this app has 20 overlays and
+   several of them legitimately hand off to each other, so the same mistake was one line of new
+   code away from coming back. This section makes "only one full-screen page at a time" a real
+   invariant instead:
+     openOverlay(id)   - show this overlay AND hide every other one first. Every place in the app
+                         that opens an overlay goes through here now.
+     closeOverlay(id)  - hide it, restore a deliberate hand-off underneath if one was declared,
+                         and let the ambient paused page come back if the table is still paused.
+     enforceSingleOverlay() - the backstop. Runs from the SAME rAF-coalesced MutationObserver the
+                         scroll hints already use (see updateScrollHints() below), so even a raw
+                         classList.remove('hidden') written by some future edit is corrected
+                         inside one frame. When it finds more than one visible it keeps the one
+                         that became visible MOST RECENTLY (the thing the player just asked for)
+                         and hides the rest.
+     syncAmbientPause() - the plain "PAUSED / tap to resume" page (#pauseOverlay) is AMBIENT: it
+                         is what everyone ELSE at the table sees while someone has the table
+                         paused. It is never opened by a tap, so it is not part of the
+                         open/close stack - it simply shows itself whenever the table is paused
+                         and no real overlay is up, and gets out of the way the moment one is.
+   TWO DELIBERATE EXEMPTIONS, both documented rather than silently allowed:
+     - #reclaimReqOverlay stays stackable (it is z-index 90 on purpose - a host must be able to
+       answer "someone wants back in" even while looking at something else, and a request that
+       arrives behind an unanswerable layer is worse than a stacked one). It is the ONLY id in
+       STACKABLE_OVERLAYS and the permanent test asserts that.
+     - a hand-off can declare what to put back underneath it when it closes (backTo/backIf) -
+       used by the online rules popup over the join screen, and by the rules panel opened from
+       the account panel. That is a SEQUENCE, never a stack: only one is ever visible.
+   The rAF loop converges by construction: every write below is guarded by an "is it already like
+   that?" check, exactly the v0.31 lesson (DOMTokenList's update steps run unconditionally, which
+   an observer reports as a real change - that is how a previous session hard-locked the page). */
+const STACKABLE_OVERLAYS=['reclaimReqOverlay'];
+function overlayEl(x){ return typeof x==='string'?$(x):x; }
+function isManagedOverlay(ov){
+  return !!ov&&ov.classList&&ov.classList.contains('overlay')&&!STACKABLE_OVERLAYS.includes(ov.id);
+}
+// Every full-screen page currently visible that this invariant governs. #pauseOverlay is
+// included: it is exactly what must NOT sit under the pause sheet.
+function visibleModalOverlays(){
+  return [...document.querySelectorAll('.overlay:not(.hidden)')].filter(isManagedOverlay);
+}
+let OVERLAY_SEQ=0;
+const OVERLAY_SHOWN_AT=new Map();   // id -> tick when it became visible (newest wins a conflict)
+const OVERLAY_BACK=new Map();       // id -> {back, ok} deliberate hand-off, see the comment above
+function hideOverlayEl(ov){
+  if(!ov)return;
+  if(!ov.classList.contains('hidden'))ov.classList.add('hidden');
+  const cc=ov.querySelector('.confirmCard');
+  if(cc&&cc.style.transform)cc.style.transform='';
+  OVERLAY_SHOWN_AT.delete(ov.id);
+}
+function openOverlay(x,opts){
+  const ov=overlayEl(x);
+  if(!ov)return null;
+  const wasUp=visibleModalOverlays();
+  // backToCurrent: "put back whatever I am covering" - used by the one-time online rules popup,
+  // which can be reached from EITHER the join screen or the host's room screen. Excludes the
+  // ambient paused page, which comes back on its own (syncAmbientPause).
+  const current=(opts&&opts.backToCurrent)
+    ? (wasUp.filter(o=>o!==ov&&o.id!=='pauseOverlay').slice(-1)[0]||null)
+    : null;
+  const want=(opts&&opts.backTo)||(current&&current.id)||null;
+  wasUp.forEach(o=>{ if(o!==ov)hideOverlayEl(o); });
+  // A hand-off is only recorded if the page being handed back was ACTUALLY on screen when this
+  // one opened - otherwise closing this could conjure up a page the player never saw.
+  if(want&&wasUp.some(o=>o.id===want))
+    OVERLAY_BACK.set(ov.id,{back:want,ok:(opts&&opts.backIf)||(()=>true)});
+  else OVERLAY_BACK.delete(ov.id);
+  OVERLAY_SHOWN_AT.set(ov.id,++OVERLAY_SEQ);
+  if(ov.classList.contains('hidden'))ov.classList.remove('hidden');
+  return ov;
+}
+function closeOverlay(x){
+  const ov=overlayEl(x);
+  if(!ov)return;
+  hideOverlayEl(ov);
+  const hand=OVERLAY_BACK.get(ov.id);
+  OVERLAY_BACK.delete(ov.id);
+  let restored=false;
+  if(hand){
+    let allowed=false;
+    try{ allowed=!!hand.ok(); }catch(e){ allowed=false; }
+    const backEl=$(hand.back);
+    if(allowed&&backEl&&isManagedOverlay(backEl)){ openOverlay(backEl); restored=true; }
+  }
+  if(!restored)syncAmbientPause();
+}
+function enforceSingleOverlay(){
+  const vis=visibleModalOverlays();
+  if(vis.length<2)return;
+  let keep=vis[0];
+  for(const ov of vis){
+    // An overlay shown by some path that did not go through openOverlay() has no tick yet -
+    // give it one now, in DOM order, so "most recent wins" still has a defined answer.
+    if(!OVERLAY_SHOWN_AT.has(ov.id))OVERLAY_SHOWN_AT.set(ov.id,++OVERLAY_SEQ);
+    if(OVERLAY_SHOWN_AT.get(ov.id)>=OVERLAY_SHOWN_AT.get(keep.id))keep=ov;
+  }
+  vis.forEach(ov=>{ if(ov!==keep)hideOverlayEl(ov); });
+}
+/* The ambient paused page. Deliberately only calls updatePauseUI() when the page has to APPEAR
+   (it is the thing that writes the page's wording, and rewriting identical text every frame
+   would be a mutation the observer reports back to us - an rAF spin). Once it is up, this is a
+   no-op, so the loop settles immediately. */
+function syncAmbientPause(){
+  try{
+    const ov=$('pauseOverlay');
+    if(!ov)return;
+    const othersUp=visibleModalOverlays().some(o=>o!==ov);
+    // PAUSED_BY_SHEET: the player who tapped PAUSE is looking at the pause sheet, which IS
+    // their paused page - they must never also get the ambient one (that was the stacking bug).
+    const wantAmbient=!!(typeof G!=='undefined'&&G&&G.paused&&!G.over&&!PAUSED_BY_SHEET&&!NET.reunionOpen)&&!othersUp;
+    if(wantAmbient){ if(ov.classList.contains('hidden'))updatePauseUI(); }
+    else if(!ov.classList.contains('hidden'))hideOverlayEl(ov);
+  }catch(e){/* pre-boot (G/NET/PAUSED_BY_SHEET not initialized yet) - nothing to sync */}
+}
 /* 2026-07-25 (item R of the UI polish batch) - "this card scrolls" made visible.
    The problem, measured at 320x568: the rules panel, the online rules popup, the host setup
    screen and the online room/lobby are ALL genuinely scrollable there, with no visual sign of
@@ -2451,7 +2749,16 @@ try{
   const queueHints=()=>{
     if(hintPending)return;
     hintPending=true;
-    requestAnimationFrame(()=>{ hintPending=false; updateScrollHints(); });
+    requestAnimationFrame(()=>{
+      hintPending=false;
+      // 2026-07-25 (§ OVERLAY LAYER): the never-two-full-screen-pages backstop rides this same
+      // already-coalesced observer, so ANY code path that reveals an overlay - including one
+      // written years from now that forgets openOverlay() - is corrected within one frame.
+      // Order matters: settle which single page is visible FIRST, then let the ambient paused
+      // page take the field if it is now free, then measure scroll hints on what is actually up.
+      try{ enforceSingleOverlay(); syncAmbientPause(); }catch(e){/* pre-boot, see syncAmbientPause */}
+      updateScrollHints();
+    });
   };
   const ovObs=new MutationObserver(queueHints);
   const watchOverlays=()=>{
@@ -2575,7 +2882,7 @@ function shouldShowSpeedPicker(){
 function gateOnSpeedPicker(cont){
   if(!shouldShowSpeedPicker()){ cont(); return; }
   SPEED_PICK_CONTINUATION=cont;
-  $('speedPickerOverlay').classList.remove('hidden');
+  openOverlay('speedPickerOverlay');
 }
 function pickSpeed(v){
   USER_SPEED=v;
@@ -3722,6 +4029,9 @@ function syncAll(){
   // AFTER resetPostGameReviewState() already ran earlier in the same boot function), so this is
   // always the final, authoritative word on the topbar's state for that boot.
   updateTopbarForGameOver(!!G.over);
+  // 2026-07-25: the account circle's letter/colour follow whoever is playing on this phone, so
+  // they are refreshed from the same always-runs-on-every-boot-and-move place (see § ACCOUNT).
+  updateAccountButton();
   // 2026-07-25 (Blake's post-game review request, item 3): the plaque layer only becomes
   // tappable-looking (cursor:pointer, hover highlight - see § STYLE) once the game is over -
   // kept in lockstep with G.over here, same as the .turn toggle right above.
@@ -3806,16 +4116,103 @@ function fadeAllDiscards(){
    HANDOFF.md for the exact before/after pixel measurements. */
 const CANVAS_PAD_BY_N={4:20,6:40};
 function currentCanvasPad(){ return CANVAS_PAD_BY_N[(G&&G.n)||4]; }
+/* 2026-07-25 (Blake, after playing v0.32): "I don't like how you moved the game board up so that
+   it rest right below the nasty sign when you're playing the game because now there is way too
+   much space down low. There should always be an equal amount of space between the nasty plaque
+   at the top and the board as there is between the board at the bottom and the word bubbles that
+   pop up. Regardless of screen size."
+
+   He is describing a real side effect of v0.31 item B. That fix gave #boardWrap a bottom margin
+   of `bandH + 18` so fitBoard() would scale the board into a container that already ENDS above
+   the message band, which is what made the band-over-board overlap arithmetically impossible.
+   But the board was still centred inside #boardWrap, and #boardWrap's TOP is the top bar - the
+   logo sits over it as an absolutely-positioned overlay and eats about 50px of that space
+   without the centring maths ever knowing. So the leftover space came out lopsided: measured
+   mid-game before this change, 20px above / 89px below at 390x844, 39/108 at 430x932, and at
+   375x667 and 320x568 the board's top actually ran up UNDER the NASTY sign.
+
+   The fix keeps item B's guarantee and changes only where the leftover space goes: the board is
+   now laid out against the two things Blake is actually looking at, and centred between them.
+     TOP EDGE   - the bottom of the in-game logo. Two candidates, see below.
+     BOTTOM EDGE- #toasts' own top. That is the fixed --bandH row the message bubble and Skip
+                  share (their CSS pins them off --handH, nothing to do with the board), so it is
+                  a stable number that does not move when a message arrives. A two-line message
+                  grows UPWARD out of that row by design (item K) into the gap this reserves - it
+                  does not drag the board around, which would break v0.7.1's "the board must
+                  never jump".
+     THE BOARD  - the SVG's own drawn artwork (getBBox()), not #boardScale's 1000x1000 box and
+                  not #boardSvg's element box. The box is a canvas with deliberate slack around
+                  the art for plaques and tee overhang (CANVAS_PAD_BY_N), so centring the BOX
+                  would leave the visible wooden board looking off-centre by exactly that slack.
+                  getBBox() is the real painted board, which is what "the board" means to Blake.
+   Everything is then centred: gapAbove === gapBelow at every viewport, to the pixel.
+
+   Two candidate top edges, resolved deterministically (never a feedback loop):
+     1. the whole logo BLOCK including the "EST. 1993" line (its box is always in layout - item C
+        only ever toggles `visibility`, never `display`);
+     2. just the NASTY sign, when there is not enough height for (1) and the est line has to be
+        hidden anyway - which is exactly what item C already does on short phones.
+   We try (1) first and only fall back to (2) when (1) would force the board smaller, so the est
+   line stays visible whenever it can and the board stays as large as possible when it cannot.
+   fitBoard() decides this now and hands the answer to updateLogoSub2(), instead of
+   updateLogoSub2() measuring the board afterwards - the old order could not work once the board
+   position depends on the logo's height.
+
+   SCALE: `sMax` is the historical formula, unchanged, and it is a CEILING - this can only ever
+   make the board smaller, never bigger, so no existing screen suddenly grows a board that used
+   to fit. On every phone from 390 wide up the vertical span is roomier than the width, so `s`
+   comes out at exactly `sMax` and the board is bit-identical to before, just sitting lower. Only
+   320x568 and 375x667 (where height was already the binding axis) give up a little size to buy
+   the equal gaps Blake asked for - the numbers are in HANDOFF.md's v0.33 section.
+   MIN_GAP is a real floor so "equal" never means "equal and zero", and SCALE_FLOOR keeps a
+   pathological viewport (landscape, a tiny debug window) from shrinking the board to nothing -
+   in that one case the gaps stay equal but can go tight, which is the same tradeoff the
+   landscape media query already makes for the top bar. */
+const BOARD_GAP_MIN=10;      // px of real breathing room above AND below, never less
+const BOARD_SCALE_FLOOR=0.6; // never shrink below this fraction of the historical scale
+let LOGO_SUB2_WANTED=true;   // set by fitBoard(), applied by updateLogoSub2() - see above
+function boardArtBox(){
+  // The drawn board, in board units. Falls back to the full canvas if getBBox is unavailable
+  // (jsdom-style environments) or throws on a detached/hidden SVG.
+  try{
+    const bb=$('boardSvg').getBBox();
+    if(bb&&bb.height>0)return {y:bb.y,h:bb.height};
+  }catch(e){}
+  return {y:0,h:1000};
+}
 function fitBoard(){
-  const w=$('boardWrap').clientWidth,h=$('boardWrap').clientHeight;
+  const wrap=$('boardWrap');
+  const w=wrap.clientWidth,h=wrap.clientHeight;
   const pad=currentCanvasPad();
-  const s=Math.min(w,h)/(1000+pad*2);
+  // --handH feeds #toasts' own position, so measure the hand bar BEFORE reading the band's rect
+  // (this used to run at the tail of this function, where it was one frame stale for us).
+  updateToastOffset();
+  const sMax=Math.min(w,h)/(1000+pad*2);
+  const art=boardArtBox();
+  const wr=wrap.getBoundingClientRect();
+  const band=$('toasts').getBoundingClientRect();
+  const logoEl=$('gameLogo'), signEl=document.querySelector('#gameLogo .sign');
+  const logoBottom=logoEl?logoEl.getBoundingClientRect().bottom:wr.top;
+  const signBottom=signEl?signEl.getBoundingClientRect().bottom:logoBottom;
+  const fit=(anchor)=>(band.top-anchor-2*BOARD_GAP_MIN)/art.h;   // scale that leaves MIN_GAP top and bottom
+  let anchor=logoBottom, s=Math.min(sMax,fit(logoBottom)), showSub=true;
+  if(s<sMax){
+    // Not enough height for the est-1993 line AND an equally-spaced board: hand its 18px to the
+    // board instead, exactly like item C already does on these same short screens.
+    const sSign=Math.min(sMax,fit(signBottom));
+    if(sSign>s){ s=sSign; anchor=signBottom; showSub=false; }
+  }
+  s=Math.max(s,sMax*BOARD_SCALE_FLOOR);
+  LOGO_SUB2_WANTED=showSub;
   const bs=$('boardScale');
   bs.style.transform=`scale(${s})`;
-  bs.style.left=((w-1000*s)/2)+'px'; bs.style.top=((h-1000*s)/2)+'px';
+  bs.style.left=((w-1000*s)/2)+'px';
+  // Centre the ART between the two edges, then back out where the 1000x1000 box has to sit for
+  // its art to land there. (art.y*s is the canvas slack above the drawing.)
+  const artTop=anchor+((band.top-anchor)-art.h*s)/2;
+  bs.style.top=(artTop-wr.top-art.y*s)+'px';
   positionPlaques();
-  updateToastOffset();
-  updateLogoSub2();          // 2026-07-25 item C: hide "EST. 1993" if the board reaches up under it
+  updateLogoSub2();          // 2026-07-25 item C: "EST. 1993" hides when the board needs its room
   positionConnIndicator();   // v0.16: re-center the connection indicator in the (re)measured logo/board gap
 }
 /* 2026-07-25 (item C of the UI polish batch): "EST. 1993" (#gameLogo .sub2) is decoration - a
@@ -3836,7 +4233,14 @@ function fitBoard(){
 function updateLogoSub2(){
   const sub=document.querySelector('#gameLogo .sub2'), board=$('boardScale');
   if(!sub||!board)return;
-  sub.style.visibility='visible';
+  // 2026-07-25 (board-centring): fitBoard() decides this now - it has to, because the board's
+  // own position is measured FROM the logo, so the old "place the board, then look and see if
+  // the line got covered" order is circular. The measurement below stays as a belt-and-braces
+  // second opinion: if for any reason the line still ends up over the drawn board, it hides,
+  // exactly as item C promised. visibility (never display) so the logo block's height - which
+  // fitBoard() measures - can never change underneath it.
+  sub.style.visibility=LOGO_SUB2_WANTED?'visible':'hidden';
+  if(!LOGO_SUB2_WANTED)return;
   const sr=sub.getBoundingClientRect(), br=board.getBoundingClientRect();
   if(sr.bottom>br.top+2)sub.style.visibility='hidden';
 }
@@ -4303,12 +4707,27 @@ function pauseGate(){
 // updatePauseUI() below for why. Defaults open (true) so offline/pre-game states never
 // accidentally lock a legitimate resume.
 let PAUSE_TAP_ALLOWED=true;
+// 2026-07-25 (§ OVERLAY LAYER): every string this function writes goes through here, guarded by
+// an "is it already that?" check. Rewriting identical text is a real DOM mutation, and the
+// overlay MutationObserver watches these nodes - the guard is what keeps the frame loop from
+// feeding itself (same load-bearing lesson as updateScrollHints(), v0.31).
+function setPauseCopy(id,txt){ const el=$(id); if(el&&el.textContent!==txt)el.textContent=txt; }
 function updatePauseUI(){
   const ov=$('pauseOverlay');
-  if(!G||!G.paused){ ov.classList.add('hidden'); { const cc=ov.querySelector('.confirmCard'); if(cc) cc.style.transform=''; } closeReunionOverlay(); return; }
+  if(!G||!G.paused){ hideOverlayEl(ov); closeReunionOverlay(); return; }
   // v0.9: the reunion lobby (see § REUNION) is its OWN overlay with its own "we're paused,
   // waiting on people" story - don't stack the plain pause overlay on top of it too.
-  if(NET.reunionOpen){ ov.classList.add('hidden'); { const cc=ov.querySelector('.confirmCard'); if(cc) cc.style.transform=''; } return; }
+  if(NET.reunionOpen){ hideOverlayEl(ov); return; }
+  /* 2026-07-25 (Blake: "it's actually the whole old page behind it") - THE stacking fix, at the
+     one place that can reveal this page without anybody tapping anything. Two gates:
+     1. PAUSED_BY_SHEET - the player who tapped PAUSE is already looking at the pause sheet
+        (#leaveConfirmOverlay, headed PAUSED). That sheet IS their paused page; this ambient one
+        must never appear underneath it. That single condition is the whole original bug.
+     2. any other full-screen page is up - a pause that starts while somebody is reading the
+        rules or the leaderboard must wait its turn rather than shove a second page underneath.
+        syncAmbientPause() (§ OVERLAY LAYER) re-checks every frame an overlay changes, so this
+        page appears by itself the moment the field is clear again. */
+  if(PAUSED_BY_SHEET||visibleModalOverlays().some(o=>o!==ov)){ hideOverlayEl(ov); return; }
   if(NET.online){
     // 2026-07-23 (item 2): NET.reunionActive is now a real, server-authoritative flag (see
     // 'reunionStatus' in handleNetMessage) - no more guessing from presence alone. This branch
@@ -4319,8 +4738,8 @@ function updatePauseUI(){
     // gate, so it points back to that screen instead of resuming.
     if(NET.reunionActive){
       PAUSE_TAP_ALLOWED=false;
-      $('pauseSub').textContent='tap to check in';
-      $('pauseText').textContent='Getting the table back together - tap below to see who\'s here and ready up.';
+      setPauseCopy('pauseSub','tap to check in');
+      setPauseCopy('pauseText','Getting the table back together - tap below to see who\'s here and ready up.');
     }else{
       // An ordinary walk-away pause (someone tapped Pause/Save, or a sheet-initiated pause -
       // unchanged since v0.10.2): any player who's actually still at the table can tap Resume.
@@ -4334,19 +4753,23 @@ function updatePauseUI(){
       const allHere=humans.length===0||humans.every(h=>h.seat===NET.mySeat||NET.presence[h.playerId]);
       PAUSE_TAP_ALLOWED=allHere;
       if(allHere){
-        $('pauseSub').textContent='tap Resume to keep playing';
-        $('pauseText').textContent='Someone hit pause - everyone\'s game is holding here. Any player can tap below to resume.';
+        setPauseCopy('pauseSub','tap Resume to keep playing');
+        setPauseCopy('pauseText','Someone hit pause - everyone\'s game is holding here. Any player can tap below to resume.');
       }else{
-        $('pauseSub').textContent='waiting for everyone to be back';
-        $('pauseText').textContent='Someone\'s getting back to the table - hang tight, play resumes once everyone\'s here.';
+        setPauseCopy('pauseSub','waiting for everyone to be back');
+        setPauseCopy('pauseText','Someone\'s getting back to the table - hang tight, play resumes once everyone\'s here.');
       }
     }
   }else{
     PAUSE_TAP_ALLOWED=true;
-    $('pauseSub').textContent='tap to resume';
-    $('pauseText').textContent='Everyone can walk away - your game is saved. Tap anywhere to keep playing.';
+    setPauseCopy('pauseSub','tap to resume');
+    setPauseCopy('pauseText','Everyone can walk away - your game is saved. Tap anywhere to keep playing.');
   }
-  ov.classList.remove('hidden');
+  // Ambient page (§ OVERLAY LAYER): shown directly rather than through openOverlay(), because it
+  // must never push a real overlay off the screen - the gates above already guarantee it only
+  // gets here when the field is clear.
+  OVERLAY_SHOWN_AT.set(ov.id,++OVERLAY_SEQ);
+  if(ov.classList.contains('hidden'))ov.classList.remove('hidden');
   fitConfirmCard(ov);
 }
 // setPaused() is the ONLY thing that actually flips G.paused and wakes the gate - both the
@@ -4936,8 +5359,10 @@ function passDeviceGate(seat){
   return new Promise(res=>{
     renderHandFor(-1);
     $('passName').textContent=G.seats[seat].name;
-    const ov=$('passOverlay'); ov.classList.remove('hidden');
-    const h=()=>{ov.classList.add('hidden');ov.removeEventListener('pointerdown',h);res();};
+    // 2026-07-25 (§ OVERLAY LAYER): opened/closed through the shared helpers so the pass-the-
+    // phone page can never end up sharing the screen with another full-screen page either.
+    const ov=openOverlay('passOverlay');
+    const h=()=>{closeOverlay(ov);ov.removeEventListener('pointerdown',h);res();};
     ov.addEventListener('pointerdown',h);
   });
 }
@@ -6071,8 +6496,9 @@ function triggerRecalibration(){
   }
 }
 /* "Reset connection" - reachable by tapping the connIndicator chip whenever it's showing, or
-   any time during an online game via the leave menu (§ UI/MENU's btnResetConnection) per
-   Blake's ask. Hard-tears-down the current socket (if any) and lets the EXISTING
+   any time during an online game from the account panel (2026-07-25: was the pause/leave sheet's
+   own btnResetConnection until Blake pointed out it does not belong there - see § ACCOUNT's
+   btnAcctReset) per Blake's ask. Hard-tears-down the current socket (if any) and lets the EXISTING
    scheduleReconnect()->connectWs()->rejoin->'sync' chain rebuild it from scratch - the same
    path a genuinely dropped connection already uses, just triggered manually instead of by an
    onclose event. Always restarts the failure-window clock, so a player who taps this after
@@ -6642,7 +7068,7 @@ function openReunionOverlay(){
   $('pauseOverlay').classList.add('hidden');
   { const cc=$('pauseOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   renderReunionOverlay();
-  $('reunionOverlay').classList.remove('hidden');
+  openOverlay('reunionOverlay');
 }
 function closeReunionOverlay(){
   NET.reunionOpen=false;
@@ -6662,6 +7088,10 @@ let PENDING_RECLAIM_REQ=null;
 function handleReclaimRequest(m){
   PENDING_RECLAIM_REQ=m.reqId;
   $('reclaimReqText').textContent=`${m.name} is trying to get back into the game from a new device, but they still look connected here. Let them take over that seat?`;
+  // 2026-07-25 (§ OVERLAY LAYER): deliberately NOT openOverlay() - this is the app's single
+  // documented stacking exemption (STACKABLE_OVERLAYS). A host must be able to answer "someone
+  // wants back in" even while looking at something else; a request that arrives behind an
+  // unanswerable layer is worse than one that stacks. Its own z-index:90 puts it on top.
   $('reclaimReqOverlay').classList.remove('hidden');
 }
 function answerReclaimRequest(approve){
@@ -6821,7 +7251,7 @@ function handleNetMessage(m){
       NET.online=true; NET.isHost=true; NET.wantConnection=true;
       NET.code=m.code; NET.playerId=m.playerId; NET.token=m.token; NET.lobby=m.lobby;
       saveNetSession(); saveLastRoom(m.code,false); updateConnIndicator(); renderRoomScreen();
-      $('onlineOverlay').classList.add('hidden'); $('roomOverlay').classList.remove('hidden');
+      $('onlineOverlay').classList.add('hidden'); openOverlay('roomOverlay');
       maybeShowOnlineRules();   // v0.25 item 1: rules BEFORE seat/invite work - see § LOBBY READY
       sendPushToken();          // v0.25 item 3: register the push token as soon as an online identity exists
       return;
@@ -6881,7 +7311,7 @@ function handleNetMessage(m){
       if(m.isHost!=null){
         NET.online=true; NET.wantConnection=true; NET.isHost=m.isHost;
         updateConnIndicator();
-        if(NET.isHost){ $('onlineOverlay').classList.add('hidden'); $('joinOverlay').classList.add('hidden'); renderRoomScreen(); $('roomOverlay').classList.remove('hidden'); }
+        if(NET.isHost){ $('onlineOverlay').classList.add('hidden'); $('joinOverlay').classList.add('hidden'); renderRoomScreen(); openOverlay('roomOverlay'); }
         else advanceJoinToSeatStep();
       } else if(NET.isHost)renderRoomScreen(); else renderJoinSeatStep();
       return;
@@ -7095,7 +7525,7 @@ function openHostSpeedOverlay(){
     b.onclick=()=>{ $('hostSpeedOverlay').classList.add('hidden'); hostCreateRoom(val); };
     wrap.appendChild(b);
   });
-  $('hostSpeedOverlay').classList.remove('hidden');
+  openOverlay('hostSpeedOverlay');
 }
 $('btnHostSpeedCancel').onclick=()=>$('hostSpeedOverlay').classList.add('hidden');
 function hostCreateRoom(tableSpeed){
@@ -7269,7 +7699,10 @@ function openJoinOverlay(prefillCode,skipSpeedGate){
     $('joinNameStep').classList.add('hidden');
     $('joinSeatStep').classList.add('hidden');
     $('joinCodeInput').value=prefillCode||'';
-    $('joinOverlay').classList.remove('hidden');
+    // 2026-07-25 (§ ACCOUNT): one name, everywhere. The join screen now starts on the same name
+    // the setup screen and the account panel show, instead of an empty box every time.
+    try{ const ni=$('joinNameInput'); if(ni&&!ni.value)ni.value=chosenName(); }catch(e){}
+    openOverlay('joinOverlay');
     if(prefillCode&&prefillCode.length===4)advanceJoinToNameStep();
   };
   if(skipSpeedGate)go(); else gateOnSpeedPicker(go);
@@ -7286,6 +7719,9 @@ function joinSubmitName(){
   if(!name){ $('joinErr').textContent='Enter your name.'; return; }
   if(isBadName(name)){ $('joinErr').textContent='Pick a nicer name.'; return; }
   JOIN.name=name; $('joinErr').textContent='';
+  // 2026-07-25 (§ ACCOUNT): joining under a name IS choosing that name - keep the setup screen
+  // and the account circle in step with it rather than letting the two drift apart.
+  try{ setChosenName(name); }catch(e){}
   NET.wantConnection=true;
   connectWs().then(()=>{ netSend({type:'join',protocolVersion:PROTOCOL_VERSION,code:JOIN.code,name}); })
     .catch(err=>{ $('joinErr').textContent=err.message; NET.wantConnection=false; });
@@ -7356,7 +7792,15 @@ function renderJoinSeatStep(){
 function maybeShowOnlineRules(){
   if(NET.rulesShown)return;
   NET.rulesShown=true;
-  $('onlineRulesOverlay').classList.remove('hidden');
+  /* 2026-07-25 (§ OVERLAY LAYER): this popup used to sit ON TOP of the screen underneath it -
+     two full-screen pages at once, the same shape of bug as the pause stacking. It is a genuine
+     hand-off, so it is expressed as one: whatever it covers (the JOIN screen for a guest, the
+     host's ROOM screen for a host - both real, both reached from handleNetMessage) is put away
+     while this is up and handed back when it is dismissed, which is what the player already
+     experienced visually, minus the second page showing through. backIf refuses the hand-back
+     once the board is up - if the game started while this popup was open, the right place to
+     land is the table, not a stale lobby screen. */
+  openOverlay('onlineRulesOverlay',{backToCurrent:true,backIf:()=>$('game').classList.contains('hidden')});
 }
 $('btnJoinReady').onclick=()=>{
   netSend({type:'readyUp',willSeat:true});
@@ -7532,7 +7976,7 @@ let PENDING_OVERWRITE_ACTION=null;
 function confirmOverwriteThenRun(action){
   const last=loadLastRoom();
   const canRejoin=!!(last&&loadNetSession(last.code));
-  if(canRejoin){ PENDING_OVERWRITE_ACTION=action; $('overwriteWarnOverlay').classList.remove('hidden'); fitConfirmCard($('overwriteWarnOverlay')); }
+  if(canRejoin){ PENDING_OVERWRITE_ACTION=action; openOverlay('overwriteWarnOverlay'); fitConfirmCard($('overwriteWarnOverlay')); }
   else action();
 }
 $('btnOverwriteConfirm').onclick=()=>{
@@ -7556,7 +8000,7 @@ function startOfflineGameGate(action){
     const s=loadOfflineSlot(k);
     $('btnReplaceSlot'+k).textContent='Replace: '+(s?saveSlotLabel(s):'(empty)');
   }
-  $('slotReplaceOverlay').classList.remove('hidden');
+  openOverlay('slotReplaceOverlay');
   fitConfirmCard($('slotReplaceOverlay'));
 }
 function chooseReplaceSlot(k){
@@ -7604,11 +8048,10 @@ function openLeaveConfirm(){
   // v0.16 item 2: the CPU-takeover option only makes sense online (there's a server to hand
   // the seat to) - offline/pass-and-play never shows it.
   $('btnLeaveForGood').classList.toggle('hidden',!NET.online);
-  // v0.20: "Reset connection" - reachable any time during an online game (not just while the
-  // connIndicator chip happens to be visible), per Blake's ask - see hardResetConnection()/
-  // § RECALIBRATION. Same online-only gating as "Leave for good."
-  $('btnResetConnection').classList.toggle('hidden',!NET.online);
-  $('leaveConfirmOverlay').classList.remove('hidden');
+  // v0.20's "Reset connection" row used to live here too. 2026-07-25: it moved to the account
+  // panel (renderAccountPanel() applies the identical online-only gating there) - this sheet is
+  // now only ways to stay or ways to go, which is what Blake asked for.
+  openOverlay('leaveConfirmOverlay');
   fitConfirmCard($('leaveConfirmOverlay'));
 }
 /* v0.25 item 4: "Pause/Save" goes STRAIGHT to the options sheet - the old intermediate
@@ -7653,14 +8096,9 @@ function doLeaveGame(saveIt){
   }
 }
 $('btnLeaveSave').onclick=()=>doLeaveGame(true);
-$('btnResetConnection').onclick=()=>{
-  $('leaveConfirmOverlay').classList.add('hidden');
-  { const cc=$('leaveConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
-  $('pauseOverlay').classList.add('hidden');
-  { const cc=$('pauseOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
-  releaseSheetPause();   // v0.25 item 4: they're staying at the table - resume it too
-  hardResetConnection();
-};
+// 2026-07-25: #btnResetConnection is gone from this sheet - "Fix my connection" is a row in the
+// account panel now (Blake: it does not belong in a list of ways to leave the game). Same
+// hardResetConnection() call, see $('btnAcctReset'), § ACCOUNT.
 $('btnLeaveCancel').onclick=()=>{
   $('leaveConfirmOverlay').classList.add('hidden');
   { const cc=$('leaveConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
@@ -7693,7 +8131,7 @@ function openSaveConfirm(){
   // mutation since v0.8 (see HANDOFF.md's "Online persistence (server)" section), so "saved
   // regardless" is already true the moment this function runs, before this comment even matters.
   doSaveOffline();
-  $('saveLeaveConfirmOverlay').classList.remove('hidden');
+  openOverlay('saveLeaveConfirmOverlay');
   fitConfirmCard($('saveLeaveConfirmOverlay'));
 }
 $('btnSave').onclick=openSaveConfirm;
@@ -7756,7 +8194,7 @@ function openSurrenderConfirm(){
     ?'Someone else already left this game. You can leave too without it counting as a loss.'
     :'Are you sure you want to concede? This will count as a loss on the leaderboard.';
   $('btnSurrenderConfirm').textContent=noFault?'Leave':'Concede';
-  $('surrenderConfirmOverlay').classList.remove('hidden');
+  openOverlay('surrenderConfirmOverlay');
   fitConfirmCard($('surrenderConfirmOverlay'));
 }
 $('btnMenu').onclick=()=>openSurrenderConfirm();
@@ -7816,7 +8254,7 @@ function doSurrenderCurrentGame(){
 }
 $('btnSurrenderConfirm').onclick=()=>doSurrenderCurrentGame();
 $('btnOnlineRulesOk').onclick=()=>{
-  $('onlineRulesOverlay').classList.add('hidden');
+  closeOverlay('onlineRulesOverlay');   // 2026-07-25 (§ OVERLAY LAYER): hands the join screen back, if that is where this came from
   maybeSendSeated();   // v0.22 P0b: if the board is up behind this popup, we're seated now
   maybeRequestPushPermission();   // v0.16 item 5: right after the FIRST online game's rules popup is dismissed - see § PUSH
   // v0.19.2: the speed picker no longer chains off dismissing this overlay - by the time this
@@ -7824,9 +8262,220 @@ $('btnOnlineRulesOk').onclick=()=>{
   // late to hold anything client-side. It now resolves before the player ever reaches the
   // online lobby instead - see gateOnSpeedPicker() at $('btnOnline')/openJoinOverlay(), § UTIL.
 };
-$('btnRules').onclick=()=>$('rulesOverlay').classList.remove('hidden');
-$('btnRules2').onclick=()=>$('rulesOverlay').classList.remove('hidden');
-$('btnRulesClose').onclick=()=>$('rulesOverlay').classList.add('hidden');
+$('btnRules').onclick=()=>openOverlay('rulesOverlay');
+// 2026-07-25: #btnRules2 (the top bar's own RULES button) is gone - the rules are a row in the
+// account panel now (see § ACCOUNT below, and the #btnAccount markup comment). Same panel, same
+// #rulesOverlay, one door fewer in the top row. closeOverlay() rather than a raw hide, so the
+// rules panel hands the account panel back when that is where it was opened from.
+$('btnRulesClose').onclick=()=>closeOverlay('rulesOverlay');
+
+/* ============================= § ACCOUNT (2026-07-25) =============================
+   Blake, after playing v0.32 on his phone: "replace the 'rules' and 'mute' buttons with an
+   account (circle icon) that is the first letter of their chosen name. When clicked, this opens
+   a mini window that offers the rules and mute buttons as well as other settings and things that
+   belong on this kind of panel (including option to delete their account or change their name,
+   stuff like that, but it makes the row of buttons spacier up top especially on smaller phones)."
+   Follow-up: "Should also have a sign out button option there."
+
+   WHOSE letter is it? Whoever is playing on THIS phone:
+     - online, that is your own seat (NET.mySeat) - the name and colour everyone else at the
+       table sees for you;
+     - offline (solo or pass-and-play), the first human seat, which is the person holding the
+       phone in every real family game;
+     - before a game exists at all, the name the setup screen is carrying (CFG), so the circle is
+       never blank waiting for a game to start.
+   The colour is that seat's own board colour, so the circle reads as you - the same green/navy/
+   pink/yellow as your tees and your name plaque - with the letter drawn in whichever of dark ink
+   or cream actually reads against it (Yellow and White seats need dark ink; the rest need cream).
+
+   EDGE CASES, all deliberately handled so the circle can never render blank or broken:
+     - a name that starts with punctuation ("J.B." -> J, ".Jim" -> J): the first LETTER OR DIGIT
+       in the string wins, not literally the first character;
+     - a name with no letters or digits at all ("..."), an empty name, or a seat we cannot
+       identify: the circle shows "?" rather than an empty circle;
+     - accents and non-Latin scripts: matched with a Unicode-aware test and uppercased through
+       toUpperCase(), so "elsa" -> E and a non-Latin first letter is shown as itself;
+     - emoji or any astral character: Array.from() walks real code points, so a surrogate pair is
+       never split in half.
+
+   ACCOUNTS ARE NOT LIVE. The server side exists but is dormant and unconfigured, so Sign in /
+   Sign out / Delete account are rendered in their real final position and DISABLED, with a plain
+   note saying so. Nothing in this section calls any /account/* endpoint, and nothing here should
+   be wired to one until that work is actually live. */
+const ACCT_FALLBACK_BG='#3b6f52', ACCT_FALLBACK_INK='#f6efdd';
+// Which seat is "me" on this phone. -1 = we are not in a game (or online but not seated yet).
+function accountSeatIndex(){
+  if(!G||!G.seats)return -1;
+  if(NET.online)return (typeof NET.mySeat==='number'&&NET.mySeat>=0&&NET.mySeat<G.n)?NET.mySeat:-1;
+  const i=G.seats.findIndex(s=>s&&s.type==='human');
+  return i;
+}
+// The one name this phone plays under. In a game the live seat name wins (that is what the rest
+// of the table sees me as); otherwise the setup screen's own first human seat, which is exactly
+// the value hostCreateRoom() sends as the host name and the online join screen pre-fills.
+function chosenName(){
+  const i=accountSeatIndex();
+  if(i>=0&&G.seats[i]&&G.seats[i].name)return G.seats[i].name;
+  const meta=(CFG.seatMeta&&CFG.seatMeta[CFG.n])||[];
+  const h=meta.find(s=>s&&s.type==='human');
+  if(h&&h.name)return h.name;
+  return (meta[0]&&meta[0].name)||'';
+}
+// First letter (or digit) of a name, uppercased. Never returns an empty string - see the edge
+// cases in this section's header comment.
+function accountInitial(name){
+  for(const ch of Array.from(String(name||''))){
+    let isAlnum=false;
+    try{ isAlnum=/[\p{L}\p{N}]/u.test(ch); }
+    catch(e){ isAlnum=/[a-z0-9]/i.test(ch); }   // engine without Unicode property escapes
+    if(isAlnum)return ch.toUpperCase();
+  }
+  return '?';
+}
+// Dark ink on a light seat colour, cream on a dark one. Plain relative-luminance check rather
+// than a hardcoded "Yellow and White are the light ones" list, so a future seat colour is
+// handled without anyone remembering to update this.
+function inkFor(hex){
+  const m=/^#?([0-9a-f]{6})$/i.exec(String(hex||''));
+  if(!m)return ACCT_FALLBACK_INK;
+  const n=parseInt(m[1],16), r=(n>>16)&255, g=(n>>8)&255, b=n&255;
+  const lin=v=>{ const c=v/255; return c<=0.03928?c/12.92:Math.pow((c+0.055)/1.055,2.4); };
+  const L=0.2126*lin(r)+0.7152*lin(g)+0.0722*lin(b);
+  return L>0.45?'#14210f':ACCT_FALLBACK_INK;
+}
+function accountColors(){
+  const i=accountSeatIndex();
+  const cols=((G?G.n:CFG.n)===6)?COLORS6:COLORS4;
+  if(i>=0&&cols[i])return {bg:cols[i].c,ink:inkFor(cols[i].c)};
+  return {bg:ACCT_FALLBACK_BG,ink:ACCT_FALLBACK_INK};
+}
+// Paints the top bar's circle. Every write is guarded ("is it already that?") - this runs from
+// syncAll() after every move, and the account panel's own avatar lives inside an .overlay that
+// the scroll-hint MutationObserver watches (§ UTIL).
+function updateAccountButton(){
+  const btn=$('btnAccount');
+  if(!btn)return;
+  const name=chosenName(), letter=accountInitial(name), c=accountColors();
+  const span=$('acctInitial');
+  if(span&&span.textContent!==letter)span.textContent=letter;
+  if(btn.style.getPropertyValue('--acctBg')!==c.bg)btn.style.setProperty('--acctBg',c.bg);
+  if(btn.style.getPropertyValue('--acctInk')!==c.ink)btn.style.setProperty('--acctInk',c.ink);
+  const label=name?('Your settings - '+name):'Your settings';
+  if(btn.getAttribute('aria-label')!==label)btn.setAttribute('aria-label',label);
+  const av=$('acctAvatar');
+  if(av){
+    if(av.textContent!==letter)av.textContent=letter;
+    if(av.style.getPropertyValue('--acctBg')!==c.bg)av.style.setProperty('--acctBg',c.bg);
+    if(av.style.getPropertyValue('--acctInk')!==c.ink)av.style.setProperty('--acctInk',c.ink);
+  }
+}
+function soundRowLabel(){ return muted?'Sound: off':'Sound: on'; }
+// Re-reads everything the panel shows. Cheap, guarded, safe to call any time.
+function renderAccountPanel(){
+  updateAccountButton();
+  const name=chosenName();
+  const who=$('acctWhoName'); if(who&&who.textContent!==(name||'Player'))who.textContent=name||'Player';
+  const sub=$('acctWhoSub');
+  const subTxt=NET.online?'Playing online in this game':'Playing on this phone';
+  if(sub&&sub.textContent!==subTxt)sub.textContent=subTxt;
+  const snd=$('btnAcctSound'); if(snd&&snd.textContent!==soundRowLabel())snd.textContent=soundRowLabel();
+  // "Fix my connection" only means something in an online game - the same gating it had in the
+  // pause sheet it moved out of (there is no server to re-reach in an offline game).
+  const rst=$('btnAcctReset');
+  if(rst)rst.classList.toggle('hidden',!(NET.online&&G));
+  closeAccountNameEdit();
+}
+function openAccountPanel(){
+  renderAccountPanel();
+  openOverlay('accountOverlay');
+}
+$('btnAccount').onclick=openAccountPanel;
+$('btnAcctClose').onclick=()=>closeOverlay('accountOverlay');
+// The rules panel is the SAME #rulesOverlay the menu's "How to play" opens - one panel, two
+// doors. backTo hands this panel back when the rules are closed, so a player who came here to
+// check a rule lands back where they were instead of on the board.
+$('btnAcctRules').onclick=()=>openOverlay('rulesOverlay',{backTo:'accountOverlay',backIf:()=>!!G});
+// The old top-bar MUTE button, now a row that says which way round it currently is.
+$('btnAcctSound').onclick=()=>{
+  muted=!muted;
+  try{ localStorage.setItem('nasty-muted',muted?'1':'0'); }catch(e){}
+  renderAccountPanel();
+};
+/* Change your name. Opens INSIDE this panel (never a second full-screen page - see
+   § OVERLAY LAYER) and writes the one value the setup screen and the online join screen both
+   use, so "your name" means one thing everywhere in the app.
+   Offline, a game in progress is renamed live too - the plaque text and the circle both change
+   immediately. Online, the table's seat names are the server's to hand out (this batch is
+   client-only and touches no server file), so the new name is what you will play under from your
+   next game onward - and the panel says exactly that rather than pretending. */
+function setChosenName(name){
+  const clean=cleanName(name,'');
+  if(!clean)return false;
+  // Both table sizes, so switching between 4 and 6 players never resurrects an old name.
+  [4,6].forEach(n=>{
+    const meta=CFG.seatMeta[n];
+    if(!meta)return;
+    const idx=meta.findIndex(s=>s&&s.type==='human');
+    if(idx>=0)meta[idx].name=clean;
+    else if(meta[0])meta[0].name=clean;
+  });
+  saveCfg();
+  const i=accountSeatIndex();
+  if(i>=0&&!NET.online&&G&&G.seats[i]){
+    G.seats[i].name=clean;
+    const pl=$('plaque-'+i);
+    if(pl){ const nm=pl.querySelector('.nm'); if(nm)nm.textContent=clean; }
+    try{ positionPlaques(); }catch(e){}
+    try{ scheduleSaveOffline(); }catch(e){}
+  }
+  try{ renderMenu(); }catch(e){}   // the setup screen behind the game shows the new name too
+  updateAccountButton();
+  return true;
+}
+function closeAccountNameEdit(){
+  const box=$('acctNameEdit');
+  if(box&&!box.classList.contains('hidden'))box.classList.add('hidden');
+  const w=$('acctNameWarn'); if(w&&w.textContent)w.textContent='';
+  const row=$('btnAcctName');
+  if(row&&row.classList.contains('hidden'))row.classList.remove('hidden');
+}
+$('btnAcctName').onclick=()=>{
+  const box=$('acctNameEdit'), inp=$('acctNameInput');
+  if(!box||!inp)return;
+  inp.value=chosenName();
+  if(box.classList.contains('hidden'))box.classList.remove('hidden');
+  $('btnAcctName').classList.add('hidden');
+  try{ inp.focus(); inp.select(); }catch(e){}
+};
+$('btnAcctNameCancel').onclick=closeAccountNameEdit;
+$('btnAcctNameSave').onclick=()=>{
+  const inp=$('acctNameInput'), warn=$('acctNameWarn');
+  const raw=(inp.value||'').slice(0,NAME_MAX).trim();
+  if(!raw){ warn.textContent='Type a name first.'; return; }
+  // Same two rules the setup screen and the join screen already enforce - one implementation
+  // (§ NAMES), so the account panel can never be a back door around them.
+  if(isBadName(raw)){ warn.textContent='Pick a nicer name.'; return; }
+  setChosenName(raw);
+  closeAccountNameEdit();
+  renderAccountPanel();
+  toast(NET.online
+    ?'Name saved. You will play as '+chosenName()+' from your next game.'
+    :'Name saved.');
+};
+// Moved here from the pause sheet (Blake: it does not belong in the list of ways to leave).
+// Exactly the same hardResetConnection() it always called, just from a sensible home.
+$('btnAcctReset').onclick=()=>{
+  closeOverlay('accountOverlay');
+  hardResetConnection();
+};
+// The three dormant rows. They are disabled in the markup; these handlers exist ONLY so a tap
+// on a disabled-looking row still explains itself if a browser ever delivers the click, and
+// they must never call the server - accounts are not live yet.
+['btnAcctSignIn','btnAcctSignOut','btnAcctDelete'].forEach(id=>{
+  const b=$(id);
+  if(b)b.onclick=()=>toast('Accounts are coming soon.');
+});
+updateAccountButton();
 /* sendInvite: shared by the online room's invite button (btnRoomText) and the reunion lobby's
    "Nudge" button - real invites only ever happen from inside the host lobby flow, once a room
    actually exists to invite someone into (v0.9.1: removed the leftover standalone "Text an
@@ -7850,7 +8499,7 @@ function sendInvite(link){
 // covered by openJoinOverlay()'s own gate (manual button AND deep-link joins both funnel
 // there). See gateOnSpeedPicker(), § UTIL, and HANDOFF.md v0.19.2 for why online can't hold a
 // live table client-side the way offline holds the deal.
-$('btnOnline').onclick=()=>{ $('onlineErr').textContent=''; gateOnSpeedPicker(()=>$('onlineOverlay').classList.remove('hidden')); };
+$('btnOnline').onclick=()=>{ $('onlineErr').textContent=''; gateOnSpeedPicker(()=>openOverlay('onlineOverlay')); };
 $('btnOnlineClose').onclick=()=>$('onlineOverlay').classList.add('hidden');
 // v0.11 item 3: confirmed hosting/joining DOES claim the same local save slot - saveLastRoom()
 // overwrites the single 'nasty-last-room' localStorage record the instant a room is created or
@@ -8294,7 +8943,7 @@ $('lbTabSolo').onclick=()=>setLbTab('solo');
 $('lbTabTeams').onclick=()=>setLbTab('teams');
 $('lbTabKo').onclick=()=>setLbTab('ko');
 $('btnLb').onclick=()=>{
-  $('lbOverlay').classList.remove('hidden');
+  openOverlay('lbOverlay');
   lbTab='solo';   // v0.21: Solo is always the tab shown when the leaderboard is (re)opened
   $('lbTabSolo').classList.add('on'); $('lbTabTeams').classList.remove('on'); $('lbTabKo').classList.remove('on');
   updateLbCaption();
@@ -8309,11 +8958,10 @@ $('btnLb').onclick=()=>{
   });
 };
 $('btnLbClose').onclick=()=>$('lbOverlay').classList.add('hidden');
-// 2026-07-23 (Blake's item 12): plain text instead of the 🔊/🔇 emoji glyphs - text-transform
-// (§ STYLE) uppercases these for display; the stored strings stay plain mixed-case.
-$('btnMute').onclick=()=>{muted=!muted;localStorage.setItem('nasty-muted',muted?'1':'0');
-  $('btnMute').textContent=muted?'Unmute':'Mute';};
-$('btnMute').textContent=muted?'Unmute':'Mute';
+// 2026-07-25: the MUTE button left the top bar with RULES - the sound toggle is a row in the
+// account panel now and says which way round it is in words ("Sound: on" / "Sound: off")
+// instead of naming the action. See $('btnAcctSound'), § ACCOUNT. `muted` itself and its
+// localStorage key are completely unchanged, so a phone that was muted stays muted.
 // v0.15: online, this is a SHARED table setting (NET.tableSpeed, host-controlled - see the
 // big § NET comment above for why Blake rejected per-viewer pacing) instead of each phone's
 // own local choice. Offline/pass-and-play is completely unchanged (still USER_SPEED,
@@ -8431,7 +9079,7 @@ function showWin(){
   // tapped and a name is tapped.
   updateTopbarForGameOver(true);
   REVEAL_SEAT=-1;
-  $('winOverlay').classList.remove('hidden');
+  openOverlay('winOverlay');
 }
 /* ---- post-game review mode (2026-07-25, Blake's post-game review request) ----
    The game just ended - showWin() above already recorded it (recordWin()/the server) and put up
@@ -8474,8 +9122,11 @@ function leaveFinishedGameToMenu(){
 // win popup, see reopenWinOverlay() below) so closing the X is never a one-way door. Quit is
 // relabeled "Menu" - see openSurrenderConfirm()'s own new G.over branch below for why it becomes
 // a completely free exit instead of the surrender/concede path. Speed is hidden too (nothing left
-// to animate at any speed). Rules and Mute are left exactly as they are - both still mean
-// something while looking back at the board.
+// to animate at any speed). 2026-07-25: Rules and Mute used to be the other two buttons here and
+// were deliberately left alone in review mode; they are rows in the account panel now, and the
+// account circle itself stays exactly as it is - the rules, the sound toggle and a name change
+// all still mean something while looking back at a finished board, so review mode is
+// MENU / RESULTS / circle.
 function updateTopbarForGameOver(over){
   $('btnPause').classList.toggle('hidden',over);
   $('btnSpeed').classList.toggle('hidden',over);
@@ -8497,7 +9148,7 @@ $('btnWinClose').onclick=closeWinOverlay;
 // the topbar's repurposed "Results" button (openSaveConfirm()'s G.over branch below).
 function reopenWinOverlay(){
   if(!G||!G.over)return;   // defensive - "Results" only ever means something once the game's over
-  $('winOverlay').classList.remove('hidden');
+  openOverlay('winOverlay');
 }
 // Item 3 - tap a player's plaque to flip their leftover hand face-up on the table. Gated on
 // G.over so this reveal is NEVER reachable while a game is still being played (see the plaque
@@ -8921,7 +9572,7 @@ $('verTap').addEventListener('click',()=>{
 });
 function openAdminPanel(){
   $('adminErr').textContent='';
-  $('adminOverlay').classList.remove('hidden');
+  openOverlay('adminOverlay');
   const saved=localStorage.getItem(ADMIN_TOKEN_KEY);
   if(saved){ $('adminTokenInput').value=saved; tryAdminUnlock(); }
   else{ $('adminLocked').classList.remove('hidden'); $('adminUnlocked').classList.add('hidden'); }

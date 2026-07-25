@@ -422,25 +422,31 @@ async function partF(browser) {
   for (const m of [MATRIX[0], MATRIX[4]]) {
     const { ctx, page } = await newCtx(browser, m);
     await freshBoard(page, 4);
+    // 2026-07-25 (Blake's account-panel batch) - UPDATED, deliberately: this sheet used to have a
+    // FIFTH button, "Fix my connection". Blake asked for it to move out of the list of ways to
+    // leave and into the new account panel ("Reset connection ... currently buried in the
+    // Pause/leave sheet, where it does not belong"), so it is no longer part of this sheet's
+    // shape. The two assertions about that button moved with it, into
+    // test_ui_account_panel_2026_07_25.js (it must be present, online-only, not danger-styled,
+    // and still in plain language). Everything item F was actually about - the loss-bearing
+    // options looking expensive and every button rendering at ONE width instead of a ragged
+    // pile - is unchanged and still checked below, now across four buttons.
     const r = await page.evaluate(() => {
-      // Force the ONLINE shape too - all five buttons visible at once, the widest case.
+      // Force the ONLINE shape too - every button visible at once, the widest case.
       document.getElementById('btnLeaveForGood').classList.remove('hidden');
-      document.getElementById('btnResetConnection').classList.remove('hidden');
       document.getElementById('leaveConfirmOverlay').classList.remove('hidden');
       const btns = [...document.querySelectorAll('#leaveConfirmOverlay .bigBtns .btn')];
       return btns.map((b) => ({ id: b.id, cls: b.className, w: +b.getBoundingClientRect().width.toFixed(1), text: b.textContent.trim() }));
     });
     const widths = r.map((b) => b.w);
-    ok(new Set(widths).size === 1, `${m.w}x${m.h}: all five leave-sheet buttons render at ONE width (got ${JSON.stringify(widths)}; was 167/130/195/296/167 at 320)`);
+    ok(new Set(widths).size === 1, `${m.w}x${m.h}: all four leave-sheet buttons render at ONE width (got ${JSON.stringify(widths)}; was 167/130/195/296/167 at 320)`);
     const discard = r.find((b) => b.id === 'btnLeaveDiscard');
     const forGood = r.find((b) => b.id === 'btnLeaveForGood');
     ok(discard && /danger/.test(discard.cls), '"Leave without saving" is styled as costly (it records a loss)');
     ok(forGood && /danger/.test(forGood.cls), '"Have a computer take over my seat" is styled as costly (it records a loss)');
     const save = r.find((b) => b.id === 'btnLeaveSave');
-    const reset = r.find((b) => b.id === 'btnResetConnection');
     ok(save && !/danger/.test(save.cls), '"Save & leave" is NOT styled as costly - it is the free one');
-    ok(reset && !/danger/.test(reset.cls), 'the connection button is NOT styled as costly - it keeps you at the table');
-    ok(reset && !/reset connection/i.test(reset.text), `the connection button is no longer engineer-speak (got "${reset ? reset.text : ''}")`);
+    ok(!r.some((b) => b.id === 'btnResetConnection'), 'the connection button is NOT in this sheet any more (2026-07-25: it moved to the account panel, covered there)');
     if (m.w === 320) await page.screenshot({ path: path.join(SHOTDIR, 'leavesheet_320.png') });
     await ctx.close();
   }
