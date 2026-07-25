@@ -4,11 +4,16 @@
 # can find it. Same ops pattern as the memo-mindmap / cortana-dashboard tunnels on this
 # Mac Mini (see ~/Library/LaunchAgents/com.blake.memomindmap-tunnel.plist).
 #
-# Every time cloudflared reports a (new) public URL, this script rewrites
-# /Users/jarvis/nasty-game/wsurl.json to point at it (as a wss:// URL, since the tunnel
-# terminates TLS) and commits + pushes so GitHub Pages serves the new value within a
-# minute. The client fetches that file (cache-busted) to discover the server — see the
-# resolveWsUrl() function in index.html.
+# STATUS: RETIRED as of the 2026-07-12 cloud cutover, and stopped + disabled on 2026-07-25.
+# The game reaches the cloud relay (wss://play.nastyboardgame.com) via wsurl.json now; this
+# Mac's tunnel is not part of how anyone gets to the game. Kept on disk as the rollback path
+# (see update_wsurl() below for the exact steps) and because server.js is still the private
+# test server every local test recipe spins up.
+#
+# It USED to rewrite /Users/jarvis/nasty-game/wsurl.json on every new tunnel URL and then
+# commit and push it. It no longer writes, commits, or pushes anything - see the warning in
+# update_wsurl() below, and do not put that back. The client discovers the server by fetching
+# wsurl.json (cache-busted) - see resolveWsUrl() in index.html.
 
 REPO_DIR="/Users/jarvis/nasty-game"
 LOG_FILE="$REPO_DIR/tunnel.log"
@@ -34,8 +39,18 @@ update_wsurl() {
   # wsurl.json, which points at the cloud relay wss://play.nastyboardgame.com.
   # This Mac's tunnel is no longer part of how anyone reaches the game.
   #
+  # Both LaunchAgents were stopped and DISABLED on 2026-07-25 (they had kept port 8484 open to
+  # the internet through a cloudflared quick tunnel for 13 days after the cutover, with nothing
+  # pointing at them). The plists and server.js are deliberately kept - they are the rollback
+  # path, and every local test recipe still uses server.js as a private test server.
+  #
   # ROLLING BACK TO THIS MAC IS A DELIBERATE, HUMAN ACT. It is:
-  #   1. start the local server + tunnel again
+  #   1. re-enable and start the local server + tunnel again. `launchctl load` on its own is NOT
+  #      enough now - they are disabled in the per-user override database, and a plain unload
+  #      would not have survived a reboot anyway (launchd re-scans ~/Library/LaunchAgents at
+  #      every login), which is why they were disabled properly rather than just unloaded:
+  #        launchctl enable gui/$(id -u)/com.nasty.server
+  #        launchctl enable gui/$(id -u)/com.nasty.tunnel
   #        launchctl load ~/Library/LaunchAgents/com.nasty.server.plist
   #        launchctl load ~/Library/LaunchAgents/com.nasty.tunnel.plist
   #   2. read the new https://<something>.trycloudflare.com URL out of
