@@ -222,6 +222,17 @@ function cleanName(raw, fallback) {
   const s = String(raw || "").trim().slice(0, NAME_MAX);
   return s || fallback || "";
 }
+/* 2026-07-25 § LEADERBOARD NAME FOLDING (bug 6) - cleanName() trims and caps length but
+   deliberately does NOT change what the player typed; it produces the DISPLAY name used
+   everywhere (lobby seats, in-game plates, admin renames), so case-folding it would be wrong.
+   The LEADERBOARD, though, is a lifetime record of a PERSON, and "Blake" / "blake" / "BLAKE"
+   are one person - the same human on a phone and an iPad. leaderboardNameKey() is the fold used
+   ONLY for leaderboard identity: lower-cased, nothing else (no digit/symbol substitution - that
+   is normalizeName()'s job for the profanity blocklist, and it strips so much that genuinely
+   different names could collide). Twin of server.ts's matching helper. */
+function leaderboardNameKey(cleanedName) {
+  return String(cleanedName || "").toLowerCase();
+}
 
 /* ---------------------------------------------------------------------------------------
  * v0.9 § ADMIN — "god mode" for Blake. Unchanged from v0.14.
@@ -261,9 +272,32 @@ const LEADERBOARD_FILE = process.env.NASTY_LEADERBOARD_FILE
   ? path.resolve(process.env.NASTY_LEADERBOARD_FILE)
   : path.join(__dirname, "leaderboard.json");
 let globalBoard = {};
+/* 2026-07-25 (bug 6): lower-cased name -> the DISPLAY key that name's row actually lives under
+   in globalBoard. Rebuilt from scratch on every load and kept in step with every write below;
+   this is what makes "Blake" and "blake" land on the same lifetime row without changing the
+   board's on-disk shape (still keyed by a display name, so index.html needs no change at all).
+   Twin of server.ts's ["lbname", lower] KV index - see that file for the KV-shaped version. */
+let lbNameIndex = new Map();
+function rebuildLbNameIndex() {
+  lbNameIndex = new Map();
+  for (const k of Object.keys(globalBoard)) lbNameIndex.set(leaderboardNameKey(k), k);
+}
+/* The row this cleaned name belongs to. If ANY capitalization of it is already on the board,
+   that existing row wins - the display capitalization is deliberately STICKY rather than being
+   rewritten to whatever spelling happened to submit most recently. Rewriting it would mean
+   renaming the row's key on every game, which on the Deno twin means moving up to ten separate
+   KV counters non-atomically - a real risk of losing stats for a purely cosmetic benefit. */
+function boardKeyFor(clean) {
+  const lower = leaderboardNameKey(clean);
+  const existing = lbNameIndex.get(lower);
+  if (existing && globalBoard[existing]) return existing;
+  lbNameIndex.set(lower, clean);
+  return clean;
+}
 function loadLeaderboard() {
   try { globalBoard = JSON.parse(fs.readFileSync(LEADERBOARD_FILE, "utf8")) || {}; }
   catch (e) { globalBoard = {}; }
+  rebuildLbNameIndex();
 }
 let lbPersistTimer = null;
 function scheduleLeaderboardPersist() {
@@ -288,10 +322,33 @@ function persistLeaderboardNow() {
 // below), so no boot-time migration function was needed for these two, unlike
 // migrateLegacyLeaderboardPoints() just below.
 const NUMERIC_STAT_KEY = /^(hg[46][st]|hw[46][st]|hptsS|hptsT|hkoDealt|hkoTaken)$/;
-function applyLeaderboardEntry(name, delta) {
+/* 2026-07-25 § STAT DELTA VALIDATION (bug 4) - the only thing this used to check was
+   Number.isFinite(v), which let a NEGATIVE delta through: a lifetime stat could go DOWN, and
+   the Deno twin (unsigned KvU64 counters) threw outright on the same input and answered HTTP
+   500 while this file answered 200 - two servers whose whole contract is identical behavior
+   disagreeing on a plain POST. Both now apply exactly these rules, per key:
+     - must be a finite NUMBER (a numeric string like "3" is rejected, not coerced - a real
+       client has never sent one, and coercing is how junk creeps in);
+     - must be a whole number (no fractions - every stat this app records is a count);
+     - must be strictly POSITIVE (zero is nothing to record; negative is never legitimate -
+       nothing in the app has ever decremented a lifetime stat, and the admin god-mode PATCH
+       route is the deliberate, authenticated way to correct a number downward);
+     - must be <= MAX_STAT_DELTA.
+   MAX_STAT_DELTA is an absurdity ceiling, not a game rule. The largest value any single real
+   game can produce is small and knowable: games/wins are always 1; points top out at 15 (a
+   6-player table, five human opponents at 3 points each - see pointsForWinServer()); knockouts
+   are a few dozen at the very most in a long game. 1000 is orders of magnitude above anything
+   legitimate while still refusing a garbage or hostile number outright.
+   An invalid key is SKIPPED, not fatal: its valid siblings in the same delta still land and the
+   submission still answers 200, so a client's offline queue drains instead of retrying a
+   poisoned game forever (that retry loop was the nastiest half of this bug on Deno).
+   sanitizeLeaderboardDelta() is deliberately PURE - it writes nothing - so a caller can
+   validate an entire submission before any storage is touched. See handleSoloResult()'s
+   validate-then-mark-seen-then-apply ordering for why that matters. */
+const MAX_STAT_DELTA = 1000;
+function sanitizeLeaderboardDelta(name, delta) {
   const clean = cleanName(name, "");
-  if (!clean || isBadName(clean) || !delta || typeof delta !== "object") return;
-  const r = globalBoard[clean] = globalBoard[clean] || {};
+  if (!clean || isBadName(clean) || !delta || typeof delta !== "object") return null;
   // Legacy pre-split clients (already shipped, can't be changed) still send a plain "hpts" key
   // instead of hptsS/hptsT. Every delta this app has ever produced always carries exactly one
   // "hg"+mode key alongside it (see buildResultEntries()/buildResultEntriesServer() - every
@@ -306,13 +363,30 @@ function applyLeaderboardEntry(name, delta) {
     const modeKey = Object.keys(delta).find((k) => /^h[gw][46][st]$/.test(k));
     if (modeKey) legacyPtsTarget = modeKey.endsWith("t") ? "hptsT" : "hptsS";
   }
+  const out = {};
+  let any = false;
   for (const k of Object.keys(delta)) {
     const key = k === "hpts" ? legacyPtsTarget : k;
     if (!key || !NUMERIC_STAT_KEY.test(key)) continue;
-    const v = Number(delta[k]);
-    if (!Number.isFinite(v)) continue;
-    r[key] = (r[key] || 0) + v;
+    const raw = delta[k];
+    if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw) || raw <= 0 || raw > MAX_STAT_DELTA) {
+      log("leaderboard delta key rejected", clean, key + "=" + JSON.stringify(raw));
+      continue;
+    }
+    out[key] = (out[key] || 0) + raw;   // two aliases landing on one key (hpts + hptsS) still sum
+    any = true;
   }
+  if (!any) return null;
+  return { clean, keys: out };
+}
+function applyLeaderboardEntry(name, delta) {
+  const s = sanitizeLeaderboardDelta(name, delta);
+  if (!s) return;
+  // 2026-07-25 (bug 6): route through boardKeyFor() so every capitalization of one human's name
+  // lands on that human's single lifetime row.
+  const bk = boardKeyFor(s.clean);
+  const r = globalBoard[bk] = globalBoard[bk] || {};
+  for (const key of Object.keys(s.keys)) r[key] = (r[key] || 0) + s.keys[key];
   scheduleLeaderboardPersist();
 }
 /* v0.21 § LEADERBOARD SPLIT MIGRATION - boot-time, idempotent. Entries stored before the
@@ -357,6 +431,76 @@ function migrateLegacyLeaderboardPoints() {
   }
   if (migrated) {
     log("migrated", migrated, "leaderboard entries to split solo/team points");
+    scheduleLeaderboardPersist();
+  }
+}
+
+/* 2026-07-25 § LEADERBOARD NAME-CASE MERGE MIGRATION (bug 6) - boot-time, idempotent, same
+   conventions as migrateLegacyLeaderboardPoints() just above.
+
+   Before this, cleanName() never case-folded, so one human who typed "Blake" on their phone and
+   "blake" on the iPad had TWO lifetime rows (Blake's real board had three for one person). Going
+   forward boardKeyFor() prevents new splits; this pass merges the ones already on disk.
+
+   Rules, deliberately conservative:
+     - group the existing rows by their lower-cased name;
+     - a group of one is left completely alone (that is the overwhelming majority of rows, and
+       it is why re-running this is free);
+     - within a group, the WINNER (the surviving display capitalization) is the row with the most
+       recorded games, since that is the spelling this person has actually played under most.
+       Ties break on the largest total of all numeric stats, then alphabetically, so the outcome
+       is fully deterministic and does not depend on object key order;
+     - every numeric key from the losing rows is SUMMED into the winner, never overwritten, and
+       keys the winner has never seen are created. Non-numeric junk (there should be none) is
+       left behind rather than copied.
+     - "hpts" is summed too, even though nothing writes it anymore: this runs AFTER
+       migrateLegacyLeaderboardPoints(), so a legacy-only row has already had its plain hpts
+       split into hptsS/hptsT and the leftover hpts is just carried along rather than dropped.
+
+   Idempotency/safety: the migration is structurally self-guarding - after it runs, no two rows
+   share a lower-cased name, so a second boot finds no groups of size 2+ and writes nothing at
+   all. That is a stronger guard than a stored flag (which could be lost or forged) and it is why
+   there is no "already migrated" marker to keep in sync. And because Node holds the whole board
+   in memory and persists it with one write, a crash mid-merge leaves the ON-DISK file exactly as
+   it was - there is no partially-merged state to resume from or double-count. */
+function migrateLeaderboardNameCase() {
+  const groups = new Map();
+  for (const name of Object.keys(globalBoard)) {
+    const r = globalBoard[name];
+    if (!r || typeof r !== "object") continue;
+    const lower = leaderboardNameKey(name);
+    if (!groups.has(lower)) groups.set(lower, []);
+    groups.get(lower).push(name);
+  }
+  const totalGames = (r) => ["hg4s", "hg6s", "hg4t", "hg6t"].reduce((a, k) => a + (Number(r[k]) || 0), 0);
+  const totalAll = (r) => Object.keys(r).reduce((a, k) => a + (typeof r[k] === "number" && Number.isFinite(r[k]) ? r[k] : 0), 0);
+  let merged = 0;
+  for (const [, names] of groups) {
+    if (names.length < 2) continue;   // nothing to merge - the normal case, and what makes this idempotent
+    const sorted = names.slice().sort((a, b) => {
+      const ga = totalGames(globalBoard[a]), gb = totalGames(globalBoard[b]);
+      if (ga !== gb) return gb - ga;
+      const ta = totalAll(globalBoard[a]), tb = totalAll(globalBoard[b]);
+      if (ta !== tb) return tb - ta;
+      return a < b ? -1 : (a > b ? 1 : 0);
+    });
+    const winner = sorted[0];
+    const target = globalBoard[winner];
+    for (const loser of sorted.slice(1)) {
+      const src = globalBoard[loser];
+      for (const k of Object.keys(src)) {
+        const v = src[k];
+        if (typeof v !== "number" || !Number.isFinite(v)) continue;
+        target[k] = (Number(target[k]) || 0) + v;
+      }
+      delete globalBoard[loser];
+      merged++;
+    }
+    log("merged leaderboard rows", JSON.stringify(sorted.slice(1)), "into", JSON.stringify(winner));
+  }
+  rebuildLbNameIndex();
+  if (merged) {
+    log("merged", merged, "duplicate-capitalization leaderboard rows");
     scheduleLeaderboardPersist();
   }
 }
@@ -586,10 +730,23 @@ async function handleSoloResult(req, res) {
     return;
   }
   const entries = Array.isArray(body.entries) ? body.entries.slice(0, 6) : [];
-  for (const e of entries) { if (e && e.name) applyLeaderboardEntry(e.name, e.delta); }
+  // 2026-07-25 (bug 4) § SEEN-MARKER ORDERING - validate the WHOLE submission first (pure, no
+  // writes), then mark the gameId seen, and only then apply. Two things this buys, identically
+  // on both servers:
+  //   1. at-most-once. If anything failed part-way through applying, the gameId is already
+  //      marked seen, so the client's offline-queue retry is answered `duplicate` instead of
+  //      re-adding the keys that DID land. A double-count is silent and permanent; a rare
+  //      dropped game is neither.
+  //   2. no forever-retry. The old Deno path threw mid-loop BEFORE writing the marker, so a
+  //      submission holding one bad number was retried by that device on every single launch,
+  //      forever. Validation now happens before any of that, and a bad key is skipped rather
+  //      than thrown on, so the submission always reaches a final answer.
+  const sanitized = [];
+  for (const e of entries) { if (e && e.name) { const s = sanitizeLeaderboardDelta(e.name, e.delta); if (s) sanitized.push(s); } }
   soloSeen.set(gameId, Date.now());
   scheduleSoloSeenPersist();
-  log("solo result recorded", gameId, entries.map(e => e && e.name).filter(Boolean).join(","));
+  for (const s of sanitized) applyLeaderboardEntry(s.clean, s.keys);
+  log("solo result recorded", gameId, sanitized.map(s => s.clean).join(","));
   sendJson(res, 200, { ok: true, epoch: leaderboardEpoch });
 }
 
@@ -634,6 +791,10 @@ function roomToDisk(room) {
     // "Ready up" taps silently forgotten - a real regression, not a harmless degrade. Persisting
     // it means a restart mid-reunion comes back exactly as it was.
     reunionActive: !!room.reunionActive, tableReadyIds: Array.from(room.tableReady || []),
+    // 2026-07-25 (bug 2): the gate's own clock, persisted for the same reason the rest of the
+    // gate is - REUNION_GATE_CAP_MS is enforced from this timestamp, and a restart that lost it
+    // would leave exactly the stuck table the cap exists to rescue.
+    reunionOpenedAt: room.reunionOpenedAt || 0,
   };
 }
 function roomFromDisk(obj) {
@@ -651,6 +812,9 @@ function roomFromDisk(obj) {
     // 2026-07-23 (item 2): PERSISTED (see roomToDisk's matching comment) - restored exactly as
     // it was, not reset.
     reunionActive: !!obj.reunionActive, tableReady: new Set(obj.tableReadyIds || []),
+    // 2026-07-25 (bug 2): a room persisted before this field existed simply has no timestamp -
+    // sweepReunionGates() starts its clock on the first sweep instead of expiring it instantly.
+    reunionOpenedAt: Number(obj.reunionOpenedAt) || 0,
   };
   for (const p of (obj.players || []))
     room.players.set(p.id, {
@@ -786,6 +950,7 @@ function makeRoom(code) {
     // comes back exactly as it was instead of stranding a paused table.
     reunionActive: false, // true while a "getting the table back together" ready-up gate is open
     tableReady: new Set(),// playerIds who have tapped Ready up during the CURRENT reunion
+    reunionOpenedAt: 0,   // 2026-07-25 (bug 2): when the CURRENT gate opened - see REUNION_GATE_CAP_MS
   };
   rooms.set(code, room);
   return room;
@@ -1009,6 +1174,9 @@ function broadcastAwayClear(room) {
 }
 const awaySweepTimer = setInterval(() => {
   const now = Date.now();
+  // 2026-07-25 (bug 2): the reunion gate's cap rides this same sweep - it is the one periodic
+  // per-room pass this file has, and seconds-level cadence is far finer than a 75s cap needs.
+  sweepReunionGates();
   for (const room of rooms.values()) {
     const t = currentAwayTarget(room);
     if (!t) { if (room.away) broadcastAwayClear(room); continue; }
@@ -1211,13 +1379,59 @@ function actuallyStartGame(room) {
  * resumes; a seat that's still genuinely missing doesn't block it (send a rejoin link, or hand
  * it to a computer via the existing takeOverSeat - unchanged).
  *
- * Deliberately does NOT touch plain pauseToggle (an ordinary Pause/Save tap, or its own
- * Cancel/"Return to Game") - that stays instant, exactly as it always has (index.html's
- * releaseSheetPause() depends on this: cancelling YOUR OWN sheet-initiated pause must never
- * require a ready-up dance). This gate is a SEPARATE, additive mechanism the client opts into
- * (requestReunion) only when deliberately coming back to a game, never applied automatically to
- * every pause.
+ * Deliberately does NOT touch an ordinary pauseToggle (a plain Pause/Save tap, or its own
+ * Cancel/"Return to Game") when no gate is open - that stays instant, exactly as it always has
+ * (index.html's releaseSheetPause() depends on this: cancelling YOUR OWN sheet-initiated pause
+ * must never require a ready-up dance). This gate is a SEPARATE, additive mechanism the client
+ * opts into (requestReunion) only when deliberately coming back to a game, never applied
+ * automatically to every pause.
+ *
+ * 2026-07-25 § TWO HOLES IN THE ABOVE, FOUND AND CLOSED
+ *
+ * (bug 1) "does not touch pauseToggle" was too literal: pauseToggle set room.paused
+ * UNCONDITIONALLY and never looked at reunionActive. So an UNPAUSE arriving while the gate was
+ * open resumed play with nobody having readied AND left reunionActive stuck true forever - after
+ * which requestReunion's own "already open, no-op" guard made every LATER reunion a silent
+ * no-op, killing the feature for the rest of that room's life. And it needed no old build to
+ * reach: player A opens the Pause/Save sheet (PAUSED_BY_SHEET=true), player B returns via the
+ * tile and opens the gate, player A taps Cancel -> releaseSheetPause() -> requestPause(false).
+ * A build-38 client's tap-to-resume sends the same message (its PAUSE_TAP_ALLOWED has no
+ * reunion awareness), which is what made this the real protocol-5 compatibility hole too.
+ * The fix is in the pauseToggle case below: while a gate is open, an UNPAUSE is REFUSED and the
+ * asker is told plainly why. Refusing rather than treating it as a gate cancel is deliberate -
+ * cancelling a Pause/Save sheet is not "everyone is back and ready", and Blake asked for that
+ * check-in lobby specifically; silently dissolving it on a stray Cancel tap would put us right
+ * back at the presence-stands-in-for-attention behavior he reported. Pausing (paused:true)
+ * while a gate is open stays allowed and is simply a no-op, since the gate already paused it.
+ * Deliberately NOT treated as an implicit ready-up either: a Cancel tap is not "I'm ready".
+ *
+ * (bug 2) The gate had NO cap. maybeResolveReunion() required every currently-connected human
+ * seat to ready up and would wait forever - so one person who put their phone down with the
+ * app open, or one client whose ready-up button never rendered, froze the whole table with no
+ * escape at all (the gate pauses the table, and currentAwayTarget() bails on room.paused, so
+ * the away ladder AND its "have a computer take over" escape were both disabled for the whole
+ * duration). The pre-start seat gate has had SEAT_GATE_CAP_MS since v0.22 for exactly this
+ * reason - "a broken client can never hold the table hostage" - and this gate now has the same
+ * thing. REUNION_GATE_CAP_MS is generous (a family really does take a moment to all tap a
+ * button) but finite; when it expires the gate resolves itself exactly as if everyone had
+ * readied, so play carries on and no stale state is left behind.
+ *
+ * The cap is enforced from a TIMESTAMP (room.reunionOpenedAt, persisted with the rest of the
+ * gate) checked by the periodic sweep below, NOT from a setTimeout: a timer would be lost on a
+ * restart, and losing it would strand exactly the table this cap exists to protect. The Deno
+ * twin uses the same timestamp + sweep shape for the same reason.
  * ------------------------------------------------------------------------------------- */
+const REUNION_GATE_CAP_MS = envInt("NASTY_REUNION_GATE_CAP_MS", 75 * 1000);
+function closeReunionGate(room, why) {
+  room.paused = false;
+  room.reunionActive = false;
+  room.tableReady = new Set();
+  room.reunionOpenedAt = 0;
+  touch(room);
+  broadcast(room, { type: "paused", paused: false });
+  broadcast(room, { type: "reunionStatus", active: false, readyPlayerIds: [] });
+  log("reunion gate closed - table resuming", room.code, "(" + why + ")");
+}
 function maybeResolveReunion(room) {
   if (!room.reunionActive || !room.engine) return;
   const G = room.engine.getG();
@@ -1230,16 +1444,35 @@ function maybeResolveReunion(room) {
   });
   // Never auto-resolve with nobody required (e.g. everyone momentarily disconnected at once) -
   // sit tight until someone's actually back to tap ready, rather than silently resuming an
-  // unattended table.
+  // unattended table. (The cap below is what bounds even THIS case - see sweepReunionGates().)
   if (required.length === 0) return;
   if (!required.every((pid) => room.tableReady.has(pid))) return;
-  room.paused = false;
-  room.reunionActive = false;
-  room.tableReady = new Set();
-  touch(room);
-  broadcast(room, { type: "paused", paused: false });
-  broadcast(room, { type: "reunionStatus", active: false, readyPlayerIds: [] });
-  log("reunion resolved - table resuming", room.code);
+  closeReunionGate(room, "everyone readied up");
+}
+// 2026-07-25 (bug 2): the cap's enforcement. Runs on the same interval as the away ladder's
+// sweep - that is the one periodic per-room pass this file already has, and its cadence
+// (seconds) is far finer than the cap needs.
+function sweepReunionGates() {
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    if (!room.reunionActive) continue;
+    if (!room.reunionOpenedAt) { room.reunionOpenedAt = now; continue; }   // pre-2026-07-25 persisted gate: start its clock now
+    // A gate that has sat UNOBSERVED for far longer than the cap did not have anybody there to
+    // tap Ready up, so expiring it the instant somebody finally shows up would flash the
+    // check-in lobby for a second and then yank it away. Restart its clock instead, so whoever
+    // just came back gets a full-length check-in. Reachable here after a long server outage with
+    // a gate persisted open; the identical line in the Deno twin also covers ITS case (the sweep
+    // there only sees rooms with a live socket, so a gate goes unwatched whenever everyone is
+    // gone). Same rule in both files on purpose.
+    if (now - room.reunionOpenedAt > REUNION_GATE_CAP_MS * 3) { room.reunionOpenedAt = now; continue; }
+    if (now - room.reunionOpenedAt < REUNION_GATE_CAP_MS) continue;
+    closeReunionGate(room, "waited " + Math.round((now - room.reunionOpenedAt) / 1000) + "s for everyone to tap Ready up");
+    // A clean resume, not just an unpaused flag: if the gate happened to open while the very
+    // first deal was still pending, nothing else would retrigger it. Guarded on nextSeq===1 so
+    // this is a no-op unless that deal is genuinely still owed - the same condition the Deno
+    // twin's releaseFirstDeal() checks for itself.
+    if (room.engine && room.nextSeq === 1) driveTurnLoop(room);
+  }
 }
 
 /* ---- tiny HTTP helpers (no framework, matches the rest of this file's style) ---- */
@@ -1331,6 +1564,7 @@ async function handleAdminRoute(req, res, url) {
   }
   if (parts.length === 3 && parts[1] === "leaderboard" && parts[2] === "reset" && req.method === "POST") {
     globalBoard = {};
+    rebuildLbNameIndex();   // 2026-07-25 (bug 6): a new season starts with an empty name index too
     leaderboardEpoch += 1;
     persistLeaderboardNow();
     persistLeaderboardEpoch();
@@ -1355,6 +1589,7 @@ async function handleAdminRoute(req, res, url) {
   if (parts.length === 3 && parts[1] === "leaderboard" && req.method === "DELETE") {
     const name = decodeURIComponent(parts[2]);
     delete globalBoard[name];
+    rebuildLbNameIndex();   // 2026-07-25 (bug 6): keep the case-fold index in step with a deletion
     scheduleLeaderboardPersist();
     log("admin deleted leaderboard entry", name);
     sendJson(res, 200, { ok: true });
@@ -1865,9 +2100,24 @@ wss.on("connection", (ws, req) => {
           if (G.over || G.seats[seat].type !== "human") return;   // already finished, or not actually a human seat — nothing to surrender
           const mode = (G.n === 4 ? "4" : "6") + (G.teams ? "t" : "s");
           if (room.anySurrenderOccurred) {
-            // Someone else already surrendered this same game — free, no-fault exit. Skip the
-            // leaderboard write entirely (not a disguised win/draw — a true no-op stat-wise).
-            log("no-fault exit (someone already surrendered this game)", room.code, "seat=" + seat, "name=" + G.seats[seat].name, "mode=" + mode);
+            // Someone else already surrendered this same game - free, no-fault exit: no
+            // hg<mode>, no loss, no points. Not a disguised win/draw, a true competitive no-op.
+            //
+            // 2026-07-25 (bug 5): this branch used to `return` right here, before building any
+            // delta at all - so this player's already-accrued hkoDealt/hkoTaken were lost
+            // permanently (their seat becomes a CPU immediately after, so finishGame() skips it
+            // too, and nothing else ever writes them). That contradicted this handler's own
+            // comment a few lines down ("a knockout isn't gated on how the game eventually
+            // ends") and diverged from the offline twin recordOfflineSurrenderLoss(), which
+            // always records them. A knockout already happened at the table; it is a fun
+            // lifetime stat, not a competitive one, and nobody else's concession should erase
+            // it. So the free exit still writes a delta - just one containing ONLY the knockout
+            // keys. Twin of server.ts's matching branch.
+            const koDelta = {};
+            if (G.koDealt && G.koDealt[seat]) koDelta.hkoDealt = G.koDealt[seat];
+            if (G.koTaken && G.koTaken[seat]) koDelta.hkoTaken = G.koTaken[seat];
+            if (Object.keys(koDelta).length) applyLeaderboardEntry(G.seats[seat].name, koDelta);
+            log("no-fault exit (someone already surrendered this game)", room.code, "seat=" + seat, "name=" + G.seats[seat].name, "mode=" + mode, "knockouts kept=" + JSON.stringify(koDelta));
             return;
           }
           const delta = {}; delta["hg" + mode] = 1;
@@ -1985,9 +2235,29 @@ wss.on("connection", (ws, req) => {
 
       case "pauseToggle": {
         if (!ctx) return;
-        const { room } = ctx;
+        const { room, playerId } = ctx;
         if (!room.started) return;
-        room.paused = !!msg.paused;
+        const wantPaused = !!msg.paused;
+        // 2026-07-25 (bug 1) § REUNION GATE GUARD - see the big comment above maybeResolveReunion()
+        // for the full root cause. Short version: this case used to set room.paused
+        // unconditionally, so an unpause arriving while the ready-up gate was open both BYPASSED
+        // the gate (play resumed with nobody having readied) and WEDGED it (reunionActive stayed
+        // true forever, which made every later reunion a silent no-op for that room's whole
+        // life). Two entirely ordinary taps produce that message - cancelling the Pause/Save
+        // sheet, and an older build's tap-to-resume - so this had to be closed server-side.
+        // An unpause is refused while the gate is open and the player is told plainly why; the
+        // gate itself is untouched (still open, still waiting, still capped). A PAUSE request is
+        // still accepted, because it changes nothing: the gate has already paused the table.
+        if (!wantPaused && room.reunionActive) {
+          send(ws, { type: "error", message: "Everyone is checking in first. Tap Ready up when you are ready to keep playing." });
+          // Re-state the truth to just this player, so a client that assumed its own tap worked
+          // (or an older build with no idea this gate exists) lands back on the real state.
+          send(ws, { type: "paused", paused: true });
+          send(ws, { type: "reunionStatus", active: true, readyPlayerIds: Array.from(room.tableReady || []) });
+          log("unpause refused - reunion gate open", room.code, "playerId=" + playerId);
+          return;
+        }
+        room.paused = wantPaused;
         touch(room);
         broadcast(room, { type: "paused", paused: room.paused });
         return;
@@ -2004,10 +2274,17 @@ wss.on("connection", (ws, req) => {
         if (!ctx) return;
         const { room, playerId } = ctx;
         if (!room.started || !room.engine) return;
+        // 2026-07-25 (bug 7): the same seat check its sibling "tableReadyUp" below has always
+        // had. Without it a guest who joined the lobby but never claimed a seat could pause the
+        // whole table with this message - and then could NOT clear it, because tableReadyUp
+        // does check seatOwners, so their own ready-up was rejected. Only somebody who is
+        // actually playing can call the table back together.
+        if (!room.seatOwners || !room.seatOwners.includes(playerId)) return;
         if (!room.reunionActive) {
           room.paused = true;
           room.reunionActive = true;
           room.tableReady = new Set();
+          room.reunionOpenedAt = Date.now();   // 2026-07-25 (bug 2): starts REUNION_GATE_CAP_MS
           touch(room);
           broadcast(room, { type: "paused", paused: true });
           broadcast(room, { type: "reunionStatus", active: true, readyPlayerIds: [] });
@@ -2189,6 +2466,11 @@ if (process.env.NASTY_DEBUG_DIGEST) {
 loadRoomsFromDisk();
 loadLeaderboard();
 migrateLegacyLeaderboardPoints();
+// 2026-07-25 (bug 6): ORDER IS LOAD-BEARING - the solo/teams split runs first so a legacy
+// pre-split row's plain "hpts" is turned into hptsS/hptsT while that row still stands alone;
+// merging first would fold that row into a sibling that already has hptsS/hptsT, and the split
+// migration's own "already split, skip" guard would then leave the legacy points stranded.
+migrateLeaderboardNameCase();
 loadSoloSeen();
 loadLeaderboardEpoch();
 log(`admin token file: ${ADMIN_TOKEN_FILE}`);

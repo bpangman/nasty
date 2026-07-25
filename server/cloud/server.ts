@@ -230,6 +230,13 @@ function cleanName(raw: unknown, fallback?: string): string {
   const s = String(raw || "").trim().slice(0, NAME_MAX);
   return s || fallback || "";
 }
+/* 2026-07-25 § LEADERBOARD NAME FOLDING (bug 6) - twin of server.js's matching helper, see that
+   file for the full reasoning. cleanName() keeps what the player typed (it is the DISPLAY name);
+   this fold is used ONLY for leaderboard identity, so one human on a phone and an iPad
+   ("Blake" / "blake" / "BLAKE") is one lifetime row. */
+function leaderboardNameKey(cleanedName: string): string {
+  return String(cleanedName || "").toLowerCase();
+}
 
 /* ---------------------------------------------------------------------------------------
  * § ADMIN — token from env (Deploy secret), not a file. See file header.
@@ -264,9 +271,21 @@ function checkAdminToken(req: Request, url: URL): boolean {
 // legacy predecessor so no migration function needed (a missing key just reads as 0) - see
 // server.js's matching comment + the § KNOCKOUT TALLY block below.
 const NUMERIC_STAT_KEY = /^(hg[46][st]|hw[46][st]|hptsS|hptsT|hkoDealt|hkoTaken)$/;
-async function applyLeaderboardEntry(name: unknown, delta: unknown) {
+/* 2026-07-25 § STAT DELTA VALIDATION (bug 4) - twin of server.js's block, see that file for the
+   full reasoning and the exact rules. The bug bit HARDEST here: the old code fed Number(v)
+   straight into BigInt() and then into an UNSIGNED KvU64 sum, so a negative value threw, the
+   whole /solo-result handler 500'd, any sibling keys later in the same delta were silently LOST
+   (the loop aborted mid-way), and because the throw happened before the soloSeenKey write the
+   gameId was never marked seen - so that device retried the same poisoned game forever. Node
+   meanwhile answered 200 and cheerfully APPLIED the negative. Both servers now apply exactly the
+   same rules, skip an invalid key instead of throwing, and always reach a final answer.
+   MAX_STAT_DELTA is an absurdity ceiling, not a game rule - see server.js's comment for the
+   arithmetic behind the number. */
+const MAX_STAT_DELTA = 1000;
+type SanitizedEntry = { clean: string; keys: Record<string, number> };
+function sanitizeLeaderboardDelta(name: unknown, delta: unknown): SanitizedEntry | null {
   const clean = cleanName(name, "");
-  if (!clean || isBadName(clean) || !delta || typeof delta !== "object") return;
+  if (!clean || isBadName(clean) || !delta || typeof delta !== "object") return null;
   const d = delta as Record<string, unknown>;
   // Legacy pre-split clients (already shipped, can't be changed) still send a plain "hpts" key
   // instead of hptsS/hptsT. Every delta this app has ever produced always carries exactly one
@@ -279,12 +298,42 @@ async function applyLeaderboardEntry(name: unknown, delta: unknown) {
     const modeKey = Object.keys(d).find((k) => /^h[gw][46][st]$/.test(k));
     if (modeKey) legacyPtsTarget = modeKey.endsWith("t") ? "hptsT" : "hptsS";
   }
+  const out: Record<string, number> = {};
+  let any = false;
   for (const k of Object.keys(d)) {
     const key = k === "hpts" ? legacyPtsTarget : k;
     if (!key || !NUMERIC_STAT_KEY.test(key)) continue;
-    const v = Number(d[k]);
-    if (!Number.isFinite(v)) continue;
-    await kv.atomic().sum(["leaderboard", clean, key], BigInt(Math.round(v))).commit();
+    const raw = d[k];
+    if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw) || raw <= 0 || raw > MAX_STAT_DELTA) {
+      log("leaderboard delta key rejected", clean, key + "=" + JSON.stringify(raw));
+      continue;
+    }
+    out[key] = (out[key] || 0) + raw;   // two aliases landing on one key (hpts + hptsS) still sum
+    any = true;
+  }
+  if (!any) return null;
+  return { clean, keys: out };
+}
+/* 2026-07-25 (bug 6): the lower-cased name index. KV has no case-insensitive lookup, so one tiny
+   key per player maps the folded name to the DISPLAY name its stat counters live under. Twin of
+   server.js's in-memory lbNameIndex Map (that file can afford to hold the whole board in
+   memory; this one cannot, so the index is stored). The display capitalization is STICKY - the
+   first spelling to reach the board keeps the row for good. Rewriting it later would mean moving
+   up to ten separate KV counters non-atomically on an ordinary game finish, risking real stat
+   loss for a purely cosmetic gain. */
+function lbNameIndexKey(clean: string): Deno.KvKey { return ["lbname", leaderboardNameKey(clean)]; }
+async function boardKeyFor(clean: string): Promise<string> {
+  const idx = await kv.get<string>(lbNameIndexKey(clean));
+  if (typeof idx.value === "string" && idx.value) return idx.value;
+  await kv.set(lbNameIndexKey(clean), clean);
+  return clean;
+}
+async function applyLeaderboardEntry(name: unknown, delta: unknown) {
+  const s = sanitizeLeaderboardDelta(name, delta);
+  if (!s) return;
+  const bk = await boardKeyFor(s.clean);
+  for (const key of Object.keys(s.keys)) {
+    await kv.atomic().sum(["leaderboard", bk, key], BigInt(s.keys[key])).commit();
   }
 }
 /* v0.21 § LEADERBOARD SPLIT MIGRATION - startup, idempotent. Twin of server.js's matching
@@ -334,13 +383,89 @@ async function migrateLegacyLeaderboardPoints(): Promise<void> {
   }
   if (migrated) log("migrated", migrated, "leaderboard entries to split solo/team points");
 }
+
+/* 2026-07-25 § LEADERBOARD NAME-CASE MERGE MIGRATION (bug 6) - twin of server.js's matching
+   function; read that one first for the full "why" and the winner-selection rules (most games
+   wins the display capitalization; ties break on total stats, then alphabetically). This is the
+   KV-shaped version, and it also (re)builds the ["lbname", lower] index every row needs.
+
+   THE SAFETY ARGUMENT, which is why this looks different from server.js's straightforward
+   in-memory sum. Node holds the whole board in memory and persists it with ONE write, so a crash
+   mid-merge simply leaves the on-disk file untouched. KV has no such all-or-nothing moment: a
+   naive "read every duplicate, write the summed total onto the winner, then delete the losers"
+   would DOUBLE-COUNT if it were interrupted between the write and the deletes, because a second
+   run would find the winner already holding the merged total AND the losers still holding
+   theirs. So nothing here ever writes a computed total. Instead each losing counter is MOVED,
+   one key at a time, in a single atomic transaction that is conditional on that loser key not
+   having changed:
+       check(loserEntry).sum(winnerKey, loserValue).delete(loserKey)
+   Either both halves land or neither does. Interrupt it anywhere and the not-yet-moved counters
+   are all still sitting untouched on their original rows, so the next boot simply finishes the
+   job - resumable, and exactly-once per counter no matter how many times it runs.
+   Idempotency is then structural, exactly as in server.js: once no two rows share a folded name,
+   there is nothing to merge and later boots write nothing at all. */
+async function migrateLeaderboardNameCase(): Promise<void> {
+  const rows: Record<string, Record<string, number>> = {};
+  for await (const e of kv.list<Deno.KvU64>({ prefix: ["leaderboard"] })) {
+    const name = String(e.key[1]);
+    rows[name] = rows[name] || {};
+    rows[name][String(e.key[2])] = Number(e.value.value);
+  }
+  const groups = new Map<string, string[]>();
+  for (const name of Object.keys(rows)) {
+    const lower = leaderboardNameKey(name);
+    if (!groups.has(lower)) groups.set(lower, []);
+    groups.get(lower)!.push(name);
+  }
+  const totalGames = (r: Record<string, number>) => ["hg4s", "hg6s", "hg4t", "hg6t"].reduce((a, k) => a + (Number(r[k]) || 0), 0);
+  const totalAll = (r: Record<string, number>) => Object.keys(r).reduce((a, k) => a + (Number.isFinite(r[k]) ? r[k] : 0), 0);
+  let merged = 0;
+  for (const [lower, names] of groups) {
+    const sorted = names.slice().sort((a, b) => {
+      const ga = totalGames(rows[a]), gb = totalGames(rows[b]);
+      if (ga !== gb) return gb - ga;
+      const ta = totalAll(rows[a]), tb = totalAll(rows[b]);
+      if (ta !== tb) return tb - ta;
+      return a < b ? -1 : (a > b ? 1 : 0);
+    });
+    const winner = sorted[0];
+    // The index has to exist for EVERY row, duplicates or not - that is what routes a future
+    // game submitted under a different capitalization onto this row.
+    const idx = await kv.get<string>(["lbname", lower]);
+    if (idx.value !== winner) await kv.set(["lbname", lower], winner);
+    if (sorted.length < 2) continue;   // nothing to merge - the normal case, and the idempotency guard
+    for (const loser of sorted.slice(1)) {
+      for (const statKey of Object.keys(rows[loser])) {
+        // Re-read each loser counter inside the loop so the atomic `check` is against its
+        // CURRENT version, not the (possibly stale) value from the scan above.
+        const cur = await kv.get<Deno.KvU64>(["leaderboard", loser, statKey]);
+        if (!cur.value) continue;
+        const ok = await kv.atomic()
+          .check(cur)
+          .sum(["leaderboard", winner, statKey], cur.value.value)
+          .delete(["leaderboard", loser, statKey])
+          .commit();
+        if (!ok.ok) log("name-case merge lost a race on", loser, statKey, "- it will be finished on the next boot");
+      }
+      merged++;
+    }
+    log("merged leaderboard rows", JSON.stringify(sorted.slice(1)), "into", JSON.stringify(winner));
+  }
+  if (merged) log("merged", merged, "duplicate-capitalization leaderboard rows");
+}
+
 let lbMigrationReady: Promise<void> | null = null;
 // Same lazy-once-per-isolate pattern as ensureKv() above (see that comment for why nothing
 // here can run at module/top-level scope on this platform) - called from handler() right after
 // ensureKv() resolves, so every request path is covered, but the actual KV scan+write only
 // ever happens once per isolate.
 function ensureLeaderboardMigrated(): Promise<void> {
-  if (!lbMigrationReady) lbMigrationReady = migrateLegacyLeaderboardPoints();
+  // 2026-07-25 (bug 6): ORDER IS LOAD-BEARING, exactly as in server.js - the solo/teams split
+  // must run BEFORE the name-case merge, so a legacy pre-split row's plain "hpts" is turned into
+  // hptsS/hptsT while that row still stands alone. Merging first would fold it into a sibling
+  // that already has hptsS/hptsT, and the split migration's own "already split, skip" guard
+  // would then leave those legacy points stranded.
+  if (!lbMigrationReady) lbMigrationReady = migrateLegacyLeaderboardPoints().then(() => migrateLeaderboardNameCase());
   return lbMigrationReady;
 }
 async function getLeaderboard(): Promise<Record<string, Record<string, number>>> {
@@ -359,6 +484,11 @@ async function leaderboardEntryExists(name: string): Promise<boolean> {
 }
 async function deleteLeaderboardEntry(name: string) {
   for await (const e of kv.list({ prefix: ["leaderboard", name] })) await kv.delete(e.key);
+  // 2026-07-25 (bug 6): drop the folded-name index entry too, or a later game under this name
+  // would be routed to a row that no longer exists. Only if it actually points at THIS row -
+  // never clobber another capitalization's live index entry.
+  const idx = await kv.get<string>(lbNameIndexKey(name));
+  if (idx.value === name) await kv.delete(lbNameIndexKey(name));
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -372,6 +502,8 @@ async function getEpoch(): Promise<number> {
 }
 async function resetLeaderboard(): Promise<number> {
   for await (const e of kv.list({ prefix: ["leaderboard"] })) await kv.delete(e.key);
+  // 2026-07-25 (bug 6): a new season starts with an empty folded-name index too.
+  for await (const e of kv.list({ prefix: ["lbname"] })) await kv.delete(e.key);
   const epoch = (await getEpoch()) + 1;
   await kv.set(EPOCH_KEY, epoch);
   return epoch;
@@ -435,9 +567,17 @@ async function handleSoloResult(req: Request, ip: string): Promise<Response> {
   }
   const rawEntries = (body as Record<string, unknown>).entries;
   const entries = Array.isArray(rawEntries) ? (rawEntries as Record<string, unknown>[]).slice(0, 6) : [];
-  for (const e of entries) { if (e && e.name) await applyLeaderboardEntry(e.name, e.delta); }
+  // 2026-07-25 (bug 4) § SEEN-MARKER ORDERING - twin of server.js's matching block, and the
+  // reason it exists at all is this file: the old order (apply, THEN mark seen) meant a throw
+  // part-way through applying left the gameId unmarked, so the device retried the same
+  // submission forever while some of its keys had already landed. Validate everything first
+  // (sanitizeLeaderboardDelta writes nothing), then mark seen, then apply - at-most-once, and
+  // always a final answer for the client's offline queue.
+  const sanitized: SanitizedEntry[] = [];
+  for (const e of entries) { if (e && e.name) { const s = sanitizeLeaderboardDelta(e.name, e.delta); if (s) sanitized.push(s); } }
   await kv.set(soloSeenKey(gameId), true, { expireIn: SOLO_ID_TTL_MS });
-  log("solo result recorded", gameId, entries.map((e) => e && (e.name as string)).filter(Boolean).join(","));
+  for (const s of sanitized) await applyLeaderboardEntry(s.clean, s.keys);
+  log("solo result recorded", gameId, sanitized.map((s) => s.clean).join(","));
   return json(200, { ok: true, epoch });
 }
 
@@ -482,18 +622,42 @@ type RoomMeta = {
   // false/empty wherever read.
   reunionActive?: boolean;
   tableReadyIds?: number[];
+  // 2026-07-25 (bug 2): when the CURRENT reunion gate opened. REUNION_GATE_CAP_MS is enforced
+  // from this timestamp by the away sweep, deliberately NOT from a setTimeout - an isolate
+  // recycle would lose a timer, and losing it would strand exactly the stuck table the cap
+  // exists to rescue. Optional so an older persisted meta still parses (the sweep starts its
+  // clock on first sight rather than expiring it instantly). Twin of server.js's field.
+  reunionOpenedAt?: number;
 };
 
 function roomKey(code: string): Deno.KvKey { return ["room", code]; }
 function logKey(code: string, seq: number): Deno.KvKey { return ["roomlog", code, seq]; }
 function ttlFor(meta: RoomMeta) { return meta.started ? STARTED_ROOM_TTL_MS : ROOM_TTL_MS; }
 
+/* 2026-07-25 (DENO-ONLY BY NATURE) § UNBIASED ROOM-CODE LETTERS. This used to be
+   `CODE_ALPHABET[b % CODE_ALPHABET.length]` over a random byte. 256 is not a multiple of 19, so
+   that is modulo-biased: 256 = 19*13 + 9, meaning the first NINE letters of the alphabet each
+   had 14 of the 256 byte values and the remaining ten had 13 - about a 7.7% excess for a third
+   of the alphabet. server.js has never had this (it uses Node's crypto.randomInt, which does
+   rejection sampling internally), so this was a straight divergence between two files whose
+   whole contract is identical behavior. Purely cosmetic in effect - four-letter codes out of
+   130k are collision-checked against KV anyway - but divergence is divergence.
+   The fix is the same rejection sampling randomInt does: throw away any byte at or above the
+   largest exact multiple of 19 (247) and draw again, so every remaining value maps to exactly
+   one letter with equal probability. The reject rate is 9/256, about 3.5%, so this practically
+   never loops more than once. */
+const CODE_LIMIT = Math.floor(256 / CODE_ALPHABET.length) * CODE_ALPHABET.length;   // 247
+function randomCodeChar(): string {
+  const buf = new Uint8Array(1);
+  for (;;) {
+    crypto.getRandomValues(buf);
+    if (buf[0] < CODE_LIMIT) return CODE_ALPHABET[buf[0] % CODE_ALPHABET.length];
+  }
+}
 async function newUniqueCode(): Promise<string> {
   let code: string;
   do {
-    const buf = new Uint8Array(4);
-    crypto.getRandomValues(buf);
-    code = Array.from(buf, (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join("");
+    code = randomCodeChar() + randomCodeChar() + randomCodeChar() + randomCodeChar();
   } while ((await kv.get(roomKey(code))).value);
   return code;
 }
@@ -886,7 +1050,7 @@ async function actuallyStartGame(code: string, pre: RoomMeta): Promise<void> {
     meta.G = G;
     meta.recorded = false;
     meta.anySurrenderOccurred = false;   // v0.27.1: a genuinely new game/rematch resets the no-fault-exit flag
-    meta.reunionActive = false; meta.tableReadyIds = [];   // 2026-07-23: defensive reset, same lifecycle as `recorded`
+    meta.reunionActive = false; meta.tableReadyIds = []; meta.reunionOpenedAt = 0;   // 2026-07-23 / 2026-07-25: defensive reset, same lifecycle as `recorded`
     meta.nextSeq = 1;   // 'start' is broadcast seq 0
     meta.logCount = 1;
     return { seatOwners: meta.seatOwners };
@@ -921,9 +1085,26 @@ async function actuallyStartGame(code: string, pre: RoomMeta): Promise<void> {
 }
 
 // 2026-07-23 (Blake's item 2) § REUNION READY GATE - twin of server.js's maybeResolveReunion(),
-// see the big comment block above that function for the full design. Async/KV-shaped: reads a
-// fresh meta and only commits when the gate is genuinely ready to resolve (touchRoom's mutate
-// returning `false` is a clean no-op, no write, no broadcast - exactly "not resolved yet").
+// see the big comment block above that function for the full design AND for the 2026-07-25
+// write-up of the two holes closed since (bug 1: an unpause used to bypass and permanently wedge
+// this gate; bug 2: the gate had no cap, so one person who never tapped Ready up froze the table
+// forever). Async/KV-shaped: reads a fresh meta and only commits when the gate is genuinely
+// ready to resolve (touchRoom's mutate returning `false` is a clean no-op, no write, no
+// broadcast - exactly "not resolved yet").
+const REUNION_GATE_CAP_MS = envInt("NASTY_REUNION_GATE_CAP_MS", 75 * 1000);
+// Shared close-out for both ways a gate ends (everyone readied, or the cap expired) - twin of
+// server.js's closeReunionGate().
+function clearReunionFields(meta: RoomMeta) {
+  meta.paused = false;
+  meta.reunionActive = false;
+  meta.tableReadyIds = [];
+  meta.reunionOpenedAt = 0;
+}
+function broadcastReunionClosed(code: string, why: string) {
+  broadcastRoom(code, { type: "paused", paused: false });
+  broadcastRoom(code, { type: "reunionStatus", active: false, readyPlayerIds: [] });
+  log("reunion gate closed - table resuming", code, "(" + why + ")");
+}
 async function maybeResolveReunion(code: string): Promise<void> {
   const r = await touchRoom(code, (meta) => {
     if (!meta.reunionActive || !meta.G) return false;
@@ -937,18 +1118,49 @@ async function maybeResolveReunion(code: string): Promise<void> {
       return !!(p && p.connected);   // only players CURRENTLY at the table are required to ready up
     });
     // Never auto-resolve with nobody required - sit tight rather than silently resume an
-    // unattended table (mirrors server.js's own guard).
+    // unattended table (mirrors server.js's own guard). The cap below bounds even THIS case.
     if (required.length === 0) return false;
     if (!required.every((pid) => readySet.has(pid as number))) return false;
-    meta.paused = false;
-    meta.reunionActive = false;
-    meta.tableReadyIds = [];
+    clearReunionFields(meta);
+    return {};
+  });
+  if (r.ok) broadcastReunionClosed(code, "everyone readied up");
+}
+// 2026-07-25 (bug 2): the cap's enforcement. Called from awaySweep() below - the one periodic
+// per-room pass this file has, and the only one that already knows which rooms have anyone
+// looking at them. Twin of server.js's sweepReunionGates().
+async function sweepReunionGate(code: string, meta: RoomMeta | null): Promise<void> {
+  if (!meta || !meta.reunionActive) return;
+  const now = Date.now();
+  if (!meta.reunionOpenedAt) {
+    // A gate persisted before this field existed: start its clock rather than expiring it now.
+    await touchRoom(code, (m) => { if (!m.reunionActive || m.reunionOpenedAt) return false; m.reunionOpenedAt = now; return {}; });
+    return;
+  }
+  // A gate that has sat UNOBSERVED for far longer than the cap did not have anybody there to tap
+  // Ready up, so expiring it the instant somebody finally shows up would flash the check-in
+  // lobby for a second and then yank it away. Restart its clock instead, so whoever just came
+  // back gets a full-length check-in. This sweep only ever sees rooms with a live local socket,
+  // so that is exactly what happens whenever everybody was gone for a while. Same rule, same
+  // line, in server.js - see its matching comment.
+  if (now - meta.reunionOpenedAt > REUNION_GATE_CAP_MS * 3) {
+    await touchRoom(code, (m) => { if (!m.reunionActive) return false; m.reunionOpenedAt = now; return {}; });
+    return;
+  }
+  if (now - meta.reunionOpenedAt < REUNION_GATE_CAP_MS) return;
+  const waited = Math.round((now - meta.reunionOpenedAt) / 1000);
+  const r = await touchRoom(code, (m) => {
+    if (!m.reunionActive) return false;   // somebody resolved it between the read and here
+    clearReunionFields(m);
     return {};
   });
   if (r.ok) {
-    broadcastRoom(code, { type: "paused", paused: false });
-    broadcastRoom(code, { type: "reunionStatus", active: false, readyPlayerIds: [] });
-    log("reunion resolved - table resuming", code);
+    broadcastReunionClosed(code, "waited " + waited + "s for everyone to tap Ready up");
+    // A clean resume, not just an unpaused flag: if the gate happened to open while the very
+    // first deal was still pending, releaseFirstDeal() bailed on `paused` and nothing would ever
+    // retrigger it. This no-ops unless that deal is genuinely still owed (it checks nextSeq
+    // itself). Twin of server.js's matching call.
+    await withRoomChain(code, () => releaseFirstDeal(code)).catch((e) => log("post-cap re-drive failed", code, (e as Error).message));
   }
 }
 
@@ -1070,7 +1282,10 @@ function unregisterLocalSocket(code: string, playerId: number) {
   const m = localSockets.get(code);
   if (!m) return;
   m.delete(playerId);
-  if (m.size === 0) { localSockets.delete(code); closeChannel(code); }
+  // 2026-07-25 (bug 3): drop this room's TTL-refresh bookkeeping when the last socket goes, so a
+  // room somebody comes back to later gets refreshed straight away instead of waiting out a
+  // stale timestamp - and so the map can't grow forever across a long-lived isolate.
+  if (m.size === 0) { localSockets.delete(code); lastTtlRefresh.delete(code); closeChannel(code); }
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -1181,6 +1396,12 @@ const AWAY_CPU_OFFER_MS = envInt("NASTY_AWAY_CPU_MS", 150 * 1000);
 const AWAY_SILENT_MS = envInt("NASTY_AWAY_SILENT_MS", 60 * 1000);
 const AWAY_SWEEP_MS = envInt("NASTY_AWAY_SWEEP_MS", Math.min(5000, Math.max(500, Math.floor(AWAY_NUDGE_MS / 3))));
 const AWAY_REPUSH_MIN_MS = 25 * 1000;
+// 2026-07-25 (bug 3): how often the sweep below pushes a still-occupied room's KV expiry out.
+// Well under ROOM_TTL_MS (30 min), so a room with anyone connected can never expire between two
+// refreshes. Isolate-local + transient like the rest of this section's state - a recycle just
+// means the next sweep refreshes early, which is harmless.
+const ROOM_TTL_REFRESH_MS = envInt("NASTY_ROOM_TTL_REFRESH_MS", 5 * 60 * 1000);
+const lastTtlRefresh = new Map<string, number>();
 type AwayState = { seat: number; since: number; nudgeSent: boolean; offerSent: boolean; announced: boolean; lastPushAt: number };
 const awayStates = new Map<string, AwayState>();
 function playerLooksAway(code: string, p: Player | undefined): boolean {
@@ -1205,6 +1426,37 @@ async function awaySweep() {
   for (const code of Array.from(localSockets.keys())) {
     const cur = await kv.get<RoomMeta>(roomKey(code));
     const meta = cur.value;
+    // 2026-07-25 (bug 3, DENO-ONLY BY NATURE) § KEEP A ROOM WITH PEOPLE IN IT ALIVE.
+    //
+    // server.js never prunes a room anyone is connected to - its pruner's very first line is
+    // `if (!roomIsFullyDisconnected(room)) continue;`. This file had no equivalent guard at all:
+    // expiry here is purely KV's own `expireIn`, and the ONLY thing that ever refreshed it was a
+    // touchRoom() write, i.e. an actual message. So a never-started lobby whose host was sitting
+    // right there, connected and idle, silently vanished after ROOM_TTL_MS (30 minutes). That is
+    // Blake's exact real-world flow: open a room, text the link, wait for the family to gather.
+    // Confirmed by reading the local KV SQLite's expiration_ms directly - an idle-but-connected
+    // room's expiry did not move; a real message moved it.
+    //
+    // The fix, matching Node's semantics rather than inventing new ones: while this room has at
+    // least one live local socket, keep pushing its expiry out. The rewrite is conditional on the
+    // entry not having changed (a plain `check`), so it can never clobber a concurrent write, and
+    // it carries the SAME meta forward - it deliberately does NOT touch lastActivity, because
+    // "somebody is connected" is not "somebody did something". A room nobody is connected to is
+    // not in localSockets at all, so it still expires exactly as it always did.
+    // Rate-limited to ROOM_TTL_REFRESH_MS per room (isolate-local bookkeeping, transient by
+    // design like every other map in this section) so this costs a handful of tiny KV writes an
+    // hour rather than one per sweep. The default is comfortably shorter than the 30-minute
+    // lobby TTL, so a room can never slip through the gap between two refreshes.
+    if (meta) {
+      const last = lastTtlRefresh.get(code) || 0;
+      if (now - last >= ROOM_TTL_REFRESH_MS) {
+        lastTtlRefresh.set(code, now);
+        const ok = await kv.atomic().check(cur).set(roomKey(code), meta, { expireIn: ttlFor(meta) }).commit();
+        if (!ok.ok) log("room ttl refresh lost a race", code, "- the next sweep will retry");
+      }
+    }
+    // 2026-07-25 (bug 2): the reunion gate's cap rides this same sweep - see sweepReunionGate().
+    await sweepReunionGate(code, meta ?? null);
     let target: { seat: number; name: string } | null = null;
     // v0.22 P0b: a room still holding its first deal has nobody meaningfully "on turn" yet.
     if (meta && meta.started && !meta.paused && meta.seatOwners && !seatGates.has(code)) {
@@ -1874,8 +2126,21 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           if (G.over || G.seats[seat].type !== "human") return;   // already finished, or not actually a human seat — nothing to surrender
           const mode = (G.n === 4 ? "4" : "6") + (G.teams ? "t" : "s");
           if (meta.anySurrenderOccurred) {
-            // Someone else already surrendered this same game — free, no-fault exit.
-            log("no-fault exit (someone already surrendered this game)", code, "seat=" + seat, "name=" + G.seats[seat].name, "mode=" + mode);
+            // Someone else already surrendered this same game - free, no-fault exit: no
+            // hg<mode>, no loss, no points.
+            //
+            // 2026-07-25 (bug 5): this branch used to `return` right here, before building any
+            // delta, so this player's already-accrued hkoDealt/hkoTaken were lost permanently
+            // (their seat becomes a CPU immediately after, so recordFinishedGame() skips it
+            // too). A knockout genuinely happened at the table, it is a fun lifetime stat rather
+            // than a competitive one, and nobody else's concession should erase it. The free
+            // exit now still writes a delta - just one holding ONLY the knockout keys. Twin of
+            // server.js's matching branch.
+            const koDelta: Record<string, number> = {};
+            if (G.koDealt && G.koDealt[seat]) koDelta.hkoDealt = G.koDealt[seat];
+            if (G.koTaken && G.koTaken[seat]) koDelta.hkoTaken = G.koTaken[seat];
+            if (Object.keys(koDelta).length) await applyLeaderboardEntry(G.seats[seat].name, koDelta);
+            log("no-fault exit (someone already surrendered this game)", code, "seat=" + seat, "name=" + G.seats[seat].name, "mode=" + mode, "knockouts kept=" + JSON.stringify(koDelta));
             return;
           }
           const delta: Record<string, number> = {}; delta["hg" + mode] = 1;
@@ -1924,6 +2189,15 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           if (ok) maybeSendTurnPush(code, E, cont.finished).catch((e) => log("push check failed", code, (e as Error).message));
           // Follow-up commit for the lockout + seatOwners slot - same pattern as leaveForGood
           // (it must land even though commitAndBroadcast just persisted a fresh meta.G).
+          //
+          // 2026-07-25 (DENO-ONLY BY NATURE): gated on `ok`. This used to run unconditionally,
+          // so a FAILED commitAndBroadcast (contention, a vanished room) still locked the seat's
+          // owner out and blanked their seatOwners slot - while KV still held them as a live
+          // HUMAN seat, because the conversion itself never landed. That combination strands the
+          // seat: the original player can never get back in, and no CPU is playing it either.
+          // server.js cannot produce this at all - its conversion and its lockout are the same
+          // synchronous block with nothing that can fail between them.
+          if (!ok) { log("takeOverSeat commit failed - leaving the seat untouched", code, "seat=" + seat); return; }
           await touchRoom(code, (m) => {
             const p = m.players.find((pp) => pp.id === ownerId);
             if (p) p.leftForGood = true;
@@ -2010,12 +2284,33 @@ function handleWsUpgrade(req: Request, ip: string): Response {
 
       case "pauseToggle": {
         if (!ctx) return;
-        const { code } = ctx;
+        const { code, playerId } = ctx;
+        const wantPaused = !!msg.paused;
+        // 2026-07-25 (bug 1) § REUNION GATE GUARD - twin of server.js's matching guard; see the
+        // big comment above server.js's maybeResolveReunion() for the full root cause. In short:
+        // this case set meta.paused unconditionally, so an unpause arriving while the ready-up
+        // gate was open BYPASSED the gate and left reunionActive stuck true forever, which made
+        // every later reunion a silent no-op for that room's whole life. Cancelling the
+        // Pause/Save sheet and an older build's tap-to-resume both send exactly this message.
+        // An unpause is refused while a gate is open and the asker is told plainly why; a PAUSE
+        // is still fine (the gate has already paused the table, so it changes nothing).
+        let refused: RoomMeta | null = null;
         const r = await touchRoom(code, (meta) => {
           if (!meta.started) return false;
-          meta.paused = !!msg.paused;
+          if (!wantPaused && meta.reunionActive) { refused = meta; return false; }
+          meta.paused = wantPaused;
           return {};
         });
+        if (refused) {
+          const m = refused as RoomMeta;
+          send(socket, { type: "error", message: "Everyone is checking in first. Tap Ready up when you are ready to keep playing." });
+          // Re-state the truth to just this player, so a client that assumed its own tap worked
+          // (or an older build with no idea this gate exists) lands back on the real state.
+          send(socket, { type: "paused", paused: true });
+          send(socket, { type: "reunionStatus", active: true, readyPlayerIds: m.tableReadyIds || [] });
+          log("unpause refused - reunion gate open", code, "playerId=" + playerId);
+          return;
+        }
         if (r.ok) broadcastRoom(code, { type: "paused", paused: r.meta.paused });
         return;
       }
@@ -2032,9 +2327,15 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         const { code, playerId } = ctx;
         const r = await touchRoom(code, (meta) => {
           if (!meta.started || meta.reunionActive) return false;
+          // 2026-07-25 (bug 7): the same seat check its sibling "tableReadyUp" below has always
+          // had - twin of server.js's guard. Without it a guest who joined the lobby but never
+          // claimed a seat could pause the whole table, and then could NOT clear it, because
+          // tableReadyUp DOES check seatOwners so their own ready-up was rejected.
+          if (!meta.seatOwners || !meta.seatOwners.includes(playerId)) return false;
           meta.paused = true;
           meta.reunionActive = true;
           meta.tableReadyIds = [];
+          meta.reunionOpenedAt = Date.now();   // 2026-07-25 (bug 2): starts REUNION_GATE_CAP_MS
           return {};
         });
         if (r.ok) {
