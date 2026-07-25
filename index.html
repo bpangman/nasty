@@ -427,37 +427,135 @@ button{font:inherit;cursor:pointer}
    only about 3px, so this was one label wording change away from breaking on every phone.
    Fix: let the row WRAP (the label keeps its own line, the buttons drop underneath and get the
    full width) and give both children min-width:0 so they can actually shrink first. The row
-   still renders on one line exactly as before on any screen where it genuinely fits. */
-.optRow{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin:10px 2px}
+   still renders on one line exactly as before on any screen where it genuinely fits.
+
+   2026-07-25 LATER THE SAME DAY - Blake's setup-screen feedback, his item 2. READ THIS BEFORE
+   REVERTING ANYTHING BELOW. Item G's wrap fixed the clipping but produced a screen Blake
+   rejected on sight: GAME TYPE's two buttons dropped onto their own line UNDERNEATH the label,
+   while the PLAYERS row directly above it kept its label and buttons side by side. His words:
+   "I don't like how both these options are now below game type while players is in the same row
+   as the options (how these were before)."
+
+   So the row is nowrap again - the label and its options ALWAYS share one line, on every
+   screen, both rows reading the same way. The 29px overflow that item G existed to solve is
+   now solved a different way, without wrapping:
+     - the label is flex:0 0 auto + white-space:nowrap (it is short and must never break),
+     - .segs is the only shrinkable child and carries min-width:0, so it absorbs every bit of
+       the squeeze instead of the row overflowing,
+     - .seg itself is flex:0 1 auto + min-width:0 with a smaller font and tighter padding, and
+       .segs keeps flex-wrap:wrap INTERNALLY - so when the two buttons genuinely cannot sit
+       side by side, "Teams" drops UNDER "Everyone for themselves" inside their own column and
+       the block just gets two buttons tall. Blake explicitly okayed that: "it's okay to make
+       these buttons 2 rows thick for symmetry like it was before."
+   Net effect: zero overflow at 320/375/390/393/430 (verified by measurement, see
+   server/tests/test_ui_setup_rows_2026_07_25.js), and the label never loses its line. */
+.optRow{display:flex;flex-wrap:nowrap;gap:8px;align-items:center;justify-content:space-between;margin:10px 2px}
 .optRow>*{min-width:0}
-.optRow label{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#a9d2b5;min-width:0}
+/* min-width holds every label to one shared column width (6.6em is just over the longest label
+   on the setup screen, "GAME TYPE"), which is what makes the PLAYERS options block and the GAME
+   TYPE options block come out the SAME width and line up with each other down the card - Blake's
+   "this should all be symmetrical". Without it the shorter "PLAYERS" label would hand its row a
+   wider options column and the two blocks would sit at different left edges. */
+.optRow label{font-size:13px;letter-spacing:.10em;text-transform:uppercase;color:#a9d2b5;
+  flex:0 0 auto;white-space:nowrap;min-width:6.6em}
+/* Any non-.segs control parked in an .optRow (the join overlay's room-code and name boxes, the
+   admin token box) sets its own pixel width inline. max-width:100% keeps that inline width from
+   pushing the now-nowrap row wider than the card on a narrow phone. */
+.optRow>input{max-width:100%}
 .segs{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+/* Right-aligned ONLY inside an .optRow, so the buttons hug the right edge opposite their label
+   and the two option rows line up with each other. The standalone .segs (the leaderboard's
+   Solo/Teams/KOs tabs) keeps its normal left alignment.
+   flex:1 1 auto on the column plus flex:1 1 auto on the buttons is what makes the PLAYERS and
+   GAME TYPE blocks the SAME width as each other and makes every button in a block the same
+   width as its neighbour - so when "Teams" does drop under "Everyone for themselves" the two
+   read as one tidy stacked pair rather than a big button with a little one hanging off it.
+   Both are scoped to .optRow so the leaderboard tabs keep sizing to their own text. */
+.optRow .segs{flex:1 1 auto;justify-content:flex-end}
+.optRow .seg{flex:1 1 auto}
 .seg{border:1px solid rgba(255,255,255,.25);background:transparent;color:var(--cream);
-  padding:8px 16px;border-radius:10px;font-weight:700;font-size:15px;min-height:44px}
+  padding:8px 10px;border-radius:10px;font-weight:700;font-size:13px;min-height:44px;
+  flex:0 1 auto;min-width:0;line-height:1.2}
 .seg.on{background:var(--gold);border-color:var(--gold);color:#3a2c05}
+/* Same narrow-phone budget idea as .seatRow below: at 359px and under the label sheds a point of
+   size and most of its letter-spacing and the buttons tighten, which is exactly enough for
+   "Everyone for themselves" to stay a single line of text in its own column instead of wrapping
+   to two. 375 and up never see this block. */
+@media (max-width:359px){
+  .optRow{gap:6px}
+  .optRow label{font-size:12px;letter-spacing:.04em}
+  .seg{font-size:12px;padding:8px 8px}
+}
 #teamNote{font-size:13px;color:#ffe9a8;margin:2px 2px 8px;min-height:18px}
-.seatRow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:rgba(255,255,255,.06);
-  border-radius:12px;padding:8px 10px;margin:8px 0}
-.seatRow .dot{width:22px;height:22px;border-radius:50%;flex:none;border:2px solid rgba(255,255,255,.6)}
+/* 2026-07-25 - Blake's setup-screen feedback, his item 1. READ THIS BEFORE CHANGING THE FOUR
+   RULES BELOW, and read it together with the .optRow note above (his item 2).
+
+   History, so nobody flips this back a third time:
+     - Up to v0.30 the seat row was one line, but .nameWrap had min-width:60px. At 320 the name
+       box really did collapse to 60px, and the input's own padding (10 left + 26 right for the
+       pencil) ate 36 of it, leaving 24px of ACTUAL visible text - every default name truncated
+       mid-word ("Ton", "Do"), and a full 10-character name still clipped at 390.
+     - v0.31 item J fixed the truncation by letting .seatRow WRAP: dot + name on line one, the
+       two dropdowns underneath. That made the row 112px tall at every width and left the
+       difficulty dropdown hanging on a second line by itself.
+     - Blake saw that on his phone and rejected it: "make the slot to input names (even for the
+       CPU's) slightly smaller so the CPU/Human designation and difficulty level all fit on 1
+       row. This should all be symmetrical, but the current design doesn't work."
+
+   So: nowrap, one line per seat, and the row is sized so all four controls genuinely fit
+   WITHOUT bringing the old 24px truncation back. Four rules make that work:
+     1. The two dropdowns are flex:0 0 auto - they size to their own widest option and never
+        shrink. Because every seat row has the identical option lists in the identical font,
+        every row's dropdowns come out the identical width, so the columns line up straight
+        down the list. That is what Blake means by "symmetrical", and it is a consequence of
+        the sizing rule rather than a pile of hand-tuned pixel widths that could drift apart.
+     2. A human seat hides its difficulty dropdown with visibility:hidden (see renderSeats,
+        § MENU) - NOT display:none - so the hidden control still holds its column open and a
+        human row lines up exactly with a computer row. Do not "tidy" that into display:none.
+     3. .nameWrap is the ONLY flexible child (flex:1 1 0, min-width:0), so it takes whatever is
+        left over and is identical on every row of a given screen. It shrinks instead of the row
+        overflowing, which is why nothing can ever poke out of the panel.
+     4. The dropdowns are appearance:none with our own small chevron drawn as a background
+        image. The native control reserves about 24px of arrow furniture on its own; the
+        chevron needs about 11. Those ~13px per dropdown, x2, are most of what buys the name
+        box back its readable width on a narrow phone.
+   The four --seat* custom properties below are the whole size budget in one place, with a
+   single narrow-phone override for 359px and under. Measured result (visible text inside the
+   name box, i.e. width minus its own padding): 65px at 320, 93px at 375, 108px at 390/393,
+   148px at 430 - versus the 24px that caused the original bug. A full 10-character name fits
+   uncut at every one of those widths. */
+.seatRow{display:flex;flex-wrap:nowrap;gap:var(--seatGap);align-items:center;background:rgba(255,255,255,.06);
+  border-radius:12px;padding:8px var(--seatPadX);margin:8px 0;
+  --seatGap:6px;--seatPadX:10px;--seatDot:20px;
+  --seatSelFS:13px;--seatSelPadL:6px;--seatSelPadR:14px;
+  --seatNameFS:14px;--seatNamePadL:8px;--seatNamePadR:18px}
+/* 320x568 (iPhone SE 1st gen / 5s) is the one screen where the default budget above does not
+   leave the name box a usable amount of text. Everything tightens by a couple of pixels here
+   and only here - 375 and up are untouched by this block. */
+@media (max-width:359px){
+  .seatRow{--seatGap:4px;--seatPadX:6px;--seatDot:18px;
+    --seatSelFS:12px;--seatSelPadL:5px;--seatSelPadR:12px;
+    --seatNameFS:12.5px;--seatNamePadL:6px;--seatNamePadR:16px}
+}
+.seatRow .dot{width:var(--seatDot);height:var(--seatDot);border-radius:50%;flex:none;
+  border:2px solid rgba(255,255,255,.6);box-sizing:border-box}
 /* v0.24: .nameWrap wraps the name input so a pencil glyph can sit inside it - Blake's ask was
    to make it obvious the name is tappable/editable (nothing signaled it before). pointer-events:
    none on the glyph so taps still land on the input underneath it. */
-/* 2026-07-25 (item J of the UI polish batch): min-width:60px let the name box collapse to a
-   60px-wide input whose own padding (10px left + 26px right for the pencil) already eats 36px
-   of that - leaving 24px of ACTUAL visible text, so every default name was truncated mid-word
-   at a 320px phone ("Ton", "Do") and even a 10-character name still clipped at 390. Measured
-   directly, not eyeballed. Fix: let .seatRow wrap, and give the name a real flex-basis so it
-   keeps a usable width and the two dropdowns drop onto their own line whenever the row is
-   genuinely too tight for all three. min-width:0 (not 60px) is what actually lets the flex
-   algorithm reach that decision instead of overflowing first. */
-.seatRow .nameWrap{position:relative;flex:1 1 150px;min-width:0}
+.seatRow .nameWrap{position:relative;flex:1 1 0;min-width:0}
 .seatRow .nameWrap input{width:100%;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.18);
   border-bottom:1px solid rgba(244,197,66,.55);border-radius:8px;color:var(--cream);
-  padding:8px 26px 8px 10px;font-size:15px;min-height:44px;box-sizing:border-box}
-.seatRow .nameWrap .editPencil{position:absolute;right:8px;top:50%;transform:translateY(-50%);
-  font-size:13px;opacity:.7;pointer-events:none}
-.seatRow select{background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.18);border-radius:8px;
-  color:var(--cream);padding:8px 6px;font-size:14px;min-height:44px;flex:0 1 auto;min-width:0}
+  padding:8px var(--seatNamePadR) 8px var(--seatNamePadL);font-size:var(--seatNameFS);
+  min-height:44px;box-sizing:border-box}
+.seatRow .nameWrap .editPencil{position:absolute;right:4px;top:50%;transform:translateY(-50%);
+  font-size:11px;opacity:.7;pointer-events:none}
+.seatRow select{appearance:none;-webkit-appearance:none;
+  background-color:rgba(0,0,0,.35);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%23f4ecd8' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 3px center;
+  border:1px solid rgba(255,255,255,.18);border-radius:8px;color:var(--cream);
+  padding:8px var(--seatSelPadR) 8px var(--seatSelPadL);font-size:var(--seatSelFS);
+  min-height:44px;flex:0 0 auto;min-width:0;text-overflow:ellipsis}
 #nameHint{font-size:12.5px;color:#9ec7aa;min-height:16px;margin:0 2px 4px;text-align:center}
 .bigBtns{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:18px}
 /* v0.26 item 2: the HOST speed picker only (#hostSpeedOverlay's #hostSpeedBtns) - a real 2x2
@@ -1497,7 +1595,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.31</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.32</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->

@@ -34,6 +34,13 @@
  *       edge), setup name inputs (24px of visible text), and long toast messages (silently
  *       sliced by a fixed 60px band).
  *
+ * NOTE, same day, after Blake reviewed v0.31 on his phone: the two SHAPES that items G and J
+ * used to solve their overflow (the .optRow wrapping its buttons under the label, and the
+ * .seatRow wrapping its dropdowns under the name) were both reversed - see his feedback quoted
+ * in index.html's § STYLE and the companion suite test_ui_setup_rows_2026_07_25.js. Both
+ * OVERFLOW guarantees are unchanged and still asserted here; only item J's visible-text
+ * threshold moved, with its reason recorded at the assertion itself.
+ *
  * Fully offline (file://) - no server needed.
  * Run: node test_ui_polish_2026_07_25.js
  */
@@ -469,7 +476,18 @@ async function partGtoK(browser) {
       return { w: r.width, padL: parseFloat(cs.paddingLeft), padR: parseFloat(cs.paddingRight), clipped };
     });
     const visibleText = seats.w - seats.padL - seats.padR;
-    ok(visibleText >= 100, `${m.w}: (J) a seat name input shows ${visibleText.toFixed(0)}px of actual text (was 24px at 320, still clipping a 10-char name at 390)`);
+    /* 2026-07-25, later the same day - THRESHOLD UPDATED, DELIBERATELY, from 100 to 60.
+       Item J bought its 100px+ of visible text by letting .seatRow WRAP onto two lines, and
+       Blake rejected that layout as soon as he saw it on his phone ("make the slot to input
+       names slightly smaller so the CPU/Human designation and difficulty level all fit on 1
+       row"). The seat row is one line again, so the name box is deliberately narrower - 67px
+       of visible text at 320 and 88-148px at 375 and up. What this assertion exists to prevent
+       is the ORIGINAL bug (a 24px box that truncated every default name mid-word), and 60px is
+       comfortably above that while being honest about the one-row budget. The real usability
+       check is the one immediately below it, which is unchanged and un-weakened: a full
+       10-character name must still fit uncut at every width. See
+       test_ui_setup_rows_2026_07_25.js for the full one-row/symmetry coverage. */
+    ok(visibleText >= 60, `${m.w}: (J) a seat name input shows ${visibleText.toFixed(0)}px of actual text (was 24px at 320, still clipping a 10-char name at 390)`);
     ok(seats.clipped === 0, `${m.w}: (J) no seat row overflows the setup panel`);
 
     // J again, with real content: a 10-character name must not be cut off mid-word.
