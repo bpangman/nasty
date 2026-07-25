@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '86f64cf9-8331-4b98-8e25-9c71fc0bcb57'
+BUILD_SUBMISSION_ID = 'af8d2e1c-58d1-4316-bcf1-be64a0e24492'
 
 
 def current_build():
@@ -101,11 +101,14 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>This one is the post-game changes you asked for:</p>
+<p>This one is a whole batch of small fixes that were quietly making the game harder to play on a phone:</p>
 <ul>
-<li>When the game ends you now see everyone's knockout numbers, with a ratio, right on the winner screen.</li>
-<li>You can close that winner popup with the X to look back at the finished board, then tap any player's name to see the cards they had left.</li>
-<li>There's a clear way to leave and get back to the menu from that screen, and a "Results" button to pull the winner popup back up if you closed it.</li>
+<li>Longer names like Michelle or Christina no longer get their name plate cut off by the edge of the screen.</li>
+<li>On smaller phones the message strip at the bottom used to sit right on top of the board, and the gold "your turn" message was almost unreadable. The board now sits above it, and the message has a solid dark background.</li>
+<li>The circles you tap to pick a tee were only about the size of a fingernail. They are proper thumb sized targets now.</li>
+<li>QUIT now also offers "Save and leave instead", so you can step away without taking a loss. Anywhere leaving costs you a loss, the safe button comes first now, and the little trash can on a saved game says Concede, which is what it always actually did.</li>
+<li>The NASTY sign on the menu, the setup screen name boxes, the online lobby and the online setup screen were all getting cut off on narrower phones. All fixed.</li>
+<li>Tapping a card you cannot play now tells you why instead of doing nothing.</li>
 </ul>
 <h3>The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
