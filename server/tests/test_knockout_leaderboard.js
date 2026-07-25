@@ -65,25 +65,34 @@ async function partA(browser) {
   await page.waitForFunction(() => typeof window.NET === 'object');
 
   // ---- pure math: koRatioStr/koRatioNum, no G/DOM needed ----
+  // 2026-07-25 REVISION (Blake's post-game review request - "the KOs ratio ranks oddly"): the
+  // ORIGINAL v0.28 behavior tested here (bare dealt count shown/sorted for a never-KO'd player)
+  // let a tiny, unproven "perfect" sample (e.g. 5 KOs, 0 taken) outrank a proven high-volume real
+  // ratio (e.g. 412/307 = 1.34), purely because 5 > 1.34 as raw numbers - genuinely odd, not just
+  // superficially so, once a real ratio exists to compare against. See koRatioStr()/koRatioNum()'s
+  // own dated comment, index.html, for the full reasoning. Updated here to match the new,
+  // deliberately-changed behavior: "Perfect" (plain word, never a bare number or "Infinity"),
+  // sorting BELOW every player with a real, computed ratio (a negative sentinel that's always
+  // less than any real ratio, which is always >= 0).
   const math = await page.evaluate(() => ({
     zeroZero: koRatioStr(0, 0),
-    dealtOnly: koRatioStr(7, 0),
+    perfect: koRatioStr(7, 0),
     normal: koRatioStr(3, 2),
-    numZero: koRatioNum(9, 0),
+    numPerfect: koRatioNum(9, 0),
     numNormal: koRatioNum(4, 2),
   }));
   check(math.zeroZero === '-', `koRatioStr(0,0) is a clean "-", not NaN - got "${math.zeroZero}"`);
-  check(math.dealtOnly === '7', `koRatioStr(7,0) (dealt, never KO'd) shows the count itself, not "Infinity" - got "${math.dealtOnly}"`);
+  check(math.perfect === 'Perfect', `koRatioStr(7,0) (dealt, never KO'd) shows the word "Perfect", not a bare count or "Infinity" - got "${math.perfect}"`);
   check(math.normal === '1.50', `koRatioStr(3,2) is a real ratio, 2 decimal places - got "${math.normal}"`);
-  check(math.numZero === 9, 'koRatioNum(9,0) sorts by the dealt count when never KO\'d');
+  check(math.numPerfect < 0, `koRatioNum(9,0) is a negative sentinel - sorts BELOW any real ratio (always >= 0) - got ${math.numPerfect}`);
   check(math.numNormal === 2, 'koRatioNum(4,2) computes the real ratio for sorting');
 
   // ---- table render + sort + empty state ----
   await page.evaluate(() => {
     localStorage.setItem('nasty-stats', JSON.stringify({
       Ace: { hkoDealt: 10, hkoTaken: 2 },     // ratio 5.00 - top
-      Bo: { hkoDealt: 6, hkoTaken: 0 },       // never KO'd - ratio shows as "6"
-      Cy: { hkoDealt: 3, hkoTaken: 6 },       // ratio 0.50 - bottom
+      Bo: { hkoDealt: 6, hkoTaken: 0 },       // never KO'd - "Perfect", now ranks BELOW real ratios
+      Cy: { hkoDealt: 3, hkoTaken: 6 },       // ratio 0.50 - still ranks above "Perfect"
       Deb: { hg4s: 4, hw4s: 1 },              // has OTHER stats but zero knockouts - must NOT appear on this tab
     }));
     lbTab = 'ko';
@@ -95,16 +104,14 @@ async function partA(browser) {
   check(/KOs/.test(html) && /KO.d/.test(html), 'headers read "KOs"/"KO\'d", not "kill"/"death"');
   check(!/\bkill\b/i.test(html) && !/\bdeath\b/i.test(html), 'the word "kill" or "death" never appears anywhere on the KOs tab');
   const order = await page.evaluate(() => Array.from(document.querySelectorAll('.lbTable.lbKo tr')).slice(1).map(tr => tr.children[0].textContent));
-  // Bo (6 dealt, never KO'd -> ratio shows as the count itself, 6) ranks ABOVE Ace (10 dealt / 2
-  // taken -> a real 5.00 ratio) - an undefeated 6 outranks a 5.00 ratio, which is the documented,
-  // deliberate divide-by-zero behavior (koRatioNum treats "never KO'd" as the dealt count for
-  // sorting purposes too, not a separately-invented tiebreak) - not a bug, so the test expects it.
-  check(JSON.stringify(order) === JSON.stringify(['Bo', 'Ace', 'Cy']), `sorted by ratio descending (Bo "6" undefeated, Ace 5.00, Cy 0.50) - got ${JSON.stringify(order)}`);
+  // Ace (5.00) and Cy (0.50) - both real, computed ratios - now BOTH rank above Bo ("Perfect",
+  // 6 dealt/0 taken) - a tiny unproven perfect streak no longer jumps the real-ratio players.
+  check(JSON.stringify(order) === JSON.stringify(['Ace', 'Cy', 'Bo']), `sorted by ratio descending, "Perfect" (Bo) now ranks LAST behind both real ratios (Ace 5.00, Cy 0.50) - got ${JSON.stringify(order)}`);
   const boVals = await page.evaluate(() => {
     const tr = Array.from(document.querySelectorAll('.lbTable.lbKo tr')).find((r) => r.textContent.includes('Bo'));
     return Array.from(tr.children).map((td) => td.textContent);
   });
-  check(boVals[1] === '6' && boVals[2] === '0' && boVals[3] === '6', `Bo's row (dealt 6, taken 0) shows Ratio "6" not "Infinity" - got ${JSON.stringify(boVals)}`);
+  check(boVals[1] === '6' && boVals[2] === '0' && boVals[3] === 'Perfect', `Bo's row (dealt 6, taken 0) shows Ratio "Perfect", not "6" or "Infinity" - got ${JSON.stringify(boVals)}`);
 
   // Empty state - nobody has any KO stats at all.
   await page.evaluate(() => { localStorage.setItem('nasty-stats', JSON.stringify({ Nobody: { hg4s: 1 } })); lbTab = 'ko'; renderLb(loadStats()); });

@@ -531,6 +531,13 @@ button{font:inherit;cursor:pointer}
    word), every button's own scrollWidth === clientWidth (nothing clipped) and all six buttons'
    rendered widths match each other to within a fraction of a pixel (flex rounding only). */
 #topbar .iconBtn{text-transform:uppercase;padding:6px 4px;font-size:clamp(10px,3vw,13px)}
+/* 2026-07-25 (Blake's post-game review request, item 4): once the game is over, the repurposed
+   Save->Results button (see updateTopbarForGameOver(), § TURNS) gets a gold highlight so it
+   reads as the obviously-important "look at the results again" button, not just another plain
+   topbar label - the same gold-accent language the rest of the app already uses for anything
+   the player should notice (turn ring, points, etc). */
+#btnSave.postGameHighlight{background:rgba(244,197,66,.22);border-color:rgba(244,197,66,.55);
+  color:var(--gold);font-weight:800}
 @keyframes netPulse{50%{opacity:.4}}
 /* v0.16: problem-only connection indicator (see updateConnIndicator()) - USED to be a small
    always-on "🟢 online" chip in the topbar, which read as a meaningless bare dot on a phone
@@ -685,7 +692,16 @@ button{font:inherit;cursor:pointer}
   border:calc(1px * var(--pscale)) solid rgba(255,255,255,.16);border-left-width:calc(4px * var(--pscale));
   border-radius:calc(10px * var(--pscale));
   padding:calc(6px * var(--pscale)) calc(11px * var(--pscale));max-width:calc(150px * var(--pfont));
-  text-align:left;transition:box-shadow .3s}
+  text-align:left;transition:box-shadow .3s;
+  /* 2026-07-25 (Blake's post-game review request, item 3): #plaqueLayer itself is
+     pointer-events:none (§ RENDER's #tableLayer/#plaqueLayer/etc. rule, same reason the board's
+     SVG can still be tapped through the empty parts of this layer) - .tee already opts back in
+     (see "#tableLayer .tee{pointer-events:auto}" above); .plaque needs the exact same opt-in now
+     that it's tappable too, or every click silently falls through to the board SVG underneath
+     it (found via direct Playwright reproduction - the click landed on #boardSvg, never on the
+     plaque, until this was added). Always auto, not gated on review mode - onPlaqueClick()
+     itself is what actually gates on G.over, so a plain tap mid-game is just an inert no-op. */
+  pointer-events:auto}
 .plaque .nm{font-weight:800;font-size:calc(17px * var(--pfont));white-space:nowrap;
   max-width:calc(130px * var(--pfont));overflow:hidden;text-overflow:ellipsis;color:var(--cream)}
 .plaque.turn{box-shadow:0 0 0 3px var(--gold),0 0 26px rgba(244,197,66,.55);animation:turnPulse 1.6s infinite}
@@ -697,6 +713,18 @@ button{font:inherit;cursor:pointer}
    player can still be the on-turn seat - the gold ring shows through). */
 .plaque.away{opacity:.9}
 .plaque.away .nm{color:#ff5449;text-shadow:0 1px 2px rgba(0,0,0,.7)}
+/* 2026-07-25 (Blake's post-game review request, item 3): "post-game review mode" - once the
+   game is over, tapping a player's plaque flips their leftover hand face-up in the hand tray
+   (see onPlaqueClick()/renderPostGameReveal(), § TURNS). #plaqueLayer only gets the
+   reviewMode class while G.over is true (syncAll() keeps this in sync, same pattern as the
+   .turn class right above) so this is never a visible/tappable affordance mid-game - nobody's
+   hand can be peeked at while the game is still being played. .revealed marks whichever plaque
+   is currently showing its cards, reusing the same gold-ring visual language as .turn above
+   (the two classes can never coexist - .turn is force-excluded the instant G.over is true, see
+   syncAll()'s own toggle condition). */
+#plaqueLayer.reviewMode .plaque{cursor:pointer}
+#plaqueLayer.reviewMode .plaque:hover{border-color:rgba(244,197,66,.5)}
+.plaque.revealed{box-shadow:0 0 0 3px var(--gold),0 0 20px rgba(244,197,66,.5)}
 /* v0.22 P3: the away-ladder STATUS LINE reuses the normal update bubble (#toasts, latest-wins,
    fixed --bandH height - unchanged); its tappable BUTTONS live in this separate fixed row just
    ABOVE the bubble so the band's fixed-height geometry never has to grow or clip. The row
@@ -1071,6 +1099,49 @@ button{font:inherit;cursor:pointer}
   .confirmCard .bigBtns{gap:8px;margin-top:12px}
   .confirmCard .bigBtns .btn{padding:10px 16px;font-size:14.5px;min-height:44px}
 }
+/* 2026-07-25 (Blake's post-game review request) - two ALREADY-DIAGNOSED bugs fixed in this same
+   pass, since this session was already rebuilding the win screen:
+   1. THE WIN BADGE OVERFLOWS THE SCREEN. #winOverlay/#passOverlay's .sign is a DIRECT child of
+      .overlay - it never got the .confirmCard .sign sizing work above, because it was never
+      wrapped in a .confirmCard to begin with (see the "passOverlay/winOverlay have no such
+      single wrapper child" comment on .overlay itself, above) - so it stayed at the base .sign
+      rule's raw 56px Arial Black with no max-width and no clamp(). Measured: an 8-character name
+      ("Michelle") overflows at 320/375/390px; a 10-character name (this app's own NAME_MAX)
+      is 684px wide and blows off both edges at every size. #passOverlay's .sign (the
+      pass-the-device badge, seen every turn in pass-and-play) has the IDENTICAL bug.
+      Fix: the same box-sizing:border-box + max-width:100% discipline as .confirmCard .sign,
+      plus a viewport-tied clamp() sized for this content specifically - a winner name is at
+      most NAME_MAX (10) characters, but a TEAM win joins up to two names with " & " (up to ~23
+      characters) - rather than force that onto one line like the confirmCard headings, .sign b's
+      own default (display:block, no white-space:nowrap) already wraps cleanly onto a second
+      line when the joined names are long, so there's no single-line requirement to fight here -
+      the max-width:100% + clamp() combination guarantees the sign itself never overflows past
+      the overlay's own inner width either way, text just wraps inside it instead of clipping.
+   2. THE KOs RATIO RANKS ODDLY - see koRatioStr()/koRatioNum()'s own comment, § LEADERBOARD,
+      for the actual fix; unrelated to this CSS. */
+#winOverlay .sign,#passOverlay .sign{box-sizing:border-box;max-width:100%}
+#winOverlay .sign b,#passOverlay .sign b{font-size:clamp(22px,7vw,40px)}
+@media (max-height:660px){
+  #winOverlay .sign b,#passOverlay .sign b{font-size:clamp(18px,5.6vw,30px)}
+}
+/* The X close button (see closeWinOverlay(), § TURNS) - dismisses the win popup without any
+   consequence (the game already finished and was already recorded by recordWin()/the server)
+   and reveals the finished board underneath ("post-game review mode", see onPlaqueClick()/
+   renderPostGameReveal()). Positioned top-right of the overlay itself (.overlay is
+   position:fixed, so this absolute child is pinned to the real screen corner, safe-area aware),
+   never inside .sign so it can never be mistaken for part of the winner badge. */
+.winCloseBtn{position:absolute;top:calc(env(safe-area-inset-top) + 14px);right:16px;
+  width:38px;height:38px;border-radius:50%;border:1px solid rgba(255,255,255,.3);
+  background:rgba(0,0,0,.35);color:var(--cream);font-size:18px;line-height:1;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:2}
+/* The per-game KO scoreboard (buildGameKoTableHtml(), § TURNS) reuses the leaderboard KOs tab's
+   own .lbTable.lbKo styling verbatim (same column widths/font sizing) so the two tables read as
+   one consistent design language - only the wrapper needs its own width here, since #winOverlay
+   is a column flexbox with align-items:center (children shrink to content width by default
+   unless given an explicit width - unlike .modalCard's normal block-layout leaderboard, where
+   .lbScroll already stretches for free). */
+#winKoWrap{width:100%;max-width:380px;margin-top:10px}
+.winKoCaption{font-size:12.5px;color:#a9d2b5;letter-spacing:.03em;text-transform:uppercase;margin-bottom:4px}
 .modalCard{background:#10281a;border:1px solid rgba(255,255,255,.18);border-radius:18px;max-width:520px;
   width:100%;max-height:82vh;overflow-y:auto;padding:22px;text-align:left}
 .modalCard h3{margin:2px 0 12px;font-size:21px}
@@ -1251,7 +1322,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.29</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.30</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -1320,9 +1391,16 @@ button{font:inherit;cursor:pointer}
 </div>
 
 <div id="winOverlay" class="overlay hidden">
+  <!-- 2026-07-25 (Blake's post-game review request): closes this popup WITHOUT ending/losing/
+       resetting anything - the game already finished and was already recorded by recordWin()/
+       the server. See closeWinOverlay(), § TURNS. -->
+  <button id="btnWinClose" class="winCloseBtn" aria-label="Close and look at the board">✕</button>
   <div class="sign"><b id="winTitle">-</b><small id="winSub">wins the game</small></div>
   <p id="winText"></p>
   <p id="winPoints" style="font-weight:800;color:var(--gold);font-size:14.5px"></p>
+  <!-- Per-game knockout scoreboard, every seat (human and computer) - see
+       buildGameKoTableHtml(), § TURNS. -->
+  <div id="winKoWrap"></div>
   <div class="bigBtns">
     <button class="btn primary" id="btnAgain">Play again</button>
     <button class="btn ghost" id="btnWinMenu">Back to menu</button>
@@ -3207,6 +3285,10 @@ function buildTable(){
     // default cream color now lives in ".plaque .nm" itself (§ STYLE) so ".plaque.away .nm"
     // can actually win when a seat goes offline.
     d.innerHTML=`<div class="nm">${esc(seat.name)}</div>`;
+    // 2026-07-25 (Blake's post-game review request, item 3): tapping a plaque flips that seat's
+    // leftover hand face-up - see onPlaqueClick(), § TURNS, which itself refuses to do anything
+    // unless G.over is true, so this is a dead tap for the entire time the game is being played.
+    d.addEventListener('click',()=>onPlaqueClick(s));
     pl.appendChild(d);
   }
   const dl=$('discardLayer'); dl.innerHTML='';
@@ -3232,6 +3314,24 @@ function syncAll(){
   for(let s=0;s<G.n;s++){
     $(`plaque-${s}`).classList.toggle('turn',s===G.turn&&!G.over);
   }
+  // 2026-07-25 (Blake's post-game review request, item 4): drive the post-game topbar directly
+  // off G.over HERE, not just at the explicit call sites (showWin()/resetPostGameReviewState()) -
+  // syncAll() runs on every boot (buildTable()'s own tail call, below) AND after every move, so
+  // this is the one place that's guaranteed to reflect reality regardless of ENTRY PATH. This
+  // matters for a real gap the explicit-call-sites-only approach missed: a client that
+  // RECONNECTS/rejoins directly into an ALREADY-FINISHED game (bootGameFromSnapshot() with a
+  // snapshot G.over already true) never calls showWin() at all (see that function's own "no
+  // popups on reconnect" comment) - without this, resetPostGameReviewState()'s unconditional
+  // "false" (correct for the normal fresh-game-boot case) would incorrectly leave Quit/Pause/Save/
+  // Speed in their LIVE-game labels/visibility on a board that is actually already over. Ordering
+  // is safe either way: this call always runs LAST (buildTable() calls syncAll() at its own tail,
+  // AFTER resetPostGameReviewState() already ran earlier in the same boot function), so this is
+  // always the final, authoritative word on the topbar's state for that boot.
+  updateTopbarForGameOver(!!G.over);
+  // 2026-07-25 (Blake's post-game review request, item 3): the plaque layer only becomes
+  // tappable-looking (cursor:pointer, hover highlight - see § STYLE) once the game is over -
+  // kept in lockstep with G.over here, same as the .turn toggle right above.
+  $('plaqueLayer').classList.toggle('reviewMode',!!G.over);
   $('deckCount').textContent=G.deck.length;
   // v0.11.2 item 2: Skip's spot never empties anymore - toggle the real `disabled` attribute
   // (dims it + makes it non-interactive, see #btnSkip:disabled in § STYLE) instead of `.hidden`
@@ -4113,6 +4213,23 @@ function tallyKnockout(owner,kick){
   if(!G.koTaken)G.koTaken=new Array(G.n).fill(0);
   if(G.seats[owner].type==='human')G.koDealt[owner]=(G.koDealt[owner]||0)+1;
   if(G.seats[kick.seat].type==='human')G.koTaken[kick.seat]=(G.koTaken[kick.seat]||0)+1;
+  /* 2026-07-25 (Blake's post-game review request, item 1) - the win popup's new per-game
+     scoreboard shows EVERY seat, human AND computer. G.koDealt/G.koTaken directly above stay
+     human-only ON PURPOSE - they feed the shared LIFETIME leaderboard's human-only KOs tab (see
+     buildResultEntries()/recordOfflineSurrenderLoss() below), and the entire permanent
+     server/tests/test_knockout_leaderboard.js suite hard-asserts that exact human-only shape
+     (CPU-vs-CPU credits nobody, a CPU attacker/victim never moves either array) - changing what
+     those two arrays mean would silently break that already-shipped, already-tested contract.
+     Rather than touch them, a second parallel pair - G.koDealtAll/G.koTakenAll - tracks the SAME
+     two numbers for literally every seat, no type filter at all. Purely a per-game display
+     convenience for the win popup's own table (buildGameKoTableHtml(), § TURNS); nothing that
+     touches the shared/lifetime leaderboard ever reads these two arrays. Same lazy-creation, same
+     replay-safety (every client's copy is rebuilt identically by the same tallyKnockout() call on
+     the same action stream) as the human-only pair above. */
+  if(!G.koDealtAll)G.koDealtAll=new Array(G.n).fill(0);
+  if(!G.koTakenAll)G.koTakenAll=new Array(G.n).fill(0);
+  G.koDealtAll[owner]=(G.koDealtAll[owner]||0)+1;
+  G.koTakenAll[kick.seat]=(G.koTakenAll[kick.seat]||0)+1;
 }
 async function performMove(seat,m,cardEl){
   try{ await performMoveInner(seat,m,cardEl); }
@@ -4884,6 +5001,24 @@ function clearSelection(keepTurn){
 // offered the same three strings); an old server already accepted and stored `diff` exactly as
 // before. Nothing here changes what any message means or requires a new field for anything to
 // keep working either direction.
+// 2026-07-25 (Blake's post-game review request - win popup KO scoreboard, close/reopen, per-seat
+// hand reveal, post-game topbar, leave-for-free): STAYS at 5, NOT bumped, and this is a genuinely
+// ZERO-wire-change batch, not just an additive one. Every server file (server.js/server.ts) is
+// completely untouched this session - confirmed by checking, not assuming, whether a non-host
+// client actually has every OTHER seat's final hand at game end: it does, already, on every
+// existing shipped client, because applyDealAction() (§ NET, below) pushes the FULL
+// action.hands[s] for EVERY seat into G.hands[s] on every connected client identically (the
+// server's own "deterministic lockstep" design broadcasts one full deal to the whole room, not a
+// per-recipient redacted one - see HANDOFF.md's "Online multiplayer" section) - nothing anywhere
+// ever clears/redacts another seat's G.hands entry, only the DISPLAY layer
+// (visibleHandSeat()/renderHandFor()) ever hid it during play. The KO scoreboard reads
+// G.koDealt/koTaken's new sibling arrays (G.koDealtAll/koTakenAll, see tallyKnockout()'s comment,
+// § TURNS) which already ride along inside G exactly like every other per-game field. Every other
+// piece of this feature (the win popup's X/reveal/reopen, the post-game topbar, the free
+// leave-to-menu path) is pure client-side DOM/state, with no new message type, no new field on
+// any EXISTING message, and no change in meaning for anything already on the wire. An old
+// (unpatched) client talking to a new server, or a new client talking to an old server, behaves
+// exactly as before in every case this session touches.
 const PROTOCOL_VERSION=5;
 const NET={
   ws:null, online:false, isHost:false, wantConnection:false,
@@ -5519,6 +5654,7 @@ function bootGameFromNetwork(action){
   $('menu').classList.add('hidden');
   $('game').classList.remove('hidden');
   $('winOverlay').classList.add('hidden');
+  resetPostGameReviewState();   // 2026-07-25: a fresh game start is never in post-game review mode
   clearToasts();   // v0.11.3: game start - never inherit a toast left over from a previous game
   drawBoard(); buildTable(); fitBoard(); setTimeout(fitBoard,50);
   window.G=G; window.LAY=LAY;
@@ -5573,9 +5709,26 @@ function bootGameFromSnapshot(snapshotG,paused,tableSpeed,appliedSeq){
   $('menu').classList.add('hidden');
   $('game').classList.remove('hidden');
   $('winOverlay').classList.add('hidden');
+  // 2026-07-25 (Blake's post-game review request): resets REVEAL_SEAT/the topbar's DEFAULT state;
+  // syncAll() (called at buildTable()'s own tail, right below) is what actually has the final say
+  // on the topbar, correctly flipping it back to post-game mode if this snapshot's G.over is
+  // already true (see syncAll()'s own comment, § RENDER) - a reconnect landing directly on an
+  // ALREADY-FINISHED game (missed the live ending entirely) is a real case this app must not get
+  // wrong: Quit/Pause/Save/Speed must not show their normal in-game meaning on a board that's
+  // actually already over.
+  resetPostGameReviewState();
   clearToasts();
   drawBoard(); buildTable(); fitBoard(); setTimeout(fitBoard,50);
   window.G=G; window.LAY=LAY;
+  // 2026-07-25 (Blake's post-game review request): a reconnect/rejoin landing DIRECTLY on an
+  // already-finished game never calls showWin() (recordWin()/confetti/the sound already happened
+  // on whichever phone was there live - re-running any of that here would be wrong) - but the win
+  // popup's own CONTENT still needs to be ready the instant "Results" is tapped, rather than
+  // opening blank (no winner name, no KO table). Populated here, not shown - matches this
+  // function's own established "no popups on reconnect, always land on the board" rule right
+  // below (the v0.22 P0b comment) - the player can tap "Results" (see
+  // updateTopbarForGameOver()/reopenWinOverlay(), § TURNS) whenever they want to see it.
+  if(G.over)renderWinPopupContent();
   // v0.20: this IS the fresh authoritative snapshot § RECALIBRATION was waiting for - whether
   // this boot came from a full rejoin/'sync' or the lightweight 'resync' reply, the client's
   // state is now genuinely current again, so input unlocks and the chip clears (or drops back
@@ -6790,6 +6943,7 @@ function startGame(){
   $('menu').classList.add('hidden');
   $('game').classList.remove('hidden');
   $('winOverlay').classList.add('hidden');
+  resetPostGameReviewState();   // 2026-07-25: a fresh offline game start is never in post-game review mode
   clearToasts();   // v0.11.3: game start - never inherit a toast left over from a previous game
   drawBoard(); buildTable(); fitBoard();
   setTimeout(fitBoard,50);
@@ -6857,13 +7011,14 @@ $('btnReplaceCancel').onclick=()=>{ $('slotReplaceOverlay').classList.add('hidde
 $('btnStart').onclick=()=>startOfflineGameGate(startGame);
 $('btnAgain').onclick=()=>{$('winOverlay').classList.add('hidden');
   if(NET.online)leaveOnlineToMenu(); else{clearOfflineSave();startGame();}};
-$('btnWinMenu').onclick=()=>{location.hash='';NETGEN++;G=null;$('winOverlay').classList.add('hidden');
-  // v0.26: same stale-chain defense as doLeaveGame()/leaveOnlineToMenu() - G.over is normally
-  // true by the time this is reachable at all, which already stops a NEW runTurn()/loop
-  // iteration from starting, but bumping NETGEN here too closes the gap for any chain still
-  // mid-animation (e.g. a queued queueMicrotask tail) at the exact moment this is tapped.
-  if(NET.online)leaveOnlineToMenu();
-  else{clearOfflineSave();SAVE_SLOT=null;$('game').classList.add('hidden');$('menu').classList.remove('hidden');clearToasts();updateMenuResumeButtons();}};
+// 2026-07-25 (Blake's post-game review request, item 4): this handler is now the ONE shared
+// "leave a finished game" implementation - see leaveFinishedGameToMenu(), § TURNS (defined next
+// to the rest of post-game review mode, right after showWin()) - reused by BOTH this button and
+// the topbar's repurposed post-game "Menu" button (openSurrenderConfirm()'s new G.over branch
+// below), same "one implementation, not several" convention § SURRENDER already follows. Body is
+// byte-for-byte the same as before this session (v0.26's NETGEN-bump stale-chain defense and all)
+// - only the NAME changed, so this button's own behavior is provably unchanged.
+$('btnWinMenu').onclick=()=>leaveFinishedGameToMenu();
 // v0.10.3 FIX (real bug, Blake's 2026-07-13 report): this used to be a SILENT, PERMANENT
 // delete of your progress (clearOfflineSave() / leaveOnlineToMenu() with no keepRoom) - and
 // its confirm() only ever said "leave", never "your save will be lost." The topbar "‹ Menu"
@@ -6959,7 +7114,12 @@ $('btnLeaveCancel').onclick=()=>{
    whole online table while it's open, the same no-pause precedent the topbar Quit/Concede
    confirm already set (openSurrenderConfirm() below never pauses either). */
 function openSaveConfirm(){
-  if(!G||G.over)return;
+  if(!G)return;
+  // 2026-07-25 (Blake's post-game review request, item 4): nothing left to save once the game's
+  // over - recordWin() already ran the instant it ended. Repurpose the SAME topbar button (now
+  // labeled "Results", see updateTopbarForGameOver()) into reopening the win popup instead of the
+  // old silent no-op, so closing the X is never a one-way door.
+  if(G.over){ reopenWinOverlay(); return; }
   // Offline: written to the save slot right now, regardless of what's tapped next.
   // Online: doSaveOffline() itself no-ops (see its own `NET.online` guard) - there is nothing
   // extra to trigger, the server has already been persisting this room continuously after every
@@ -7010,7 +7170,17 @@ $('btnSaveLeaveCancel').onclick=()=>{
 // the stat consequence, only for what it SHOWS the player beforehand). Offline never reaches the
 // no-fault branch (NET.online is false) - see recordOfflineSurrenderLoss()'s comment for why.
 function openSurrenderConfirm(){
-  if(!G||G.over)return;
+  if(!G)return;
+  // 2026-07-25 (Blake's post-game review request, item 4): a finished game has nothing left to
+  // concede - recordWin()/the server already recorded the result the instant G.over flipped.
+  // Repurpose the SAME topbar button (now labeled "Menu", see updateTopbarForGameOver()) into a
+  // completely free exit back to the menu instead of the old silent no-op - Blake explicitly
+  // asked for an obvious way to leave from post-game review mode, and this must never touch
+  // doSurrenderCurrentGame() below (nothing left to lose). The Pause sheet's own two buttons that
+  // also call this function (btnLeaveDiscard/btnLeaveForGood) can never actually reach this
+  // branch in practice - the sheet that holds them only opens via openPauseSheet(), which already
+  // refuses to open at all once G.over is true.
+  if(G.over){ leaveFinishedGameToMenu(); return; }
   $('leaveConfirmOverlay').classList.add('hidden');   // defensive: hide the sheet if this came from it
   { const cc=$('leaveConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   const noFault=NET.online&&NET.anySurrenderOccurred;
@@ -7443,14 +7613,33 @@ function renderLb(st){
 // "KO'd" = times one of THEIR pegs got sent back (hkoTaken), "Ratio" = KOs per KO'd - the same
 // idea as a video-game K/D ratio, deliberately without ever writing the words "kill" or "death"
 // anywhere (Blake's explicit ask). Divide-by-zero handled cleanly: a player who's dealt
-// knockouts but never suffered one shows their KOs count as the ratio (not "Infinity"); a
-// player with zero of both (shouldn't reach this tab at all - see the `active` filter below,
-// belt-and-suspenders) would show "-", never "NaN".
+// knockouts but never suffered one is never shown a raw "Infinity"; a player with zero of both
+// (shouldn't reach the lifetime tab at all - see the `active` filter below, belt-and-suspenders -
+// but CAN legitimately reach the new per-game table, § TURNS, which lists every seat) shows "-".
+//
+// 2026-07-25 REVISION (Blake's post-game review request - "the KOs ratio ranks oddly"): the
+// ORIGINAL v0.28 version of this function displayed the bare dealt count for a never-KO'd player
+// (e.g. "5") and sorted by that same raw count - so a player with 5 KOs and zero times caught
+// outranked a player with 412 KOs / 307 KO'd (a real 1.34 ratio), purely because 5 > 1.34. That
+// was documented as deliberate at the time (see test_knockout_leaderboard.js's original Part A,
+// now updated to match this revision) but reads exactly as oddly as it sounds once a real
+// high-volume ratio exists to compare against - a tiny, unproven "perfect" sample shouldn't jump
+// straight to the top of a leaderboard over a proven track record. Fix: a never-KO'd player with
+// at least one KO dealt now displays as the plain word "Perfect" (never a bare number pretending
+// to be a ratio, never "Infinity") and sorts BELOW every player with a real, computed ratio - a
+// negative sentinel (-1) that's guaranteed less than any real ratio (which is always >= 0) does
+// that for free through the exact same comparator every other ratio already sorts through, with
+// ties among several "Perfect" players still broken by raw dealt count (more knockouts before
+// ever getting caught ranks higher within that group). A seat with genuinely zero of both (only
+// reachable from the new per-game table, never the lifetime tab) sorts lower still (-2) and
+// displays "-". Applies identically to BOTH the lifetime leaderboard's KOs tab (renderLbKo()
+// above) and the win popup's new per-game scoreboard (buildGameKoTableHtml(), § TURNS) - one
+// pair of helpers, one behavior, everywhere a KO ratio is ever shown.
 function koRatioStr(dealt,taken){
-  if(taken===0)return dealt>0?String(dealt):'-';
+  if(taken===0)return dealt>0?'Perfect':'-';
   return (dealt/taken).toFixed(2);
 }
-function koRatioNum(dealt,taken){ return taken===0?dealt:dealt/taken; }
+function koRatioNum(dealt,taken){ return taken>0?dealt/taken:(dealt>0?-1:-2); }
 function renderLbKo(st){
   const names=Object.keys(st);
   const v=(n,k)=>st[n][k]||0;
@@ -7469,10 +7658,48 @@ function renderLbKo(st){
     active.map(n=>`<tr><td>${esc(n)}</td><td>${dealt(n)}</td><td>${taken(n)}</td>
       <td>${koRatioStr(dealt(n),taken(n))}</td></tr>`).join('')+`</table></div>`;
 }
+/* 2026-07-25 (Blake's post-game review request, item 1) - the win popup's own per-game
+   scoreboard: EVERY seat (human AND computer), using THIS game's own numbers
+   (G.koDealtAll/G.koTakenAll - see tallyKnockout()'s comment above for why these are a separate
+   pair from the human-only G.koDealt/G.koTaken the lifetime leaderboard feeds from), never the
+   lifetime hkoDealt/hkoTaken. Reuses the leaderboard KOs tab's own column styling (.lbTable.lbKo)
+   and the same koRatioStr()/koRatioNum() helpers (including the "Perfect" divide-by-zero
+   treatment) so a KO ratio reads identically everywhere it appears in this app. Called from
+   showWin(), § TURNS, once per finished game. */
+function buildGameKoTableHtml(){
+  // 2026-07-25 honest-gap note: G.koDealtAll/koTakenAll are computed CLIENT-SIDE, live, as this
+  // phone processes the game's own action stream (tallyKnockout(), § TURNS) - correct for every
+  // client that's actually connected while the game is being played, which is the overwhelming
+  // common case (this popup shows the instant a game you're watching ends). The ONE narrow case
+  // this can't cover: a client that RECONNECTS directly into an ALREADY-FINISHED game it was never
+  // live for (bootGameFromSnapshot() installs the server's snapshot G directly, no replay - see
+  // that function's own comment) - the SERVER'S copy of G tracks the human-only G.koDealt/koTaken
+  // (server.js/server.ts's own mirrored tallyKnockout(), needed for the shared lifetime
+  // leaderboard) but was deliberately NOT extended to also track the all-seats koDealtAll/
+  // koTakenAll pair this session - doing so would require a server change and the mandatory cloud
+  // deploy that comes with one, for a display-only convenience on a rare edge case (missing the
+  // live ending entirely). Rather than show a misleading all-zero table in that one case, detect
+  // it honestly and say so plainly instead of guessing.
+  if(!G.koDealtAll&&!G.koTakenAll){
+    return `<div class="winKoCaption">This game's knockouts</div>
+      <p style="font-size:13px;color:#a9d2b5;margin:2px 0 0">Knockout numbers aren't available for this view - they're only tracked while you're at the table live.</p>`;
+  }
+  const dealt=[],taken=[];
+  for(let i=0;i<G.n;i++){
+    dealt.push((G.koDealtAll&&G.koDealtAll[i])||0);
+    taken.push((G.koTakenAll&&G.koTakenAll[i])||0);
+  }
+  const order=G.seats.map((s,i)=>i).sort((a,b)=>
+    koRatioNum(dealt[b],taken[b])-koRatioNum(dealt[a],taken[a])||dealt[b]-dealt[a]);
+  const rows=order.map(i=>`<tr><td>${esc(G.seats[i].name)}</td><td>${dealt[i]}</td><td>${taken[i]}</td>
+    <td>${koRatioStr(dealt[i],taken[i])}</td></tr>`).join('');
+  return `<div class="winKoCaption">This game's knockouts</div>
+    <div class="lbScroll"><table class="lbTable lbKo"><tr><th>Player</th><th>KOs</th><th>KO'd</th><th>Ratio</th></tr>${rows}</table></div>`;
+}
 // Caption under the table changes per tab - the Solo/Teams points explainer doesn't apply to KOs.
 function updateLbCaption(){
   $('lbCaption').textContent=lbTab==='ko'
-    ?"KOs = pegs you've sent back to base. KO'd = times your own peg got sent back. Ratio = KOs per KO'd - humans only, CPUs never show up here."
+    ?"KOs = pegs you've sent back to base. KO'd = times your own peg got sent back. Ratio = KOs per KO'd (Perfect = never been KO'd yet) - humans only, CPUs never show up here."
     :'Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a human - humans only, CPUs never show up here.';
 }
 function setLbTab(tab){
@@ -7575,13 +7802,16 @@ $('pauseOverlay').addEventListener('pointerdown',()=>{
 // doesn't also trigger the overlay's own tap-to-resume handler.
 $('btnSaveQuit').addEventListener('pointerdown',e=>e.stopPropagation());
 $('btnSaveQuit').onclick=openLeaveConfirm;
-function showWin(){
-  recordWin();
-  // v0.8: finished games don't offer a resume. v0.17: offline finishes only - an ONLINE game
-  // finishing must never clear an offline save spot that belongs to a different, still-alive
-  // offline game (SAVE_SLOT could still be bound to one from earlier this session).
-  if(!NET.online)clearOfflineSave();
-  sWin(); confettiBurst();
+// 2026-07-25 (Blake's post-game review request): pulled the win popup's own DOM population out
+// of showWin() so a client that RECONNECTS directly into an already-finished game (G.over true
+// the instant the snapshot lands - see bootGameFromSnapshot()) can populate the exact same
+// content (winner badge, points, per-game KO scoreboard) WITHOUT re-running recordWin()/
+// confettiBurst()/sWin() a second time - the win was already recorded and celebrated on whichever
+// phone was actually there live; a reconnect just needs the popup ready to open on demand (this
+// app's own reconnect philosophy is "no popups on reconnect, always land on the board" - see the
+// comment right below bootGameFromSnapshot()'s own call site - so it's populated but not force-
+// shown there, only ready the instant "Results" is tapped instead of opening blank).
+function renderWinPopupContent(){
   const names=G.winners.map(w=>G.seats[w].name);
   const cols=G.winners.map(w=>G.seats[w].color.name);
   $('winTitle').textContent=names.join(' & ').toUpperCase();
@@ -7598,7 +7828,128 @@ function showWin(){
   $('winPoints').textContent=(winHuman&&parts.length)
     ?`+${pts} points: `+parts.map(p=>`${p.label} ${p.val}`).join(', ')
     :'';
+  // 2026-07-25 (Blake's post-game review request): the per-game KO scoreboard, every seat.
+  $('winKoWrap').innerHTML=buildGameKoTableHtml();
+}
+function showWin(){
+  recordWin();
+  // v0.8: finished games don't offer a resume. v0.17: offline finishes only - an ONLINE game
+  // finishing must never clear an offline save spot that belongs to a different, still-alive
+  // offline game (SAVE_SLOT could still be bound to one from earlier this session).
+  if(!NET.online)clearOfflineSave();
+  sWin(); confettiBurst();
+  renderWinPopupContent();
+  // 2026-07-25 (Blake's post-game review request): entering "post-game review mode" - the
+  // topbar repurposes itself (see updateTopbarForGameOver(), § TURNS) and nobody's leftover hand
+  // is revealed by default (see renderPostGameReveal()/onPlaqueClick() below) until the X is
+  // tapped and a name is tapped.
+  updateTopbarForGameOver(true);
+  REVEAL_SEAT=-1;
   $('winOverlay').classList.remove('hidden');
+}
+/* ---- post-game review mode (2026-07-25, Blake's post-game review request) ----
+   The game just ended - showWin() above already recorded it (recordWin()/the server) and put up
+   the win popup. These four pieces let Blake close that popup, look back at the finished board,
+   see how close everyone else was, and get back to the menu - all with zero consequence, since
+   there is nothing left to win or lose.
+   REVEAL_SEAT (-1 = nobody revealed) is deliberately a plain script-local `let`, same pattern as
+   SEL/CUR_SEAT above (§ UI) - it's pure post-game DISPLAY state, never read by any engine/turn
+   code, so it doesn't need to ride G or survive a save/reload. */
+let REVEAL_SEAT=-1;
+// Shared by the win popup's own X button and the topbar's repurposed post-game "Menu" button
+// (openSurrenderConfirm()'s G.over branch below) - resets the reveal + the topbar back to their
+// normal in-game look, exactly like every fresh/resumed game boot already needs to do (see the
+// four call sites at bootGameFromNetwork/bootGameFromSnapshot/startGame/resumeOfflineGame).
+function resetPostGameReviewState(){
+  REVEAL_SEAT=-1;
+  updateTopbarForGameOver(false);
+}
+// Item 4 - the ONE shared "leave a finished game, for free" implementation - reused by the win
+// popup's own "Back to menu" button AND the topbar's repurposed post-game "Menu" button
+// (openSurrenderConfirm()'s G.over branch below), same "one implementation, not several"
+// convention § SURRENDER already follows for every OTHER way to leave a game. Always free: the
+// game already finished and was already recorded by recordWin()/the server the instant it ended
+// (see showWin()/server.js's finishGame()) - this must never route through
+// doSurrenderCurrentGame()/openSurrenderConfirm()'s normal body, since there is nothing left to
+// concede. Body is the exact same steps btnWinMenu's handler always ran (NETGEN bump for the
+// v0.26 stale-chain defense included) - only pulled out into its own name so a second call site
+// (the topbar button) can reuse it instead of duplicating it.
+function leaveFinishedGameToMenu(){
+  location.hash='';
+  NETGEN++;
+  G=null;
+  $('winOverlay').classList.add('hidden');
+  resetPostGameReviewState();   // 2026-07-25: defensive - the next game boot already resets this too
+  if(NET.online)leaveOnlineToMenu();
+  else{clearOfflineSave();SAVE_SLOT=null;$('game').classList.add('hidden');$('menu').classList.remove('hidden');clearToasts();updateMenuResumeButtons();}
+}
+// Item 4 - Pause/Save mean nothing once the game is over (no turn to pause, the finished game is
+// already saved/recorded) - Pause hides outright; Save is repurposed into "Results" (reopens the
+// win popup, see reopenWinOverlay() below) so closing the X is never a one-way door. Quit is
+// relabeled "Menu" - see openSurrenderConfirm()'s own new G.over branch below for why it becomes
+// a completely free exit instead of the surrender/concede path. Speed is hidden too (nothing left
+// to animate at any speed). Rules and Mute are left exactly as they are - both still mean
+// something while looking back at the board.
+function updateTopbarForGameOver(over){
+  $('btnPause').classList.toggle('hidden',over);
+  $('btnSpeed').classList.toggle('hidden',over);
+  $('btnMenu').textContent=over?'Menu':'Quit';
+  $('btnSave').textContent=over?'Results':'Save';
+  $('btnSave').classList.toggle('postGameHighlight',over);
+}
+// Item 2 - the X button. Closing never touches G, never concedes, never deletes a save beyond
+// what showWin() already did - it just hides the popup and refreshes the reveal hint/hand tray
+// underneath (in case a PRIOR game's reveal state was somehow still sitting there - defensive,
+// resetPostGameReviewState() already clears it at every fresh game boot).
+function closeWinOverlay(){
+  $('winOverlay').classList.add('hidden');
+  renderPostGameReveal();
+}
+$('btnWinClose').onclick=closeWinOverlay;
+// The other half of "closing the X is not a one-way door" - reopens the SAME popup (no replayed
+// confetti/sound, no re-running recordWin() - showWin() already ran exactly once). Reachable via
+// the topbar's repurposed "Results" button (openSaveConfirm()'s G.over branch below).
+function reopenWinOverlay(){
+  if(!G||!G.over)return;   // defensive - "Results" only ever means something once the game's over
+  $('winOverlay').classList.remove('hidden');
+}
+// Item 3 - tap a player's plaque to flip their leftover hand face-up on the table. Gated on
+// G.over so this reveal is NEVER reachable while a game is still being played (see the plaque
+// click listener itself, § RENDER, which calls this unconditionally - the real guard lives here,
+// belt-and-suspenders against ever wiring a second call site that forgets the check).
+// G.hands[seat] genuinely holds every seat's real remaining cards on every client at this point,
+// including a non-host client in a real online game - confirmed directly (2026-07-25 session):
+// the deal action every phone applies (applyDealAction(), § NET) pushes action.hands[s] for
+// EVERY seat into G.hands[s] on every connected client identically (the "deterministic lockstep"
+// design, see HANDOFF.md's "Online multiplayer" section - the server broadcasts the same full
+// deal to everyone, and every phone runs the exact same engine against its own copy of G), and
+// nothing anywhere ever redacts/clears another seat's G.hands entry for privacy - only the
+// DISPLAY layer (visibleHandSeat()/renderHandFor(), § TURNS/UI) ever hid it during play. So no
+// server change was needed to ship this - the data was already there the whole time.
+function onPlaqueClick(seat){
+  if(!G||!G.over)return;
+  REVEAL_SEAT=(REVEAL_SEAT===seat)?-1:seat;
+  renderPostGameReveal();
+}
+// Renders into the SAME #handInfo/#handRow the live game used for turn prompts/the hand fan -
+// safe to repurpose because once G.over is true, nothing else will ever call renderHandFor()/
+// turnPrompt() again for this G (every call site is itself gated on !G.over, see runTurnInner()'s
+// and runOnlineTurnLoop()'s own top-of-function guards) - this is the only writer left standing.
+function renderPostGameReveal(){
+  if(!G)return;
+  for(let s=0;s<G.n;s++){ const el=$(`plaque-${s}`); if(el)el.classList.toggle('revealed',s===REVEAL_SEAT); }
+  if(REVEAL_SEAT<0){
+    $('handInfo').textContent=G.over?"Tap a player's name to see their leftover cards":'';
+    $('handRow').innerHTML='';
+    return;
+  }
+  const seat=G.seats[REVEAL_SEAT], hand=G.hands[REVEAL_SEAT]||[];
+  $('handInfo').textContent=hand.length
+    ?`${seat.name}'s cards - tap again to hide`
+    :`${seat.name} had no cards left`;
+  const row=$('handRow'); row.innerHTML='';
+  hand.forEach(card=>{ const w=document.createElement('div'); w.innerHTML=cardHTML(card); row.appendChild(w.firstElementChild); });
+  updateToastOffset();
 }
 
 /* ---- "Resume Saved Game" tiles, main menu (v0.9 item 4; up to three since v0.17) ----
@@ -7834,6 +8185,7 @@ function resumeOfflineGame(slot){
   $('menu').classList.add('hidden');
   $('game').classList.remove('hidden');
   $('winOverlay').classList.add('hidden');
+  resetPostGameReviewState();   // 2026-07-25: resuming an offline save is never in post-game review mode
   clearToasts();   // v0.11.3: game start/resume - never inherit a toast left over from before
   drawBoard(); buildTable(); fitBoard(); setTimeout(fitBoard,50);
   window.G=G; window.LAY=LAY;
