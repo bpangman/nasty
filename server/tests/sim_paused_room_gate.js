@@ -1,25 +1,42 @@
 "use strict";
 /*
- * v0.22 Layer-2 lifecycle test - real WebKit in the real iOS Simulator, driven with simctl.
+ * Paused-room seat gate - real WebKit in the real iOS Simulator, driven with simctl.
+ * (Was server/tests/sim_lifecycle.js. Renamed and cut down on 2026-07-25 - see "History" below.)
+ *
  * Usage:
- *   node sim_lifecycle.js node     (server/server.js)
- *   node sim_lifecycle.js deno     (server/cloud/server.ts)
+ *   node sim_paused_room_gate.js node     (server/server.js)
+ *   node sim_paused_room_gate.js deno     (server/cloud/server.ts)
  * SKIPS cleanly (exit 0, "SKIP" lines) when no iOS Simulator is available on this machine.
  *
- * What this layer is for (per the reconnect research doc): the Simulator does NOT faithfully
- * reproduce true suspension/socket teardown - Layer 1 (test_freeze_recovery.js) covers those
- * semantics at the network layer. THIS layer verifies the EVENT and RELOAD plumbing on real
- * iOS WebKit (mobile Safari - the same engine the Capacitor shell wraps):
- *   1. A phone with a stored session for a LIVE room, launched cold, silently rejoins straight
- *      to the board (the P2 cold-reload path) - verified server-side: player connected, room
- *      NEVER paused (no reunion auto-pause - one phone's relaunch must not pause the family).
- *   2. Backgrounding (foregrounding Settings over Safari) then returning keeps/regains the
- *      connection, room still never paused.
- *   3. terminate + cold relaunch (the memory-kill shape): plain URL, no params - localStorage
- *      alone gets the player back to the table, still no pause.
- *   4. The gate holds: with the room PAUSED, a cold relaunch does NOT silently sit down at the
- *      table - the client backs out to its menu (server sees it disconnect again), the room
- *      stays paused and untouched.
+ * WHAT THIS PROVES (the one thing, and it is still worth proving):
+ *   A phone that holds a perfectly valid stored session for a room that is currently PAUSED
+ *   must NOT silently sit down at that table when it is cold-launched. The room has to stay
+ *   paused and untouched, and the returning player has to stay disconnected until a human
+ *   deliberately taps the resume tile.
+ *
+ *   Why it matters: the family pauses a game and walks away. Somebody's phone wakes up, or
+ *   gets relaunched by iOS, and quietly rejoins. From the table's point of view a player just
+ *   appeared out of nowhere in a game nobody meant to restart. That is the failure this suite
+ *   exists to catch, and only a real iOS WebKit run can catch it, because it depends on how
+ *   mobile Safari restores a cold page.
+ *
+ *   To make sure a PASS is meaningful and not just "the token was junk", the run finishes with
+ *   a control step: a raw websocket client rejoins with the exact same credentials the phone
+ *   was holding. If that control succeeds, then the phone staying out was a deliberate client
+ *   decision, not a broken session.
+ *
+ * HISTORY - why the other three legs are gone (read before "restoring" them):
+ *   Through v0.24 this file was sim_lifecycle.js and had four legs. Legs 1-3 asserted that a
+ *   cold app launch SILENTLY auto-rejoined a live room (seeded launch, background-and-return,
+ *   and terminate-then-relaunch). That behavior was DELIBERATELY REMOVED in v0.25: every
+ *   rejoin is now an intentional tile tap, because silent auto-rejoin is exactly the thing
+ *   Blake asked to get rid of. Legs 1-3 were therefore asserting behavior the product no
+ *   longer has, and an agent told to "make the tests green" would have re-introduced it.
+ *   They were deleted on 2026-07-25 rather than left failing or skipped. Do not write them
+ *   back. If you need coverage of the network-layer freeze/resume semantics, that lives in
+ *   test_freeze_recovery.js (Layer 1); the deliberate-tile-tap rejoin flows live in
+ *   test_v025_ui_flows.js and test_reconnect_retry.js.
+ *
  * Never touches production: private server + private static file server, both on localhost
  * (the Simulator shares the host's loopback), plus the ?testseed= boot hook (index.html).
  */
@@ -160,8 +177,8 @@ async function main() {
   const staticSrv = await startStaticServer(HTTP_PORT, PORT);
 
   // Build the room: harness holds seat 0 (Host); "Sim" joins as playerId 2 for seat 1; two CPU
-  // seats. Then the Sim identity's raw socket closes - the PHONE takes that identity over via
-  // the ?testseed= boot hook.
+  // seats. Then the Sim identity's raw socket closes - the PHONE holds that identity via the
+  // ?testseed= boot hook.
   const hostWs = await wsConnect(PORT);
   sendJ(hostWs, { type: "host", protocolVersion: 5, name: "Host", n: 4, teams: false, seats: [
     { name: "Host", type: "human", diff: "medium" }, { name: "Sim", type: "human", diff: "medium" },
@@ -175,8 +192,7 @@ async function main() {
   sendJ(simWs, { type: "claimSeat", seatIndex: 1, name: "Sim" });
   await sleep(300);
   // v0.25 item 1: readiness lives in the lobby now - the guest (Sim) readies up on the seat
-  // screen BEFORE the host's Start, which is the host's own ready and deals directly (no more
-  // post-Start readyCheck broadcast to wait on).
+  // screen BEFORE the host's Start, which is the host's own ready and deals directly.
   sendJ(simWs, { type: "readyUp", willSeat: true });
   await sleep(300);
   sendJ(hostWs, { type: "start", protocolVersion: 5, willSeat: true });
@@ -188,43 +204,43 @@ async function main() {
   const seedUrl = `http://127.0.0.1:${HTTP_PORT}/index.html?ws=${encodeURIComponent(`ws://127.0.0.1:${PORT}`)}&testseed=${code}:${joined.playerId}:${joined.token}`;
   const plainUrl = `http://127.0.0.1:${HTTP_PORT}/index.html`;
 
-  // --- Leg 1: seeded launch -> silent rejoin to the LIVE board, no pause. ---
+  // --- Setup (NOT an assertion): put a genuine stored session on the phone. -------------
+  // The ?testseed= hook only writes localStorage ('nasty-net-<CODE>' + 'nasty-last-room') and
+  // then falls through to the normal boot. Since v0.25 that boot does NOT auto-rejoin, so all
+  // this step does is leave the phone holding real credentials for a real live room - exactly
+  // the state a family member's phone is in after they pause and put it in their pocket.
   simctl(`openurl ${UD} "${seedUrl}"`);
-  const t1 = await waitFor(async () => { const r = await roomInfo(code); return r && r.players.find((p) => p.id === joined.playerId)?.connected === true; }, 20000, "sim player connected after seeded launch");
-  check(t1 >= 0, `${KIND}: simulator Safari silently rejoined the live room in ${t1}ms (cold-reload path)`);
-  let r = await roomInfo(code);
-  check(r && r.paused === false, `${KIND}: the table was NOT paused by the silent rejoin (no reunion auto-pause)`);
+  await sleep(8000);
+  log("phone seeded with a valid stored session for room", code);
 
-  // --- Leg 2: background via Settings, then return to Safari. ---
-  simctl(`launch ${UD} com.apple.Preferences`);
-  await sleep(15000);
-  simctl(`launch ${UD} ${SAFARI}`);
-  const t2 = await waitFor(async () => { const rr = await roomInfo(code); return rr && rr.players.find((p) => p.id === joined.playerId)?.connected === true; }, 15000, "sim player connected after background+return");
-  check(t2 >= 0, `${KIND}: after 15s backgrounded (Settings) + return, the player is (still/again) connected in ${t2}ms`);
-  r = await roomInfo(code);
-  check(r && r.paused === false, `${KIND}: still never paused after background+return`);
-
-  // --- Leg 3: terminate + cold relaunch with a PLAIN url - localStorage alone rejoins. ---
-  try { simctl(`terminate ${UD} ${SAFARI}`); } catch (e) { /* already dead is fine */ }
-  await sleep(2000);
-  simctl(`openurl ${UD} "${plainUrl}"`);
-  const t3 = await waitFor(async () => { const rr = await roomInfo(code); return rr && rr.players.find((p) => p.id === joined.playerId)?.connected === true; }, 25000, "sim player connected after terminate+cold relaunch");
-  check(t3 >= 0, `${KIND}: terminate + cold relaunch (plain URL, localStorage only) silently rejoined in ${t3}ms`);
-  r = await roomInfo(code);
-  check(r && r.paused === false, `${KIND}: still never paused after the memory-kill-shaped relaunch`);
-
-  // --- Leg 4: the gate - a PAUSED room must NOT be silently sat down at. ---
+  // --- THE GATE: pause the room, then cold-relaunch the phone. ---------------------------
   sendJ(hostWs, { type: "pauseToggle", paused: true });
   const pausedLanded = await waitFor(async () => { const rr = await roomInfo(code); return rr && rr.paused === true; }, 8000, "pause request landed");
   check(pausedLanded >= 0, `${KIND}: precondition - the harness's pause actually landed server-side`);
-  try { simctl(`terminate ${UD} ${SAFARI}`); } catch (e) { /* fine */ }
+
+  try { simctl(`terminate ${UD} ${SAFARI}`); } catch (e) { /* already dead is fine */ }
   await sleep(2000);
-  simctl(`openurl ${UD} "${plainUrl}"`);
-  await sleep(12000);   // give it time to rejoin-check and back out
-  r = await roomInfo(code);
+  simctl(`openurl ${UD} "${plainUrl}"`);   // plain URL, no params - localStorage alone
+  await sleep(12000);                      // ample time to boot, check, and back out
+
+  let r = await roomInfo(code);
   const simP = r && r.players.find((p) => p.id === joined.playerId);
-  check(r && r.paused === true, `${KIND}: the paused room STAYED paused through the relaunch attempt`);
-  check(simP && simP.connected === false, `${KIND}: the client backed out of the paused game (no silent seat-down; the deliberate resume tile is the way in)`);
+  check(r && r.paused === true, `${KIND}: the paused room STAYED paused through the cold relaunch`);
+  check(!simP || simP.connected === false, `${KIND}: the phone did NOT silently sit down at the paused table (the deliberate resume tile is the only way in)`);
+
+  // --- Control: prove the session the phone was holding was actually usable. --------------
+  // Without this, "the phone stayed out" could just mean the credentials were junk. A raw ws
+  // client rejoining with the SAME playerId/token proves the gate above was a deliberate
+  // client-side decision, not a broken token.
+  let controlOk = false;
+  try {
+    const ctlWs = await wsConnect(PORT);
+    sendJ(ctlWs, { type: "rejoin", protocolVersion: 5, code, playerId: joined.playerId, token: joined.token });
+    const res = await nextMsg(ctlWs, (m) => m.type === "rejoined" || m.type === "joined" || m.type === "error", 8000).catch(() => null);
+    controlOk = !!(res && res.type !== "error");
+    ctlWs.close();
+  } catch (e) { /* controlOk stays false */ }
+  check(controlOk, `${KIND}: control - the very same stored credentials DO still work over a raw socket, so the phone's abstention was deliberate`);
 
   try { simctl(`terminate ${UD} ${SAFARI}`); } catch (e) { /* fine */ }
   hostWs.close();

@@ -16,29 +16,38 @@ URL_FILE="$REPO_DIR/wsurl.json"
 PORT="${NASTY_PORT:-8484}"
 
 update_wsurl() {
-  # GATED (cloud cutover, 2026-07-12): wsurl.json now points at the cloud relay
-  # (wss://play.nastyboardgame.com), and the site discovers the server from THAT file, not
-  # this Mac's tunnel anymore. Left this function and its call site intact (not deleted) so
-  # a rollback is just deleting the two lines below and un-commenting nothing else -- the
-  # tunnel/server themselves keep running in drain mode so any game already in flight here
-  # finishes normally. See HANDOFF.md's "Cloud hosting" section, rollback subsection.
-  echo "[tunnel.sh] Cloud cutover is live -- skipping wsurl.json auto-republish (would overwrite the cloud URL with a stale tunnel URL)." | tee -a "$LOG_FILE"
+  # ############################################################################
+  # DO NOT MAKE THIS SCRIPT COMMIT OR PUSH. EVER.
+  # ############################################################################
+  #
+  # This script is started by a KeepAlive LaunchAgent (com.nasty.tunnel). It
+  # restarts itself automatically and runs with nobody watching. Anything it is
+  # allowed to do, it will eventually do unattended, at 3 AM, to Blake's LIVE
+  # production repo.
+  #
+  # It used to rewrite wsurl.json and then run `git add` / `git commit` /
+  # `git pull --rebase` / `git push origin main`. That body was deleted on
+  # 2026-07-25. Do not restore it, do not reimplement it, and do not "just add
+  # a small git push here" for convenience.
+  #
+  # Since the cloud cutover (2026-07-12) the game discovers its server from
+  # wsurl.json, which points at the cloud relay wss://play.nastyboardgame.com.
+  # This Mac's tunnel is no longer part of how anyone reaches the game.
+  #
+  # ROLLING BACK TO THIS MAC IS A DELIBERATE, HUMAN ACT. It is:
+  #   1. start the local server + tunnel again
+  #        launchctl load ~/Library/LaunchAgents/com.nasty.server.plist
+  #        launchctl load ~/Library/LaunchAgents/com.nasty.tunnel.plist
+  #   2. read the new https://<something>.trycloudflare.com URL out of
+  #        /Users/jarvis/nasty-game/tunnel.log
+  #   3. hand-edit /Users/jarvis/nasty-game/wsurl.json to the wss:// form of it
+  #   4. review the diff, then commit and push it yourself, on purpose
+  # See HANDOFF.md's "Cloud hosting" section, rollback subsection.
+  #
+  # All this function does now is note the tunnel URL in the log so a human
+  # doing step 2 above can find it.
+  echo "[tunnel.sh] Tunnel URL: $1 (informational only - wsurl.json is NOT auto-updated and this script never commits or pushes)." | tee -a "$LOG_FILE"
   return 0
-  local https_url="$1"
-  local wss_url="${https_url/https:\/\//wss://}"
-  echo "[tunnel.sh] New tunnel URL: $https_url -> $wss_url" | tee -a "$LOG_FILE"
-  local tmp
-  tmp=$(mktemp)
-  printf '{"url":"%s","updated":"%s"}\n' "$wss_url" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp"
-  mv "$tmp" "$URL_FILE"
-  cd "$REPO_DIR" || return
-  git add wsurl.json
-  if ! git diff --cached --quiet; then
-    git commit -m "chore: update online-play server URL to ${wss_url}" >> "$LOG_FILE" 2>&1
-    git pull --rebase >> "$LOG_FILE" 2>&1
-    git push origin main >> "$LOG_FILE" 2>&1
-    echo "[tunnel.sh] wsurl.json committed and pushed." | tee -a "$LOG_FILE"
-  fi
 }
 
 /opt/homebrew/bin/cloudflared tunnel --url "http://localhost:${PORT}" 2>&1 | while IFS= read -r line; do

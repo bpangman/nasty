@@ -1,15 +1,51 @@
 #!/usr/bin/env python3
 """Watch the Nasty TestFlight beta review; email Blake both links on approval.
-Runs from cron every 30 min. Self-disables (writes a done-marker) after sending.
+
+HOW THIS ACTUALLY RUNS (corrected 2026-07-25): BY HAND, one run per check. It is NOT on cron
+and NOT on a LaunchAgent - `crontab -l` is empty and there is no com.nasty.* plist for it. Run
+it yourself after uploading a build, then again every so often until it reports APPROVED:
+
+    python3 /Users/jarvis/nasty-game/server/beta_watch.py
+
+Each run is a single check-and-exit (no loop, no sleep). It self-disables by writing a
+done-marker once it has emailed Blake, so re-running after that is a harmless no-op. To arm it
+for a NEW build: delete server/.beta_watch_done, update BUILD_SUBMISSION_ID below to the new
+build's betaAppReviewSubmissions filter id, and refresh the two "what is in this build" bullets
+in the email body.
+
+The build NUMBER in the subject line and the email body is read automatically out of
+CURRENT_PROJECT_VERSION in app/ios/App/App.xcodeproj/project.pbxproj, so it cannot drift away
+from the build that was actually uploaded. (The submission ID still has to be updated by hand -
+Apple mints a fresh one per build and there is no way to derive it locally.)
+
 No Claude involvement - pure API check + gmail_sa.py send.
 """
-import base64, json, time, subprocess, sys, os, urllib.request
+import base64, json, re, time, subprocess, sys, os, urllib.request
 
 DONE = '/Users/jarvis/nasty-game/server/.beta_watch_done'
 LOG = '/Users/jarvis/nasty-game/server/beta_watch.log'
 KEY = '/Users/jarvis/nasty-game/server/AuthKey_4JZ244TV94.p8'
+PBXPROJ = '/Users/jarvis/nasty-game/app/ios/App/App.xcodeproj/project.pbxproj'
 KID, ISS = '4JZ244TV94', '8e4b9c40-3dfe-4cbf-8b12-0e6d6c585cdf'
 APP_ID = '6790999186'
+
+# The one thing that must still be updated by hand for each new build (Apple mints it per
+# build; it cannot be derived from anything on this Mac).
+BUILD_SUBMISSION_ID = 'd1488977-e689-46e2-a67e-c586b121059f'
+
+
+def current_build():
+    """Read CURRENT_PROJECT_VERSION out of the Xcode project - the single source of truth for
+    which build this watcher is talking about. Both the Debug and Release configs carry it and
+    the release process keeps them equal; if they ever disagree, that is a real problem, so say
+    so rather than guessing."""
+    nums = set(re.findall(r'CURRENT_PROJECT_VERSION\s*=\s*(\d+)\s*;', open(PBXPROJ).read()))
+    if not nums:
+        raise RuntimeError(f'no CURRENT_PROJECT_VERSION found in {PBXPROJ}')
+    if len(nums) > 1:
+        raise RuntimeError(f'CURRENT_PROJECT_VERSION disagrees between build configs: {sorted(nums)} '
+                           '- fix the Xcode project before shipping')
+    return nums.pop()
 
 def log(m):
     with open(LOG, 'a') as f:
@@ -40,8 +76,10 @@ def api(path):
     return json.load(urllib.request.urlopen(req))
 
 try:
+    BUILD = current_build()
+    log(f'watching build {BUILD} (from CURRENT_PROJECT_VERSION)')
     # newest beta app review submission for the app's builds
-    d = api('/v1/betaAppReviewSubmissions?filter[build]=d1488977-e689-46e2-a67e-c586b121059f&limit=5')
+    d = api(f'/v1/betaAppReviewSubmissions?filter[build]={BUILD_SUBMISSION_ID}&limit=5')
     states = [(i['attributes']['betaReviewState'], i['id']) for i in d.get('data', [])]
     log(f'states={states}')
     if not any(s == 'APPROVED' for s, _ in states):
@@ -59,9 +97,9 @@ try:
         sys.exit(0)
 
     body = '/tmp/nasty_beta_live.html'
-    open(body, 'w').write('''
+    open(body, 'w').write(f'''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">Build 45 reached the family</h1>
+<h1 style="color:#1a5c38">Build {BUILD} reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
 <p>This one has two of your asks:</p>
 <ul>
@@ -81,8 +119,8 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    'NASTY: build 45 is live for the family', body], check=True)
+                    f'NASTY: build {BUILD} is live for the family', body], check=True)
     open(DONE, 'w').write('approved\n')
-    log('APPROVED - email sent, watcher done')
+    log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
     log(f'error: {e}')
