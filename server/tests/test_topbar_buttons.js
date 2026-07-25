@@ -162,6 +162,56 @@ async function partB2_zeroHorizontalOverflowMatrix(browser) {
   }
 }
 
+// 2026-07-24 (Blake's follow-up: "make the buttons at the top for quit, pause, etc.
+// symmetrical") - PERMANENT regression check for the fix: root cause was Pause/Save alone
+// getting flex:1 0 auto (grow to fill spare room) while the other four buttons sat at
+// flex:none (locked to their own content width) - a mixed-sizing row is exactly what "ragged,
+// not symmetrical" looks like. The fix gives every #topbar .iconBtn the SAME flex:1 1 0 (all
+// six grow and shrink identically from a zero basis), so this check asserts all six end up the
+// SAME width (not just the same height, which Part B already covered), at every width in
+// Blake's matrix, with real safe-area insets, AND at both the narrowest ("Normal") and widest
+// ("Turbo") speed-button labels - the case most likely to silently break equal sizing again if
+// a future change reintroduces per-button width overrides.
+async function partB3_equalWidthMatrix(browser) {
+  console.log('\n=== Part B3: all six topbar buttons share ONE equal width (symmetry), full matrix ===');
+  const MATRIX = [
+    { w: 320, h: 568, top: 0, bottom: 0 },
+    { w: 375, h: 667, top: 0, bottom: 0 },
+    { w: 390, h: 844, top: 47, bottom: 34 },
+    { w: 393, h: 852, top: 59, bottom: 34 },
+    { w: 430, h: 932, top: 59, bottom: 34 },
+  ];
+  for (const m of MATRIX) {
+    for (const speed of [0.6, 2.6]) {   // 0.6='Normal' (narrowest word), 2.6='Turbo' (widest tier used elsewhere)
+      const ctx = await browser.newContext({ viewport: { width: m.w, height: m.h } });
+      const page = await ctx.newPage();
+      const client = await ctx.newCDPSession(page);
+      await client.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: m.top, left: 0, bottom: m.bottom, right: 0 } });
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(String(e)));
+      await newGame(page);
+      await page.evaluate((s) => { USER_SPEED = s; updateSpeedButtonLabel(); }, speed);
+      await page.waitForTimeout(80);
+      const info = await page.evaluate(() => {
+        const tb = document.getElementById('topbar');
+        const btns = [...tb.querySelectorAll('.iconBtn')].map((b) => {
+          const r = b.getBoundingClientRect();
+          return { id: b.id, text: b.textContent, w: r.width, h: r.height, scrollW: b.scrollWidth, clientW: b.clientWidth };
+        });
+        return { clientWidth: tb.clientWidth, scrollWidth: tb.scrollWidth, btns };
+      });
+      const widths = info.btns.map((b) => b.w);
+      const uniform = widths.every((w) => Math.abs(w - widths[0]) < 1);
+      ok(uniform, `${m.w}x${m.h} speed="${info.btns.find((b) => b.id === 'btnSpeed').text}": all six buttons within 1px of the same width - ${JSON.stringify(widths.map((w) => Math.round(w * 100) / 100))}`);
+      ok(info.btns.every((b) => b.scrollW <= b.clientW), `${m.w}x${m.h}: no button's own label overflows its box (scrollWidth<=clientWidth per button) - ${JSON.stringify(info.btns.map((b) => `${b.id}:${b.scrollW}/${b.clientW}`))}`);
+      ok(info.scrollWidth === info.clientWidth, `${m.w}x${m.h}: topbar itself has zero horizontal overflow (scrollWidth ${info.scrollWidth} === clientWidth ${info.clientWidth})`);
+      ok(info.btns.every((b) => b.h >= 44), `${m.w}x${m.h}: every button still at/above the 44px tap-target floor`);
+      ok(errors.length === 0, `${m.w}x${m.h}: zero page errors`);
+      await ctx.close();
+    }
+  }
+}
+
 async function partC_saveButtonBehavior(browser) {
   console.log('\n=== Part C: item 5 - Save button (offline) ===');
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -253,6 +303,7 @@ async function main() {
   await partA_labels(browser);
   await partB_widthMatrix(browser);
   await partB2_zeroHorizontalOverflowMatrix(browser);
+  await partB3_equalWidthMatrix(browser);
   await partC_saveButtonBehavior(browser);
   await partD_pauseButtonUnchanged(browser);
   await browser.close();

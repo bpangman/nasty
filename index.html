@@ -471,19 +471,24 @@ button{font:inherit;cursor:pointer}
    min-height:44px. Bumping every OTHER topbar button up to match 48px (not shrinking Pause
    down to 44px) keeps the topbar's own total height exactly where it already was - Pause/Save
    was already the tallest button driving that height, so this only makes the shorter ones
-   catch up to it, never changes the row's own height (v0.7.1 rule: the board must not move). */
-#topbar .iconBtn{flex:none;min-height:48px}
-/* flex:1 0 auto (grow yes, SHRINK NO) - a flex-shrink of 1 (the default, and what a plain
-   flex:1 would give it) let this button collapse below its own nowrap text's width once the
-   row got tight, and since the collapsed box no longer overflowed the ROW itself, overflow-x
-   auto never kicked in - the text just visually spilled over the neighboring buttons instead
-   (caught on the 320px viewport check). shrink:0 means it only ever grows to fill spare room
-   and never shrinks past its natural content size; if that ever doesn't fit, the row's existing
-   overflow-x:auto scrolls it like everything else, which is the correct fallback.
-   2026-07-23 (Blake's item 5): the old single "Pause/Save" button split into two (#btnPause +
-   the new #btnSave) - both keep the same grow-not-shrink treatment so the pair still reads as
-   the row's visual center, same as the one combined button used to. */
-#topbar #btnPause,#topbar #btnSave{flex:1 0 auto;font-weight:800;min-height:48px}
+   catch up to it, never changes the row's own height (v0.7.1 rule: the board must not move).
+   2026-07-24 (Blake's follow-up: "make the buttons at the top for quit, pause, etc. symmetrical"):
+   root cause was TWO buttons (Pause/Save, see the old rule right below this one, now folded in
+   here) set to flex:1 0 auto (grow to fill spare room) while the other four sat at flex:none
+   (locked to their own text width) - a mixed-sizing row where two buttons stretched and four
+   didn't is exactly what reads as a "ragged" uneven set of tabs. Every one of the six buttons
+   now shares this SAME rule - flex:1 1 0 (grow AND shrink, starting from a zero basis) plus
+   min-width:0 (lets a flex item shrink below its own text's natural width, which a flex item
+   cannot do by default - without it the six equal shares would fight their own content size
+   and stop being equal well before the row was actually full) - so all six divide the row's
+   width exactly evenly, no matter how many pixels their own label needs. Font size is the
+   escape valve for a long label at a narrow share (see the clamp() rule below, whose floor
+   this fix also had to lower) rather than letting any one button claim extra width for itself.
+   The old #btnPause/#btnSave-only rule (flex:1 0 auto + font-weight:800) is gone - folding
+   their sizing into this shared rule (and letting their font-weight fall back to the generic
+   .iconBtn 700, same as the other four) is what actually makes the row read as ONE consistent
+   set of tabs instead of two visually bolder buttons bolted onto four plainer ones. */
+#topbar .iconBtn{flex:1 1 0;min-width:0;min-height:48px}
 /* 2026-07-23 (Blake's item 12): "Make Quit all caps with no x on the button. Same with Pause
    but no pause emoji. Same with Save in all caps - same for all the buttons at the top
    actually!" Scoped to `#topbar .iconBtn` specifically (not a blanket .iconBtn rule) so the
@@ -510,13 +515,22 @@ button{font:inherit;cursor:pointer}
    read as bigger) is gone - every topbar button, including these two, now shares ONE responsive
    font-size clamp, so nothing is arbitrarily wider than it needs to be, and the row reads as
    deliberately uniform rather than two different button styles bolted together.
-   (3) the shared clamp(10.5px,3.1vw,13px) below scales the text down a little further on the
-   very narrowest phones (where 6 short-but-real words genuinely need every spare pixel) while
-   staying at the old familiar 13px on anything roomier - together with the #topbar row's own
-   tightened gap/padding (see that rule above), this keeps every label a single unclipped word,
-   above the 44px tap-target floor (48px min-height, untouched), and never forces the sideways
-   scroll a real family member would notice and dislike. */
-#topbar .iconBtn{text-transform:uppercase;padding:6px 5px;font-size:clamp(10.5px,3.1vw,13px)}
+   (3) the shared clamp() below scales the text down a little further on the very narrowest
+   phones (where 6 short-but-real words genuinely need every spare pixel) while staying at the
+   old familiar 13px on anything roomier - together with the #topbar row's own tightened
+   gap/padding (see that rule above), this keeps every label a single unclipped word, above the
+   44px tap-target floor (48px min-height, untouched), and never forces the sideways scroll a
+   real family member would notice and dislike.
+   2026-07-24 (Blake's follow-up - "make the buttons symmetrical"): now that all six buttons
+   share equal flex widths (see the #topbar .iconBtn flex rule above), the per-button side
+   padding dropped 5px->4px and the clamp floor 10.5px->10px (preferred 3.1vw->3vw) - a small
+   final squeeze so the single widest real label ("NORMAL", the longest speed-tier word) still
+   renders with zero clipping at its new, narrower equal-width share on a 320px SE screen.
+   Verified with Playwright: at every width in the test matrix (320/375/390/393/430) and both the
+   narrowest ("Normal") and widest ("Turbo") speed labels plus "Unmute" (the longest mute-toggle
+   word), every button's own scrollWidth === clientWidth (nothing clipped) and all six buttons'
+   rendered widths match each other to within a fraction of a pixel (flex rounding only). */
+#topbar .iconBtn{text-transform:uppercase;padding:6px 4px;font-size:clamp(10px,3vw,13px)}
 @keyframes netPulse{50%{opacity:.4}}
 /* v0.16: problem-only connection indicator (see updateConnIndicator()) - USED to be a small
    always-on "🟢 online" chip in the topbar, which read as a meaningless bare dot on a phone
@@ -549,6 +563,18 @@ button{font:inherit;cursor:pointer}
 .lobbySeat.mine{box-shadow:0 0 0 2px var(--gold)}
 .lobbySeat.open{cursor:pointer}
 .lobbySeat.open:active{background:rgba(255,255,255,.16)}
+/* 2026-07-24 (Blake's follow-up: "give me the option to set the cpu difficulty when playing
+   an online game") - the host's own room screen (renderRoomScreen) gets a real <select> per
+   CPU seat, same three-tier Easy/Tricky/Nasty choice + look as the offline setup screen's own
+   .diffSel (§ MENU) - deliberately matched, not reinvented, so it reads as the same control
+   Blake already knows from starting an offline game. Guests never see this element at all
+   (renderJoinSeatStep shows the chosen tier as plain text instead, see .lobbySeat .diffLabel
+   below) - only the host's own screen ever creates a <select> here, and the server itself
+   still refuses any non-host's setSeat regardless (defense in depth, not the only guard). */
+.lobbySeat select{background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.18);
+  border-radius:8px;color:var(--cream);padding:6px 6px;font-size:12.5px;min-height:44px}
+/* Read-only twin for the guest seat screen - same three-tier wording, no control to tap. */
+.lobbySeat .diffLabel{font-size:12px;color:#e0c86a;font-weight:700;white-space:nowrap}
 /* v0.10: min-height:44px is the standard iOS/Android comfortable-tap-target size - the old
    6px-padding buttons measured ~30px tall (see HANDOFF.md matrix testing), too small to
    reliably tap on a phone. flex centering keeps the visible label sitting the same tight-looking
@@ -1225,7 +1251,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.28.5</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.29</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -4845,6 +4871,19 @@ function clearSelection(keepTurn){
 //    reunionPairingText()). An old client already sends/receives `teams` correctly; it just never
 //    showed it - nothing here changes what any message means or requires a new field to exist
 //    for anything to keep working.
+// 2026-07-24 (Blake's follow-up: "give me the option to set the cpu difficulty when playing an
+// online game"): STAYS at 5, still not bumped. `diff` has ridden every seat object (the `host`
+// message's seats:[{name,type,diff}], room.lobby.seats, lobbySnapshot(), and the setSeat
+// {patch:{diff}} case) since v0.15/v0.25 - the server already stored and honored a per-seat
+// diff (takeOverSeat already sent one from the reunion lobby's "have a computer take over"
+// picker). This batch adds server-side validation to setSeat's diff patch (restrict to the
+// three real tiers, same allowlist takeOverSeat already used - a defense-in-depth tightening,
+// not a new field or a new meaning for an old one) and a client-side control + read-only
+// display for it (renderRoomScreen()'s new CPU-seat <select>, renderJoinSeatStep()'s new
+// read-only label). An old client never sent a bad diff value anyway (its own UI only ever
+// offered the same three strings); an old server already accepted and stored `diff` exactly as
+// before. Nothing here changes what any message means or requires a new field for anything to
+// keep working either direction.
 const PROTOCOL_VERSION=5;
 const NET={
   ws:null, online:false, isHost:false, wantConnection:false,
@@ -6445,6 +6484,30 @@ function renderRoomScreen(){
         btn.textContent=s.type==='cpu'?'Make human':'Make CPU';
         btn.onclick=e=>{e.stopPropagation(); netSend({type:'setSeat',seatIndex:i,patch:{type:s.type==='cpu'?'human':'cpu'}});};
         row.appendChild(btn);
+        // 2026-07-24 (Blake's follow-up: "give me the option to set the cpu difficulty when
+        // playing an online game") - host-only difficulty picker for a CPU seat, right next to
+        // the existing Make human/Make CPU toggle. Every CPU seat is, by construction, an
+        // "open" seat (claiming a seat always sets type='human' - see claimSeat/setSeat on the
+        // server - so a type==='cpu' seat is never `mine`), which is why this lives in the
+        // SAME open-only branch as that toggle rather than needing a new branch. Same three
+        // real tiers/labels as the offline setup screen's .diffSel and the reunion lobby's
+        // "have a computer take over" picker (easy/medium/hard -> Easy/Tricky/Nasty, see
+        // DIFF_LABEL, § UI/HUD) - matched exactly, not reinvented. Sends the existing host-only
+        // setSeat message with a {diff} patch - already fully wired server-side (validated
+        // against the same three tiers, see server.js/server.ts's setSeat case) - this was
+        // purely a missing lobby control, not a protocol gap; PROTOCOL_VERSION does NOT bump
+        // (see the dated note by PROTOCOL_VERSION's definition, § NET).
+        if(s.type==='cpu'){
+          const sel=document.createElement('select'); sel.setAttribute('aria-label','computer difficulty');
+          sel.addEventListener('click',ev=>ev.stopPropagation());   // don't also trigger the row's claimSeat tap
+          [['easy','Easy'],['medium','Tricky'],['hard','Nasty']].forEach(([val,label])=>{
+            const o=document.createElement('option'); o.value=val; o.textContent=label;
+            if((s.diff||'medium')===val)o.selected=true;
+            sel.appendChild(o);
+          });
+          sel.onchange=()=>{ netSend({type:'setSeat',seatIndex:i,patch:{diff:sel.value}}); };
+          row.appendChild(sel);
+        }
       }
     }
     list.appendChild(row);
@@ -6535,7 +6598,15 @@ function renderJoinSeatStep(){
       :mine?(iAmReady?'You - Ready ✓':'You')
       :s.claimedBy!=null?(ready.has(s.claimedBy)?'Ready ✓':'Taken')
       :s.type==='cpu'?'CPU - tap to join':'Tap to sit here';
-    row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(s.name)}</span><span class="st">${statusTxt}</span>`;
+    // 2026-07-24 (Blake's follow-up: "give me the option to set the cpu difficulty when
+    // playing an online game") - "Every player in the lobby should be able to SEE each CPU
+    // seat's difficulty... even though only the host can change it." Read-only twin of
+    // renderRoomScreen()'s new <select>: a guest never gets an editable control here (that
+    // control only exists on the host's OWN room screen), just the same Easy/Tricky/Nasty
+    // wording as plain text (DIFF_LABEL, § UI/HUD - the exact tier names/mapping used
+    // everywhere else, never reinvented here).
+    const diffTxt=s.type==='cpu'?`<span class="diffLabel">${DIFF_LABEL[s.diff]||'Tricky'}</span>`:'';
+    row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(s.name)}</span>${diffTxt}<span class="st">${statusTxt}</span>`;
     // v0.25 item 1: "Ready up" locks the seat choice in - no more seat hopping after it
     // (the server enforces the same rule; this just stops offering the tap).
     if(open&&!iAmReady)row.onclick=()=>netSend({type:'claimSeat',seatIndex:i,name:JOIN.name});

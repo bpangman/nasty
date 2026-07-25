@@ -1712,7 +1712,12 @@ function handleWsUpgrade(req: Request, ip: string): Response {
             if (meta.ready) meta.ready = meta.ready.filter((id) => id !== kicked);
           }
           if (patch.type) seat.type = patch.type === "cpu" ? "cpu" : "human";
-          if (patch.diff) seat.diff = patch.diff as string;
+          // 2026-07-24 (Blake's follow-up: "let me set the cpu difficulty when playing an
+          // online game") - host-only (guarded above, unchanged), CPU-seat difficulty patch.
+          // Validated against the same three real tiers takeOverSeat already checks below
+          // (easy/medium/hard - Easy/Tricky/Nasty are just the display names, see index.html's
+          // DIFF_LABEL) - keeps server.js/server.ts parity exact.
+          if (patch.diff && ["easy", "medium", "hard"].includes(patch.diff as string)) seat.diff = patch.diff as string;
           if (patch.name != null && !isBadName(patch.name)) seat.name = cleanName(patch.name, seat.name);
           return {};
         });

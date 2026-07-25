@@ -1728,7 +1728,15 @@ wss.on("connection", (ws, req) => {
           if (kp) send(kp.ws, { type: "kicked", message: "The host turned your seat into a CPU." });
         }
         if (patch.type) seat.type = patch.type === "cpu" ? "cpu" : "human";
-        if (patch.diff) seat.diff = patch.diff;
+        // 2026-07-24 (Blake's follow-up: "let me set the cpu difficulty when playing an online
+        // game") - host-only (guarded above, unchanged), CPU-seat difficulty patch. Validated
+        // against the same three real tiers takeOverSeat already checks (easy/medium/hard -
+        // Easy/Tricky/Nasty are just the display names, see index.html's DIFF_LABEL) rather than
+        // trusting the wire value directly - an unrecognized string would otherwise sit on the
+        // seat forever (harmless at play time, since chooseAI() already falls back to
+        // AI_TIERS.medium for anything it doesn't recognize, but it would show as a broken/blank
+        // label everywhere the lobby displays it, both to the host and to every guest).
+        if (patch.diff && ["easy", "medium", "hard"].includes(patch.diff)) seat.diff = patch.diff;
         if (patch.name != null && !isBadName(patch.name)) seat.name = cleanName(patch.name, seat.name);
         touch(room);
         broadcast(room, { type: "lobby", lobby: lobbySnapshot(room) });
