@@ -478,9 +478,15 @@ button{font:inherit;cursor:pointer}
   flex:0 1 auto;min-width:0;line-height:1.2}
 .seg.on{background:var(--gold);border-color:var(--gold);color:#3a2c05}
 /* Same narrow-phone budget idea as .seatRow below: at 359px and under the label sheds a point of
-   size and most of its letter-spacing and the buttons tighten, which is exactly enough for
-   "Everyone for themselves" to stay a single line of text in its own column instead of wrapping
-   to two. 375 and up never see this block. */
+   size and most of its letter-spacing and the buttons tighten. 375 and up never see this block.
+   The longest button label, "Everyone for themselves", needs 166.6px here against 164.8px of
+   column, so at 320 that ONE button carries its text on two lines inside itself and comes out
+   46.8px tall instead of 44. That is deliberate and is not worth chasing: nothing clips either
+   way (the button grows taller, the column does not get wider), the two buttons still fill their
+   column edge to edge, and Blake's okay covers it - "it's okay to make these buttons 2 rows thick
+   for symmetry". Shaving 2px off this padding does buy the single line back in the test browser,
+   but only by about 2px, which a slightly wider device font would eat anyway - so it would be a
+   fragile promise, not a real one. Leave it. */
 @media (max-width:359px){
   .optRow{gap:6px}
   .optRow label{font-size:12px;letter-spacing:.04em}
