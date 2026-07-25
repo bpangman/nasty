@@ -107,6 +107,14 @@ const KV_PATH = Deno.env.get("NASTY_KV_PATH") || undefined; // undefined = Deplo
    no new message/changed shape. Item 14 needed zero server changes - `teams` already rode the
    `host` message and RoomMeta since it existed; this session's fix is client-side display only.
    See index.html's PROTOCOL_VERSION comment for the full reasoning. */
+/* 2026-07-25 § ACCOUNTS Stage 1 (Sign in with Apple, server plumbing) - twin of server.js's
+   matching comment, which carries the full case-by-case reasoning. STAYS at 5, not bumped:
+   everything added is new HTTP endpoints under /account/* plus two new /admin/* routes; not one
+   websocket message changed shape in either direction; /leaderboard's and /solo-result's bodies
+   are unchanged; and the room playerId/token rejoin credential was not touched at all. An old
+   client never calls the new routes, and a new client treats any non-200 from them as "accounts
+   unavailable, stay a guest" - it is never left waiting on a reply it cannot interpret, which is
+   this project's actual bar for a bump. */
 const PROTOCOL_VERSION = 5;
 const PROTOCOL_MISMATCH_MESSAGE =
   "This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.";
@@ -504,6 +512,10 @@ async function resetLeaderboard(): Promise<number> {
   for await (const e of kv.list({ prefix: ["leaderboard"] })) await kv.delete(e.key);
   // 2026-07-25 (bug 6): a new season starts with an empty folded-name index too.
   for await (const e of kv.list({ prefix: ["lbname"] })) await kv.delete(e.key);
+  // 2026-07-25 § ACCOUNTS: and with empty account-keyed rows - they are leaderboard rows, just
+  // in their own namespace. Accounts, sessions and the name index are deliberately LEFT ALONE:
+  // after a reset you are still signed in and still own your name. Twin of server.js's line.
+  for await (const e of kv.list({ prefix: ["lbacct"] })) await kv.delete(e.key);
   const epoch = (await getEpoch()) + 1;
   await kv.set(EPOCH_KEY, epoch);
   return epoch;
@@ -577,8 +589,566 @@ async function handleSoloResult(req: Request, ip: string): Promise<Response> {
   for (const e of entries) { if (e && e.name) { const s = sanitizeLeaderboardDelta(e.name, e.delta); if (s) sanitized.push(s); } }
   await kv.set(soloSeenKey(gameId), true, { expireIn: SOLO_ID_TTL_MS });
   for (const s of sanitized) await applyLeaderboardEntry(s.clean, s.keys);
+  // 2026-07-25 § ACCOUNTS (Stage 1): twin of server.js's note - a future client may send an
+  // `auth` session token in this body. It is deliberately ACCEPTED AND IGNORED; attribution
+  // still goes strictly by name, exactly as today. The flip is Stage 4, not this stage.
   log("solo result recorded", gameId, sanitized.map((s) => s.clean).join(","));
   return json(200, { ok: true, epoch });
+}
+
+/* =======================================================================================
+ * 2026-07-25 § ACCOUNTS - Stage 1 of 6: SERVER PLUMBING, DORMANT.
+ *
+ * EXACT TWIN of server.js's § ACCOUNTS section - same routes, same rules, same plain-language
+ * strings, same numbers. Read that file's block comment for the full reasoning (what "dormant"
+ * means, why the kill switch is an env flag rather than a data restore, why the account rows
+ * live in their own namespace, why no email is ever stored, and why there is no JWT library).
+ * This file is the PRODUCTION server; server.js is local/dev/tests. They must not diverge.
+ *
+ * The only differences here are storage-shaped, because Deno Deploy has KV and no disk:
+ *
+ *   server.js file                     this file's KV keys
+ *   ---------------------------------  ----------------------------------------------------
+ *   accounts.json                      ["account", uid]
+ *   account-index.json                 ["acctidx","apple",sub] and ["acctidx","name",folded]
+ *   sessions.json                      ["session", token]         (native expireIn)
+ *   auth-nonces.json                   ["authnonce", nonce]       (native expireIn, 10 min)
+ *   accounts-leaderboard.json          ["lbacct", uid, statKey]   (Deno.KvU64, like ["leaderboard"])
+ *   claims.json                        ["claimjournal", uid]
+ *
+ * Two KV-specific care points, both deliberate:
+ *   - the nonce is consumed with an ATOMIC check+delete, so two isolates racing the same nonce
+ *     cannot both win. (server.js is single-threaded, so a plain delete is already atomic there.)
+ *   - the claim writes the account row with `set`, never `sum`. Deno.KvU64 is UNSIGNED, so a
+ *     rollback that lowers a counter would throw on a sum; and because the merge is a pure
+ *     function of the journal, `set` is also what makes re-running it safe after a crash.
+ * ===================================================================================== */
+
+function accountsEnvFlagOn(raw: string | undefined, dflt: string): boolean {
+  const s = String(raw == null || raw === "" ? dflt : raw).trim().toLowerCase();
+  return !(s === "0" || s === "false" || s === "off" || s === "no");
+}
+function accountsEnvMs(raw: string | undefined, dflt: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : dflt;
+}
+const ACCOUNTS_ENABLED = accountsEnvFlagOn(Deno.env.get("NASTY_ACCOUNTS_ENABLED"), "1");
+const APPLE_ISSUER = (Deno.env.get("NASTY_APPLE_ISSUER") || "https://appleid.apple.com").trim();
+const APPLE_JWKS_URL = (Deno.env.get("NASTY_APPLE_JWKS_URL") || "https://appleid.apple.com/auth/keys").trim();
+const APPLE_AUDIENCES = String(Deno.env.get("NASTY_APPLE_AUDIENCES") || "")
+  .split(",").map((s) => s.trim()).filter(Boolean);
+function accountsConfigured(): boolean { return ACCOUNTS_ENABLED && APPLE_AUDIENCES.length > 0; }
+
+const SESSION_TTL_MS = accountsEnvMs(Deno.env.get("NASTY_SESSION_TTL_MS"), 400 * 24 * 60 * 60 * 1000);
+const SESSION_SLIDE_AFTER_MS = accountsEnvMs(Deno.env.get("NASTY_SESSION_SLIDE_AFTER_MS"), 30 * 24 * 60 * 60 * 1000);
+const NAME_COOLDOWN_MS = accountsEnvMs(Deno.env.get("NASTY_NAME_COOLDOWN_MS"), 30 * 24 * 60 * 60 * 1000);
+const AUTH_NONCE_TTL_MS = accountsEnvMs(Deno.env.get("NASTY_AUTH_NONCE_TTL_MS"), 10 * 60 * 1000);
+const APPLE_JWKS_TTL_MS = 6 * 60 * 60 * 1000;
+const APPLE_CLOCK_SKEW_MS = 10 * 60 * 1000;
+const APPLE_TOKEN_MAX_CHARS = 8192;
+const ACCOUNT_RATE_LIMIT = accountsEnvMs(Deno.env.get("NASTY_ACCOUNT_RATE_LIMIT"), 120);
+const ACCOUNT_RATE_WINDOW_MS = 60 * 1000;
+const ACCOUNTS_UNAVAILABLE_BODY = {
+  error: "accounts unavailable",
+  message: "Signing in isn't set up yet. You can keep playing without an account.",
+};
+const SIGNED_OUT_BODY = {
+  error: "signedout",
+  message: "You've been signed out. You can keep playing - sign in again any time.",
+};
+
+type AccountRecord = {
+  uid: string; provider: string; sub: string;
+  gameName: string | null; nameFolded: string | null; nameChangedAt: number;
+  nameHistory: { name: string | null; from: number; to: number }[];
+  claimDeclined: boolean; created: number; lastSeen: number; refreshToken: string | null;
+  // No email field, on purpose - see server.js's § ACCOUNTS header.
+};
+type SessionRecord = { uid: string; exp: number };
+type ClaimJournal = {
+  uid: string; folded: string; ts: number;
+  rows: Record<string, Record<string, number>>;
+  pre: Record<string, number>;
+  state: "pending" | "done" | "undone";
+};
+
+function accountKey(uid: string): Deno.KvKey { return ["account", uid]; }
+function appleIdxKey(sub: string): Deno.KvKey { return ["acctidx", "apple", sub]; }
+function nameIdxKey(folded: string): Deno.KvKey { return ["acctidx", "name", folded]; }
+function sessionKey(token: string): Deno.KvKey { return ["session", token]; }
+function authNonceKey(nonce: string): Deno.KvKey { return ["authnonce", nonce]; }
+function acctBoardKey(uid: string, statKey: string): Deno.KvKey { return ["lbacct", uid, statKey]; }
+function claimJournalKey(uid: string): Deno.KvKey { return ["claimjournal", uid]; }
+
+function accountsRandHex(bytes: number): string {
+  const buf = new Uint8Array(bytes);
+  crypto.getRandomValues(buf);
+  return Array.from(buf).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/* --- Apple identity token verification. Same six mandatory checks, same order, same hardcoded
+   RS256-only verifier as server.js - see that file for the reasoning behind each one, including
+   why the alg check is an equality test rather than a blocklist. --- */
+// The explicit Uint8Array<ArrayBuffer> is not decoration: crypto.subtle.verify() wants a
+// BufferSource backed by a real ArrayBuffer, and a bare `Uint8Array` widens to ArrayBufferLike
+// (which could be a SharedArrayBuffer) and fails `deno check`.
+function accountsB64uToBytes(s: string): Uint8Array<ArrayBuffer> {
+  let t = String(s || "").replace(/-/g, "+").replace(/_/g, "/");
+  while (t.length % 4) t += "=";
+  const bin = atob(t);
+  const out = new Uint8Array(new ArrayBuffer(bin.length));
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function accountsB64uToJson(s: string): unknown {
+  return JSON.parse(new TextDecoder().decode(accountsB64uToBytes(s)));
+}
+let appleJwksKeys: Record<string, string>[] | null = null;
+let appleJwksAt = 0;
+async function fetchAppleJwks(): Promise<void> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => { try { ctl.abort(); } catch (_e) { /* already done */ } }, 8000);
+  try {
+    const r = await fetch(APPLE_JWKS_URL, { signal: ctl.signal });
+    if (!r.ok) throw new Error("jwks http " + r.status);
+    const body = await r.json();
+    if (!body || !Array.isArray(body.keys)) throw new Error("jwks shape");
+    appleJwksKeys = body.keys;
+    appleJwksAt = Date.now();
+  } finally { clearTimeout(timer); }
+}
+async function appleJwkForKid(kid: string): Promise<Record<string, string> | null> {
+  if (!appleJwksKeys || Date.now() - appleJwksAt > APPLE_JWKS_TTL_MS) await fetchAppleJwks();
+  let k = (appleJwksKeys || []).find((j) => j && j.kid === kid);
+  if (!k) {   // key rotation: exactly one forced refetch, then fail closed
+    await fetchAppleJwks();
+    k = (appleJwksKeys || []).find((j) => j && j.kid === kid);
+  }
+  return k || null;
+}
+type AppleVerifyResult = { ok: true; sub: string } | { ok: false; reason: string };
+async function verifyAppleIdentityToken(rawToken: unknown, expectedNonce: string): Promise<AppleVerifyResult> {
+  const token = typeof rawToken === "string" ? rawToken : "";
+  if (!token || token.length > APPLE_TOKEN_MAX_CHARS) return { ok: false, reason: "malformed" };
+  const parts = token.split(".");
+  if (parts.length !== 3) return { ok: false, reason: "malformed" };
+  let header: Record<string, unknown>, payload: Record<string, unknown>;
+  try {
+    header = accountsB64uToJson(parts[0]) as Record<string, unknown>;
+    payload = accountsB64uToJson(parts[1]) as Record<string, unknown>;
+  } catch (_e) { return { ok: false, reason: "malformed" }; }
+  if (!header || typeof header !== "object" || !payload || typeof payload !== "object") return { ok: false, reason: "malformed" };
+  if (header.alg !== "RS256") return { ok: false, reason: "alg" };
+  if (typeof header.kid !== "string" || !header.kid) return { ok: false, reason: "kid" };
+  const jwk = await appleJwkForKid(header.kid);
+  if (!jwk || jwk.kty !== "RSA") return { ok: false, reason: "kid" };
+  let key: CryptoKey;
+  try {
+    key = await crypto.subtle.importKey(
+      "jwk", { kty: "RSA", n: jwk.n, e: jwk.e, alg: "RS256", ext: true },
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"],
+    );
+  } catch (_e) { return { ok: false, reason: "kid" }; }
+  let good = false;
+  try {
+    good = await crypto.subtle.verify(
+      { name: "RSASSA-PKCS1-v1_5" }, key,
+      accountsB64uToBytes(parts[2]), new TextEncoder().encode(parts[0] + "." + parts[1]),
+    );
+  } catch (_e) { good = false; }
+  if (!good) return { ok: false, reason: "signature" };
+  if (payload.iss !== APPLE_ISSUER) return { ok: false, reason: "issuer" };
+  const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+  if (!auds.some((a) => typeof a === "string" && APPLE_AUDIENCES.includes(a))) return { ok: false, reason: "audience" };
+  const now = Date.now();
+  const exp = payload.exp, iat = payload.iat;
+  if (typeof exp !== "number" || !Number.isFinite(exp) || exp * 1000 <= now) return { ok: false, reason: "expired" };
+  if (typeof iat !== "number" || !Number.isFinite(iat) || Math.abs(now - iat * 1000) > APPLE_CLOCK_SKEW_MS) return { ok: false, reason: "clock" };
+  if (typeof payload.nonce !== "string" || !payload.nonce || payload.nonce !== expectedNonce) return { ok: false, reason: "nonce" };
+  if (typeof payload.sub !== "string" || !payload.sub) return { ok: false, reason: "sub" };
+  return { ok: true, sub: payload.sub };
+}
+
+/* --- nonces. Server-issued, single use, 10 minutes, consumed with an ATOMIC check+delete so two
+   isolates racing the same nonce cannot both win. This is the replay defence. --- */
+async function issueAuthNonce(): Promise<string> {
+  const n = accountsRandHex(16);
+  await kv.set(authNonceKey(n), Date.now() + AUTH_NONCE_TTL_MS, { expireIn: AUTH_NONCE_TTL_MS });
+  return n;
+}
+async function consumeAuthNonce(n: unknown): Promise<boolean> {
+  if (typeof n !== "string" || !n) return false;
+  const cur = await kv.get<number>(authNonceKey(n));
+  if (!cur.value) return false;
+  const ok = await kv.atomic().check(cur).delete(authNonceKey(n)).commit();
+  if (!ok.ok) return false;             // somebody else consumed it first - that is a replay
+  return cur.value > Date.now();
+}
+
+/* --- sessions. Opaque, server-minted, 400 days, sliding. Completely separate from - and
+   invisible to - the per-room playerId/token rejoin credential, which this stage does not
+   touch. KV's native expireIn does the expiry, and the record carries `exp` too so the sliding
+   refresh and the client both have a number to read. --- */
+async function issueSession(uid: string): Promise<{ token: string; exp: number }> {
+  const token = accountsRandHex(32);
+  const exp = Date.now() + SESSION_TTL_MS;
+  await kv.set(sessionKey(token), { uid, exp } as SessionRecord, { expireIn: SESSION_TTL_MS });
+  return { token, exp };
+}
+type ResolvedSession = { token: string; uid: string; exp: number; account: AccountRecord };
+async function resolveSession(auth: unknown): Promise<ResolvedSession | null> {
+  if (typeof auth !== "string" || !auth) return null;
+  const cur = await kv.get<SessionRecord>(sessionKey(auth));
+  const s = cur.value;
+  if (!s) return null;
+  const now = Date.now();
+  if (!(s.exp > now)) { await kv.delete(sessionKey(auth)); return null; }
+  const acctRes = await kv.get<AccountRecord>(accountKey(s.uid));
+  const account = acctRes.value;
+  if (!account) { await kv.delete(sessionKey(auth)); return null; }
+  let exp = s.exp;
+  if (s.exp - now < SESSION_TTL_MS - SESSION_SLIDE_AFTER_MS) {
+    exp = now + SESSION_TTL_MS;
+    await kv.set(sessionKey(auth), { uid: s.uid, exp } as SessionRecord, { expireIn: SESSION_TTL_MS });
+  }
+  // Once a minute at most - see server.js's matching comment. Here it saves a KV write per
+  // authenticated request, which on Deno Deploy is the more expensive half of that trade.
+  if (now - (account.lastSeen || 0) > 60 * 1000) {
+    account.lastSeen = now;
+    await kv.set(accountKey(s.uid), account);
+  }
+  return { token: auth, uid: s.uid, exp, account };
+}
+async function revokeAllSessionsFor(uid: string): Promise<number> {
+  let n = 0;
+  for await (const e of kv.list<SessionRecord>({ prefix: ["session"] })) {
+    if (e.value && e.value.uid === uid) { await kv.delete(e.key); n++; }
+  }
+  return n;
+}
+
+/* --- accounts. Apple's `sub` is an INDEX KEY, never the account id - see server.js. --- */
+function newAccountRecord(sub: string): AccountRecord {
+  const now = Date.now();
+  return {
+    uid: accountsRandHex(16), provider: "apple", sub,
+    gameName: null, nameFolded: null, nameChangedAt: 0, nameHistory: [],
+    claimDeclined: false, created: now, lastSeen: now, refreshToken: null,
+  };
+}
+async function accountForAppleSub(sub: string): Promise<AccountRecord> {
+  const idx = await kv.get<string>(appleIdxKey(sub));
+  if (typeof idx.value === "string" && idx.value) {
+    const existing = await kv.get<AccountRecord>(accountKey(idx.value));
+    if (existing.value) return existing.value;
+  }
+  const rec = newAccountRecord(sub);
+  // check() on the index so two isolates racing a brand-new sub cannot both create an account.
+  const ok = await kv.atomic().check(idx).set(accountKey(rec.uid), rec).set(appleIdxKey(sub), rec.uid).commit();
+  if (!ok.ok) {
+    const again = await kv.get<string>(appleIdxKey(sub));
+    if (typeof again.value === "string" && again.value) {
+      const existing = await kv.get<AccountRecord>(accountKey(again.value));
+      if (existing.value) return existing.value;
+    }
+    await kv.set(accountKey(rec.uid), rec);
+    await kv.set(appleIdxKey(sub), rec.uid);
+  }
+  log("new account created", rec.uid);
+  return rec;
+}
+async function accountOwningFoldedName(folded: string): Promise<string | null> {
+  const idx = await kv.get<string>(nameIdxKey(folded));
+  if (typeof idx.value !== "string" || !idx.value) return null;
+  const acct = await kv.get<AccountRecord>(accountKey(idx.value));
+  return acct.value ? idx.value : null;
+}
+
+/* --- the name claim. Twin of server.js's, same five ordered steps, same crash-recovery
+   argument: the journal is written FIRST and carries both the source snapshot and the account
+   row's pre-claim values, which makes step 3 a pure function of the journal and therefore safe
+   to re-run any number of times. --- */
+async function accountRowFor(uid: string): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  for await (const e of kv.list<Deno.KvU64>({ prefix: ["lbacct", uid] })) {
+    out[String(e.key[2])] = Number(e.value.value);
+  }
+  return out;
+}
+async function setAccountRow(uid: string, row: Record<string, number>): Promise<void> {
+  for await (const e of kv.list({ prefix: ["lbacct", uid] })) {
+    if (!Object.prototype.hasOwnProperty.call(row, String(e.key[2]))) await kv.delete(e.key);
+  }
+  for (const k of Object.keys(row)) {
+    // `set`, never `sum` - Deno.KvU64 is unsigned, and this write must be able to go DOWN
+    // (a rollback) as well as up. Clamped at zero so an underflow can never throw.
+    await kv.set(acctBoardKey(uid, k), new Deno.KvU64(BigInt(Math.max(0, Math.round(row[k])))));
+  }
+}
+async function unclaimedRowsForFolded(folded: string): Promise<Record<string, Record<string, number>>> {
+  const out: Record<string, Record<string, number>> = {};
+  for await (const e of kv.list<Deno.KvU64>({ prefix: ["leaderboard"] })) {
+    const name = String(e.key[1]);
+    if (leaderboardNameKey(name) !== folded) continue;
+    out[name] = out[name] || {};
+    out[name][String(e.key[2])] = Number(e.value.value);
+  }
+  return out;
+}
+function claimSummary(rows: Record<string, Record<string, number>>) {
+  const t: Record<string, number> = {};
+  for (const n of Object.keys(rows || {})) for (const k of Object.keys(rows[n])) t[k] = (t[k] || 0) + rows[n][k];
+  return {
+    games: (t.hg4s || 0) + (t.hg6s || 0) + (t.hg4t || 0) + (t.hg6t || 0),
+    wins: (t.hw4s || 0) + (t.hw6s || 0) + (t.hw4t || 0) + (t.hw6t || 0),
+    points: (t.hptsS || 0) + (t.hptsT || 0),
+    koDealt: t.hkoDealt || 0,
+    koTaken: t.hkoTaken || 0,
+  };
+}
+// Test-only crash simulation, twin of server.js's. Unset in production.
+function claimFaultPoint(): string { return String(Deno.env.get("NASTY_CLAIM_FAULT") || ""); }
+async function runAccountClaim(acct: AccountRecord): Promise<{ alreadyDone: boolean; moved: ReturnType<typeof claimSummary> }> {
+  const uid = acct.uid;
+  const cur = await kv.get<ClaimJournal>(claimJournalKey(uid));
+  let j = cur.value;
+  if (j && j.state === "done") return { alreadyDone: true, moved: claimSummary(j.rows) };
+  if (!j || j.state !== "pending") {
+    const pre = await accountRowFor(uid);
+    j = {
+      uid, folded: acct.nameFolded || "", ts: Date.now(),
+      rows: await unclaimedRowsForFolded(acct.nameFolded || ""), pre, state: "pending",
+    };
+    // check() on the journal key: two concurrent claim requests for one account cannot both
+    // write a fresh journal, so the snapshot can never be taken twice.
+    const ok = await kv.atomic().check(cur).set(claimJournalKey(uid), j).commit();
+    if (!ok.ok) {
+      const again = await kv.get<ClaimJournal>(claimJournalKey(uid));
+      if (!again.value) throw new Error("claim journal write lost");
+      j = again.value;
+      if (j.state === "done") return { alreadyDone: true, moved: claimSummary(j.rows) };
+    }
+  }
+  if (claimFaultPoint() === "after-journal") throw new Error("simulated crash after journal write");
+  const target: Record<string, number> = {};
+  for (const k of Object.keys(j.pre)) target[k] = j.pre[k];
+  for (const n of Object.keys(j.rows)) for (const k of Object.keys(j.rows[n])) target[k] = (target[k] || 0) + j.rows[n][k];
+  await setAccountRow(uid, target);
+  if (claimFaultPoint() === "after-merge") throw new Error("simulated crash after merge, before source delete");
+  for (const n of Object.keys(j.rows)) await deleteLeaderboardEntry(n);
+  j.state = "done";
+  await kv.set(claimJournalKey(uid), j);
+  log("account claim completed", uid, "rows=" + JSON.stringify(Object.keys(j.rows)));
+  return { alreadyDone: false, moved: claimSummary(j.rows) };
+}
+async function undoAccountClaim(uid: string): Promise<{ ok: boolean; error?: string; restored?: string[] }> {
+  const cur = await kv.get<ClaimJournal>(claimJournalKey(uid));
+  const j = cur.value;
+  if (!j) return { ok: false, error: "no claim journal for that account" };
+  for (const n of Object.keys(j.rows)) {
+    const snap = j.rows[n];
+    for (const k of Object.keys(snap)) {
+      // Restore verbatim into a vacant name (the normal case); ADD into one that has been
+      // written to since the claim, so a rollback never destroys newer data. Twin of server.js.
+      const existing = await kv.get<Deno.KvU64>(["leaderboard", n, k]);
+      const base = existing.value ? Number(existing.value.value) : 0;
+      await kv.set(["leaderboard", n, k], new Deno.KvU64(BigInt(Math.max(0, base + snap[k]))));
+    }
+    const idx = await kv.get<string>(["lbname", leaderboardNameKey(n)]);
+    if (!idx.value) await kv.set(["lbname", leaderboardNameKey(n)], n);
+  }
+  const pre: Record<string, number> = {};
+  for (const k of Object.keys(j.pre)) { const v = j.pre[k]; if (Number.isFinite(v) && v > 0) pre[k] = v; }
+  await setAccountRow(uid, pre);
+  j.state = "undone";
+  await kv.set(claimJournalKey(uid), j);
+  log("admin undid account claim", uid);
+  return { ok: true, restored: Object.keys(j.rows) };
+}
+
+/* --- deletion. Twin of server.js's: by default the leaderboard row SURVIVES, converted back
+   into an ordinary unclaimed name row; `eraseBoard:true` removes the counters too. Apple token
+   revocation waits on the .p8 key Blake has not created yet, which Apple's own guidance
+   explicitly allows - so in-app deletion is compliant from day one. --- */
+async function deleteAccountRecord(acct: AccountRecord, eraseBoard: boolean): Promise<{ keptOnBoard: boolean }> {
+  const uid = acct.uid;
+  const row = await accountRowFor(uid);
+  let keptOnBoard = false;
+  if (!eraseBoard && acct.gameName && Object.keys(row).length) {
+    const bk = await boardKeyFor(acct.gameName);
+    for (const k of Object.keys(row)) {
+      if (!NUMERIC_STAT_KEY.test(k)) continue;
+      const v = row[k];
+      if (Number.isFinite(v) && v > 0) { await kv.atomic().sum(["leaderboard", bk, k], BigInt(Math.round(v))).commit(); keptOnBoard = true; }
+    }
+  }
+  await setAccountRow(uid, {});
+  if (acct.nameFolded) await kv.delete(nameIdxKey(acct.nameFolded));
+  if (acct.sub) await kv.delete(appleIdxKey(acct.sub));
+  const killed = await revokeAllSessionsFor(uid);
+  await kv.delete(accountKey(uid));
+  // The claim journal is deliberately KEPT, so an already-run claim stays reversible.
+  log("account deleted", uid, "sessions=" + killed, "boardRowKept=" + keptOnBoard);
+  return { keptOnBoard };
+}
+
+/* --- HTTP. Twin of server.js's handleAccountRoute, same paths, same status codes, same
+   plain-language strings. --- */
+const accountRateMap = new Map<string, number[]>();
+function underAccountRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const kept = (accountRateMap.get(ip) || []).filter((t) => now - t < ACCOUNT_RATE_WINDOW_MS);
+  if (kept.length >= ACCOUNT_RATE_LIMIT) { accountRateMap.set(ip, kept); return false; }
+  kept.push(now);
+  accountRateMap.set(ip, kept);
+  return true;
+}
+function accountPublicView(acct: AccountRecord, exp: number) {
+  return {
+    uid: acct.uid,
+    gameName: acct.gameName,
+    needsName: !acct.gameName,
+    claimDeclined: !!acct.claimDeclined,
+    nameChangedAt: acct.nameChangedAt || 0,
+    nameHistory: Array.isArray(acct.nameHistory) ? acct.nameHistory : [],
+    exp: exp || 0,
+  };
+}
+async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<Response> {
+  if (!underAccountRateLimit(ip)) {
+    return json(429, { error: "slow down", message: "Too many sign-in tries. Wait a minute and try again." });
+  }
+  if (!accountsConfigured()) return json(503, ACCOUNTS_UNAVAILABLE_BODY);
+  const p = url.pathname;
+  if (p === "/account/nonce") {
+    if (req.method !== "GET") return json(405, { error: "method not allowed" });
+    return json(200, { nonce: await issueAuthNonce() });
+  }
+  if (req.method !== "POST") return json(405, { error: "method not allowed" });
+  const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+
+  if (p === "/account/apple") {
+    const nonce = typeof body.nonce === "string" ? body.nonce : "";
+    if (!(await consumeAuthNonce(nonce))) {
+      return json(401, { error: "badnonce", message: "That sign-in took too long. Please try again." });
+    }
+    let v: AppleVerifyResult;
+    try { v = await verifyAppleIdentityToken(body.identityToken, nonce); }
+    catch (e) {
+      log("apple jwks unavailable", (e as Error).message);
+      return json(503, ACCOUNTS_UNAVAILABLE_BODY);
+    }
+    if (!v.ok) {
+      log("apple sign-in rejected", v.reason);
+      return json(401, { error: "badtoken", reason: v.reason, message: "That sign-in couldn't be verified. Please try again." });
+    }
+    const acct = await accountForAppleSub(v.sub);
+    const s = await issueSession(acct.uid);
+    return json(200, { sessionToken: s.token, ...accountPublicView(acct, s.exp) });
+  }
+
+  if (p === "/account/me") {
+    const me = await resolveSession(body.auth);
+    if (!me) return json(401, SIGNED_OUT_BODY);
+    return json(200, accountPublicView(me.account, me.exp));
+  }
+
+  if (p === "/account/name-available") {
+    const clean = cleanName(body.name, "");
+    if (!clean) return json(200, { available: false, reason: "empty", message: "Type a name first." });
+    if (isBadName(clean)) return json(200, { available: false, reason: "blocked", message: "That name is blocked. Please pick another one." });
+    const folded = leaderboardNameKey(clean);
+    const owner = await accountOwningFoldedName(folded);
+    const me = await resolveSession(body.auth);
+    if (owner && (!me || owner !== me.uid)) {
+      return json(200, { available: false, reason: "taken", message: "Somebody already has that name. Please pick another one." });
+    }
+    return json(200, { available: true, name: clean });
+  }
+
+  if (p === "/account/name") {
+    const me = await resolveSession(body.auth);
+    if (!me) return json(401, SIGNED_OUT_BODY);
+    const acct = me.account;
+    const clean = cleanName(body.name, "");
+    if (!clean) return json(400, { error: "empty", message: "Pick a name first." });
+    if (isBadName(clean)) return json(400, { error: "blocked", message: "That name is blocked. Please pick another one." });
+    const folded = leaderboardNameKey(clean);
+    const owner = await accountOwningFoldedName(folded);
+    if (owner && owner !== acct.uid) {
+      return json(409, { error: "taken", message: "Somebody already has that name. Please pick another one." });
+    }
+    const now = Date.now();
+    if (acct.nameFolded === folded) {
+      if (acct.gameName !== clean) { acct.gameName = clean; await kv.set(accountKey(acct.uid), acct); }
+    } else if (!acct.nameFolded) {
+      acct.gameName = clean;
+      acct.nameFolded = folded;
+      acct.nameChangedAt = 0;   // the FIRST rename after this is free - see server.js
+      await kv.set(accountKey(acct.uid), acct);
+      await kv.set(nameIdxKey(folded), acct.uid);
+    } else {
+      if (acct.nameChangedAt && now - acct.nameChangedAt < NAME_COOLDOWN_MS) {
+        const daysLeft = Math.max(1, Math.ceil((NAME_COOLDOWN_MS - (now - acct.nameChangedAt)) / (24 * 60 * 60 * 1000)));
+        return json(429, { error: "cooldown", daysLeft, message: "You can change your name again in " + daysLeft + (daysLeft === 1 ? " day." : " days.") });
+      }
+      const oldFolded = acct.nameFolded;
+      if (!Array.isArray(acct.nameHistory)) acct.nameHistory = [];
+      acct.nameHistory.push({ name: acct.gameName, from: acct.nameChangedAt || acct.created, to: now });
+      if (acct.nameHistory.length > 20) acct.nameHistory = acct.nameHistory.slice(-20);
+      acct.gameName = clean;
+      acct.nameFolded = folded;
+      acct.nameChangedAt = now;
+      await kv.delete(nameIdxKey(oldFolded));   // the old folded name goes back in the pool
+      await kv.set(accountKey(acct.uid), acct);
+      await kv.set(nameIdxKey(folded), acct.uid);
+    }
+    let pendingClaim = null;
+    const j = await kv.get<ClaimJournal>(claimJournalKey(acct.uid));
+    if (!acct.claimDeclined && (!j.value || j.value.state !== "done")) {
+      const rows = await unclaimedRowsForFolded(folded);
+      if (Object.keys(rows).length) pendingClaim = claimSummary(rows);
+    }
+    return json(200, { gameName: acct.gameName, pendingClaim });
+  }
+
+  if (p === "/account/claim") {
+    const me = await resolveSession(body.auth);
+    if (!me) return json(401, SIGNED_OUT_BODY);
+    const acct = me.account;
+    if (!acct.gameName) return json(400, { error: "noname", message: "Pick your game name first." });
+    if (body.decline === true) {
+      acct.claimDeclined = true;
+      await kv.set(accountKey(acct.uid), acct);
+      return json(200, { ok: true, declined: true });
+    }
+    try {
+      const r = await runAccountClaim(acct);
+      return json(200, { ok: true, alreadyDone: r.alreadyDone, moved: r.moved });
+    } catch (e) {
+      log("account claim failed", acct.uid, (e as Error).message);
+      return json(500, { error: "server error" });
+    }
+  }
+
+  if (p === "/account/signout") {
+    if (typeof body.auth === "string" && body.auth) await kv.delete(sessionKey(body.auth));
+    return json(200, { ok: true });
+  }
+
+  if (p === "/account/delete") {
+    const me = await resolveSession(body.auth);
+    if (!me) return json(401, SIGNED_OUT_BODY);
+    const r = await deleteAccountRecord(me.account, body.eraseBoard === true);
+    return json(200, {
+      ok: true,
+      appleRevoked: false,
+      keptOnBoard: r.keptOnBoard,
+      message: "Your account is deleted. You can also remove NASTY under Settings, your name, Sign in with Apple.",
+    });
+  }
+
+  return json(404, { error: "no such account route" });
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -1659,6 +2229,34 @@ async function handleAdminRoute(req: Request, url: URL): Promise<Response> {
     log("admin deleted leaderboard entry", name);
     return json(200, { ok: true });
   }
+  /* 2026-07-25 § ACCOUNTS (Stage 1) - twin of server.js's two new admin routes: a god-mode
+     listing and the one individual reversal. Both vanish when the kill switch is off. Apple's
+     `sub` is deliberately not in the listing. */
+  if (ACCOUNTS_ENABLED && parts.length === 2 && parts[1] === "accounts" && req.method === "GET") {
+    const out = [];
+    for await (const e of kv.list<AccountRecord>({ prefix: ["account"] })) {
+      const a = e.value;
+      if (!a || !a.uid) continue;
+      const j = await kv.get<ClaimJournal>(claimJournalKey(a.uid));
+      let sessionCount = 0;
+      for await (const se of kv.list<SessionRecord>({ prefix: ["session"] })) { if (se.value && se.value.uid === a.uid) sessionCount++; }
+      out.push({
+        uid: a.uid, gameName: a.gameName, nameFolded: a.nameFolded, created: a.created, lastSeen: a.lastSeen,
+        nameChangedAt: a.nameChangedAt || 0, nameHistory: a.nameHistory || [], claimDeclined: !!a.claimDeclined,
+        sessions: sessionCount,
+        claim: j.value ? j.value.state : null,
+        row: await accountRowFor(a.uid),
+      });
+    }
+    return json(200, out);
+  }
+  if (ACCOUNTS_ENABLED && parts.length === 3 && parts[1] === "claim" && parts[2] === "undo" && req.method === "POST") {
+    const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const uid = typeof body.uid === "string" ? body.uid : "";
+    const r = await undoAccountClaim(uid);
+    if (!r.ok) return json(404, { error: r.error });
+    return json(200, r);
+  }
   return json(404, { error: "no such admin route" });
 }
 
@@ -2599,6 +3197,13 @@ async function handler(req: Request, info: Deno.ServeHandlerInfo): Promise<Respo
     // "§ SOLO RESULTS" above.
     try { return await handleSoloResult(req, ip); }
     catch (e) { log("solo-result route error", e); return json(500, { error: "server error" }); }
+  }
+  // 2026-07-25 § ACCOUNTS (Stage 1): only routed when the kill switch is ON. With
+  // NASTY_ACCOUNTS_ENABLED=0 these paths fall through to the same 404 they hit today - twin of
+  // server.js's matching guard.
+  if (ACCOUNTS_ENABLED && url.pathname.startsWith("/account/")) {
+    try { return await handleAccountRoute(req, url, ip); }
+    catch (e) { log("account route error", e); return json(500, { error: "server error" }); }
   }
   return new Response("nasty relay - see /health", { status: 404, headers: { "content-type": "text/plain", ...CORS_HEADERS } });
 }

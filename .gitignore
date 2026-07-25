@@ -28,3 +28,17 @@ server/apns-key-id.txt
 server/ci-keychain-pass.txt
 server/ci-dist-key.pem
 .beta_watch_done
+
+# --- 2026-07-25 accounts (Sign in with Apple, Stage 1) ---
+# The dev server's account storage. accounts.json holds Apple's per-app identifier for each
+# player and sessions.json holds live session tokens, so none of these may ever reach this
+# public repo. The Deno production server keeps the same six things in KV, not on disk.
+server/accounts.json
+server/account-index.json
+server/sessions.json
+server/auth-nonces.json
+server/accounts-leaderboard.json
+server/claims.json
+# The Sign in with Apple key, when Blake creates it (same treatment as the APNs key above).
+server/apple-key.p8
+server/apple-key-id.txt

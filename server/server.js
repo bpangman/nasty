@@ -102,6 +102,23 @@ const CODE_ALPHABET = "BCDFGHJKMNPQRSTVWXZ";
  * has ridden the `host` message and `room.lobby.teams` since this field existed; this session's
  * fix is exposing/displaying it client-side, not adding to the wire. See index.html's
  * PROTOCOL_VERSION comment for the full reasoning on both. */
+/* 2026-07-25 § ACCOUNTS Stage 1 (Sign in with Apple, server plumbing): STAYS at 5, not bumped.
+ * The bar this project set itself is index.html's: "an old client can never get stuck waiting on
+ * a reply it doesn't know how to interpret." Applied to this batch:
+ *   - Everything added is NEW HTTP endpoints under /account/* (plus two new /admin/* routes).
+ *     An old client never calls them. A new client talking to an old server gets a plain 404 and
+ *     treats any non-200 as "accounts unavailable, stay a guest" - it is never left waiting.
+ *   - Not one WEBSOCKET message changed shape, in either direction. `host`/`join`/`rejoin`/
+ *     `reclaim` are byte-for-byte what they were, and the room playerId/token rejoin credential
+ *     is not touched at all.
+ *   - /leaderboard's response body is unchanged: still the flat {displayName:{stats}} map. The
+ *     account-keyed rows live in a separate namespace that nothing serves yet, so every
+ *     already-shipped TestFlight build keeps rendering a correct board.
+ *   - /solo-result's request and response shapes are unchanged.
+ * Same additive shape as hkoDealt/hkoTaken (2026-07-24) and hptsS/hptsT (v0.21), both of which
+ * this block declined to bump for. The one change that WOULD need a bump is making the account
+ * token REQUIRED on `host` or `join`. Never do that - it is written here so a future session
+ * does not "tidy it up" into a requirement. */
 const PROTOCOL_VERSION = 5;
 const PROTOCOL_MISMATCH_MESSAGE =
   "This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.";
@@ -746,8 +763,676 @@ async function handleSoloResult(req, res) {
   soloSeen.set(gameId, Date.now());
   scheduleSoloSeenPersist();
   for (const s of sanitized) applyLeaderboardEntry(s.clean, s.keys);
+  // 2026-07-25 § ACCOUNTS (Stage 1): a future client may send an `auth` session token in this
+  // body. It is deliberately ACCEPTED AND IGNORED here - attribution still goes strictly by
+  // name, exactly as it does today. Flipping attribution over to the account is Stage 4, not
+  // this stage, and doing it early would change what the family's board shows. Unknown body
+  // fields have always been ignored by this handler, so literally nothing had to change.
   log("solo result recorded", gameId, sanitized.map(s => s.clean).join(","));
   sendJson(res, 200, { ok: true, epoch: leaderboardEpoch });
+}
+
+/* =======================================================================================
+ * 2026-07-25 § ACCOUNTS - Stage 1 of 6: SERVER PLUMBING, DORMANT.
+ *
+ * WHAT THIS IS. NASTY has never had accounts. The leaderboard is keyed on whatever name a
+ * player typed, so anyone can type "Blake" and their wins land on Blake's row. The full plan
+ * (Sign in with Apple, optional, guest-first, six stages) adds a real account that owns a game
+ * name. THIS STAGE BUILDS THE SERVER HALF AND NOTHING ELSE.
+ *
+ * WHAT "DORMANT" MEANS, precisely:
+ *   - No client calls any of these routes. index.html is untouched by this stage.
+ *   - /leaderboard's response body is byte-for-byte what it has always been. Account rows live
+ *     in a SEPARATE namespace (accountBoard here, ["lbacct", uid, stat] on the Deno twin) that
+ *     nothing reads yet. That is what makes shipping this a zero-migration change, and what
+ *     makes reverting it a flag rather than a data restore.
+ *   - Existing leaderboard data is not read, rewritten, or migrated by this stage. The ONE
+ *     operation that ever moves existing data is the name claim below, which is reachable only
+ *     by an authenticated account holder - and there cannot be one until Apple is configured.
+ *   - Not one existing endpoint, wire message, or room code path changed.
+ *
+ * THE KILL SWITCH. NASTY_ACCOUNTS_ENABLED=0 (or false/off/no) makes /account/* unrouted
+ * entirely, so those paths fall through to the same 404 they hit today, the admin account
+ * routes disappear, and nothing here ever writes a byte. That is the revert: a Deno Deploy
+ * environment-variable change, no redeploy, no data restore. It is ON by default because the
+ * Apple gate below already keeps the whole thing inert in production.
+ *
+ * THE APPLE GATE, following server/apns.js's no-op-gracefully precedent exactly: with
+ * NASTY_APPLE_AUDIENCES unset (which is the state of production today, and until Blake finishes
+ * the Apple developer portal steps), every /account/* route answers 503 "accounts unavailable"
+ * and touches no storage. So this stage is safe to deploy the moment it is written.
+ *
+ * PROTOCOL_VERSION IS NOT BUMPED. See the dated note in the § PROTOCOL VERSION block above.
+ *
+ * NO NEW DEPENDENCY. Apple's identity token is a signed JWT, and it is verified here with
+ * WebCrypto and core modules only - same house style as server/apns.js, which signs its APNs
+ * JWTs with node:crypto rather than pulling in a JWT library. This repo is public; a JWT/JWKS
+ * package on the server is exactly the supply-chain surface this project has been right to
+ * avoid.
+ * ===================================================================================== */
+
+/* --- configuration. Every knob defaults to the real Apple values, so production behavior is
+   whatever Blake's environment says and nothing else. --- */
+function accountsEnvFlagOn(raw, dflt) {
+  const s = String(raw == null || raw === "" ? dflt : raw).trim().toLowerCase();
+  return !(s === "0" || s === "false" || s === "off" || s === "no");
+}
+const ACCOUNTS_ENABLED = accountsEnvFlagOn(process.env.NASTY_ACCOUNTS_ENABLED, "1");
+const APPLE_ISSUER = (process.env.NASTY_APPLE_ISSUER || "https://appleid.apple.com").trim();
+const APPLE_JWKS_URL = (process.env.NASTY_APPLE_JWKS_URL || "https://appleid.apple.com/auth/keys").trim();
+// Comma separated. The native App ID (com.pangman.nasty) and, later, the web Services ID.
+// EMPTY = accounts unavailable, the apns.js pattern. This is the production state today.
+const APPLE_AUDIENCES = String(process.env.NASTY_APPLE_AUDIENCES || "")
+  .split(",").map((s) => s.trim()).filter(Boolean);
+function accountsConfigured() { return ACCOUNTS_ENABLED && APPLE_AUDIENCES.length > 0; }
+
+// Session lifetime is deliberately enormous. This is a family board game: being signed out
+// because you did not play for a month would be a bug, not security. Sliding - any
+// authenticated request on a session older than SESSION_SLIDE_AFTER_MS silently extends it.
+// The two _MS overrides exist ONLY so the test suite can prove the slide and the rename
+// cooldown without waiting 30 days; nothing sets them in production. Same idea as the existing
+// NASTY_TEST_FREEZE_MS knob in the freeze-recovery suite.
+function accountsEnvMs(raw, dflt) {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : dflt;
+}
+const SESSION_TTL_MS = accountsEnvMs(process.env.NASTY_SESSION_TTL_MS, 400 * 24 * 60 * 60 * 1000);
+const SESSION_SLIDE_AFTER_MS = accountsEnvMs(process.env.NASTY_SESSION_SLIDE_AFTER_MS, 30 * 24 * 60 * 60 * 1000);
+const NAME_COOLDOWN_MS = accountsEnvMs(process.env.NASTY_NAME_COOLDOWN_MS, 30 * 24 * 60 * 60 * 1000);
+const AUTH_NONCE_TTL_MS = accountsEnvMs(process.env.NASTY_AUTH_NONCE_TTL_MS, 10 * 60 * 1000); // a sign-in slower than this restarts
+const APPLE_JWKS_TTL_MS = 6 * 60 * 60 * 1000;  // Apple rotates rarely; a kid miss forces one refetch
+const APPLE_CLOCK_SKEW_MS = 10 * 60 * 1000;    // allowed iat drift, both directions
+const APPLE_TOKEN_MAX_CHARS = 8192;            // a real identity token is ~1KB; refuse a 1MB one outright
+const ACCOUNT_RATE_LIMIT = accountsEnvMs(process.env.NASTY_ACCOUNT_RATE_LIMIT, 120); // per IP per minute
+const ACCOUNT_RATE_WINDOW_MS = 60 * 1000;
+const ACCOUNTS_UNAVAILABLE_BODY = {
+  error: "accounts unavailable",
+  message: "Signing in isn't set up yet. You can keep playing without an account.",
+};
+const SIGNED_OUT_BODY = {
+  error: "signedout",
+  message: "You've been signed out. You can keep playing - sign in again any time.",
+};
+
+/* --- storage. Six small JSON files, all env-overridable exactly like NASTY_LEADERBOARD_FILE so
+   tests point them at scratch paths, all debounce-persisted like the leaderboard, and all in
+   .gitignore (accounts.json holds Apple's per-app identifier and sessions.json holds live
+   session tokens - the repo is public). The Deno twin stores the same six things as KV key
+   prefixes; see server.ts's matching section. --- */
+function accountsFilePath(envName, base) {
+  return process.env[envName] ? path.resolve(process.env[envName]) : path.join(__dirname, base);
+}
+let accounts = {};        // uid -> account record (shape documented at newAccountRecord() below)
+let accountIndex = {};    // "apple:<sub>" -> uid, and "name:<foldedName>" -> uid
+let sessions = {};        // opaque session token -> {uid, exp}
+let authNonces = {};      // server-issued sign-in nonce -> expiry ms (single use, deleted on sight)
+let accountBoard = {};    // uid -> {statKey: number} - the SEPARATE leaderboard namespace
+let claimJournal = {};    // uid -> the reversible record of that account's one-time name claim
+
+const accountStores = [];
+function registerAccountStore(file, get, set) {
+  const s = { file, get, set, timer: null };
+  accountStores.push(s);
+  return s;
+}
+function loadAccountStore(s) {
+  try {
+    const o = JSON.parse(fs.readFileSync(s.file, "utf8"));
+    if (o && typeof o === "object") s.set(o);
+  } catch (e) { /* missing file is the normal, expected state - stay empty, create nothing */ }
+}
+function persistAccountStoreNow(s) {
+  if (s.timer) { clearTimeout(s.timer); s.timer = null; }
+  try { fs.writeFileSync(s.file, JSON.stringify(s.get())); }
+  catch (e) { log("account store persist failed", s.file, e.message); }
+}
+function scheduleAccountStorePersist(s) {
+  if (s.timer) return;
+  s.timer = setTimeout(() => { s.timer = null; persistAccountStoreNow(s); }, PERSIST_DEBOUNCE_MS);
+}
+const STORE_ACCOUNTS = registerAccountStore(accountsFilePath("NASTY_ACCOUNTS_FILE", "accounts.json"), () => accounts, (o) => { accounts = o; });
+const STORE_ACCT_INDEX = registerAccountStore(accountsFilePath("NASTY_ACCOUNT_INDEX_FILE", "account-index.json"), () => accountIndex, (o) => { accountIndex = o; });
+const STORE_SESSIONS = registerAccountStore(accountsFilePath("NASTY_SESSIONS_FILE", "sessions.json"), () => sessions, (o) => { sessions = o; });
+const STORE_NONCES = registerAccountStore(accountsFilePath("NASTY_AUTH_NONCES_FILE", "auth-nonces.json"), () => authNonces, (o) => { authNonces = o; });
+const STORE_ACCT_BOARD = registerAccountStore(accountsFilePath("NASTY_ACCOUNTS_LEADERBOARD_FILE", "accounts-leaderboard.json"), () => accountBoard, (o) => { accountBoard = o; });
+const STORE_CLAIMS = registerAccountStore(accountsFilePath("NASTY_ACCOUNT_CLAIMS_FILE", "claims.json"), () => claimJournal, (o) => { claimJournal = o; });
+function loadAccountStores() { for (const s of accountStores) loadAccountStore(s); pruneAuthNonces(); }
+function flushAccountStores() { for (const s of accountStores) if (s.timer) persistAccountStoreNow(s); }
+
+/* --- Apple identity token verification ------------------------------------------------
+   Apple hands the client a signed JWT ("identity token"). The server trusts NOTHING the client
+   says except this token, and verifies it itself. Every one of these checks is mandatory and
+   they run in this order:
+
+     1. the nonce (checked by the caller BEFORE any crypto - see handleAccountRoute) must be one
+        this server issued and has not seen before. That is the replay defence.
+     2. size + shape: exactly three dot-separated segments, and short enough that a hostile 1MB
+        "token" is refused before anything parses it.
+     3. header.alg === "RS256", as a hardcoded EQUALITY CHECK. This verifier never branches on
+        what the token claims its algorithm is, so alg:"none" and the classic alg-confusion
+        attack (an HS256 token MAC'd with the RSA public key as the shared secret) are closed by
+        construction, not by a blocklist.
+     4. the signing key comes from Apple's published JWKS, looked up by the header's `kid`,
+        cached 6 hours. A kid we have never seen forces exactly ONE refetch (Apple rotates keys),
+        then gives up. There is deliberately no "could not fetch keys, skip the signature" path.
+     5. the RSASSA-PKCS1-v1_5 / SHA-256 signature itself, via WebCrypto.
+     6. the claims: issuer, audience against an allowlist, exp in the future, iat within ten
+        minutes either way, the nonce echoed back exactly, and a non-empty string `sub`.
+
+   `sub` is Apple's stable per-app-per-user identifier and is the ONLY thing taken from the
+   token. Deliberately NOT read, and deliberately not even a field in the account record:
+   `email`, `is_private_email`, and anything the client sends about the user's name. Nothing in
+   this design needs an email (there is no password to reset and no mail to send), Apple only
+   returns one on the very first authorization anyway, and not collecting it keeps
+   "Contact Info > Email Address" off the App Store privacy label entirely.
+   --------------------------------------------------------------------------------------- */
+const webcrypto = crypto.webcrypto;
+function accountsB64uToBuf(s) {
+  return Buffer.from(String(s || "").replace(/-/g, "+").replace(/_/g, "/"), "base64");
+}
+function accountsB64uToJson(s) {
+  return JSON.parse(accountsB64uToBuf(s).toString("utf8"));
+}
+let appleJwksKeys = null, appleJwksAt = 0;
+async function fetchAppleJwks() {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => { try { ctl.abort(); } catch (e) {} }, 8000);
+  try {
+    const r = await fetch(APPLE_JWKS_URL, { signal: ctl.signal });
+    if (!r.ok) throw new Error("jwks http " + r.status);
+    const body = await r.json();
+    if (!body || !Array.isArray(body.keys)) throw new Error("jwks shape");
+    appleJwksKeys = body.keys;
+    appleJwksAt = Date.now();
+    return appleJwksKeys;
+  } finally { clearTimeout(timer); }
+}
+async function appleJwkForKid(kid) {
+  if (!appleJwksKeys || Date.now() - appleJwksAt > APPLE_JWKS_TTL_MS) await fetchAppleJwks();
+  let k = (appleJwksKeys || []).find((j) => j && j.kid === kid);
+  // Key rotation: one forced refetch on a miss, then fail closed. Never a signature-less fallback.
+  if (!k) {
+    await fetchAppleJwks();
+    k = (appleJwksKeys || []).find((j) => j && j.kid === kid);
+  }
+  return k || null;
+}
+// Returns {ok:true, sub} or {ok:false, reason}. Throws ONLY if Apple's key list is unreachable,
+// which the caller turns into 503 "accounts unavailable" - never into a partial verification.
+async function verifyAppleIdentityToken(rawToken, expectedNonce) {
+  const token = typeof rawToken === "string" ? rawToken : "";
+  if (!token || token.length > APPLE_TOKEN_MAX_CHARS) return { ok: false, reason: "malformed" };
+  const parts = token.split(".");
+  if (parts.length !== 3) return { ok: false, reason: "malformed" };
+  let header, payload;
+  try { header = accountsB64uToJson(parts[0]); payload = accountsB64uToJson(parts[1]); }
+  catch (e) { return { ok: false, reason: "malformed" }; }
+  if (!header || typeof header !== "object" || !payload || typeof payload !== "object") return { ok: false, reason: "malformed" };
+  if (header.alg !== "RS256") return { ok: false, reason: "alg" };
+  if (typeof header.kid !== "string" || !header.kid) return { ok: false, reason: "kid" };
+  const jwk = await appleJwkForKid(header.kid);
+  if (!jwk || jwk.kty !== "RSA") return { ok: false, reason: "kid" };
+  let key;
+  try {
+    key = await webcrypto.subtle.importKey(
+      "jwk", { kty: "RSA", n: jwk.n, e: jwk.e, alg: "RS256", ext: true },
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"],
+    );
+  } catch (e) { return { ok: false, reason: "kid" }; }
+  let good = false;
+  try {
+    good = await webcrypto.subtle.verify(
+      { name: "RSASSA-PKCS1-v1_5" }, key,
+      accountsB64uToBuf(parts[2]), Buffer.from(parts[0] + "." + parts[1], "ascii"),
+    );
+  } catch (e) { good = false; }
+  if (!good) return { ok: false, reason: "signature" };
+  if (payload.iss !== APPLE_ISSUER) return { ok: false, reason: "issuer" };
+  const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+  if (!auds.some((a) => typeof a === "string" && APPLE_AUDIENCES.includes(a))) return { ok: false, reason: "audience" };
+  const now = Date.now();
+  if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp * 1000 <= now) return { ok: false, reason: "expired" };
+  if (typeof payload.iat !== "number" || !Number.isFinite(payload.iat) || Math.abs(now - payload.iat * 1000) > APPLE_CLOCK_SKEW_MS) return { ok: false, reason: "clock" };
+  if (typeof payload.nonce !== "string" || !payload.nonce || payload.nonce !== expectedNonce) return { ok: false, reason: "nonce" };
+  if (typeof payload.sub !== "string" || !payload.sub) return { ok: false, reason: "sub" };
+  return { ok: true, sub: payload.sub };
+}
+
+/* --- nonces. The SERVER issues them (GET /account/nonce), stores them single-use with a
+   10-minute life, and deletes on first presentation whether or not it was still valid. That
+   is what makes replaying a captured identity token impossible. --- */
+function pruneAuthNonces() {
+  const now = Date.now();
+  let pruned = false;
+  for (const n of Object.keys(authNonces)) { if (!(authNonces[n] > now)) { delete authNonces[n]; pruned = true; } }
+  if (pruned) scheduleAccountStorePersist(STORE_NONCES);
+}
+function issueAuthNonce() {
+  pruneAuthNonces();
+  const n = crypto.randomBytes(16).toString("hex");
+  authNonces[n] = Date.now() + AUTH_NONCE_TTL_MS;
+  scheduleAccountStorePersist(STORE_NONCES);
+  return n;
+}
+function consumeAuthNonce(n) {
+  if (typeof n !== "string" || !n) return false;
+  const exp = authNonces[n];
+  delete authNonces[n];                                   // single use, unconditionally
+  scheduleAccountStorePersist(STORE_NONCES);
+  return !!(exp && exp > Date.now());
+}
+
+/* --- sessions. The server mints its OWN opaque token after a successful Apple verification and
+   never shows Apple's token to anything again. Completely separate from - and invisible to -
+   the per-room playerId/token rejoin credential in § ROOMS, which this stage does not touch in
+   any way. Sent by a future client in the JSON body as `auth`, never as a header, because
+   CORS_HEADERS allows exactly "content-type, x-admin-token" and a body field needs no CORS
+   change at all. --- */
+function issueSession(uid) {
+  const token = crypto.randomBytes(32).toString("hex");
+  const exp = Date.now() + SESSION_TTL_MS;
+  sessions[token] = { uid, exp };
+  scheduleAccountStorePersist(STORE_SESSIONS);
+  return { token, exp };
+}
+// null = no session / expired / the account is gone. Otherwise {token, uid, exp, account},
+// with the sliding refresh already applied.
+function resolveSession(auth) {
+  if (typeof auth !== "string" || !auth) return null;
+  const s = sessions[auth];
+  if (!s) return null;
+  const now = Date.now();
+  if (!(s.exp > now)) { delete sessions[auth]; scheduleAccountStorePersist(STORE_SESSIONS); return null; }
+  const account = accounts[s.uid];
+  if (!account) { delete sessions[auth]; scheduleAccountStorePersist(STORE_SESSIONS); return null; }
+  if (s.exp - now < SESSION_TTL_MS - SESSION_SLIDE_AFTER_MS) {
+    s.exp = now + SESSION_TTL_MS;                          // silently extended, no client dance
+    scheduleAccountStorePersist(STORE_SESSIONS);
+  }
+  // lastSeen is a rough "when did we last hear from this person" for Blake's god-mode panel, so
+  // it is only written once a minute at most. Updating it on literally every authenticated
+  // request would rewrite the whole accounts store constantly for no benefit (and on the Deno
+  // twin that is a KV write per request).
+  if (now - (account.lastSeen || 0) > 60 * 1000) {
+    account.lastSeen = now;
+    scheduleAccountStorePersist(STORE_ACCOUNTS);
+  }
+  return { token: auth, uid: s.uid, exp: s.exp, account };
+}
+function revokeSession(token) {
+  if (typeof token !== "string" || !token || !sessions[token]) return false;
+  delete sessions[token];
+  scheduleAccountStorePersist(STORE_SESSIONS);
+  return true;
+}
+function revokeAllSessionsFor(uid) {
+  let n = 0;
+  for (const t of Object.keys(sessions)) { if (sessions[t] && sessions[t].uid === uid) { delete sessions[t]; n++; } }
+  if (n) scheduleAccountStorePersist(STORE_SESSIONS);
+  return n;
+}
+
+/* --- accounts. The Apple `sub` is an INDEX KEY, not the account id: the leaderboard must never
+   be keyed on a provider-specific value, or adding another sign-in method later (or Apple
+   changing something) would reach straight into the family's lifetime stats. --- */
+function newAccountRecord(sub) {
+  const now = Date.now();
+  return {
+    uid: crypto.randomBytes(16).toString("hex"),
+    provider: "apple",
+    sub,                    // Apple's stable per-app identifier. Nothing else from the token.
+    gameName: null,         // the 10-char display label; null until the player picks one
+    nameFolded: null,       // leaderboardNameKey(gameName) - what uniqueness is enforced on
+    nameChangedAt: 0,       // 0 = the first rename is free; see handleAccountRoute's /account/name
+    nameHistory: [],        // [{name, from, to}] so "who was Ginny in June" is answerable
+    claimDeclined: false,   // they were offered the existing name row and said "start fresh"
+    created: now,
+    lastSeen: now,
+    refreshToken: null,     // stays null until Apple's .p8 key exists (revoke-on-delete, Stage 6)
+    // There is deliberately NO email field in this shape, so a future careless edit cannot
+    // start storing one by accident. See the § ACCOUNTS header.
+  };
+}
+function accountForAppleSub(sub) {
+  const idxKey = "apple:" + sub;
+  const existing = accountIndex[idxKey];
+  if (existing && accounts[existing]) return accounts[existing];
+  const rec = newAccountRecord(sub);
+  accounts[rec.uid] = rec;
+  accountIndex[idxKey] = rec.uid;
+  scheduleAccountStorePersist(STORE_ACCOUNTS);
+  scheduleAccountStorePersist(STORE_ACCT_INDEX);
+  log("new account created", rec.uid);
+  return rec;
+}
+function accountOwningFoldedName(folded) {
+  const uid = accountIndex["name:" + folded];
+  return uid && accounts[uid] ? uid : null;
+}
+
+/* --- the name claim. THE ONLY OPERATION IN THIS WHOLE PLAN THAT MOVES EXISTING DATA, so it is
+   written to be replayable and individually reversible.
+
+   Order, and why:
+     1. snapshot every unclaimed leaderboard row whose folded name matches this account's name;
+     2. write the journal FIRST and flush it to disk. The journal holds both the source snapshot
+        AND the account row's values from before the claim (`pre`), which is what makes step 3 a
+        PURE FUNCTION of the journal - so a crash anywhere can re-run it any number of times
+        without ever double-counting;
+     3. account row := pre + sum(snapshot);
+     4. delete the source rows;
+     5. mark the journal done.
+   Crash between 2 and 3, 3 and 4, or 4 and 5: re-running from the existing pending journal
+   lands on exactly the same numbers. A journal already marked "done" short-circuits at the top.
+   Journal entries are never deleted - they are a few bytes each and there will be fewer than
+   twenty of them in this app's lifetime. --- */
+function unclaimedRowsForFolded(folded) {
+  const out = {};
+  for (const name of Object.keys(globalBoard)) {
+    if (leaderboardNameKey(name) !== folded) continue;
+    const r = globalBoard[name];
+    if (!r || typeof r !== "object") continue;
+    const snap = {};
+    for (const k of Object.keys(r)) { const v = r[k]; if (typeof v === "number" && Number.isFinite(v)) snap[k] = v; }
+    out[name] = snap;
+  }
+  return out;
+}
+// The plain-language summary a future client shows in "There are already 47 games and 19 wins
+// on the board under the name Blake. Is that you?"
+function claimSummary(rows) {
+  const t = {};
+  for (const n of Object.keys(rows || {})) for (const k of Object.keys(rows[n])) t[k] = (t[k] || 0) + rows[n][k];
+  return {
+    games: (t.hg4s || 0) + (t.hg6s || 0) + (t.hg4t || 0) + (t.hg6t || 0),
+    wins: (t.hw4s || 0) + (t.hw6s || 0) + (t.hw4t || 0) + (t.hw6t || 0),
+    points: (t.hptsS || 0) + (t.hptsT || 0),
+    koDealt: t.hkoDealt || 0,
+    koTaken: t.hkoTaken || 0,
+  };
+}
+// Test-only crash simulation. Unset in production; the suite sets it to prove the journal really
+// does make a half-finished claim recoverable. Values: "after-journal", "after-merge".
+function claimFaultPoint() { return String(process.env.NASTY_CLAIM_FAULT || ""); }
+function runAccountClaim(acct) {
+  const uid = acct.uid;
+  let j = claimJournal[uid];
+  if (j && j.state === "done") return { ok: true, alreadyDone: true, moved: claimSummary(j.rows) };
+  if (!j || j.state !== "pending") {
+    const pre = {};
+    const cur = accountBoard[uid] || {};
+    for (const k of Object.keys(cur)) pre[k] = cur[k];
+    j = claimJournal[uid] = { uid, folded: acct.nameFolded, ts: Date.now(), rows: unclaimedRowsForFolded(acct.nameFolded), pre, state: "pending" };
+    persistAccountStoreNow(STORE_CLAIMS);   // journal first, on disk, before anything moves
+  }
+  if (claimFaultPoint() === "after-journal") throw new Error("simulated crash after journal write");
+  const target = {};
+  for (const k of Object.keys(j.pre)) target[k] = j.pre[k];
+  for (const n of Object.keys(j.rows)) for (const k of Object.keys(j.rows[n])) target[k] = (target[k] || 0) + j.rows[n][k];
+  if (Object.keys(target).length) accountBoard[uid] = target; else delete accountBoard[uid];
+  persistAccountStoreNow(STORE_ACCT_BOARD);
+  if (claimFaultPoint() === "after-merge") throw new Error("simulated crash after merge, before source delete");
+  let removed = 0;
+  for (const n of Object.keys(j.rows)) { if (globalBoard[n]) { delete globalBoard[n]; removed++; } }
+  if (removed) { rebuildLbNameIndex(); persistLeaderboardNow(); }
+  j.state = "done";
+  persistAccountStoreNow(STORE_CLAIMS);
+  log("account claim completed", uid, "rows=" + JSON.stringify(Object.keys(j.rows)));
+  return { ok: true, moved: claimSummary(j.rows) };
+}
+// The individual reversal. Restores each source row from the journal (verbatim if that name is
+// vacant, which is the normal case; ADDED if something has written to that name since, so a
+// rollback never destroys newer data) and puts the account row back to its pre-claim values.
+function undoAccountClaim(uid) {
+  const j = claimJournal[uid];
+  if (!j) return { ok: false, error: "no claim journal for that account" };
+  for (const n of Object.keys(j.rows)) {
+    const snap = j.rows[n];
+    if (!globalBoard[n]) { globalBoard[n] = Object.assign({}, snap); continue; }
+    const cur = globalBoard[n];
+    for (const k of Object.keys(snap)) cur[k] = (Number(cur[k]) || 0) + snap[k];
+  }
+  rebuildLbNameIndex();
+  persistLeaderboardNow();
+  const pre = {};
+  for (const k of Object.keys(j.pre)) { const v = j.pre[k]; if (typeof v === "number" && Number.isFinite(v) && v > 0) pre[k] = v; }
+  if (Object.keys(pre).length) accountBoard[uid] = pre; else delete accountBoard[uid];
+  persistAccountStoreNow(STORE_ACCT_BOARD);
+  j.state = "undone";
+  persistAccountStoreNow(STORE_CLAIMS);
+  log("admin undid account claim", uid);
+  return { ok: true, restored: Object.keys(j.rows) };
+}
+
+/* --- deletion (App Store guideline 5.1.1(v) - an app that creates accounts must delete them
+   in-app). By default the leaderboard ROW SURVIVES, converted back into an ordinary unclaimed
+   name row: the counters are the family's shared history and the display name is user-chosen
+   and already public, while the actual personal data (Apple's identifier, the sessions) is
+   genuinely destroyed. `eraseBoard:true` is the second, smaller option that removes the
+   counters too. Apple token revocation needs the .p8 key Blake has not created yet; Apple's own
+   guidance explicitly allows completing the deletion without it, so this is compliant from day
+   one and the client tells the player they can also remove NASTY under
+   Settings > their name > Sign in with Apple. --- */
+function deleteAccountRecord(acct, eraseBoard) {
+  const uid = acct.uid;
+  const row = accountBoard[uid];
+  let keptOnBoard = false;
+  if (row && !eraseBoard && acct.gameName) {
+    const bk = boardKeyFor(acct.gameName);
+    const r = globalBoard[bk] = globalBoard[bk] || {};
+    for (const k of Object.keys(row)) {
+      if (!NUMERIC_STAT_KEY.test(k)) continue;
+      const v = row[k];
+      if (typeof v === "number" && Number.isFinite(v) && v > 0) { r[k] = (r[k] || 0) + v; keptOnBoard = true; }
+    }
+    if (!Object.keys(r).length) delete globalBoard[bk];
+    rebuildLbNameIndex();
+    persistLeaderboardNow();
+  }
+  delete accountBoard[uid];
+  persistAccountStoreNow(STORE_ACCT_BOARD);
+  if (acct.nameFolded) delete accountIndex["name:" + acct.nameFolded];
+  if (acct.sub) delete accountIndex["apple:" + acct.sub];
+  const killed = revokeAllSessionsFor(uid);
+  delete accounts[uid];
+  persistAccountStoreNow(STORE_ACCOUNTS);
+  persistAccountStoreNow(STORE_ACCT_INDEX);
+  // The claim journal is deliberately KEPT, so an already-run claim stays individually
+  // reversible even after the account that ran it is gone.
+  log("account deleted", uid, "sessions=" + killed, "boardRowKept=" + keptOnBoard);
+  return { keptOnBoard };
+}
+
+/* --- HTTP. Every route is POST with the session token in the JSON body as `auth`, except the
+   nonce (a GET that carries nothing). /account/me and /account/name-available are POSTs
+   specifically so a session token never lands in a URL, a server log, or a Referer header. --- */
+const accountRateMap = new Map();
+function underAccountRateLimit(ip) {
+  const now = Date.now();
+  const kept = (accountRateMap.get(ip) || []).filter((t) => now - t < ACCOUNT_RATE_WINDOW_MS);
+  if (kept.length >= ACCOUNT_RATE_LIMIT) { accountRateMap.set(ip, kept); return false; }
+  kept.push(now);
+  accountRateMap.set(ip, kept);
+  return true;
+}
+function accountPublicView(acct, exp) {
+  return {
+    uid: acct.uid,
+    gameName: acct.gameName,
+    needsName: !acct.gameName,
+    claimDeclined: !!acct.claimDeclined,
+    nameChangedAt: acct.nameChangedAt || 0,
+    nameHistory: Array.isArray(acct.nameHistory) ? acct.nameHistory : [],
+    exp: exp || 0,
+  };
+}
+async function handleAccountRoute(req, res, url) {
+  if (!underAccountRateLimit(remoteIp(req))) {
+    sendJson(res, 429, { error: "slow down", message: "Too many sign-in tries. Wait a minute and try again." });
+    return;
+  }
+  if (!accountsConfigured()) { sendJson(res, 503, ACCOUNTS_UNAVAILABLE_BODY); return; }
+  const p = url.pathname;
+  if (p === "/account/nonce") {
+    if (req.method !== "GET") { sendJson(res, 405, { error: "method not allowed" }); return; }
+    sendJson(res, 200, { nonce: issueAuthNonce() });
+    return;
+  }
+  if (req.method !== "POST") { sendJson(res, 405, { error: "method not allowed" }); return; }
+  const body = await readJsonBody(req);
+
+  if (p === "/account/apple") {
+    // Nonce FIRST, before any crypto, and consumed whether or not it was still valid.
+    const nonce = typeof body.nonce === "string" ? body.nonce : "";
+    if (!consumeAuthNonce(nonce)) {
+      sendJson(res, 401, { error: "badnonce", message: "That sign-in took too long. Please try again." });
+      return;
+    }
+    let v;
+    try { v = await verifyAppleIdentityToken(body.identityToken, nonce); }
+    catch (e) {
+      // Apple's key list was unreachable. Fail closed and tell the client accounts are simply
+      // unavailable - never a partial verification, never a signature-less fallback.
+      log("apple jwks unavailable", e.message);
+      sendJson(res, 503, ACCOUNTS_UNAVAILABLE_BODY);
+      return;
+    }
+    if (!v.ok) {
+      log("apple sign-in rejected", v.reason);
+      sendJson(res, 401, { error: "badtoken", reason: v.reason, message: "That sign-in couldn't be verified. Please try again." });
+      return;
+    }
+    const acct = accountForAppleSub(v.sub);
+    const s = issueSession(acct.uid);
+    sendJson(res, 200, Object.assign({ sessionToken: s.token }, accountPublicView(acct, s.exp)));
+    return;
+  }
+
+  if (p === "/account/me") {
+    const me = resolveSession(body.auth);
+    if (!me) { sendJson(res, 401, SIGNED_OUT_BODY); return; }
+    sendJson(res, 200, accountPublicView(me.account, me.exp));
+    return;
+  }
+
+  if (p === "/account/name-available") {
+    const clean = cleanName(body.name, "");
+    if (!clean) { sendJson(res, 200, { available: false, reason: "empty", message: "Type a name first." }); return; }
+    if (isBadName(clean)) { sendJson(res, 200, { available: false, reason: "blocked", message: "That name is blocked. Please pick another one." }); return; }
+    const folded = leaderboardNameKey(clean);
+    const owner = accountOwningFoldedName(folded);
+    const me = resolveSession(body.auth);
+    if (owner && (!me || owner !== me.uid)) {
+      sendJson(res, 200, { available: false, reason: "taken", message: "Somebody already has that name. Please pick another one." });
+      return;
+    }
+    sendJson(res, 200, { available: true, name: clean });
+    return;
+  }
+
+  if (p === "/account/name") {
+    const me = resolveSession(body.auth);
+    if (!me) { sendJson(res, 401, SIGNED_OUT_BODY); return; }
+    const acct = me.account;
+    const clean = cleanName(body.name, "");
+    if (!clean) { sendJson(res, 400, { error: "empty", message: "Pick a name first." }); return; }
+    if (isBadName(clean)) { sendJson(res, 400, { error: "blocked", message: "That name is blocked. Please pick another one." }); return; }
+    const folded = leaderboardNameKey(clean);
+    const owner = accountOwningFoldedName(folded);
+    if (owner && owner !== acct.uid) {
+      // First claim wins. There is no softer rule that actually stops squatting.
+      sendJson(res, 409, { error: "taken", message: "Somebody already has that name. Please pick another one." });
+      return;
+    }
+    const now = Date.now();
+    if (acct.nameFolded === folded) {
+      // Same name, possibly a different capitalization. Idempotent and always free - the fold is
+      // what identity is enforced on, so this is a label edit, not a rename.
+      if (acct.gameName !== clean) { acct.gameName = clean; scheduleAccountStorePersist(STORE_ACCOUNTS); }
+    } else if (!acct.nameFolded) {
+      acct.gameName = clean;
+      acct.nameFolded = folded;
+      acct.nameChangedAt = 0;   // the FIRST rename after this is free; a day-one typo is not a 30-day sentence
+      accountIndex["name:" + folded] = acct.uid;
+      scheduleAccountStorePersist(STORE_ACCOUNTS);
+      scheduleAccountStorePersist(STORE_ACCT_INDEX);
+    } else {
+      // A real rename. Allowed, with a 30-day cooldown: the leaderboard is a social object, and
+      // a name that changes hourly makes the board unreadable and lets somebody cycle through
+      // and squat names. History is NOT touched - the account row is keyed on uid, so this
+      // rewrites one string and nothing else.
+      if (acct.nameChangedAt && now - acct.nameChangedAt < NAME_COOLDOWN_MS) {
+        const daysLeft = Math.max(1, Math.ceil((NAME_COOLDOWN_MS - (now - acct.nameChangedAt)) / (24 * 60 * 60 * 1000)));
+        sendJson(res, 429, { error: "cooldown", daysLeft, message: "You can change your name again in " + daysLeft + (daysLeft === 1 ? " day." : " days.") });
+        return;
+      }
+      delete accountIndex["name:" + acct.nameFolded];   // the old folded name goes back in the pool
+      if (!Array.isArray(acct.nameHistory)) acct.nameHistory = [];
+      acct.nameHistory.push({ name: acct.gameName, from: acct.nameChangedAt || acct.created, to: now });
+      if (acct.nameHistory.length > 20) acct.nameHistory = acct.nameHistory.slice(-20);
+      acct.gameName = clean;
+      acct.nameFolded = folded;
+      acct.nameChangedAt = now;
+      accountIndex["name:" + folded] = acct.uid;
+      scheduleAccountStorePersist(STORE_ACCOUNTS);
+      scheduleAccountStorePersist(STORE_ACCT_INDEX);
+    }
+    // Is there existing history sitting on the board under this name? Report it; do NOT move
+    // anything. An automatic merge on a name match would silently hand one relative another
+    // relative's record - the confirm is the whole point.
+    let pendingClaim = null;
+    const j = claimJournal[acct.uid];
+    if (!acct.claimDeclined && (!j || j.state !== "done")) {
+      const rows = unclaimedRowsForFolded(folded);
+      if (Object.keys(rows).length) pendingClaim = claimSummary(rows);
+    }
+    sendJson(res, 200, { gameName: acct.gameName, pendingClaim });
+    return;
+  }
+
+  if (p === "/account/claim") {
+    const me = resolveSession(body.auth);
+    if (!me) { sendJson(res, 401, SIGNED_OUT_BODY); return; }
+    const acct = me.account;
+    if (!acct.gameName) { sendJson(res, 400, { error: "noname", message: "Pick your game name first." }); return; }
+    if (body.decline === true) {
+      acct.claimDeclined = true;
+      scheduleAccountStorePersist(STORE_ACCOUNTS);
+      sendJson(res, 200, { ok: true, declined: true });
+      return;
+    }
+    try {
+      const r = runAccountClaim(acct);
+      sendJson(res, 200, { ok: true, alreadyDone: !!r.alreadyDone, moved: r.moved });
+    } catch (e) {
+      log("account claim failed", acct.uid, e.message);
+      sendJson(res, 500, { error: "server error" });
+    }
+    return;
+  }
+
+  if (p === "/account/signout") {
+    // Deletes the server session and nothing else. A signed-out player is exactly a guest: their
+    // saved games, their device stats cache and every per-room rejoin credential are untouched.
+    revokeSession(typeof body.auth === "string" ? body.auth : "");
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (p === "/account/delete") {
+    const me = resolveSession(body.auth);
+    if (!me) { sendJson(res, 401, SIGNED_OUT_BODY); return; }
+    const r = deleteAccountRecord(me.account, body.eraseBoard === true);
+    sendJson(res, 200, {
+      ok: true,
+      appleRevoked: false,   // needs the .p8 key Blake has not created yet - see the block comment
+      keptOnBoard: r.keptOnBoard,
+      message: "Your account is deleted. You can also remove NASTY under Settings, your name, Sign in with Apple.",
+    });
+    return;
+  }
+
+  sendJson(res, 404, { error: "no such account route" });
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -1565,6 +2250,12 @@ async function handleAdminRoute(req, res, url) {
   if (parts.length === 3 && parts[1] === "leaderboard" && parts[2] === "reset" && req.method === "POST") {
     globalBoard = {};
     rebuildLbNameIndex();   // 2026-07-25 (bug 6): a new season starts with an empty name index too
+    // 2026-07-25 § ACCOUNTS: a new season wipes the account-keyed rows too - they are leaderboard
+    // rows, just stored in their own namespace. Accounts, sessions and the name index are
+    // deliberately LEFT ALONE: after a reset you are still signed in and still own your name.
+    // In production today this namespace is empty, so this line does nothing observable.
+    accountBoard = {};
+    persistAccountStoreNow(STORE_ACCT_BOARD);
     leaderboardEpoch += 1;
     persistLeaderboardNow();
     persistLeaderboardEpoch();
@@ -1593,6 +2284,34 @@ async function handleAdminRoute(req, res, url) {
     scheduleLeaderboardPersist();
     log("admin deleted leaderboard entry", name);
     sendJson(res, 200, { ok: true });
+    return true;
+  }
+  /* 2026-07-25 § ACCOUNTS (Stage 1) - god-mode view + the one reversal.
+     Both only exist while the accounts kill switch is ON; with it off they 404 like any other
+     unknown admin route, so the switch really does restore today's exact surface. The listing
+     deliberately does NOT include Apple's `sub` - Blake never needs it, and the less that
+     identifier travels the better. */
+  if (ACCOUNTS_ENABLED && parts.length === 2 && parts[1] === "accounts" && req.method === "GET") {
+    const list = Object.keys(accounts).map((uid) => {
+      const a = accounts[uid];
+      const j = claimJournal[uid];
+      return {
+        uid, gameName: a.gameName, nameFolded: a.nameFolded, created: a.created, lastSeen: a.lastSeen,
+        nameChangedAt: a.nameChangedAt || 0, nameHistory: a.nameHistory || [], claimDeclined: !!a.claimDeclined,
+        sessions: Object.keys(sessions).filter((t) => sessions[t] && sessions[t].uid === uid).length,
+        claim: j ? j.state : null,
+        row: accountBoard[uid] || {},
+      };
+    });
+    sendJson(res, 200, list);
+    return true;
+  }
+  if (ACCOUNTS_ENABLED && parts.length === 3 && parts[1] === "claim" && parts[2] === "undo" && req.method === "POST") {
+    const body = await readJsonBody(req);
+    const uid = typeof body.uid === "string" ? body.uid : "";
+    const r = undoAccountClaim(uid);
+    if (!r.ok) { sendJson(res, 404, { error: r.error }); return true; }
+    sendJson(res, 200, r);
     return true;
   }
   sendJson(res, 404, { error: "no such admin route" });
@@ -1634,6 +2353,13 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === "/solo-result" && req.method === "POST") {
     handleSoloResult(req, res).catch((e) => { log("solo-result route error", e); sendJson(res, 500, { error: "server error" }); });
+    return;
+  }
+  // 2026-07-25 § ACCOUNTS (Stage 1): only routed when the kill switch is ON. With
+  // NASTY_ACCOUNTS_ENABLED=0 these paths fall through to the same 404 they hit today, which is
+  // exactly what makes the switch a true revert rather than a partial one.
+  if (ACCOUNTS_ENABLED && url.pathname.startsWith("/account/")) {
+    handleAccountRoute(req, res, url).catch((e) => { log("account route error", e); sendJson(res, 500, { error: "server error" }); });
     return;
   }
   res.writeHead(404, Object.assign({ "content-type": "text/plain" }, CORS_HEADERS));
@@ -2473,8 +3199,13 @@ migrateLegacyLeaderboardPoints();
 migrateLeaderboardNameCase();
 loadSoloSeen();
 loadLeaderboardEpoch();
+// 2026-07-25 § ACCOUNTS (Stage 1): reads six small JSON files if they happen to exist and
+// creates none of them. On a machine that has never had an account (every machine today) this
+// leaves all six stores empty and writes nothing at all.
+loadAccountStores();
 log(`admin token file: ${ADMIN_TOKEN_FILE}`);
 log(`protocol version: ${PROTOCOL_VERSION}`);
+log(`accounts: ${!ACCOUNTS_ENABLED ? "OFF (NASTY_ACCOUNTS_ENABLED=0)" : (accountsConfigured() ? "on, Apple audiences configured" : "on but Apple is not configured yet - /account/* answers 503")}`);
 
 server.listen(PORT, () => log(`nasty relay listening on :${PORT}`));
 
@@ -2486,6 +3217,7 @@ function shutdown() {
   if (soloSeenPersistTimer) { clearTimeout(soloSeenPersistTimer); soloSeenPersistTimer = null; }
   persistSoloSeenNow();
   persistLeaderboardEpoch();
+  flushAccountStores();   // 2026-07-25 § ACCOUNTS: only writes stores with a pending debounce
   for (const ws of wss.clients) { try { ws.terminate(); } catch (e) {} }
   server.close(() => process.exit(0));
 }
