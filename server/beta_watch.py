@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '2d381c04-f03f-4801-853d-2bf18ffb394e'
+BUILD_SUBMISSION_ID = '84e49604-238d-41bd-b81a-fbeaaa2d6990'
 
 
 def current_build():
@@ -101,11 +101,12 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>This one is all about the setup screen you see before a game starts, from your own feedback:</p>
+<p>Three things from your own feedback, all about how the game screen looks and behaves:</p>
 <ul>
-<li>Each player sits on one line again: colour, name, Human or Computer, and how tough the computer plays, all in neat columns straight down the list.</li>
-<li>The name box is a little smaller so all four fit, but a full 10 letter name still shows without being cut off.</li>
-<li>Game type ("Everyone for themselves" or "Teams") now sits beside its label, the same way Players already did, so the two choices read as a matching pair.</li>
+<li>The Rules and Mute buttons are gone from the top row. In their place is a round button with the first letter of your name on it, in your own colour. Tap it for the rules, sound on or off, changing your name, and fixing your connection. Sign in, sign out and delete account are shown there too, greyed out until accounts are ready.</li>
+<li>That leaves four buttons up top instead of six, so Quit, Pause, Save and Speed are all noticeably wider and easier to hit, especially on a smaller phone.</li>
+<li>Tapping Pause now shows one clean PAUSED screen with all the choices on it, instead of a second screen sitting on top of the first one.</li>
+<li>The board sits in the middle of the screen again: the same amount of space above it as below it, on every size of phone.</li>
 <li>Nothing about how the game plays has changed.</li>
 </ul>
 <h3>The link to text the family:</h3>
