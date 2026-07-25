@@ -12,8 +12,8 @@
  *     non-base64), a 1 MB token, and Apple rotating its signing key.
  *   Part B - accounts and sessions: the same Apple sub always resolves to the same account id,
  *     two different subs are two accounts, /account/me works with a good token and 401s with an
- *     expired or garbage one, sign-out is immediate, the sliding expiry really extends, and no
- *     email is stored anywhere.
+ *     expired or garbage one, sign-out is immediate, the sliding expiry really extends, and the
+ *     email rules hold (verified is stored, unverified never is, a private relay is flagged).
  *   Part C - the Apple gate: with NASTY_APPLE_AUDIENCES unset (production's state today) every
  *     /account/* route answers 503 in plain language and no storage is touched.
  *
@@ -196,21 +196,40 @@ async function main() {
     check(again.status === 200, "B7c signing out twice is harmless (idempotent)");
   }
   {
-    // Nothing anywhere may hold an email address. Check the account listing AND, on Node, the
-    // raw storage file - this is the guarantee the App Store privacy label depends on.
-    const r = await c.signIn(keyA, { sub: "001111.email.0200", extra: { email: "blake@example.com", is_private_email: "true" } });
-    check(r.status === 200, "B8 a token that happens to carry an email still signs in");
+    /* 2026-07-25 (Blake's four-provider direction) - THE EMAIL REVERSAL, pinned here.
+       Stage 1 stored NO email and this block asserted exactly that. With four sign-in methods
+       that decision breaks down (one human, four providers, four unlinkable accounts), so a
+       VERIFIED email is now stored and used as the linking key. What has NOT changed is the
+       strictness: an address the provider did not vouch for is still never kept, and a private
+       relay address is never used to match across providers. Both halves are asserted. */
+    const unver = await c.signIn(keyA, { sub: "001111.email.0200", extra: { email: "unverified@example.com" } });
+    check(unver.status === 200, "B8 a token that happens to carry an email still signs in");
+    check(unver.body.email === null, "B8a an UNVERIFIED email is not stored - the provider has to vouch for it");
+    const ver = await c.signIn(keyA, { sub: "001111.email.0201", extra: { email: "Blake@Example.com", email_verified: "true" } });
+    check(ver.body.email === "blake@example.com",
+      "B8b a VERIFIED email IS stored now, lowercased - the deliberate reversal that makes linking possible");
+    check(ver.body.emailPrivateRelay === false, "B8b2 and it is flagged as a real address, not a private relay");
+    const relay = await c.signIn(keyA, { sub: "001111.email.0202", extra: { email: "abc123@privaterelay.appleid.com", email_verified: "true" } });
+    check(relay.body.email === "abc123@privaterelay.appleid.com" && relay.body.emailPrivateRelay === true,
+      "B8b3 an Apple private-relay address is stored (it is stable per app) but flagged as a relay");
     const list = await fetch(`${base}/admin/accounts`, { headers: { "x-admin-token": ADMIN_TOKEN } });
     const body = await list.text();
-    check(!/blake@example\.com/.test(body), "B8b the email is NOT in the admin account listing");
-    check(!/"sub"/.test(body), "B8c Apple's sub is not exposed in the admin listing either");
+    check(!/"sub"/.test(body), "B8c Apple's sub is still not exposed in the admin listing");
+    check(!/unverified@example\.com/.test(body), "B8c2 and an unverified address never reaches it either");
     if (KIND === "node") {
-      await K.sleep(1200);   // the account stores persist on the same 800ms debounce as the leaderboard
-      const raw = fs.readFileSync(path.join(scratch, "accounts.json"), "utf8");
-      check(!/blake@example\.com/.test(raw) && !/"email"/.test(raw),
-        "B8d the email is not in accounts.json - no email field exists in the record shape at all");
+      // The account stores persist on the same 800ms debounce as the leaderboard. Poll rather
+      // than sleep once: on a loaded machine a single fixed wait is a flake waiting to happen.
+      let raw = "";
+      for (let i = 0; i < 20; i++) {
+        await K.sleep(300);
+        try { raw = fs.readFileSync(path.join(scratch, "accounts.json"), "utf8"); } catch (e) { raw = ""; }
+        if (/blake@example\.com/.test(raw)) break;
+      }
+      check(!/unverified@example\.com/.test(raw), "B8d an unverified email is not in accounts.json either");
+      check(/blake@example\.com/.test(raw), "B8d2 and the verified one is, which is what the privacy label now has to declare");
     } else {
       check(true, "B8d (node-only file check, skipped on deno)");
+      check(true, "B8d2 (node-only file check, skipped on deno)");
     }
   }
 

@@ -39,6 +39,14 @@ server/sessions.json
 server/auth-nonces.json
 server/accounts-leaderboard.json
 server/claims.json
+# email-codes.json holds a HASH of each pending six-digit sign-in code plus the address it was
+# sent to, so it is personal data even though the code itself is never written down.
+server/email-codes.json
 # The Sign in with Apple key, when Blake creates it (same treatment as the APNs key above).
 server/apple-key.p8
 server/apple-key-id.txt
+# 2026-07-25: the other three sign-in methods' secrets, for the dev server only (production reads
+# them from Deno Deploy environment variables). Same treatment as the APNs key: never committed,
+# and the server no-ops gracefully when they are absent.
+server/facebook-app-secret.txt
+server/email-api-key.txt

@@ -107,14 +107,15 @@ const KV_PATH = Deno.env.get("NASTY_KV_PATH") || undefined; // undefined = Deplo
    no new message/changed shape. Item 14 needed zero server changes - `teams` already rode the
    `host` message and RoomMeta since it existed; this session's fix is client-side display only.
    See index.html's PROTOCOL_VERSION comment for the full reasoning. */
-/* 2026-07-25 § ACCOUNTS Stage 1 (Sign in with Apple, server plumbing) - twin of server.js's
-   matching comment, which carries the full case-by-case reasoning. STAYS at 5, not bumped:
-   everything added is new HTTP endpoints under /account/* plus two new /admin/* routes; not one
-   websocket message changed shape in either direction; /leaderboard's and /solo-result's bodies
-   are unchanged; and the room playerId/token rejoin credential was not touched at all. An old
-   client never calls the new routes, and a new client treats any non-200 from them as "accounts
-   unavailable, stay a guest" - it is never left waiting on a reply it cannot interpret, which is
-   this project's actual bar for a bump. */
+/* 2026-07-25 § ACCOUNTS (server plumbing, four sign-in methods) - twin of server.js's matching
+   comment, which carries the full case-by-case reasoning. STAYS at 5, not bumped: everything
+   added is new HTTP endpoints under /account/*, plus /leaderboard/v2 and two /admin/* routes,
+   plus exactly ONE optional websocket field (`acct` on host/join) that no shipped client sends
+   and that an older server would simply ignore. No reply changed shape in either direction;
+   /leaderboard's and /solo-result's bodies are unchanged; and the room playerId/token rejoin
+   credential was not touched at all. An old client never calls the new routes, and a new client
+   treats any non-200 from them as "accounts unavailable, stay a guest" - it is never left
+   waiting on a reply it cannot interpret, which is this project's actual bar for a bump. */
 const PROTOCOL_VERSION = 5;
 const PROTOCOL_MISMATCH_MESSAGE =
   "This game needs the newest version of NASTY. Please refresh the page (website) or update the app (App Store) and try again.";
@@ -525,7 +526,11 @@ async function resetLeaderboard(): Promise<number> {
 // ANY of those reasons picks up a reset promptly. Header, not body shape, so old clients that
 // don't know about epochs are completely unaffected (see server.js's matching comment).
 async function jsonLeaderboard(status: number): Promise<Response> {
-  const [board, epoch] = await Promise.all([getLeaderboard(), getEpoch()]);
+  // 2026-07-25 § ACCOUNTS: with the account-only switch OFF (production today, and the default)
+  // boardRowsForDisplay() returns getLeaderboard()'s result untouched, so this is byte-for-byte
+  // the response it has always been.
+  const [rows, epoch] = await Promise.all([boardRowsForDisplay(), getEpoch()]);
+  const board = rows.flat;
   return new Response(JSON.stringify(board), {
     status,
     headers: { "content-type": "application/json", "x-leaderboard-epoch": String(epoch), ...CORS_HEADERS },
@@ -588,21 +593,40 @@ async function handleSoloResult(req: Request, ip: string): Promise<Response> {
   const sanitized: SanitizedEntry[] = [];
   for (const e of entries) { if (e && e.name) { const s = sanitizeLeaderboardDelta(e.name, e.delta); if (s) sanitized.push(s); } }
   await kv.set(soloSeenKey(gameId), true, { expireIn: SOLO_ID_TTL_MS });
-  for (const s of sanitized) await applyLeaderboardEntry(s.clean, s.keys);
-  // 2026-07-25 § ACCOUNTS (Stage 1): twin of server.js's note - a future client may send an
-  // `auth` session token in this body. It is deliberately ACCEPTED AND IGNORED; attribution
-  // still goes strictly by name, exactly as today. The flip is Stage 4, not this stage.
-  log("solo result recorded", gameId, sanitized.map((s) => s.clean).join(","));
+  /* 2026-07-25 § ACCOUNTS: attribution, twin of server.js's.
+     SWITCH OFF (production today, and the default): every entry lands on its name row exactly as
+     it always has, and the `auth` field a future client may send is accepted and ignored.
+     SWITCH ON: only the SIGNED-IN player's own result reaches the shared board, credited to
+     their account. Everything else on that device is a guest result - it still counted in the
+     device's own local stats, and the answer is still a plain 200 so nothing retries forever. */
+  let credited: string[] = [];
+  if (accountsOnlyBoard()) {
+    const me = await resolveSession((body as Record<string, unknown>).auth);
+    if (me && me.account && me.account.nameFolded) {
+      for (const s of sanitized) {
+        if (leaderboardNameKey(s.clean) !== me.account.nameFolded) continue;
+        await applyAccountLeaderboardEntry(me.uid, s.clean, s.keys);
+        credited.push(s.clean);
+      }
+    }
+  } else {
+    for (const s of sanitized) await applyLeaderboardEntry(s.clean, s.keys);
+    credited = sanitized.map((s) => s.clean);
+  }
+  log("solo result recorded", gameId, credited.join(","));
   return json(200, { ok: true, epoch });
 }
 
 /* =======================================================================================
- * 2026-07-25 § ACCOUNTS - Stage 1 of 6: SERVER PLUMBING, DORMANT.
+ * 2026-07-25 § ACCOUNTS - SERVER PLUMBING, DORMANT.
  *
  * EXACT TWIN of server.js's § ACCOUNTS section - same routes, same rules, same plain-language
- * strings, same numbers. Read that file's block comment for the full reasoning (what "dormant"
+ * strings, same numbers. Read that file's block comment for the full reasoning: what "dormant"
  * means, why the kill switch is an env flag rather than a data restore, why the account rows
- * live in their own namespace, why no email is ever stored, and why there is no JWT library).
+ * live in their own namespace, why there is no JWT library, why a verified email IS now stored
+ * (a deliberate reversal of Stage 1, forced by having four sign-in methods instead of one), why
+ * the leaderboard becomes account-only going forward, and why the name claim is a one-time
+ * migration window whose unclaimed rows are frozen rather than deleted.
  * This file is the PRODUCTION server; server.js is local/dev/tests. They must not diverge.
  *
  * The only differences here are storage-shaped, because Deno Deploy has KV and no disk:
@@ -615,6 +639,14 @@ async function handleSoloResult(req: Request, ip: string): Promise<Response> {
  *   auth-nonces.json                   ["authnonce", nonce]       (native expireIn, 10 min)
  *   accounts-leaderboard.json          ["lbacct", uid, statKey]   (Deno.KvU64, like ["leaderboard"])
  *   claims.json                        ["claimjournal", uid]
+ *   email-codes.json                   ["emailcode", folded]      (native expireIn, 24 h)
+ *
+ * The account-index prefix now holds one entry per LINKED SIGN-IN METHOD, not just Apple:
+ *   ["acctidx","apple",sub] ["acctidx","google",sub] ["acctidx","facebook",id]
+ *   ["acctidx","email",addr]   the email sign-in method's own identity
+ *   ["acctidx","mail",addr]    the verified-email LINKING index (deliberately a different word
+ *                              from the provider named "email", so the two never collide)
+ *   ["acctidx","name",folded]  game-name uniqueness, unchanged
  *
  * Two KV-specific care points, both deliberate:
  *   - the nonce is consumed with an ATOMIC check+delete, so two isolates racing the same nonce
@@ -633,11 +665,49 @@ function accountsEnvMs(raw: string | undefined, dflt: number): number {
   return Number.isFinite(n) && n > 0 ? n : dflt;
 }
 const ACCOUNTS_ENABLED = accountsEnvFlagOn(Deno.env.get("NASTY_ACCOUNTS_ENABLED"), "1");
-const APPLE_ISSUER = (Deno.env.get("NASTY_APPLE_ISSUER") || "https://appleid.apple.com").trim();
+function accountsEnvList(raw: string | undefined): string[] {
+  return String(raw || "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+/* --- the four sign-in methods, twin of server.js's block. Every one is INDEPENDENTLY
+   configured and every one is OFF until Blake pastes its identifiers into this app's Deno
+   Deploy environment, which is what keeps this whole section inert in production today. --- */
+const APPLE_ISSUERS = accountsEnvList(Deno.env.get("NASTY_APPLE_ISSUER") || "https://appleid.apple.com");
 const APPLE_JWKS_URL = (Deno.env.get("NASTY_APPLE_JWKS_URL") || "https://appleid.apple.com/auth/keys").trim();
-const APPLE_AUDIENCES = String(Deno.env.get("NASTY_APPLE_AUDIENCES") || "")
-  .split(",").map((s) => s.trim()).filter(Boolean);
-function accountsConfigured(): boolean { return ACCOUNTS_ENABLED && APPLE_AUDIENCES.length > 0; }
+const APPLE_AUDIENCES = accountsEnvList(Deno.env.get("NASTY_APPLE_AUDIENCES"));
+const GOOGLE_ISSUERS = accountsEnvList(Deno.env.get("NASTY_GOOGLE_ISSUER") || "https://accounts.google.com,accounts.google.com");
+const GOOGLE_JWKS_URL = (Deno.env.get("NASTY_GOOGLE_JWKS_URL") || "https://www.googleapis.com/oauth2/v3/certs").trim();
+const GOOGLE_AUDIENCES = accountsEnvList(Deno.env.get("NASTY_GOOGLE_AUDIENCES"));
+const FACEBOOK_ISSUERS = accountsEnvList(Deno.env.get("NASTY_FACEBOOK_ISSUER") || "https://www.facebook.com,https://facebook.com");
+const FACEBOOK_JWKS_URL = (Deno.env.get("NASTY_FACEBOOK_JWKS_URL") || "https://www.facebook.com/.well-known/oauth/openid/jwks/").trim();
+const FACEBOOK_APP_ID = (Deno.env.get("NASTY_FACEBOOK_APP_ID") || "").trim();
+const FACEBOOK_APP_SECRET = (Deno.env.get("NASTY_FACEBOOK_APP_SECRET") || "").trim();
+const FACEBOOK_GRAPH_URL = (Deno.env.get("NASTY_FACEBOOK_GRAPH_URL") || "https://graph.facebook.com/v21.0").trim().replace(/\/+$/, "");
+const EMAIL_PROVIDER = String(Deno.env.get("NASTY_EMAIL_PROVIDER") || "").trim().toLowerCase();
+const EMAIL_API_KEY = (Deno.env.get("NASTY_EMAIL_API_KEY") || "").trim();
+const EMAIL_API_URL = (Deno.env.get("NASTY_EMAIL_API_URL") || "").trim();
+const EMAIL_FROM = (Deno.env.get("NASTY_EMAIL_FROM") || "").trim();
+
+type OidcProviderConfig = { name: string; issuers: string[]; jwksUrl: string; audiences: string[] };
+const OIDC_PROVIDERS: Record<string, OidcProviderConfig> = {
+  apple: { name: "apple", issuers: APPLE_ISSUERS, jwksUrl: APPLE_JWKS_URL, audiences: APPLE_AUDIENCES },
+  google: { name: "google", issuers: GOOGLE_ISSUERS, jwksUrl: GOOGLE_JWKS_URL, audiences: GOOGLE_AUDIENCES },
+  facebook: { name: "facebook", issuers: FACEBOOK_ISSUERS, jwksUrl: FACEBOOK_JWKS_URL, audiences: FACEBOOK_APP_ID ? [FACEBOOK_APP_ID] : [] },
+};
+function emailSenderConfigured(): boolean {
+  if (!EMAIL_PROVIDER || EMAIL_PROVIDER === "off" || EMAIL_PROVIDER === "none") return false;
+  if (EMAIL_PROVIDER === "console") return true;
+  return !!(EMAIL_API_KEY && EMAIL_FROM);
+}
+function providerConfigured(p: string): boolean {
+  if (p === "apple") return APPLE_AUDIENCES.length > 0;
+  if (p === "google") return GOOGLE_AUDIENCES.length > 0;
+  if (p === "facebook") return !!FACEBOOK_APP_ID;
+  if (p === "email") return emailSenderConfigured();
+  return false;
+}
+function configuredProviders(): string[] { return ["apple", "google", "facebook", "email"].filter(providerConfigured); }
+function anyProviderConfigured(): boolean { return configuredProviders().length > 0; }
+function accountsConfigured(): boolean { return ACCOUNTS_ENABLED && anyProviderConfigured(); }
 
 const SESSION_TTL_MS = accountsEnvMs(Deno.env.get("NASTY_SESSION_TTL_MS"), 400 * 24 * 60 * 60 * 1000);
 const SESSION_SLIDE_AFTER_MS = accountsEnvMs(Deno.env.get("NASTY_SESSION_SLIDE_AFTER_MS"), 30 * 24 * 60 * 60 * 1000);
@@ -648,6 +718,10 @@ const APPLE_CLOCK_SKEW_MS = 10 * 60 * 1000;
 const APPLE_TOKEN_MAX_CHARS = 8192;
 const ACCOUNT_RATE_LIMIT = accountsEnvMs(Deno.env.get("NASTY_ACCOUNT_RATE_LIMIT"), 120);
 const ACCOUNT_RATE_WINDOW_MS = 60 * 1000;
+const EMAIL_CODE_TTL_MS = accountsEnvMs(Deno.env.get("NASTY_EMAIL_CODE_TTL_MS"), 10 * 60 * 1000);
+const EMAIL_CODE_MAX_ATTEMPTS = accountsEnvMs(Deno.env.get("NASTY_EMAIL_CODE_MAX_ATTEMPTS"), 5);
+const EMAIL_CODE_RESEND_MS = accountsEnvMs(Deno.env.get("NASTY_EMAIL_CODE_RESEND_MS"), 60 * 1000);
+const EMAIL_CODE_MAX_PER_DAY = accountsEnvMs(Deno.env.get("NASTY_EMAIL_CODE_MAX_PER_DAY"), 12);
 const ACCOUNTS_UNAVAILABLE_BODY = {
   error: "accounts unavailable",
   message: "Signing in isn't set up yet. You can keep playing without an account.",
@@ -657,14 +731,48 @@ const SIGNED_OUT_BODY = {
   message: "You've been signed out. You can keep playing - sign in again any time.",
 };
 
+/* --- THE CLAIM SUNSET, twin of server.js's. The one-time migration window in which somebody
+   who already has history on the family board can move it onto a brand-new account. After it
+   closes, /account/claim answers 410 and /account/name stops offering it - and every row nobody
+   claimed stays on the board as a FROZEN HISTORICAL entry. Nothing is ever deleted. --- */
+function accountsEnvDeadline(raw: string | undefined): number {
+  const s = String(raw || "").trim();
+  if (!s) return 0;
+  const n = Number(s);
+  if (Number.isFinite(n) && n > 0) return n;
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : 0;
+}
+const CLAIM_WINDOW_OPEN = accountsEnvFlagOn(Deno.env.get("NASTY_CLAIM_WINDOW_OPEN"), "1");
+const CLAIM_DEADLINE_MS = accountsEnvDeadline(Deno.env.get("NASTY_CLAIM_DEADLINE"));
+function claimWindowOpen(): boolean { return CLAIM_WINDOW_OPEN && (!CLAIM_DEADLINE_MS || Date.now() < CLAIM_DEADLINE_MS); }
+function claimWindowView() { return { open: claimWindowOpen(), closesAt: CLAIM_DEADLINE_MS || 0 }; }
+const CLAIM_CLOSED_BODY = {
+  error: "claimclosed",
+  message: "The one-time window for moving an older name onto an account has closed. Older names stay on the board as history - new games count on your account from here.",
+};
+
+/* --- THE ACCOUNT-ONLY LEADERBOARD SWITCH, twin of server.js's. Accounts stay OPTIONAL for
+   playing; going forward only a signed-in account accrues on and appears on the shared board.
+   Gated three ways (kill switch, at least one configured provider, its own flag which defaults
+   OFF) so it is completely dormant right now. --- */
+const LEADERBOARD_ACCOUNTS_ONLY = accountsEnvFlagOn(Deno.env.get("NASTY_LEADERBOARD_ACCOUNTS_ONLY"), "0");
+function accountsOnlyBoard(): boolean { return ACCOUNTS_ENABLED && LEADERBOARD_ACCOUNTS_ONLY && anyProviderConfigured(); }
+
+type AccountIdentity = { provider: string; sub: string; linkedAt: number };
 type AccountRecord = {
   uid: string; provider: string; sub: string;
+  identities?: AccountIdentity[];
+  // 2026-07-25: a VERIFIED email is now stored, and it is the linking key that stops one human
+  // with four sign-in methods becoming four accounts. This reverses Stage 1's "store no email"
+  // decision - see server.js's LINKING block for the full reasoning and its honest limits.
+  email?: string | null; emailSource?: string | null; emailPrivateRelay?: boolean;
   gameName: string | null; nameFolded: string | null; nameChangedAt: number;
   nameHistory: { name: string | null; from: number; to: number }[];
   claimDeclined: boolean; created: number; lastSeen: number; refreshToken: string | null;
-  // No email field, on purpose - see server.js's § ACCOUNTS header.
 };
 type SessionRecord = { uid: string; exp: number };
+type EmailChallenge = { hash: string; exp: number; attempts: number; sentAt: number; sentToday: number; dayStart: number };
 type ClaimJournal = {
   uid: string; folded: string; ts: number;
   rows: Record<string, Record<string, number>>;
@@ -673,8 +781,13 @@ type ClaimJournal = {
 };
 
 function accountKey(uid: string): Deno.KvKey { return ["account", uid]; }
-function appleIdxKey(sub: string): Deno.KvKey { return ["acctidx", "apple", sub]; }
+function identityIdxKey(provider: string, sub: string): Deno.KvKey { return ["acctidx", provider, sub]; }
+function appleIdxKey(sub: string): Deno.KvKey { return identityIdxKey("apple", sub); }
+// Deliberately "mail", not "email" - "email" is also a PROVIDER name, and the identity index
+// already lives at ["acctidx", <provider>, <sub>]. Two indexes must not share one key space.
+function emailIdxKey(folded: string): Deno.KvKey { return ["acctidx", "mail", folded]; }
 function nameIdxKey(folded: string): Deno.KvKey { return ["acctidx", "name", folded]; }
+function emailCodeKey(folded: string): Deno.KvKey { return ["emailcode", folded]; }
 function sessionKey(token: string): Deno.KvKey { return ["session", token]; }
 function authNonceKey(nonce: string): Deno.KvKey { return ["authnonce", nonce]; }
 function acctBoardKey(uid: string, statKey: string): Deno.KvKey { return ["lbacct", uid, statKey]; }
@@ -703,31 +816,47 @@ function accountsB64uToBytes(s: string): Uint8Array<ArrayBuffer> {
 function accountsB64uToJson(s: string): unknown {
   return JSON.parse(new TextDecoder().decode(accountsB64uToBytes(s)));
 }
-let appleJwksKeys: Record<string, string>[] | null = null;
-let appleJwksAt = 0;
-async function fetchAppleJwks(): Promise<void> {
+// One cache per JWKS URL - Apple, Google and Facebook each publish their own key set at their
+// own address and rotate on their own schedules, so they cannot share a single slot.
+const jwksCache = new Map<string, { keys: Record<string, string>[]; at: number }>();
+async function fetchJwks(url: string): Promise<void> {
   const ctl = new AbortController();
   const timer = setTimeout(() => { try { ctl.abort(); } catch (_e) { /* already done */ } }, 8000);
   try {
-    const r = await fetch(APPLE_JWKS_URL, { signal: ctl.signal });
+    const r = await fetch(url, { signal: ctl.signal });
     if (!r.ok) throw new Error("jwks http " + r.status);
     const body = await r.json();
     if (!body || !Array.isArray(body.keys)) throw new Error("jwks shape");
-    appleJwksKeys = body.keys;
-    appleJwksAt = Date.now();
+    jwksCache.set(url, { keys: body.keys, at: Date.now() });
   } finally { clearTimeout(timer); }
 }
-async function appleJwkForKid(kid: string): Promise<Record<string, string> | null> {
-  if (!appleJwksKeys || Date.now() - appleJwksAt > APPLE_JWKS_TTL_MS) await fetchAppleJwks();
-  let k = (appleJwksKeys || []).find((j) => j && j.kid === kid);
+async function jwkForKid(url: string, kid: string): Promise<Record<string, string> | null> {
+  const cached = jwksCache.get(url);
+  if (!cached || Date.now() - cached.at > APPLE_JWKS_TTL_MS) await fetchJwks(url);
+  let k = (jwksCache.get(url)?.keys || []).find((j) => j && j.kid === kid);
   if (!k) {   // key rotation: exactly one forced refetch, then fail closed
-    await fetchAppleJwks();
-    k = (appleJwksKeys || []).find((j) => j && j.kid === kid);
+    await fetchJwks(url);
+    k = (jwksCache.get(url)?.keys || []).find((j) => j && j.kid === kid);
   }
   return k || null;
 }
-type AppleVerifyResult = { ok: true; sub: string } | { ok: false; reason: string };
-async function verifyAppleIdentityToken(rawToken: unknown, expectedNonce: string): Promise<AppleVerifyResult> {
+type ProviderIdentity = { sub: string; email?: string | null; emailVerified?: boolean; privateRelay?: boolean };
+type AppleVerifyResult = ({ ok: true } & ProviderIdentity) | { ok: false; reason: string };
+function oidcBool(v: unknown): boolean { return v === true || v === "true"; }
+function emailFromOidcPayload(payload: Record<string, unknown>): ProviderIdentity {
+  const raw = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
+  if (!raw || !isPlausibleEmail(raw)) return { sub: "", email: null, emailVerified: false, privateRelay: false };
+  return {
+    sub: "",
+    email: raw,
+    emailVerified: oidcBool(payload.email_verified),
+    privateRelay: oidcBool(payload.is_private_email) || /@privaterelay\.appleid\.com$/i.test(raw),
+  };
+}
+/* The ONE OpenID Connect verifier, used by Apple, by Google, and by Facebook's Limited Login.
+   Twin of server.js's - same checks, same order, same strictness, and deliberately still just
+   one implementation. Throws only if the provider's key list is unreachable. */
+async function verifyOidcToken(cfg: OidcProviderConfig, rawToken: unknown, expectedNonce: string): Promise<AppleVerifyResult> {
   const token = typeof rawToken === "string" ? rawToken : "";
   if (!token || token.length > APPLE_TOKEN_MAX_CHARS) return { ok: false, reason: "malformed" };
   const parts = token.split(".");
@@ -740,7 +869,7 @@ async function verifyAppleIdentityToken(rawToken: unknown, expectedNonce: string
   if (!header || typeof header !== "object" || !payload || typeof payload !== "object") return { ok: false, reason: "malformed" };
   if (header.alg !== "RS256") return { ok: false, reason: "alg" };
   if (typeof header.kid !== "string" || !header.kid) return { ok: false, reason: "kid" };
-  const jwk = await appleJwkForKid(header.kid);
+  const jwk = await jwkForKid(cfg.jwksUrl, header.kid);
   if (!jwk || jwk.kty !== "RSA") return { ok: false, reason: "kid" };
   let key: CryptoKey;
   try {
@@ -757,16 +886,143 @@ async function verifyAppleIdentityToken(rawToken: unknown, expectedNonce: string
     );
   } catch (_e) { good = false; }
   if (!good) return { ok: false, reason: "signature" };
-  if (payload.iss !== APPLE_ISSUER) return { ok: false, reason: "issuer" };
+  if (typeof payload.iss !== "string" || !cfg.issuers.includes(payload.iss)) return { ok: false, reason: "issuer" };
   const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-  if (!auds.some((a) => typeof a === "string" && APPLE_AUDIENCES.includes(a))) return { ok: false, reason: "audience" };
+  if (!cfg.audiences.length) return { ok: false, reason: "audience" };
+  if (!auds.some((a) => typeof a === "string" && cfg.audiences.includes(a))) return { ok: false, reason: "audience" };
   const now = Date.now();
   const exp = payload.exp, iat = payload.iat;
   if (typeof exp !== "number" || !Number.isFinite(exp) || exp * 1000 <= now) return { ok: false, reason: "expired" };
   if (typeof iat !== "number" || !Number.isFinite(iat) || Math.abs(now - iat * 1000) > APPLE_CLOCK_SKEW_MS) return { ok: false, reason: "clock" };
+  // Mandatory for all three OIDC providers - see server.js. An exception here is how a replay
+  // hole gets introduced.
   if (typeof payload.nonce !== "string" || !payload.nonce || payload.nonce !== expectedNonce) return { ok: false, reason: "nonce" };
   if (typeof payload.sub !== "string" || !payload.sub) return { ok: false, reason: "sub" };
-  return { ok: true, sub: payload.sub };
+  const mail = emailFromOidcPayload(payload);
+  return { ok: true, sub: payload.sub, email: mail.email, emailVerified: mail.emailVerified, privateRelay: mail.privateRelay };
+}
+function verifyAppleIdentityToken(rawToken: unknown, expectedNonce: string): Promise<AppleVerifyResult> {
+  return verifyOidcToken(OIDC_PROVIDERS.apple, rawToken, expectedNonce);
+}
+
+/* --- Facebook's classic access token: not a JWT, nothing to verify by signature, so the server
+   asks Facebook about it directly with an app access token ("<app id>|<app secret>") and
+   requires the answer to say the token is valid AND was issued for OUR app. Twin of
+   server.js's. --- */
+async function inspectFacebookAccessToken(accessToken: unknown): Promise<AppleVerifyResult> {
+  const t = typeof accessToken === "string" ? accessToken.trim() : "";
+  if (!t || t.length > 4096 || /[\s"']/.test(t)) return { ok: false, reason: "malformed" };
+  if (!FACEBOOK_APP_ID) return { ok: false, reason: "unconfigured" };
+  if (!FACEBOOK_APP_SECRET) return { ok: false, reason: "nosecret" };
+  const appToken = FACEBOOK_APP_ID + "|" + FACEBOOK_APP_SECRET;
+  const url = FACEBOOK_GRAPH_URL + "/debug_token?input_token=" + encodeURIComponent(t) +
+    "&access_token=" + encodeURIComponent(appToken);
+  const ctl = new AbortController();
+  const timer = setTimeout(() => { try { ctl.abort(); } catch (_e) { /* already done */ } }, 8000);
+  let data: Record<string, unknown>;
+  try {
+    const r = await fetch(url, { signal: ctl.signal });
+    const body = await r.json().catch(() => null);
+    if (!body) throw new Error("debug_token unreadable");
+    data = body.data;
+    if (!data || typeof data !== "object") return { ok: false, reason: "badtoken" };
+  } finally { clearTimeout(timer); }
+  if (data.is_valid !== true) return { ok: false, reason: "badtoken" };
+  if (String(data.app_id || "") !== FACEBOOK_APP_ID) return { ok: false, reason: "audience" };
+  const exp = Number(data.expires_at || 0);
+  if (exp > 0 && exp * 1000 <= Date.now()) return { ok: false, reason: "expired" };
+  const userId = String(data.user_id || "");
+  if (!userId) return { ok: false, reason: "sub" };
+  let email: string | null = null;
+  try {
+    const me = await fetch(FACEBOOK_GRAPH_URL + "/me?fields=id,email&access_token=" + encodeURIComponent(t));
+    const mb = await me.json().catch(() => null);
+    if (mb && String(mb.id || "") === userId && typeof mb.email === "string" && isPlausibleEmail(mb.email.trim().toLowerCase())) {
+      email = mb.email.trim().toLowerCase();
+    }
+  } catch (_e) { /* email is a bonus, never a requirement */ }
+  return { ok: true, sub: userId, email, emailVerified: !!email, privateRelay: false };
+}
+
+/* =======================================================================================
+ * THE PASSWORDLESS EMAIL CODE. Twin of server.js's - read that file's block for the full
+ * reasoning, including WHY the mail has to leave over an HTTPS API: this file runs on Deno
+ * Deploy, which is an isolate with outbound HTTPS and no SMTP, and Blake's Google Workspace
+ * service account is driven by a LOCAL command line tool that this server cannot call and must
+ * not hold credentials for. Supported: resend, postmark, and a dev-only console sink. With
+ * NASTY_EMAIL_PROVIDER unset - production today - the method is simply not offered.
+ * ===================================================================================== */
+const EMAIL_MAX_CHARS = 254;
+function isPlausibleEmail(s: unknown): boolean {
+  const v = String(s || "");
+  return v.length >= 6 && v.length <= EMAIL_MAX_CHARS && /^[^\s@,;:<>"']+@[^\s@,;:<>"']+\.[^\s@,;:<>"']{2,}$/.test(v);
+}
+function foldEmail(s: unknown): string { return String(s || "").trim().toLowerCase(); }
+function newEmailCode(): string {
+  // Six digits, uniformly: rejection sampling on a 32-bit draw, so there is no modulo bias.
+  const buf = new Uint32Array(1);
+  const limit = Math.floor(4294967296 / 1000000) * 1000000;
+  for (;;) {
+    crypto.getRandomValues(buf);
+    if (buf[0] < limit) return String(buf[0] % 1000000).padStart(6, "0");
+  }
+}
+async function hashEmailCode(folded: string, code: string): Promise<string> {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(folded + ":" + code));
+  return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+// Constant-time over equal-length hex digests - a length mismatch is already public information.
+function timingSafeHexEqual(a: string, b: string): boolean {
+  const x = String(a || ""), y = String(b || "");
+  if (x.length !== y.length) return false;
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x.charCodeAt(i) ^ y.charCodeAt(i);
+  return diff === 0;
+}
+/* Retire a code without forgetting that it was sent - twin of server.js's. The hash is wiped and
+   the expiry zeroed so it can never be presented again, but sentAt/sentToday survive, which is
+   what keeps the resend cooldown and the per-day cap honest. Deleting the record outright would
+   let anyone reset both limits just by burning a challenge. KV's own expiry cleans it up. */
+async function burnEmailChallenge(folded: string, ch: EmailChallenge): Promise<void> {
+  const spent: EmailChallenge = {
+    hash: "", exp: 0, attempts: ch.attempts || 0,
+    sentAt: ch.sentAt || 0, sentToday: ch.sentToday || 0, dayStart: ch.dayStart || Date.now(),
+  };
+  await kv.set(emailCodeKey(folded), spent, { expireIn: 24 * 60 * 60 * 1000 });
+}
+function accountEmailSubject(): string { return "Your NASTY sign-in code"; }
+function accountEmailText(code: string): string {
+  return "Your NASTY sign-in code is " + code + "\n\n" +
+    "It works for the next 10 minutes and only once. If you didn't ask for it, you can ignore this - nothing has changed.\n";
+}
+async function sendAccountEmail(to: string, code: string): Promise<{ ok: boolean; reason?: string }> {
+  if (EMAIL_PROVIDER === "console") { log("EMAIL CODE (console provider, dev only)", to, code); return { ok: true }; }
+  const ctl = new AbortController();
+  const timer = setTimeout(() => { try { ctl.abort(); } catch (_e) { /* already done */ } }, 10000);
+  try {
+    let url: string, headers: Record<string, string>, body: string;
+    if (EMAIL_PROVIDER === "resend") {
+      url = EMAIL_API_URL || "https://api.resend.com/emails";
+      headers = { "content-type": "application/json", authorization: "Bearer " + EMAIL_API_KEY };
+      body = JSON.stringify({ from: EMAIL_FROM, to: [to], subject: accountEmailSubject(), text: accountEmailText(code) });
+    } else if (EMAIL_PROVIDER === "postmark") {
+      url = EMAIL_API_URL || "https://api.postmarkapp.com/email";
+      headers = { "content-type": "application/json", accept: "application/json", "x-postmark-server-token": EMAIL_API_KEY };
+      body = JSON.stringify({ From: EMAIL_FROM, To: to, Subject: accountEmailSubject(), TextBody: accountEmailText(code), MessageStream: "outbound" });
+    } else {
+      return { ok: false, reason: "unconfigured" };
+    }
+    const r = await fetch(url, { method: "POST", headers, body, signal: ctl.signal });
+    if (!r.ok) {
+      const t = await r.text().catch(() => "");
+      log("email send failed", EMAIL_PROVIDER, r.status, t.slice(0, 200));
+      return { ok: false, reason: "sendfailed" };
+    }
+    return { ok: true };
+  } catch (e) {
+    log("email send error", EMAIL_PROVIDER, (e as Error).message);
+    return { ok: false, reason: "sendfailed" };
+  } finally { clearTimeout(timer); }
 }
 
 /* --- nonces. Server-issued, single use, 10 minutes, consumed with an ATOMIC check+delete so two
@@ -827,35 +1083,104 @@ async function revokeAllSessionsFor(uid: string): Promise<number> {
   return n;
 }
 
-/* --- accounts. Apple's `sub` is an INDEX KEY, never the account id - see server.js. --- */
-function newAccountRecord(sub: string): AccountRecord {
+/* --- accounts. A provider's `sub` is an INDEX KEY, never the account id - see server.js. --- */
+function newAccountRecord(provider: string, sub: string): AccountRecord {
   const now = Date.now();
   return {
-    uid: accountsRandHex(16), provider: "apple", sub,
+    uid: accountsRandHex(16), provider, sub,
+    identities: [{ provider, sub, linkedAt: now }],
+    email: null, emailSource: null, emailPrivateRelay: false,
     gameName: null, nameFolded: null, nameChangedAt: 0, nameHistory: [],
     claimDeclined: false, created: now, lastSeen: now, refreshToken: null,
   };
 }
-async function accountForAppleSub(sub: string): Promise<AccountRecord> {
-  const idx = await kv.get<string>(appleIdxKey(sub));
+// Stage 1 records have provider/sub and no identities array - read through this everywhere.
+function accountIdentities(acct: AccountRecord): AccountIdentity[] {
+  if (Array.isArray(acct.identities) && acct.identities.length) return acct.identities;
+  if (acct.provider && acct.sub) return [{ provider: acct.provider, sub: acct.sub, linkedAt: acct.created || 0 }];
+  return [];
+}
+async function accountForIdentity(provider: string, sub: string): Promise<AccountRecord | null> {
+  const idx = await kv.get<string>(identityIdxKey(provider, sub));
+  if (typeof idx.value !== "string" || !idx.value) return null;
+  const existing = await kv.get<AccountRecord>(accountKey(idx.value));
+  return existing.value || null;
+}
+async function accountForEmail(folded: string): Promise<AccountRecord | null> {
+  const idx = await kv.get<string>(emailIdxKey(folded));
+  if (typeof idx.value !== "string" || !idx.value) return null;
+  const existing = await kv.get<AccountRecord>(accountKey(idx.value));
+  return existing.value || null;
+}
+
+/* --- LINKING. Twin of server.js's block - read that one for the full reasoning, the reversal it
+   represents, and the honest limit around Apple private-relay addresses. Rules, in order:
+   a known provider identity always wins; otherwise a VERIFIED, non-relay email that we already
+   hold links the new identity onto the existing account; otherwise it is a new person. --- */
+function linkableEmail(v: ProviderIdentity): boolean {
+  return !!(v && v.email && v.emailVerified && !v.privateRelay && isPlausibleEmail(v.email));
+}
+async function rememberAccountEmail(acct: AccountRecord, provider: string, v: ProviderIdentity): Promise<boolean> {
+  if (!v || !v.email || !v.emailVerified || !isPlausibleEmail(v.email)) return false;
+  const folded = foldEmail(v.email);
+  const owner = await kv.get<string>(emailIdxKey(folded));
+  if (typeof owner.value === "string" && owner.value && owner.value !== acct.uid) return false;
+  const haveReal = !!acct.email && !acct.emailPrivateRelay;
+  if (acct.email === folded && !!acct.emailPrivateRelay === !!v.privateRelay) return false;
+  if (haveReal && v.privateRelay) return false;
+  const old = acct.email;
+  acct.email = folded;
+  acct.emailSource = provider;
+  acct.emailPrivateRelay = !!v.privateRelay;
+  if (old && old !== folded) await kv.delete(emailIdxKey(old));
+  await kv.set(accountKey(acct.uid), acct);
+  await kv.set(emailIdxKey(folded), acct.uid);
+  return true;
+}
+async function attachIdentity(acct: AccountRecord, provider: string, sub: string): Promise<void> {
+  if (!Array.isArray(acct.identities)) acct.identities = accountIdentities(acct).slice();
+  if (!acct.identities.some((i) => i.provider === provider && i.sub === sub)) {
+    acct.identities.push({ provider, sub, linkedAt: Date.now() });
+  }
+  await kv.set(accountKey(acct.uid), acct);
+  await kv.set(identityIdxKey(provider, sub), acct.uid);
+}
+type ResolvedAccount = { account: AccountRecord; created: boolean; linked: boolean };
+async function resolveAccountForIdentity(provider: string, v: ProviderIdentity): Promise<ResolvedAccount> {
+  const idx = await kv.get<string>(identityIdxKey(provider, v.sub));
   if (typeof idx.value === "string" && idx.value) {
     const existing = await kv.get<AccountRecord>(accountKey(idx.value));
-    if (existing.value) return existing.value;
+    if (existing.value) {
+      await rememberAccountEmail(existing.value, provider, v);
+      return { account: existing.value, created: false, linked: false };
+    }
   }
-  const rec = newAccountRecord(sub);
+  if (linkableEmail(v)) {
+    const byEmail = await accountForEmail(foldEmail(v.email as string));
+    if (byEmail) {
+      await attachIdentity(byEmail, provider, v.sub);
+      log("linked a second sign-in method to an existing account", byEmail.uid, provider);
+      return { account: byEmail, created: false, linked: true };
+    }
+  }
+  const rec = newAccountRecord(provider, v.sub);
   // check() on the index so two isolates racing a brand-new sub cannot both create an account.
-  const ok = await kv.atomic().check(idx).set(accountKey(rec.uid), rec).set(appleIdxKey(sub), rec.uid).commit();
+  const ok = await kv.atomic().check(idx).set(accountKey(rec.uid), rec).set(identityIdxKey(provider, v.sub), rec.uid).commit();
   if (!ok.ok) {
-    const again = await kv.get<string>(appleIdxKey(sub));
+    const again = await kv.get<string>(identityIdxKey(provider, v.sub));
     if (typeof again.value === "string" && again.value) {
       const existing = await kv.get<AccountRecord>(accountKey(again.value));
-      if (existing.value) return existing.value;
+      if (existing.value) { await rememberAccountEmail(existing.value, provider, v); return { account: existing.value, created: false, linked: false }; }
     }
     await kv.set(accountKey(rec.uid), rec);
-    await kv.set(appleIdxKey(sub), rec.uid);
+    await kv.set(identityIdxKey(provider, v.sub), rec.uid);
   }
-  log("new account created", rec.uid);
-  return rec;
+  await rememberAccountEmail(rec, provider, v);
+  log("new account created", rec.uid, provider);
+  return { account: rec, created: true, linked: false };
+}
+async function accountForAppleSub(sub: string): Promise<AccountRecord> {
+  return (await resolveAccountForIdentity("apple", { sub })).account;
 }
 async function accountOwningFoldedName(folded: string): Promise<string | null> {
   const idx = await kv.get<string>(nameIdxKey(folded));
@@ -984,12 +1309,95 @@ async function deleteAccountRecord(acct: AccountRecord, eraseBoard: boolean): Pr
   }
   await setAccountRow(uid, {});
   if (acct.nameFolded) await kv.delete(nameIdxKey(acct.nameFolded));
-  if (acct.sub) await kv.delete(appleIdxKey(acct.sub));
+  // Every linked sign-in method goes, not just the first one.
+  for (const id of accountIdentities(acct)) await kv.delete(identityIdxKey(id.provider, id.sub));
+  if (acct.email) await kv.delete(emailIdxKey(acct.email));
   const killed = await revokeAllSessionsFor(uid);
   await kv.delete(accountKey(uid));
   // The claim journal is deliberately KEPT, so an already-run claim stays reversible.
   log("account deleted", uid, "sessions=" + killed, "boardRowKept=" + keptOnBoard);
   return { keptOnBoard };
+}
+
+/* =======================================================================================
+ * THE ACCOUNT-ONLY LEADERBOARD. Twin of server.js's block - account rows are the only ones that
+ * ever grow from here on; the ordinary name rows already there keep being SERVED as FROZEN
+ * HISTORICAL entries so the family's real pre-accounts history is never lost, and an account
+ * whose game name folds to the same thing shadows its own historical row so nobody appears
+ * twice. /leaderboard's flat body shape does not change; /leaderboard/v2 carries the extra
+ * "frozen" detail for a client that wants to label it.
+ * ===================================================================================== */
+async function applyAccountLeaderboardEntry(uid: string, name: unknown, delta: unknown): Promise<void> {
+  const s = sanitizeLeaderboardDelta(name, delta);
+  if (!s) return;
+  for (const key of Object.keys(s.keys)) {
+    await kv.atomic().sum(acctBoardKey(uid, key), BigInt(Math.round(s.keys[key]))).commit();
+  }
+}
+type BoardDetailRow = { name: string; stats: Record<string, number>; account: boolean; frozen: boolean };
+async function boardRowsForDisplay(): Promise<{ flat: Record<string, Record<string, number>>; detail: BoardDetailRow[] | null }> {
+  const board = await getLeaderboard();
+  if (!accountsOnlyBoard()) return { flat: board, detail: null };
+  const flat: Record<string, Record<string, number>> = {};
+  const detail: BoardDetailRow[] = [];
+  const accountsList: AccountRecord[] = [];
+  for await (const e of kv.list<AccountRecord>({ prefix: ["account"] })) {
+    if (e.value) accountsList.push(e.value);
+  }
+  // Every historical row indexed by its folded name, so an account owning that same name shows as
+  // ONE row rather than colliding with it. Twin of server.js's.
+  const frozenByFold = new Map<string, { name: string; row: Record<string, number> }>();
+  for (const name of Object.keys(board)) frozenByFold.set(leaderboardNameKey(name), { name, row: board[name] });
+  const consumed = new Set<string>();
+  for (const a of accountsList) {
+    if (!a.gameName || !a.nameFolded) continue;
+    const own = await accountRowFor(a.uid);
+    // History the account owns the name for but has not yet CLAIMED is still displayed, so
+    // nothing appears to vanish between picking a name and confirming the history is yours. An
+    // explicit decline leaves the old row exactly where it is instead.
+    const frozen = a.claimDeclined ? null : frozenByFold.get(a.nameFolded);
+    const shown: Record<string, number> = {};
+    if (frozen) for (const k of Object.keys(frozen.row)) shown[k] = (shown[k] || 0) + frozen.row[k];
+    for (const k of Object.keys(own)) shown[k] = (shown[k] || 0) + own[k];
+    if (!Object.keys(shown).length) continue;   // nothing to show, so nothing is shadowed either
+    flat[a.gameName] = shown;
+    detail.push({ name: a.gameName, stats: shown, account: true, frozen: false });
+    consumed.add(a.nameFolded);
+  }
+  for (const [fold, entry] of frozenByFold) {
+    if (consumed.has(fold)) continue;           // shadowed by the account row above
+    flat[entry.name] = entry.row;
+    detail.push({ name: entry.name, stats: entry.row, account: false, frozen: true });
+  }
+  return { flat, detail };
+}
+
+/* --- the three token-based providers, one body of code, three front doors. Twin of
+   server.js's verifyProviderCredential. --- */
+const SIGNIN_ROUTES: Record<string, string> = { "/account/apple": "apple", "/account/google": "google", "/account/facebook": "facebook" };
+type CredentialResult = { fail: { status: number; body: unknown }; v?: undefined } | { fail?: undefined; v: { ok: true } & ProviderIdentity };
+async function verifyProviderCredential(provider: string, reqBody: Record<string, unknown>): Promise<CredentialResult> {
+  if (!providerConfigured(provider)) return { fail: { status: 503, body: ACCOUNTS_UNAVAILABLE_BODY } };
+  const nonce = typeof reqBody.nonce === "string" ? reqBody.nonce : "";
+  if (!(await consumeAuthNonce(nonce))) {
+    return { fail: { status: 401, body: { error: "badnonce", message: "That sign-in took too long. Please try again." } } };
+  }
+  let v: AppleVerifyResult;
+  try {
+    if (provider === "facebook" && typeof reqBody.identityToken !== "string" && typeof reqBody.accessToken === "string") {
+      v = await inspectFacebookAccessToken(reqBody.accessToken);
+    } else {
+      v = await verifyOidcToken(OIDC_PROVIDERS[provider], reqBody.identityToken, nonce);
+    }
+  } catch (e) {
+    log(provider + " verification unavailable", (e as Error).message);
+    return { fail: { status: 503, body: ACCOUNTS_UNAVAILABLE_BODY } };
+  }
+  if (!v.ok) {
+    log(provider + " sign-in rejected", v.reason);
+    return { fail: { status: 401, body: { error: "badtoken", reason: v.reason, message: "That sign-in couldn't be verified. Please try again." } } };
+  }
+  return { v };
 }
 
 /* --- HTTP. Twin of server.js's handleAccountRoute, same paths, same status codes, same
@@ -1011,6 +1419,11 @@ function accountPublicView(acct: AccountRecord, exp: number) {
     claimDeclined: !!acct.claimDeclined,
     nameChangedAt: acct.nameChangedAt || 0,
     nameHistory: Array.isArray(acct.nameHistory) ? acct.nameHistory : [],
+    identities: accountIdentities(acct).map((i) => i.provider),
+    email: acct.email || null,
+    emailPrivateRelay: !!acct.emailPrivateRelay,
+    claimWindow: claimWindowView(),
+    providers: configuredProviders(),
     exp: exp || 0,
   };
 }
@@ -1027,24 +1440,111 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
   if (req.method !== "POST") return json(405, { error: "method not allowed" });
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
 
-  if (p === "/account/apple") {
-    const nonce = typeof body.nonce === "string" ? body.nonce : "";
-    if (!(await consumeAuthNonce(nonce))) {
-      return json(401, { error: "badnonce", message: "That sign-in took too long. Please try again." });
+  if (SIGNIN_ROUTES[p]) {
+    const provider = SIGNIN_ROUTES[p];
+    const r = await verifyProviderCredential(provider, body);
+    if (r.fail) return json(r.fail.status, r.fail.body);
+    const resolved = await resolveAccountForIdentity(provider, r.v);
+    const s = await issueSession(resolved.account.uid);
+    return json(200, {
+      sessionToken: s.token, provider, linkedToExisting: resolved.linked,
+      ...accountPublicView(resolved.account, s.exp),
+    });
+  }
+
+  /* --- adding a SECOND sign-in method to the account you are already signed in to. The escape
+     hatch for the one case email matching cannot solve - Apple's private-relay address will
+     never equal the same person's real Gmail, so only the person themselves can join those
+     two up. --- */
+  if (p === "/account/link") {
+    const me = await resolveSession(body.auth);
+    if (!me) return json(401, SIGNED_OUT_BODY);
+    const provider = String(body.provider || "");
+    if (!SIGNIN_ROUTES["/account/" + provider]) return json(400, { error: "badprovider", message: "That sign-in method isn't one we use." });
+    const r = await verifyProviderCredential(provider, body);
+    if (r.fail) return json(r.fail.status, r.fail.body);
+    const owner = await accountForIdentity(provider, r.v.sub);
+    if (owner && owner.uid !== me.uid) {
+      return json(409, { error: "linkedelsewhere", message: "That sign-in is already attached to a different NASTY account. Sign in with it instead, or remove it there first." });
     }
-    let v: AppleVerifyResult;
-    try { v = await verifyAppleIdentityToken(body.identityToken, nonce); }
-    catch (e) {
-      log("apple jwks unavailable", (e as Error).message);
-      return json(503, ACCOUNTS_UNAVAILABLE_BODY);
+    await attachIdentity(me.account, provider, r.v.sub);
+    await rememberAccountEmail(me.account, provider, r.v);
+    return json(200, { ok: true, provider, ...accountPublicView(me.account, me.exp) });
+  }
+
+  if (p === "/account/unlink") {
+    const me = await resolveSession(body.auth);
+    if (!me) return json(401, SIGNED_OUT_BODY);
+    const provider = String(body.provider || "");
+    const list = accountIdentities(me.account);
+    const keep = list.filter((i) => i.provider !== provider);
+    if (keep.length === list.length) return json(404, { error: "notlinked", message: "That sign-in isn't attached to this account." });
+    // Never remove the last one - an account with no way in is a lost account, and the family's
+    // leaderboard history is attached to it.
+    if (!keep.length) return json(409, { error: "lastidentity", message: "That's the only way into this account, so it has to stay. Add another sign-in first." });
+    for (const i of list) { if (i.provider === provider) await kv.delete(identityIdxKey(i.provider, i.sub)); }
+    me.account.identities = keep;
+    if (me.account.provider === provider) { me.account.provider = keep[0].provider; me.account.sub = keep[0].sub; }
+    if (me.account.emailSource === provider && me.account.email) {
+      await kv.delete(emailIdxKey(me.account.email));
+      me.account.email = null; me.account.emailSource = null; me.account.emailPrivateRelay = false;
     }
-    if (!v.ok) {
-      log("apple sign-in rejected", v.reason);
-      return json(401, { error: "badtoken", reason: v.reason, message: "That sign-in couldn't be verified. Please try again." });
+    await kv.set(accountKey(me.account.uid), me.account);
+    return json(200, { ok: true, ...accountPublicView(me.account, me.exp) });
+  }
+
+  /* --- the passwordless email code, in two halves. Twin of server.js's. --- */
+  if (p === "/account/email/start") {
+    if (!providerConfigured("email")) return json(503, ACCOUNTS_UNAVAILABLE_BODY);
+    const email = foldEmail(body.email);
+    if (!isPlausibleEmail(email)) return json(400, { error: "bademail", message: "That doesn't look like an email address. Check it and try again." });
+    const now = Date.now();
+    const cur = await kv.get<EmailChallenge>(emailCodeKey(email));
+    const prev = cur.value;
+    if (prev && prev.sentAt && now - prev.sentAt < EMAIL_CODE_RESEND_MS) {
+      const waitS = Math.max(1, Math.ceil((EMAIL_CODE_RESEND_MS - (now - prev.sentAt)) / 1000));
+      return json(429, { error: "toosoon", waitSeconds: waitS, message: "We just sent one. Check your email, or try again in " + waitS + " seconds." });
     }
-    const acct = await accountForAppleSub(v.sub);
-    const s = await issueSession(acct.uid);
-    return json(200, { sessionToken: s.token, ...accountPublicView(acct, s.exp) });
+    const dayStart = prev && prev.dayStart && now - prev.dayStart < 24 * 60 * 60 * 1000 ? prev.dayStart : now;
+    const sentToday = (prev && prev.dayStart === dayStart ? (prev.sentToday || 0) : 0) + 1;
+    if (sentToday > EMAIL_CODE_MAX_PER_DAY) {
+      return json(429, { error: "toomany", message: "That's a lot of codes for one day. Try again tomorrow, or sign in with Apple, Google or Facebook." });
+    }
+    const code = newEmailCode();
+    const sent = await sendAccountEmail(email, code);
+    if (!sent.ok) {
+      // Nothing is stored when nothing was sent, so a mail outage leaves no half-open challenge.
+      return json(503, { error: "emailunavailable", message: "We couldn't send that code right now. Try again in a minute, or sign in with Apple, Google or Facebook." });
+    }
+    const ch: EmailChallenge = { hash: await hashEmailCode(email, code), exp: now + EMAIL_CODE_TTL_MS, attempts: 0, sentAt: now, sentToday, dayStart };
+    // The record outlives the code itself only so the per-day send counter survives; KV's native
+    // expiry then throws it away with no pruning loop.
+    await kv.set(emailCodeKey(email), ch, { expireIn: 24 * 60 * 60 * 1000 });
+    return json(200, { ok: true, sent: true, expiresInSeconds: Math.round(EMAIL_CODE_TTL_MS / 1000) });
+  }
+
+  if (p === "/account/email/verify") {
+    if (!providerConfigured("email")) return json(503, ACCOUNTS_UNAVAILABLE_BODY);
+    const email = foldEmail(body.email);
+    const code = String(body.code || "").trim();
+    const badCode = { error: "badcode", message: "That code didn't match. Check it, or ask for a new one." };
+    const cur = await kv.get<EmailChallenge>(emailCodeKey(email));
+    const ch = cur.value;
+    if (!isPlausibleEmail(email) || !ch || !(ch.exp > Date.now())) return json(401, badCode);
+    if ((ch.attempts || 0) >= EMAIL_CODE_MAX_ATTEMPTS) {
+      await burnEmailChallenge(email, ch);
+      return json(429, { error: "toomanytries", message: "Too many wrong tries. Ask for a new code." });
+    }
+    ch.attempts = (ch.attempts || 0) + 1;
+    await kv.set(emailCodeKey(email), ch, { expireIn: 24 * 60 * 60 * 1000 });
+    if (!/^[0-9]{6}$/.test(code) || !timingSafeHexEqual(ch.hash, await hashEmailCode(email, code))) return json(401, badCode);
+    await burnEmailChallenge(email, ch);       // single use, exactly like the sign-in nonce
+    const resolved = await resolveAccountForIdentity("email", { sub: email, email, emailVerified: true, privateRelay: false });
+    const s = await issueSession(resolved.account.uid);
+    return json(200, {
+      sessionToken: s.token, provider: "email", linkedToExisting: resolved.linked,
+      ...accountPublicView(resolved.account, s.exp),
+    });
   }
 
   if (p === "/account/me") {
@@ -1103,13 +1603,14 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
       await kv.set(accountKey(acct.uid), acct);
       await kv.set(nameIdxKey(folded), acct.uid);
     }
+    // Only offered while the one-time migration window is open - see THE CLAIM SUNSET above.
     let pendingClaim = null;
     const j = await kv.get<ClaimJournal>(claimJournalKey(acct.uid));
-    if (!acct.claimDeclined && (!j.value || j.value.state !== "done")) {
+    if (claimWindowOpen() && !acct.claimDeclined && (!j.value || j.value.state !== "done")) {
       const rows = await unclaimedRowsForFolded(folded);
       if (Object.keys(rows).length) pendingClaim = claimSummary(rows);
     }
-    return json(200, { gameName: acct.gameName, pendingClaim });
+    return json(200, { gameName: acct.gameName, pendingClaim, claimWindow: claimWindowView() });
   }
 
   if (p === "/account/claim") {
@@ -1117,6 +1618,14 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
     if (!me) return json(401, SIGNED_OUT_BODY);
     const acct = me.account;
     if (!acct.gameName) return json(400, { error: "noname", message: "Pick your game name first." });
+    // THE SUNSET. An already-"done" journal is still allowed through so a retry of a completed
+    // claim answers the same way it did the first time; it moves nothing either way.
+    {
+      const prior = await kv.get<ClaimJournal>(claimJournalKey(acct.uid));
+      if (!claimWindowOpen() && !(prior.value && prior.value.state === "done")) {
+        return json(410, { ...CLAIM_CLOSED_BODY, claimWindow: claimWindowView() });
+      }
+    }
     if (body.decline === true) {
       acct.claimDeclined = true;
       await kv.set(accountKey(acct.uid), acct);
@@ -1160,6 +1669,12 @@ type Player = {
   // v0.16 item 5: a registered APNs device token, tied to this SAME player identity a rejoin
   // token/reclaim-by-name already key off - see maybeSendTurnPush() below.
   pushToken?: string | null; pushPlatform?: string | null;
+  // 2026-07-25 § ACCOUNTS: the account this player signed in as, captured ONCE at the front door
+  // (the optional `acct` field on host/join) and read back at game end. Persisted for the same
+  // reason the rejoin token is - a restart mid-game must not turn a signed-in player back into a
+  // guest and lose their result. Optional so an older persisted meta still parses; null for every
+  // guest and for every client that has ever shipped.
+  accountId?: string | null;
 };
 type RoomMeta = {
   code: string; createdAt: number; lastActivity: number;
@@ -1199,6 +1714,20 @@ type RoomMeta = {
   // clock on first sight rather than expiring it instantly). Twin of server.js's field.
   reunionOpenedAt?: number;
 };
+
+/* 2026-07-25 § ACCOUNTS: the account rides along ONCE, at the front door, as an OPTIONAL `acct`
+   session token on `host`/`join`. Twin of server.js's - `rejoin` is not touched at all and never
+   re-asserts identity, a client that never sends `acct` is a guest exactly as today, and an
+   invalid token is silently ignored rather than being an error, because a sign-in problem must
+   never stop somebody joining a family game. Returns null WITHOUT touching KV when the field is
+   absent, which is every client shipped to date. */
+async function resolveAcctField(msg: Record<string, unknown>): Promise<string | null> {
+  if (!ACCOUNTS_ENABLED) return null;
+  const t = msg && typeof msg.acct === "string" ? msg.acct : "";
+  if (!t) return null;
+  const me = await resolveSession(t);
+  return me ? me.uid : null;
+}
 
 function roomKey(code: string): Deno.KvKey { return ["room", code]; }
 function logKey(code: string, seq: number): Deno.KvKey { return ["roomlog", code, seq]; }
@@ -1379,11 +1908,11 @@ function tallyKnockout(E: any, m: any) {
   if (G.seats[m.owner] && G.seats[m.owner].type === "human") G.koDealt[m.owner] = (G.koDealt[m.owner] || 0) + 1;
   if (G.seats[m.kick.seat] && G.seats[m.kick.seat].type === "human") G.koTaken[m.kick.seat] = (G.koTaken[m.kick.seat] || 0) + 1;
 }
-function buildResultEntriesServer(G: any): { name: string; delta: Record<string, number> }[] {
+function buildResultEntriesServer(G: any): { name: string; delta: Record<string, number>; seat: number }[] {
   const mode = (G.n === 4 ? "4" : "6") + (G.teams ? "t" : "s");
   const isTeam = mode.endsWith("t");
   const winSet = new Set<number>(G.winners);
-  const entries: { name: string; delta: Record<string, number> }[] = [];
+  const entries: { name: string; delta: Record<string, number>; seat: number }[] = [];
   G.seats.forEach((seat: any, i: number) => {
     if (seat.type !== "human") return;
     const delta: Record<string, number> = {}; delta["hg" + mode] = 1;
@@ -1391,15 +1920,37 @@ function buildResultEntriesServer(G: any): { name: string; delta: Record<string,
     // 2026-07-24 item 9: lifetime knockout stats, accrued all game long by tallyKnockout() above.
     if (G.koDealt && G.koDealt[i]) delta.hkoDealt = G.koDealt[i];
     if (G.koTaken && G.koTaken[i]) delta.hkoTaken = G.koTaken[i];
-    entries.push({ name: seat.name, delta });
+    // 2026-07-25 § ACCOUNTS: the seat index rides along so account attribution can look up who
+    // was actually sitting there. Never goes on the wire.
+    entries.push({ name: seat.name, delta, seat: i });
   });
   return entries;
 }
 async function recordFinishedGame(code: string, G: any) {
   const entries = buildResultEntriesServer(G);
-  for (const e of entries) await applyLeaderboardEntry(e.name, e.delta);
+  const onlyAccounts = accountsOnlyBoard();
+  const credited: string[] = [];
+  if (!onlyAccounts) {
+    for (const e of entries) { await applyLeaderboardEntry(e.name, e.delta); credited.push(e.name); }
+  } else {
+    // Attribution comes from the room's OWN stored player record - the accountId captured once
+    // at the front door - never from the typed seat name and never from anything the client
+    // says at game end. A guest's online result simply does not post to the shared board.
+    const meta = (await kv.get<RoomMeta>(roomKey(code))).value;
+    const owners = meta ? (meta.seatOwners || (meta.lobby ? meta.lobby.seats.map((s) => s.claimedBy) : null)) : null;
+    for (const e of entries) {
+      const playerId = owners ? owners[e.seat] : null;
+      const p = playerId == null || !meta ? null : meta.players.find((q) => q.id === playerId);
+      const uid = (p && p.accountId) || null;
+      if (!uid) continue;
+      const acct = await kv.get<AccountRecord>(accountKey(uid));
+      if (!acct.value) continue;
+      await applyAccountLeaderboardEntry(uid, e.name, e.delta);
+      credited.push(e.name);
+    }
+  }
   log("online game finished, recorded to global leaderboard", code,
-    entries.map((e) => e.name).join(",") || "(no human seats)");
+    credited.join(",") || "(no human seats)");
 }
 
 /* v0.27 § SURRENDER — twin of server.js's leaveSeatForGoodInternal(): shared by the
@@ -2242,6 +2793,10 @@ async function handleAdminRoute(req: Request, url: URL): Promise<Response> {
       for await (const se of kv.list<SessionRecord>({ prefix: ["session"] })) { if (se.value && se.value.uid === a.uid) sessionCount++; }
       out.push({
         uid: a.uid, gameName: a.gameName, nameFolded: a.nameFolded, created: a.created, lastSeen: a.lastSeen,
+        // Which sign-in methods answer to this one account, and the verified email it links on.
+        // The provider ids themselves are still deliberately withheld.
+        identities: accountIdentities(a).map((i) => i.provider),
+        email: a.email || null, emailPrivateRelay: !!a.emailPrivateRelay,
         nameChangedAt: a.nameChangedAt || 0, nameHistory: a.nameHistory || [], claimDeclined: !!a.claimDeclined,
         sessions: sessionCount,
         claim: j.value ? j.value.state : null,
@@ -2311,7 +2866,7 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         const meta: RoomMeta = {
           code, createdAt: Date.now(), lastActivity: Date.now(),
           hostPlayerId: playerId, nextPlayerId: 2,
-          players: [{ id: playerId, token, name: hostName, isHost: true, connected: true }],
+          players: [{ id: playerId, token, name: hostName, isHost: true, connected: true, accountId: await resolveAcctField(msg) }],
           lobby: { n: msg.n === 6 ? 6 : 4, teams: !!msg.teams, seats },
           started: false, seatOwners: null, ready: [], paused: false, logCount: 0,
           G: null, tableSpeed: seededSpeed, recorded: false, nextSeq: 0,
@@ -2335,11 +2890,14 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         // (see the "reclaim" case below) instead of dead-ending — same reasoning as server.js.
         if (preCheck.value.started) { send(socket, { type: "joinError", message: "That game already started. Ask the host to send a new code, or reconnect if you were already playing.", reason: "started" }); return; }
         if (isBadName(msg.name)) { send(socket, { type: "joinError", message: "Pick a nicer name." }); return; }
+        // 2026-07-25 § ACCOUNTS: resolved BEFORE touchRoom, never inside its mutate callback -
+        // that callback is re-run on contention and must stay a pure, synchronous edit of meta.
+        const joinAccountId = await resolveAcctField(msg);
         const r = await touchRoom(code, (meta) => {
           if (meta.started) return false;
           const playerId = meta.nextPlayerId++;
           const token = newToken();
-          meta.players.push({ id: playerId, token, name: cleanName(msg.name, "Player"), isHost: false, connected: true });
+          meta.players.push({ id: playerId, token, name: cleanName(msg.name, "Player"), isHost: false, connected: true, accountId: joinAccountId });
           return { playerId, token };
         });
         if (!r.ok) { send(socket, { type: "joinError", message: "That room code doesn't exist. Double check it with the host." }); return; }
@@ -3198,7 +3756,16 @@ async function handler(req: Request, info: Deno.ServeHandlerInfo): Promise<Respo
     try { return await handleSoloResult(req, ip); }
     catch (e) { log("solo-result route error", e); return json(500, { error: "server error" }); }
   }
-  // 2026-07-25 § ACCOUNTS (Stage 1): only routed when the kill switch is ON. With
+  // 2026-07-25 § ACCOUNTS: the additive board route - /leaderboard's flat body deliberately
+  // never changes shape, so the extra "is this row attached to an account, or is it frozen
+  // history" detail lives here. Twin of server.js's.
+  if (ACCOUNTS_ENABLED && url.pathname === "/leaderboard/v2") {
+    const [rows, epoch] = await Promise.all([boardRowsForDisplay(), getEpoch()]);
+    const entries = rows.detail ||
+      Object.keys(rows.flat).map((name) => ({ name, stats: rows.flat[name], account: false, frozen: false }));
+    return json(200, { epoch, accountsOnly: accountsOnlyBoard(), claimWindow: claimWindowView(), entries });
+  }
+  // 2026-07-25 § ACCOUNTS: only routed when the kill switch is ON. With
   // NASTY_ACCOUNTS_ENABLED=0 these paths fall through to the same 404 they hit today - twin of
   // server.js's matching guard.
   if (ACCOUNTS_ENABLED && url.pathname.startsWith("/account/")) {
