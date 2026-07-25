@@ -190,7 +190,11 @@ async function partC_onlineLobby(browser) {
     const btn = mine ? [...mine.querySelectorAll('button')].find((b) => b.textContent.includes('Rename')) : null;
     return btn ? btn.textContent : null;
   });
-  ok(renameBtnText === '✏️ Rename', `host's own seat has the pencil-prefixed Rename button (got "${renameBtnText}")`);
+  // 2026-07-25 (item M of the UI polish batch): every button in the app dropped its leading
+  // decorative glyph in the same pass the top bar went all-caps-no-icons, so this is now a plain
+  // "Rename". The affordance item 2 actually added - a per-seat Rename button on YOUR OWN row in
+  // the lobby, which did not exist before v0.24 - is exactly as present as it ever was.
+  ok(renameBtnText === 'Rename', `host's own seat has its own Rename button (got "${renameBtnText}")`);
 
   // click Rename, type a new name, Save - verify it round-trips through the server
   await page.evaluate(() => {

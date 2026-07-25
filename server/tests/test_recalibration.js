@@ -245,7 +245,10 @@ async function scenarioSilentDrift(browser, port) {
 
   await unfreezeSocket(g1);
   await g1.evaluate(() => { document.dispatchEvent(new Event('visibilitychange')); window.dispatchEvent(new Event('pageshow')); window.onForeground(); });
-  const sawRecal = await g1.evaluate(() => window.NET.recalActive === true || document.getElementById('connIndicator').textContent.includes('Recalibrating')).catch(() => false);
+  // 2026-07-25 (item S of the UI polish batch): the chip's in-game copy was renamed from the
+  // jargon "Recalibrating..." to plain language ("Catching the game back up…"). Same state, same
+  // machinery, same NET.recalActive flag - display text only. Matched on the new string here.
+  const sawRecal = await g1.evaluate(() => window.NET.recalActive === true || document.getElementById('connIndicator').textContent.includes('Catching the game back up')).catch(() => false);
   await new Promise((r) => setTimeout(r, 3000));
 
   const hostFinal = await gState(hostPage), g1Final = await gState(g1);
@@ -332,7 +335,7 @@ async function scenarioKillServerMidRecal(port, serverChild) {
     text: document.getElementById('connIndicator').textContent,
     failed: window.NET.recalFailed,
   }));
-  check(!chipState.hidden && /Recalibrating/.test(chipState.text), 'server killed mid-recalibration: chip still just says Recalibrating (visible, calm)');
+  check(!chipState.hidden && /Catching the game back up/.test(chipState.text), 'server killed mid-recalibration: chip still just says the calm catching-up message (visible, calm)');
   check(!/Couldn't restore/.test(chipState.text) && chipState.failed === false, "the failure copy NEVER appears - recalFailed never flips, no scary text");
 
   // Restart the server on the SAME port/rooms-dir so the room persists - recovery must be

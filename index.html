@@ -365,12 +365,25 @@ button{font:inherit;cursor:pointer}
 .capacitor-app,.capacitor-app body{overscroll-behavior:none}
 
 /* ---------- NASTY road sign ---------- */
+/* 2026-07-25 (item I of the UI polish batch): the MENU's own NASTY sign used to be a fixed
+   326.3px wide (56px font + 30px side padding + 5px border + 3px outline, all fixed) sitting
+   inside #menu's 288px content box at a 320px-wide phone - so its right-hand edge, its white
+   border and its drop shadow were all sliced off by 21px, measured directly. Fixed pixel sizes
+   are the root cause, exactly like the confirm-card badge two releases ago, so the fix is the
+   same shape: clamp the font AND the padding against vw so the sign shrinks with the screen
+   instead of running off it. The clamp's UPPER bound is the historical value (56px / 14px 30px
+   12px), so every screen from about 390px up renders bit-identically to before - only genuinely
+   narrow phones get the smaller size. The three places that already override these values
+   (.nastyStamp .sign b at 34px, #gameLogo .sign/.sign b at 20px, and .confirmCard .sign/.sign b
+   with their own clamps) set BOTH font-size and padding themselves, so none of them inherit any
+   part of this and all three are provably untouched - re-verified by direct computed-style
+   checks, not just by reading the cascade. */
 .sign{display:inline-block;background:linear-gradient(180deg,var(--sign1),var(--sign2));
   border:5px solid #fff;outline:3px solid #0c2c17;border-radius:14px;
-  padding:14px 30px 12px;transform:rotate(-2deg);
+  padding:clamp(10px,3.6vw,14px) clamp(20px,7.7vw,30px) clamp(9px,3.1vw,12px);transform:rotate(-2deg);
   box-shadow:0 10px 28px rgba(0,0,0,.45), inset 0 2px 0 rgba(255,255,255,.25);text-align:center}
 .sign b{display:block;font-family:"Arial Black","Avenir-Black","Helvetica Neue",sans-serif;
-  font-weight:900;font-size:56px;letter-spacing:.14em;color:#fff;line-height:1;
+  font-weight:900;font-size:clamp(38px,14.4vw,56px);letter-spacing:.14em;color:#fff;line-height:1;
   text-shadow:0 3px 0 rgba(0,0,0,.35)}
 .sign small{display:block;margin-top:6px;font-size:13px;letter-spacing:.28em;text-transform:uppercase;color:#dff2e2}
 
@@ -391,36 +404,60 @@ button{font:inherit;cursor:pointer}
    in over both when the trash is tapped once. */
 .savedTileContent{display:flex;align-items:center;gap:10px}
 .savedTileMain{flex:1;min-width:0;cursor:pointer;min-height:44px;display:flex;flex-direction:column;justify-content:center}
-.savedTileTrash{flex:none;width:44px;height:44px;display:flex;align-items:center;justify-content:center;
+/* 2026-07-25 (item E of the UI polish batch): this button used to be a trash-can glyph labelled
+   "Delete saved game" - but since v0.27 tapping it opens a CONCEDE confirm and records a real
+   loss on the leaderboard. Icon, accessible label and actual consequence all disagreed, in the
+   one direction that costs the player something. It is now a plain word ("Concede") that says
+   exactly what it does, with a matching aria-label. Sized to the same 44px tap-target floor as
+   before, just wide enough for the word instead of square. */
+.savedTileTrash{flex:none;min-width:44px;height:44px;padding:0 12px;display:flex;align-items:center;justify-content:center;
   background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.22);border-radius:10px;
-  font-size:19px;line-height:1;color:#ffb4a8}
+  font-size:13px;font-weight:800;letter-spacing:.02em;line-height:1;color:#ffb4a8;white-space:nowrap}
 .savedTileConfirm .t1{color:#ffb4a8}
 .savedTileConfirmRow{display:flex;gap:10px;margin-top:10px}
 .savedTileConfirmRow .btn{flex:1;min-height:44px;padding:10px 14px;font-size:14.5px}
 .btn.danger{background:var(--red);color:#fff}
 .panel{max-width:520px;margin:0 auto;background:rgba(9,32,20,.55);border:1px solid rgba(255,255,255,.14);
   border-radius:18px;padding:18px 16px 22px;backdrop-filter:blur(6px);text-align:left}
-.optRow{display:flex;gap:10px;align-items:center;justify-content:space-between;margin:10px 2px}
-.optRow label{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#a9d2b5}
-.segs{display:flex;gap:6px}
+/* 2026-07-25 (item G of the UI polish batch): a flex item cannot shrink below its own content's
+   natural width by default (min-width:auto), so the label + the two segmented buttons together
+   demanded 29px more than the .panel/.modalCard content box actually has at a 320px phone, and
+   the whole row was silently sliced by the card's own clipping - measured directly on the host
+   setup screen ("Everyone for themselves" + "Teams"). Even at 375/390/393/430 the headroom was
+   only about 3px, so this was one label wording change away from breaking on every phone.
+   Fix: let the row WRAP (the label keeps its own line, the buttons drop underneath and get the
+   full width) and give both children min-width:0 so they can actually shrink first. The row
+   still renders on one line exactly as before on any screen where it genuinely fits. */
+.optRow{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin:10px 2px}
+.optRow>*{min-width:0}
+.optRow label{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#a9d2b5;min-width:0}
+.segs{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
 .seg{border:1px solid rgba(255,255,255,.25);background:transparent;color:var(--cream);
   padding:8px 16px;border-radius:10px;font-weight:700;font-size:15px;min-height:44px}
 .seg.on{background:var(--gold);border-color:var(--gold);color:#3a2c05}
 #teamNote{font-size:13px;color:#ffe9a8;margin:2px 2px 8px;min-height:18px}
-.seatRow{display:flex;gap:8px;align-items:center;background:rgba(255,255,255,.06);
+.seatRow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:rgba(255,255,255,.06);
   border-radius:12px;padding:8px 10px;margin:8px 0}
 .seatRow .dot{width:22px;height:22px;border-radius:50%;flex:none;border:2px solid rgba(255,255,255,.6)}
 /* v0.24: .nameWrap wraps the name input so a pencil glyph can sit inside it - Blake's ask was
    to make it obvious the name is tappable/editable (nothing signaled it before). pointer-events:
    none on the glyph so taps still land on the input underneath it. */
-.seatRow .nameWrap{position:relative;flex:1;min-width:60px}
+/* 2026-07-25 (item J of the UI polish batch): min-width:60px let the name box collapse to a
+   60px-wide input whose own padding (10px left + 26px right for the pencil) already eats 36px
+   of that - leaving 24px of ACTUAL visible text, so every default name was truncated mid-word
+   at a 320px phone ("Ton", "Do") and even a 10-character name still clipped at 390. Measured
+   directly, not eyeballed. Fix: let .seatRow wrap, and give the name a real flex-basis so it
+   keeps a usable width and the two dropdowns drop onto their own line whenever the row is
+   genuinely too tight for all three. min-width:0 (not 60px) is what actually lets the flex
+   algorithm reach that decision instead of overflowing first. */
+.seatRow .nameWrap{position:relative;flex:1 1 150px;min-width:0}
 .seatRow .nameWrap input{width:100%;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.18);
   border-bottom:1px solid rgba(244,197,66,.55);border-radius:8px;color:var(--cream);
   padding:8px 26px 8px 10px;font-size:15px;min-height:44px;box-sizing:border-box}
 .seatRow .nameWrap .editPencil{position:absolute;right:8px;top:50%;transform:translateY(-50%);
   font-size:13px;opacity:.7;pointer-events:none}
 .seatRow select{background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.18);border-radius:8px;
-  color:var(--cream);padding:8px 6px;font-size:14px;min-height:44px}
+  color:var(--cream);padding:8px 6px;font-size:14px;min-height:44px;flex:0 1 auto;min-width:0}
 #nameHint{font-size:12.5px;color:#9ec7aa;min-height:16px;margin:0 2px 4px;text-align:center}
 .bigBtns{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:18px}
 /* v0.26 item 2: the HOST speed picker only (#hostSpeedOverlay's #hostSpeedBtns) - a real 2x2
@@ -433,14 +470,19 @@ button{font:inherit;cursor:pointer}
    the media query below. Scoped to the id (higher specificity than .bigBtns, and this element
    already carries both classes in the markup) so #speedPickerOverlay and the in-game Speed
    button - separate markup entirely, confirmed by grep before touching anything - are untouched. */
-#hostSpeedBtns{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;width:100%;margin-top:18px}
-#hostSpeedBtns .btn{padding:12px 8px;font-size:15px;min-height:44px;line-height:1.3}
-#hostSpeedBtns .btn small{font-size:12.5px}
+/* 2026-07-25 (item N of the UI polish batch): the FIRST-RUN speed picker (#speedPickerBtns,
+   inside #speedPickerOverlay) now shares this exact grid. Before this it was a plain .bigBtns
+   flex-wrap pile whose four tiles came out at four different widths, while the host picker two
+   screens later was a tidy 2x2 - the same question, asked twice, looking like two unrelated
+   controls. Same rule, both ids, so they can never drift apart again. */
+#hostSpeedBtns,#speedPickerBtns{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;width:100%;margin-top:18px}
+#hostSpeedBtns .btn,#speedPickerBtns .btn{padding:12px 8px;font-size:15px;min-height:44px;line-height:1.3}
+#hostSpeedBtns .btn small,#speedPickerBtns .btn small{font-size:12.5px}
 /* Fallback for a genuinely-too-narrow screen (verified 320/375/390/430px all keep 2 columns
    comfortably - see the v0.26 item 2 HANDOFF note for the exact measurements) - a real phone
    this narrow is essentially untested territory today, but this keeps the promise "1 column
    only where it truly cannot fit two" honest rather than hardcoded to always-2. */
-@media (max-width:300px){ #hostSpeedBtns{grid-template-columns:1fr} }
+@media (max-width:300px){ #hostSpeedBtns,#speedPickerBtns{grid-template-columns:1fr} }
 .btn{border:none;border-radius:12px;padding:13px 22px;font-weight:800;font-size:16px;letter-spacing:.03em}
 .btn.primary{background:var(--gold);color:#3a2c05;box-shadow:0 6px 18px rgba(0,0,0,.35)}
 .btn.ghost{background:rgba(255,255,255,.1);color:var(--cream);border:1px solid rgba(255,255,255,.22)}
@@ -563,7 +605,13 @@ button{font:inherit;cursor:pointer}
 .lobbySeat{display:flex;gap:8px;align-items:center;background:rgba(255,255,255,.06);
   border-radius:12px;padding:9px 11px;margin:7px 0}
 .lobbySeat .dot{width:20px;height:20px;border-radius:50%;flex:none;border:2px solid rgba(255,255,255,.6)}
-.lobbySeat .nm{flex:1;font-weight:700;font-size:14.5px}
+/* 2026-07-25 (item H of the UI polish batch): flex:1 with no min-width:0 means this name can
+   never shrink below its own text width (min-width:auto is the flex default), so a long name
+   pushed the row's "Rename" button 39px clean outside the row at a 320px phone - measured
+   directly on the online lobby. min-width:0 lets it shrink; the ellipsis makes the shrink
+   readable instead of a hard cut. */
+.lobbySeat .nm{flex:1;min-width:0;font-weight:700;font-size:14.5px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lobbySeat .st{font-size:12px;color:#a9d2b5}
 .lobbySeat button{border:none;border-radius:8px;padding:6px 10px;font-size:12.5px;font-weight:700;
   background:rgba(255,255,255,.12);color:var(--cream);min-height:44px}
@@ -590,7 +638,26 @@ button{font:inherit;cursor:pointer}
 .iconBtn{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.15);color:var(--cream);
   border-radius:10px;padding:6px 8px;font-size:13px;font-weight:700;white-space:nowrap;flex-shrink:0;
   min-height:44px;display:inline-flex;align-items:center;justify-content:center}
-#boardWrap{flex:1;position:relative;overflow:hidden}
+/* 2026-07-25 (item B of the UI polish batch) - margin-bottom is the whole fix, and it is worth
+   spelling out why. #toasts and #btnSkip are BOTH fixed-position, pinned at `--handH + 8px`
+   from the bottom of the screen, in a --bandH-tall row (see their own rules below). That
+   design silently ASSUMED there would always be slack between the bottom of the scaled board
+   and the top of the hand bar for that band to sit in. On short phones there is not: measured
+   board-bottom intrusion INTO the band was 43.8px at 320x568 4P, 38.1px at 320 6P, 20.8px at
+   375 4P and 14.1px at 375 6P (390 and up were already clean). So on exactly the screens where
+   space is tightest, the "your turn" prompt and the Skip button were being drawn ON TOP of the
+   board - over light wood, which is also what made the gold-on-gold turn prompt unreadable.
+   Reserving the band's own height here (band height + its 8px bottom offset + 10px of real
+   clearance) means fitBoard()'s `s=min(w,h)/...` is computed against a boardWrap that already
+   ENDS above the band, so the board is scaled to fit the space it actually has and the overlap
+   is arithmetically impossible at any viewport, not just the ones that were measured. Cost: on
+   a 320x568 phone (the only size in the matrix where height, not width, becomes the limiting
+   axis after this) the board renders about 6% smaller. On 375 and up nothing changes at all -
+   width is still the limiting axis, so the scale is bit-identical to before. Cheap price for
+   the one message the app most needs a family to be able to read. Bonus: shortening boardWrap
+   also pushes the vertically-centered board DOWN, which is most of item C's logo overlap gone
+   for free (the rest is handled in updateLogoSub2(), § RENDER). */
+#boardWrap{flex:1;position:relative;overflow:hidden;margin-bottom:calc(var(--bandH) + 18px)}
 #boardScale{position:absolute;width:1000px;height:1000px;transform-origin:top left}
 #boardSvg{position:absolute;inset:0}
 #tableLayer,#fxLayer,#plaqueLayer,#bubbleLayer,#pathLayer{position:absolute;inset:0;pointer-events:none}
@@ -636,11 +703,19 @@ button{font:inherit;cursor:pointer}
    ALWAYS rendered at this exact position/size; syncAll() toggles the real `disabled` attribute
    instead of `.hidden` (see § RENDER), so it only visually dims/stops-tapping (see :disabled
    below) - same size, same position, always. Height switched from min-height to a fixed
-   `height:var(--bandH)` shared with .toast below, so the two sit flush on the same row. */
+   `height:var(--bandH)` shared with .toast below, so the two sit flush on the same row.
+   2026-07-25 (item B of the UI polish batch): the fill went from a 22%-opacity gold wash to a
+   near-opaque dark gold-brown. The old translucent fill only ever worked because whatever sat
+   behind it happened to be dark felt - over the light birch board (which is exactly where it
+   was landing on short phones, see #boardWrap's margin-bottom comment above) gold text on a
+   22% gold wash computes to about 1.03:1 contrast, i.e. invisible. The new backing measures
+   about 9.8:1 for the same gold text against any backdrop, because it no longer depends on the
+   backdrop at all. .toast.myTurn below deliberately mirrors this exact look (it always has -
+   see its own comment), so the two changed together and still match. */
 #btnSkip{position:fixed;right:14px;bottom:calc(var(--handH,148px) + 8px);z-index:67;
   height:var(--bandH);padding:0 20px;font-size:15px;font-weight:800;
   border-radius:calc(var(--bandH) / 2);
-  background:rgba(244,197,66,.22);border:2px solid var(--gold);color:var(--gold);
+  background:rgba(52,38,8,.94);border:2px solid var(--gold);color:var(--gold);
   box-shadow:0 6px 18px rgba(0,0,0,.45);transition:opacity .2s,background .2s,color .2s}
 /* v0.11.3 fix (Blake): the label used to change to "⏩ Skipping…" while running, which widened
    the button and bled into the toast bubble to its left. The label never changes now (see
@@ -733,19 +808,42 @@ button{font:inherit;cursor:pointer}
 #awayActions{position:fixed;bottom:calc(var(--handH,148px) + 8px + var(--bandH,60px) + 6px);
   left:12px;right:124px;z-index:65;display:flex;gap:6px;justify-content:center;flex-wrap:wrap;
   pointer-events:none}
+/* 2026-07-25 (item Q of the UI polish batch): these measured 29px tall - the only buttons left
+   in the app under the 44px comfortable-tap floor every other control has honoured since v0.10.
+   min-height plus flex centering grows only the invisible hit area; the label reads exactly the
+   same size as before. */
 #awayActions button{pointer-events:auto;font-size:12.5px;font-weight:700;padding:6px 12px;
+  min-height:44px;display:inline-flex;align-items:center;justify-content:center;
   border-radius:10px;border:1px solid rgba(255,255,255,.35);background:rgba(15,10,6,.88);
   color:var(--cream);cursor:pointer;box-shadow:0 6px 16px rgba(0,0,0,.4)}
 #awayActions button:disabled{opacity:.5;cursor:default}
 @keyframes turnPulse{50%{box-shadow:0 0 0 3px var(--gold),0 0 40px rgba(244,197,66,.85)}}
 
 /* ---------- Tee pick bubbles (big tap targets) ---------- */
-.teeBubble{position:absolute;transform:translate(-50%,-100%);width:84px;height:84px;border-radius:50%;
-  background:rgba(15,10,6,.92);border:4px solid var(--gold);display:flex;align-items:center;justify-content:center;
+/* 2026-07-25 (item D of the UI polish batch) - "big tap targets" was aspirational, not true.
+   These sizes are in BOARD space: .teeBubble lives inside #boardScale, which fitBoard() drives
+   with a transform:scale() of roughly 0.28 to 0.41 on a phone. So the documented 84px circle
+   was actually RENDERING at 25.8px (320x568 4P), 24.9px (320 6P), 30.3px (375 4P), 31.5px
+   (390), 34.7px (430) - every single one under the 44px comfortable-tap floor, on the app's
+   single most important interaction. Automated tap-target sweeps never caught it because these
+   are divs, not buttons.
+   Fix: showBubbles() now sizes each bubble from the LIVE board scale (see its `R` there) so the
+   RENDERED diameter is always at least 46px, and writes the result here through --bubD/--bubScale
+   so the border, the arrow and the tee glyph inside all grow in proportion instead of leaving a
+   hairline ring around a huge circle. The 84px/4px/12px/1.7 defaults below are the historical
+   values and still apply verbatim on any screen big enough that 84 board-px already renders past
+   46px, so a desktop/tablet is bit-identical to before. Every spacing constant in showBubbles()
+   is expressed in terms of R already, so the crowded-track sideways dodge (v0.23) and the
+   symmetrical stable formation (v0.19.3/v0.19.4/item 8) all scale with it rather than needing
+   their own parallel change. */
+.teeBubble{position:absolute;transform:translate(-50%,-100%);
+  width:var(--bubD,84px);height:var(--bubD,84px);border-radius:50%;
+  background:rgba(15,10,6,.92);border:calc(4px * var(--bubScale,1)) solid var(--gold);
+  display:flex;align-items:center;justify-content:center;
   cursor:pointer;pointer-events:auto;z-index:26;box-shadow:0 10px 24px rgba(0,0,0,.5);
   animation:bubblePulse 1.1s infinite}
 .teeBubble::after{content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);
-  border:12px solid transparent;border-top-color:var(--gold)}
+  border:calc(12px * var(--bubScale,1)) solid transparent;border-top-color:var(--gold)}
 .teeBubble.tgt{border-color:#ff5c5c}
 .teeBubble.tgt::after{border-top-color:#ff5c5c}
 /* v0.23 (Blake: crowded track bubbles): when 2+ TRACK bubbles would sit too close for
@@ -763,7 +861,7 @@ button{font:inherit;cursor:pointer}
 .teeBubble.sideR::after{top:50%;left:auto;right:100%;transform:translateY(-50%);border-top-color:transparent;border-right-color:var(--gold)}
 .teeBubble.tgt.sideL::after{border-top-color:transparent;border-left-color:#ff5c5c}
 .teeBubble.tgt.sideR::after{border-top-color:transparent;border-right-color:#ff5c5c}
-.teeBubble svg{transform:scale(1.7)}
+.teeBubble svg{transform:scale(calc(1.7 * var(--bubScale,1)))}
 @keyframes bubblePulse{50%{transform:translate(-50%,-100%) scale(1.07)}}
 @keyframes bubblePulseL{50%{transform:translate(-100%,-50%) scale(1.07)}}
 @keyframes bubblePulseR{50%{transform:translate(0,-50%) scale(1.07)}}
@@ -842,8 +940,13 @@ button{font:inherit;cursor:pointer}
 .discardCard.show{opacity:1}
 .dFace{position:absolute;inset:0}
 .dFace .card{width:100%;height:100%}
-#deckCount{position:absolute;left:50%;top:100%;transform:translate(-50%,4px);font-size:12.5px;color:#eadfbe;
-  background:rgba(0,0,0,.35);padding:2px 9px;border-radius:99px;white-space:nowrap}
+/* 2026-07-25 (item U of the UI polish batch): the pill sat at 35% black over the light birch
+   board, which left the cream text at about 2.5:1 - under the 4.5:1 readable-text bar and
+   genuinely hard to read at arm's length. Bumping the pill's own alpha (rather than darkening
+   the text, which would have fought the wood just as badly) takes the same text to about 9:1
+   and leaves the chip looking like the same small dark pill it always was. */
+#deckCount{position:absolute;left:50%;top:100%;transform:translate(-50%,4px);font-size:12.5px;color:#f6efd8;
+  background:rgba(0,0,0,.72);padding:2px 9px;border-radius:99px;white-space:nowrap}
 .dLabel{position:absolute;left:50%;top:100%;transform:translate(-50%,4px);font-size:12.5px;color:#ffe9a8;
   background:rgba(0,0,0,.35);padding:2px 9px;border-radius:99px;white-space:nowrap}
 
@@ -855,7 +958,11 @@ button{font:inherit;cursor:pointer}
 #handRow .card{transition:transform .15s;cursor:pointer}
 #handRow .card.playable:hover{transform:translateY(-8px)}
 #handRow .card.selCard{transform:translateY(-14px);box-shadow:0 0 0 3px var(--gold),0 10px 20px rgba(0,0,0,.4);z-index:5}
-#handRow .card.dead{opacity:.45}
+/* 2026-07-25 (item P of the UI polish batch): a card you cannot play this turn now says so out
+   loud (enableSelection() gives it a tap handler that explains why, § UI) instead of being a
+   silent no-op. cursor:pointer is dropped here too - it was inherited from the rule above and
+   was actively lying about a card that had no onclick at all. */
+#handRow .card.dead{opacity:.45;cursor:default}
 
 /* ---------- FX ---------- */
 .spark{position:absolute;width:9px;height:9px;border-radius:50%;pointer-events:none}
@@ -884,19 +991,32 @@ button{font:inherit;cursor:pointer}
    horizontally centered in the remaining space left of Skip's reserved lane, and - since the
    bubble itself is also height:var(--bandH) - vertically flush with Skip regardless of message
    length. */
+/* 2026-07-25 (item K of the UI polish batch): align-items is flex-END now, not center. The row
+   itself is still exactly --bandH tall and still pinned flush with #btnSkip - but now that
+   .toast can grow past --bandH for a long message (see its own rule below), anchoring the
+   bubble by its BOTTOM edge is what keeps Skip and the bubble sharing one baseline no matter
+   how tall the message gets. A normal one-line message looks identical to before, because a
+   bubble exactly --bandH tall in a --bandH row is in the same place either way. */
 #toasts{position:fixed;bottom:calc(var(--handH,148px) + 8px);height:var(--bandH);
   left:12px;right:124px;z-index:65;
-  display:flex;justify-content:center;align-items:center;
+  display:flex;justify-content:center;align-items:flex-end;
   pointer-events:none;padding:0}
-/* Fixed height (matches #btnSkip's --bandH exactly) instead of growing with content: a 1-line
-   message is vertically centered by the flex rules above with real space left over top/bottom
-   (reads as "extra padding"); a 2-line message wraps and fills the same box instead of growing
-   it. overflow:hidden is a safety clip only - normal toast copy never approaches 2 lines' worth
-   of height at this width, this just guarantees the box itself never grows past --bandH. */
-.toast{height:var(--bandH);display:flex;align-items:center;justify-content:center;
+/* Minimum height (matches #btnSkip's --bandH exactly): a 1-line message is vertically centered
+   by the flex rules above with real space left over top/bottom (reads as "extra padding"); a
+   2-line message wraps and fills the same box without changing anything.
+   2026-07-25 (item K of the UI polish batch): this used to be a HARD height with
+   overflow:hidden, on the assumption that "normal toast copy never approaches 2 lines' worth of
+   height at this width". That assumption was wrong at a 320px phone with real family names -
+   every message tested clipped by about 2px, and the one the family most wants to read,
+   "NASTY! <name> sends <name> back to base!", needs 76px in a 56px box with 10-character names
+   and loses a whole line to the clip. Silently. Now the bubble GROWS instead: min-height keeps
+   the flush-with-Skip look for every normal message, and a long one expands UPWARD (see
+   #toasts' align-items:flex-end above) into the space #boardWrap's new bottom margin reserves,
+   so Skip and the bubble's baseline never move and nothing is ever sliced. */
+.toast{min-height:var(--bandH);display:flex;align-items:center;justify-content:center;
   background:rgba(15,10,6,.88);border:1px solid rgba(255,255,255,.2);border-radius:calc(var(--bandH) / 2);
   padding:4px 18px;font-size:14.5px;font-weight:700;line-height:1.22;box-shadow:0 6px 18px rgba(0,0,0,.4);
-  animation:toastIn .25s ease-out;max-width:100%;text-align:center;overflow:hidden}
+  animation:toastIn .25s ease-out;max-width:100%;text-align:center}
 @keyframes toastIn{from{opacity:0;transform:translateY(12px)}}
 /* v0.13.3 (Blake): turn prompts ("Your turn - tap a card", "Pick a tee to move", ...) moved out
    of #handInfo and INTO this same bubble (turnPrompt(), § UI) - one message surface instead of
@@ -910,7 +1030,16 @@ button{font:inherit;cursor:pointer}
    gold fill, same plain (non-glowing) drop shadow, same gold text - a steady outline, no motion.
    #btnSkip.active's pulsing glow is unchanged (still means "a skip is actively running"); this
    bubble no longer shares that animation, only the at-rest gold-outline look. */
-.toast.myTurn{border:2px solid var(--gold);background:rgba(244,197,66,.22);color:var(--gold);
+/* 2026-07-25 (item B of the UI polish batch): the fill was rgba(244,197,66,.22) - a 22%-opacity
+   GOLD wash carrying GOLD text. That only ever looked right because the thing behind it happened
+   to be dark felt. On short phones this band was landing on the light birch board (see
+   #boardWrap's margin-bottom, § STYLE), where the same combination computes to 1.03:1 contrast -
+   effectively invisible, on the single message whose whole job is telling a player it is their
+   turn. Now a near-opaque dark gold-brown: about 9.8:1 for the same gold text, against any
+   backdrop, because it no longer depends on the backdrop. The gold border, gold text and steady
+   (non-flashing) look Blake asked for in v0.13.4 are all unchanged, and #btnSkip's at-rest fill
+   was changed to the identical value in the same pass so the two still mirror each other. */
+.toast.myTurn{border:2px solid var(--gold);background:rgba(52,38,8,.94);color:var(--gold);
   box-shadow:0 6px 18px rgba(0,0,0,.45);animation:toastIn .25s ease-out}
 /* 2026-07-24 (Blake's 3rd-attempt follow-up, see the .confirmCard comment below for the full
    diagnosis): overflow-y:auto moved here from .confirmCard so a genuinely tall dialog can still
@@ -927,6 +1056,23 @@ button{font:inherit;cursor:pointer}
   align-items:center;justify-content:center;padding:22px;text-align:center;
   overflow-y:auto;-webkit-overflow-scrolling:touch}
 .overlay>.confirmCard,.overlay>.modalCard{margin:auto}
+/* 2026-07-25 (item R of the UI polish batch): a scrollable modal with NO visual sign that it
+   scrolls. Measured at 320x568: the rules panel, the online rules popup, the host setup screen
+   and the online room/lobby are all genuinely scrollable there, and on the room screen the
+   "Start game" button is BELOW THE FOLD with the card's own edge slicing cleanly through a seat
+   row - so it reads as a finished card, not as "there is more down here." A family member who
+   cannot find Start game is stuck with no way to know they should swipe.
+   Fix: whenever a card (or the overlay itself) has more content than fits AND is not already
+   scrolled to the bottom, the overlay gets .canScroll and paints a bottom fade plus a small
+   plain-language nudge. Both are pointer-events:none, so nothing about tapping changes; both
+   are positioned against the fixed-position overlay, so they stay pinned at the bottom of the
+   screen while the content moves underneath them. See updateScrollHints(), § UTIL, for the
+   measurement and when it re-runs. */
+.overlay.canScroll::after{content:"";position:absolute;left:0;right:0;bottom:0;height:64px;
+  background:linear-gradient(to top,rgba(5,15,9,.96),rgba(5,15,9,0));pointer-events:none;z-index:3}
+.overlay.canScroll::before{content:"more below - swipe up";position:absolute;left:0;right:0;bottom:10px;
+  text-align:center;font-size:12px;font-weight:700;letter-spacing:.06em;color:#a9d2b5;
+  pointer-events:none;z-index:4}
 /* 2026-07-24 (Blake's SAME-DAY follow-up to the badge enlargement below: "push much harder,
    roughly double, go as large as fits"). Reducing the outer gutter around the six confirm-style
    overlays specifically buys real extra width for the badge to grow into before it hits its own
@@ -979,7 +1125,16 @@ button{font:inherit;cursor:pointer}
 .confirmCard{width:100%;max-width:440px;display:flex;
   flex-direction:column;align-items:center;padding:2px;transform-origin:center center;
   overflow:visible}
-.confirmCard .bigBtns{width:100%}
+/* 2026-07-25 (item F of the UI polish batch): a confirm dialog's buttons are now a single
+   full-width column instead of .bigBtns' generic flex-wrap. .bigBtns lets each button size to
+   its own text, so the leave sheet's five options rendered at five different widths at a 320px
+   phone - 167 / 130 / 195 / 296 / 167px, measured - reading as a ragged pile rather than a list
+   of choices. Worse, size then implied importance in a dialog where the widest button ("Have a
+   computer take over my seat") is one of the two that COSTS you a loss. One column, one width,
+   in the deliberate order the markup lists them: safe options first, expensive ones last, all
+   equally weighted so the WORDS and the danger colour are what distinguish them. Only scoped to
+   .confirmCard, so the menu's own .bigBtns rows and the two speed pickers are untouched. */
+.confirmCard .bigBtns{width:100%;display:grid;grid-template-columns:1fr;gap:10px}
 /* 2026-07-24 (Blake's 3rd-attempt follow-up to item 6 - the 65% font shrink in the prior
    attempt was NOT the fix, this is). Blake's exact words: "I think the issue is the actual space
    that you have allotted for the badge itself because the edges and the top and the bottom keep
@@ -1168,7 +1323,27 @@ button{font:inherit;cursor:pointer}
 .lbTable.lbKo th:nth-child(2),.lbTable.lbKo td:nth-child(2){width:19%}
 .lbTable.lbKo th:nth-child(3),.lbTable.lbKo td:nth-child(3){width:20%}
 .lbTable.lbKo th:nth-child(4),.lbTable.lbKo td:nth-child(4){width:23%}
-@media (prefers-reduced-motion: reduce){ .plaque.turn,.tee.selectable,.tee.targetable,#btnSkip.active,.toast.myTurn{animation:none} }
+/* 2026-07-25 (item O of the UI polish batch): this block used to cover five things and miss
+   seven. Anything that loops FOREVER is the part that actually matters to somebody who turned
+   Reduce Motion on - the three infinite ones that were missed (the red kill-dot pulse on a path
+   preview, the connection chip's pulse while it is reconnecting, and the skip spotlight glow on
+   a tee) are added first below. The four one-shots after them are short but they are the ones
+   that fire constantly during normal play, so they are switched off too. The screen-wide
+   confetti burst is not CSS at all - it is 90 elements animated from JS for 2-5s each - and is
+   gated separately in confettiBurst() (§ ANIM). See also the `REDUCED` live listener in § UTIL:
+   this media query re-evaluates by itself when the setting changes, but the JS copy of it did
+   not, which is why toggling Reduce Motion in iOS Settings used to do nothing until relaunch. */
+@media (prefers-reduced-motion: reduce){
+  .plaque.turn,.tee.selectable,.tee.targetable,#btnSkip.active,.toast.myTurn,
+  .pathDot.pathKill,#connIndicator.reconnecting,.tee.spotlightGlow,
+  .pathDot,.changeRing,.toast{animation:none}
+  /* stampPop ends at opacity:1 - both of these START at opacity:0, so simply killing the
+     animation would make them permanently invisible and quietly delete information (the
+     NASTY! takeout stamp and the "SAFE" stamp are both telling the table what just happened).
+     Show them immediately, in their landed position, instead. */
+  .nastyStamp{animation:none;opacity:1;transform:translate(-50%,-50%) rotate(-8deg) scale(1)}
+  .safeStamp{animation:none;opacity:1}
+}
 
 /* v0.10: a phone rotated into landscape (short viewport height - the web version has no
    orientation lock, unlike the native iOS app) squeezes the board hard: topbar + hand bar are
@@ -1258,48 +1433,48 @@ button{font:inherit;cursor:pointer}
     <div class="savedTile hidden" id="btnSavedGame">
       <div class="savedTileContent" id="savedGameContent">
         <div class="savedTileMain" id="savedGameMain" role="button" tabindex="0">
-          <div class="t1">▶ Resume Saved Game</div>
+          <div class="t1">Resume saved game</div>
           <div class="t2" id="savedGameDetail"></div>
         </div>
-        <button class="savedTileTrash" id="savedGameTrash" type="button" aria-label="Delete saved game">🗑</button>
+        <button class="savedTileTrash" id="savedGameTrash" type="button" aria-label="Give up this saved game - it counts as a loss on the leaderboard">Concede</button>
       </div>
       <div class="savedTileConfirm hidden" id="savedGameConfirm">
         <div class="t1" id="savedGameConfirmText">Concede this game? This will count as a loss on the leaderboard.</div>
         <div class="savedTileConfirmRow">
+          <button class="btn ghost" id="savedGameCancel" type="button">Keep it</button>
           <button class="btn danger" id="savedGameDelete" type="button">Concede</button>
-          <button class="btn ghost" id="savedGameCancel" type="button">Cancel</button>
         </div>
       </div>
     </div>
     <div class="savedTile hidden" id="btnSavedGame2">
       <div class="savedTileContent" id="savedGameContent2">
         <div class="savedTileMain" id="savedGameMain2" role="button" tabindex="0">
-          <div class="t1">▶ Resume Saved Game</div>
+          <div class="t1">Resume saved game</div>
           <div class="t2" id="savedGameDetail2"></div>
         </div>
-        <button class="savedTileTrash" id="savedGameTrash2" type="button" aria-label="Delete saved game">🗑</button>
+        <button class="savedTileTrash" id="savedGameTrash2" type="button" aria-label="Give up this saved game - it counts as a loss on the leaderboard">Concede</button>
       </div>
       <div class="savedTileConfirm hidden" id="savedGameConfirm2">
         <div class="t1" id="savedGameConfirmText2">Concede this game? This will count as a loss on the leaderboard.</div>
         <div class="savedTileConfirmRow">
+          <button class="btn ghost" id="savedGameCancel2" type="button">Keep it</button>
           <button class="btn danger" id="savedGameDelete2" type="button">Concede</button>
-          <button class="btn ghost" id="savedGameCancel2" type="button">Cancel</button>
         </div>
       </div>
     </div>
     <div class="savedTile hidden" id="btnSavedGame3">
       <div class="savedTileContent" id="savedGameContent3">
         <div class="savedTileMain" id="savedGameMain3" role="button" tabindex="0">
-          <div class="t1">▶ Resume Saved Game</div>
+          <div class="t1">Resume saved game</div>
           <div class="t2" id="savedGameDetail3"></div>
         </div>
-        <button class="savedTileTrash" id="savedGameTrash3" type="button" aria-label="Delete saved game">🗑</button>
+        <button class="savedTileTrash" id="savedGameTrash3" type="button" aria-label="Give up this saved game - it counts as a loss on the leaderboard">Concede</button>
       </div>
       <div class="savedTileConfirm hidden" id="savedGameConfirm3">
         <div class="t1" id="savedGameConfirmText3">Concede this game? This will count as a loss on the leaderboard.</div>
         <div class="savedTileConfirmRow">
+          <button class="btn ghost" id="savedGameCancel3" type="button">Keep it</button>
           <button class="btn danger" id="savedGameDelete3" type="button">Concede</button>
-          <button class="btn ghost" id="savedGameCancel3" type="button">Cancel</button>
         </div>
       </div>
     </div>
@@ -1322,7 +1497,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.30</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.31</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -1372,7 +1547,7 @@ button{font:inherit;cursor:pointer}
        v0.11.2 item 2: no more `.hidden` - the button is ALWAYS in the DOM at this exact spot;
        starts `disabled` (dimmed, non-interactive) until the first syncAll() decides whether a
        CPU turn actually makes it tappable. -->
-  <button class="iconBtn" id="btnSkip" disabled>⏩ Skip</button>
+  <button class="iconBtn" id="btnSkip" disabled>Skip</button>
   <div id="handBar">
     <div id="handInfo"></div>
     <div id="handRow"></div>
@@ -1446,7 +1621,7 @@ button{font:inherit;cursor:pointer}
 
 <div id="lbOverlay" class="overlay hidden">
   <div class="modalCard">
-    <h3>🏆 Leaderboard</h3>
+    <h3>Leaderboard</h3>
     <!-- 2026-07-24 (Blake's item 9): 3rd tab, "KOs" - lifetime knockouts dealt/suffered, see
          renderLbKo() below. Same .seg visual style as Solo/Teams, just one more button in the
          same flex row - "KOs" kept deliberately short (not "Knockouts") so 3 tabs fit as
@@ -1457,7 +1632,7 @@ button{font:inherit;cursor:pointer}
       <button class="seg" id="lbTabKo">KOs</button>
     </div>
     <div id="lbBody"></div>
-    <p id="lbCaption" style="font-size:12.5px;color:#9ec7aa">Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a human - humans only, CPUs never show up here.</p>
+    <p id="lbCaption" style="font-size:12.5px;color:#9ec7aa">Points per win: 1 for each Easy computer you beat, 2 for Tricky, 3 for Nasty or a person - people only, computers never show up here.</p>
     <div class="bigBtns"><button class="btn primary" id="btnLbClose">Close</button></div>
   </div>
 </div>
@@ -1484,7 +1659,7 @@ button{font:inherit;cursor:pointer}
       <div id="roomCode" style="font-family:'Arial Black',sans-serif;font-size:44px;letter-spacing:.16em;
         color:var(--gold);background:rgba(0,0,0,.3);border-radius:14px;padding:10px 0">----</div>
     </div>
-    <div class="bigBtns"><button class="btn primary" id="btnRoomText">📱 Text an invite</button></div>
+    <div class="bigBtns"><button class="btn primary" id="btnRoomText">Text an invite</button></div>
     <h4>Seats</h4>
     <!-- 2026-07-24 (Blake's item 14): plain-language mode line + (Teams only) a live partner
          pairing note - see lobbyModeText()/lobbyPairingText(), § NET, and renderRoomScreen(). -->
@@ -1575,12 +1750,14 @@ button{font:inherit;cursor:pointer}
   <div class="modalCard">
     <h3>How fast should the game play?</h3>
     <p>Pick a pace for moves and animations. You can change this anytime in the game with the Speed button.</p>
-    <div class="bigBtns">
-      <button class="btn primary" id="btnSpeedPick0">Normal<br><small style="font-weight:400">relaxed</small></button>
-      <button class="btn primary" id="btnSpeedPick1">Quick<br><small style="font-weight:400">a little quicker</small></button>
-      <button class="btn primary" id="btnSpeedPick2">Fast<br><small style="font-weight:400">fast paced</small></button>
-      <button class="btn primary" id="btnSpeedPick3">Turbo<br><small style="font-weight:400">very fast</small></button>
-    </div>
+    <!-- 2026-07-25 (item N of the UI polish batch): this is now the same 2x2 grid the host
+         speed picker uses (#speedPickerBtns shares #hostSpeedBtns' rule, § STYLE) instead of a
+         .bigBtns flex-wrap pile that came out four different widths. The four tiles' labels and
+         subtitles are no longer hardcoded here either - they are built from SPEED_OPTS (§ UTIL),
+         the exact same source the host picker reads, so the app can never again ask the same
+         question twice with different wording. The four btnSpeedPick<i> ids are unchanged and
+         still bound by index, same as v0.19. -->
+    <div class="bigBtns" id="speedPickerBtns"></div>
   </div>
 </div>
 
@@ -1633,7 +1810,7 @@ button{font:inherit;cursor:pointer}
     <div id="reunionSeats"></div>
     <div id="reunionNote" style="font-size:13px;color:#ffe9a8;min-height:18px;margin-top:6px"></div>
     <div class="bigBtns">
-      <button class="btn primary" id="btnReunionResume">✓ I'm ready</button>
+      <button class="btn primary" id="btnReunionResume">I'm ready</button>
       <button class="btn ghost" id="btnReunionClose">Keep waiting in background</button>
     </div>
   </div>
@@ -1663,7 +1840,7 @@ button{font:inherit;cursor:pointer}
   <div class="confirmCard">
     <div class="sign"><b>PAUSED</b><small id="pauseSub">tap to resume</small></div>
     <p id="pauseText">Everyone can walk away - your game is saved. Tap anywhere to keep playing.</p>
-    <div class="bigBtns"><button class="btn ghost" id="btnSaveQuit">💾 Leave game</button></div>
+    <div class="bigBtns"><button class="btn ghost" id="btnSaveQuit">Leave game</button></div>
   </div>
 </div>
 
@@ -1686,11 +1863,11 @@ button{font:inherit;cursor:pointer}
     <div class="sign"><b>LEAVE GAME?</b></div>
     <p>Do you want to keep this game to come back to later, or leave it behind entirely?</p>
     <div class="bigBtns">
-      <button class="btn primary" id="btnLeaveCancel">▶ Return to Game</button>
+      <button class="btn primary" id="btnLeaveCancel">Return to game</button>
       <button class="btn ghost" id="btnLeaveSave">Save &amp; leave</button>
-      <button class="btn ghost" id="btnLeaveDiscard">Leave without saving</button>
-      <button class="btn ghost hidden" id="btnLeaveForGood">Have a computer take over my seat</button>
-      <button class="btn ghost hidden" id="btnResetConnection">Reset connection</button>
+      <button class="btn danger" id="btnLeaveDiscard">Leave without saving</button>
+      <button class="btn danger hidden" id="btnLeaveForGood">Have a computer take over my seat</button>
+      <button class="btn ghost hidden" id="btnResetConnection">Fix my connection</button>
     </div>
   </div>
 </div>
@@ -1714,9 +1891,25 @@ button{font:inherit;cursor:pointer}
   <div class="confirmCard">
     <div class="sign"><b id="surrenderConfirmHeading">CONCEDE?</b></div>
     <p id="surrenderConfirmText">Are you sure you want to concede? This will count as a loss on the leaderboard.</p>
+    <!-- 2026-07-25 (item E of the UI polish batch), two changes:
+         1. SAFE OPTION FIRST. Every harmless dialog in this app (SAVE & LEAVE?, REPLACE GAME?,
+            REPLACE A SAVE?) already puts the safe choice first and styles it primary. The two
+            dialogs that actually COST you a leaderboard loss - this one and the saved-tile
+            confirm - were the only two doing the opposite, putting the destructive red button
+            under the player's thumb first. Exactly backwards. Cancel is now first, primary, and
+            spelled out ("Keep playing") rather than a bare "Cancel", same lesson v0.27.1 already
+            learned for "Return to Game".
+         2. A WAY OUT THAT COSTS NOTHING. The topbar QUIT button routes straight here, so until
+            now the single most obvious "I'm done for now" button in the app offered exactly two
+            answers: take a loss, or go back. The one thing a family actually wants - keep the
+            game for later - lived only behind PAUSE, which nobody guesses. btnSurrenderSave
+            calls doLeaveGame(true), the SAME function the Pause sheet's own "Save & leave" and
+            the Save button's confirm already call - not a parallel implementation, so it is
+            provably the identical never-a-loss meaning. -->
     <div class="bigBtns">
+      <button class="btn primary" id="btnSurrenderCancel">Keep playing</button>
+      <button class="btn ghost" id="btnSurrenderSave">Save &amp; leave instead</button>
       <button class="btn danger" id="btnSurrenderConfirm">Concede</button>
-      <button class="btn ghost" id="btnSurrenderCancel">Cancel</button>
     </div>
   </div>
 </div>
@@ -1737,7 +1930,7 @@ button{font:inherit;cursor:pointer}
     <div class="sign"><b>SAVE &amp; LEAVE?</b></div>
     <p>Your game is saved - you can come back to it anytime. Leave to the menu now?</p>
     <div class="bigBtns">
-      <button class="btn primary" id="btnSaveLeaveCancel">Keep Playing</button>
+      <button class="btn primary" id="btnSaveLeaveCancel">Keep playing</button>
       <button class="btn ghost" id="btnSaveLeaveConfirm">Leave</button>
     </div>
   </div>
@@ -1785,7 +1978,7 @@ button{font:inherit;cursor:pointer}
      See HANDOFF.md "God mode" for how Blake uses this. -->
 <div id="adminOverlay" class="overlay hidden">
   <div class="modalCard" style="max-width:560px">
-    <h3>🛠️ Admin</h3>
+    <h3>Admin</h3>
     <div id="adminLocked">
       <p>Enter the admin token (saved on this device after the first time).</p>
       <div class="optRow"><label>Token</label>
@@ -1804,7 +1997,7 @@ button{font:inherit;cursor:pointer}
       <!-- v0.13: "new season" - wipes the shared board AND bumps the epoch, which clears
            every device's own local leaderboard cache the next time it talks to the server
            (see index.html § LEADERBOARD EPOCH / server.js "§ LEADERBOARD EPOCH"). -->
-      <button class="btn ghost" id="btnAdminResetLb" style="margin-bottom:8px">🔄 Reset leaderboard (new season)</button>
+      <button class="btn ghost" id="btnAdminResetLb" style="margin-bottom:8px">Reset leaderboard (new season)</button>
       <div class="bigBtns"><button class="btn ghost" id="btnAdminRefresh">Refresh</button>
         <button class="btn ghost" id="btnAdminClose2">Close</button></div>
     </div>
@@ -2091,6 +2284,80 @@ function fitConfirmCard(overlay){
   if(!card)return;
   card.style.transform='';
 }
+/* 2026-07-25 (item R of the UI polish batch) - "this card scrolls" made visible.
+   The problem, measured at 320x568: the rules panel, the online rules popup, the host setup
+   screen and the online room/lobby are ALL genuinely scrollable there, with no visual sign of
+   it whatsoever. On the room screen that hides the primary action - "Start game" sits below the
+   fold, and the card's own bottom edge cuts cleanly through a seat row, so it reads like a
+   finished card rather than a truncated one. A family member who can't find Start game has no
+   way to guess that swiping is the answer.
+   How this works: an overlay is marked .canScroll (see its CSS, § STYLE, which paints a bottom
+   fade plus a "more below - swipe up" nudge) whenever EITHER the overlay itself OR the card
+   inside it has more content than fits AND is not already scrolled to the bottom. Both parts
+   matter - .overlay scrolls (a card taller than the screen) and .modalCard scrolls
+   independently (max-height:82vh + overflow-y:auto), so checking only one would miss half the
+   real cases. The "not already at the bottom" half is what makes the hint disappear once the
+   player has actually reached the end, instead of nagging forever.
+   Re-run on: any scroll anywhere (capture phase, because these scrolls happen on inner
+   elements and don't bubble), any resize/orientation change, and any class change on an
+   overlay - that last one is how OPENING a dialog triggers it, without having to find and edit
+   every one of the ~20 places that does `classList.remove('hidden')`. Everything painted is
+   pointer-events:none, so nothing about tapping or scrolling changes. */
+const SCROLL_HINT_SLACK=6;   // px of slop before "not at the bottom" counts as real
+let SCROLL_HINT_BUSY=false;  // re-entrancy guard: this function itself mutates the DOM it watches
+function updateScrollHints(){
+  if(SCROLL_HINT_BUSY)return;
+  SCROLL_HINT_BUSY=true;
+  try{ updateScrollHintsInner(); }finally{ SCROLL_HINT_BUSY=false; }
+}
+function updateScrollHintsInner(){
+  document.querySelectorAll('.overlay').forEach(ov=>{
+    /* Both writes below are guarded by an explicit "is it already like that?" check, and that
+       guard is LOad-BEARING, not tidiness. DOMTokenList.remove() runs its update steps
+       UNCONDITIONALLY - even when the token was not there to begin with - which re-serializes
+       the class attribute, which Chrome reports to a MutationObserver as a real attribute
+       change even though the value is byte-identical. With the observer below watching these
+       same elements, an unguarded remove() therefore re-queues this function forever as a
+       microtask chain and hard-locks the main thread before the page can even finish loading.
+       Found by direct reproduction (the page would not reach DOMContentLoaded at all), not by
+       reasoning about it afterwards. classList.toggle(name, force) does NOT have this problem
+       (the spec returns early when the state already matches) but is guarded the same way here
+       so the two reads sit next to each other and neither can be "cleaned up" later without the
+       reason being visible. */
+    if(ov.classList.contains('hidden')){
+      if(ov.classList.contains('canScroll'))ov.classList.remove('canScroll');
+      return;
+    }
+    let more=false;
+    const boxes=[ov,...ov.querySelectorAll('.modalCard,.confirmCard')];
+    for(const el of boxes){
+      if(el.scrollHeight-el.clientHeight>SCROLL_HINT_SLACK&&
+         el.scrollHeight-el.clientHeight-el.scrollTop>SCROLL_HINT_SLACK){ more=true; break; }
+    }
+    if(ov.classList.contains('canScroll')!==more)ov.classList.toggle('canScroll',more);
+  });
+}
+addEventListener('scroll',updateScrollHints,true);
+addEventListener('resize',updateScrollHints);
+try{
+  // Coalesced to one run per frame: an overlay's contents can be rebuilt element-by-element
+  // (the lobby seat list, for one), and re-measuring on every single one of those mutations
+  // would be a layout thrash for no benefit.
+  let hintPending=false;
+  const queueHints=()=>{
+    if(hintPending)return;
+    hintPending=true;
+    requestAnimationFrame(()=>{ hintPending=false; updateScrollHints(); });
+  };
+  const ovObs=new MutationObserver(queueHints);
+  const watchOverlays=()=>{
+    document.querySelectorAll('.overlay').forEach(ov=>
+      ovObs.observe(ov,{attributes:true,attributeFilter:['class'],childList:true,subtree:true}));
+    queueHints();
+  };
+  if(document.readyState==='loading')addEventListener('DOMContentLoaded',watchOverlays);
+  else watchOverlays();
+}catch(e){/* no MutationObserver: the scroll/resize listeners above still do most of the job */}
 /* INSTANT (fix, 2026-07-09): reconnect catch-up used to just run the normal animated
    performMove() pipeline at a 30x-compressed SKIP speed - every animation duration has a
    hardcoded floor (see D() below), so a long history (a whole game's worth of moves, if you
@@ -2109,13 +2376,36 @@ function genGameId(){
   return Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
 }
 /* game speed = user setting × skip boost */
-const REDUCED=matchMedia('(prefers-reduced-motion: reduce)').matches;
+/* 2026-07-25 (item O of the UI polish batch): this used to be a `const`, read exactly once at
+   load. The matching CSS @media block re-evaluates by itself the instant the setting changes,
+   but this JS copy did not - so turning Reduce Motion on or off in iOS Settings while the app
+   was open (which is exactly when somebody would do it: mid-game, because the animations are
+   bothering them) changed nothing at all until the app was force-quit and relaunched. Now it is
+   a `let` with a live `change` listener, and applySpeed() is re-run so the animation-duration
+   floor it feeds (see below) takes effect immediately too. matchMedia's `change` event is
+   supported everywhere this app runs; the addEventListener call is wrapped anyway so an exotic
+   engine without it degrades to the old load-time-only behavior rather than throwing. */
+let REDUCED=matchMedia('(prefers-reduced-motion: reduce)').matches;
+try{
+  matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change',e=>{
+    REDUCED=e.matches;
+    try{ applySpeed(); }catch(err){/* not booted yet - applySpeed runs on its own at boot */}
+  });
+}catch(e){/* older engine: keep the load-time value, same as before this change */}
 // v0.19: ladder relabeled (Blake) - 0.6 is now "Normal" and the default for a brand new
 // player, 1.0 (the old default/"Normal") is now "Quick". The NUMBERS and the localStorage key
 // ('nasty-speed') are unchanged on purpose, so an existing device that already picked, say,
 // 1.7 keeps playing at 1.7 - only the label changes. See the one-time picker below (§ UTIL,
 // gateOnSpeedPicker) for how a brand new player lands on 0.6 deliberately, not by accident.
-const SPEED_OPTS=[[0.6,'Normal'],[1,'Quick'],[1.7,'Fast'],[2.6,'Turbo']];
+/* 2026-07-25 (item N of the UI polish batch): a third field, the plain-English subtitle. The app
+   asked the same "how fast?" question on two different screens with two different answers - the
+   first-run picker showed "relaxed"/"a little quicker"/"fast paced"/"very fast", the host picker
+   showed "1x"/"1.7x"/"2.8x"/"4.3x". A multiplier means nothing to a non-technical player (4.3x
+   of WHAT?), so the words won and BOTH screens now read them from here. One list, one wording,
+   no way for the two to drift apart again. The multipliers are gone from the UI entirely - the
+   0.6/1/1.7/2.6 numbers below are still the literal per-animation duration multipliers the
+   engine uses, they were just never a useful thing to show a person. */
+const SPEED_OPTS=[[0.6,'Normal','relaxed'],[1,'Quick','a little quicker'],[1.7,'Fast','fast paced'],[2.6,'Turbo','very fast']];
 let USER_SPEED=parseFloat(localStorage.getItem('nasty-speed')||'0.6');
 if(!SPEED_OPTS.some(o=>o[0]===USER_SPEED))USER_SPEED=0.6;
 // v0.24: SPOTLIGHT_HUMAN distinguishes the two spotlight tiers (see spotlightEvent()/
@@ -3421,7 +3711,30 @@ function fitBoard(){
   bs.style.left=((w-1000*s)/2)+'px'; bs.style.top=((h-1000*s)/2)+'px';
   positionPlaques();
   updateToastOffset();
+  updateLogoSub2();          // 2026-07-25 item C: hide "EST. 1993" if the board reaches up under it
   positionConnIndicator();   // v0.16: re-center the connection indicator in the (re)measured logo/board gap
+}
+/* 2026-07-25 (item C of the UI polish batch): "EST. 1993" (#gameLogo .sub2) is decoration - a
+   9.5px letterspaced line in a muted green that computes to about 1.13:1 contrast against the
+   birch board. On a short phone the vertically-centered board reaches up far enough that the
+   line landed ON the board, smeared across the top-row tees: measured overlap before this batch
+   was 34.9px at 320x568 4P, 29.2px at 320 6P, 11.8px at 375 4P and 5.1px at 375 6P (390 and up
+   were already clean). #boardWrap's new bottom margin (see its own comment, § STYLE) pushes the
+   board down and removes most of that on its own, but "most" is not a guarantee - a future
+   font/Dynamic-Type/safe-area combination could put it back. So this measures the ACTUAL two
+   rects every fitBoard() (the same measurement positionConnIndicator() right below already
+   makes for the same gap) and simply hides the line whenever the board's top edge has come up
+   past the line's bottom, with 2px of tolerance. Nothing functional is lost - the same
+   "Est. 1993" sits on the menu screen, full size and perfectly legible, and the NASTY sign
+   above it is untouched either way. visibility (not display:none) so the logo block's own
+   height never changes, which would move the board and reopen v0.7.1's "the board must not
+   jump" rule. */
+function updateLogoSub2(){
+  const sub=document.querySelector('#gameLogo .sub2'), board=$('boardScale');
+  if(!sub||!board)return;
+  sub.style.visibility='visible';
+  const sr=sub.getBoundingClientRect(), br=board.getBoundingClientRect();
+  if(sr.bottom>br.top+2)sub.style.visibility='hidden';
 }
 addEventListener('resize',fitBoard);
 
@@ -3474,8 +3787,9 @@ function positionPlaques(){
     const el=$(`plaque-${seat}`); if(!el)continue;
     const anchor=LAY.plaque[seat], dir=LAY.plaqueDir[seat];
     let slide=target;
+    let bx=anchor.x+dir.x*slide, by=anchor.y+dir.y*slide;
     for(let iter=0;iter<14;iter++){
-      const bx=anchor.x+dir.x*slide, by=anchor.y+dir.y*slide;
+      bx=anchor.x+dir.x*slide; by=anchor.y+dir.y*slide;
       el.style.left=bx+'px'; el.style.top=by+'px';
       const r=el.getBoundingClientRect();
       const worst=Math.max(wrap.left-r.left, r.right-wrap.right,
@@ -3483,6 +3797,41 @@ function positionPlaques(){
       if(worst<=BUF)break;
       if(slide<=min)break;              // already at the hole-safe floor - best effort, stop
       slide=Math.max(min, slide-(worst/s+2));
+    }
+    /* 2026-07-25 (item A of the UI polish batch) - THE fix for "name plates run off the edge".
+       Everything above only ever pulls a plaque back ALONG ITS OWN SLIDE AXIS, and both slide
+       floors are 0 (PLAQUE_SLIDE_MIN, above: 4P has never had any slide at all, 6P's floor is
+       its own hole-safe anchor). So the moment the plate itself is WIDER than the room left
+       between its anchor and #boardWrap's edge - which is exactly what happens as soon as a
+       name is 7+ characters, since the box grows with the name but the anchor never moves - the
+       loop hits `slide<=min` on its first pass, gives up, and #boardWrap's overflow:hidden
+       slices the plate. Measured with real 9/10-character family names before this fix: every
+       seat overflowed, worst 11.5px at 430x932 4P, and it got worse the wider the screen
+       because a bigger board scale magnifies the same board-space overhang. That plate is the
+       app's only "who is who" cue at a family table, so a sliced one is a real cost.
+       Fix: after the axis-constrained slide has done what it can, apply a plain screen-space
+       CORRECTION on each axis independently - measure the real rendered rect (rotation and
+       box-shadow included, which is why this is measured and not computed) and translate the
+       plate by however many board-space px it takes to bring it back inside, converting screen
+       px to board px through the live scale `s`. Independent axes matter: a plate hanging off
+       the left edge is nudged right and NOTHING else about it moves. If a plate is ever wider
+       than boardWrap itself (no viewport in the matrix does this, but a future one might) the
+       both-sides-over branch centers it rather than picking an arbitrary edge to honour.
+       Iterated because the correction changes the rect it was measured from (rotation again),
+       and it converges in one or two passes in practice; the loop is just belt and braces.
+       Deliberately allowed to move a plate over a hole: the anchors are on the corner chamfers,
+       the corrections measured here are tens of board-px, and a plate you can READ sitting near
+       a hole beats half a plate that clears everything. */
+    for(let iter=0;iter<4;iter++){
+      const r=el.getBoundingClientRect();
+      const overL=(wrap.left+BUF)-r.left, overR=r.right-(wrap.right-BUF);
+      const overT=(wrap.top+BUF)-r.top,  overB=r.bottom-(wrap.bottom-BUF);
+      let dx=0,dy=0;
+      if(overL>0&&overR>0)dx=(overL-overR)/2; else if(overL>0)dx=overL; else if(overR>0)dx=-overR;
+      if(overT>0&&overB>0)dy=(overT-overB)/2; else if(overT>0)dy=overT; else if(overB>0)dy=-overB;
+      if(Math.abs(dx)<0.25&&Math.abs(dy)<0.25)break;
+      bx+=dx/s; by+=dy/s;
+      el.style.left=bx+'px'; el.style.top=by+'px';
     }
   }
 }
@@ -3655,6 +4004,12 @@ async function animateDeal(counts){
   await Promise.all(jobs);
 }
 function confettiBurst(){
+  // 2026-07-25 (item O of the UI polish batch): the single biggest piece of motion in the whole
+  // app - 90 elements tumbling down the full height of the screen for 2 to 5 seconds each - had
+  // no Reduce Motion check at all, because it is animated from JS and the CSS @media block that
+  // covers everything else can't reach it. Skipped entirely now. Nothing is lost: the win
+  // overlay itself, the winner's name, the scoreboard and the win sound all still fire.
+  if(REDUCED)return;
   const cols=G.winners.map(w=>G.seats[w].color.c).concat(['#f4c542','#ffffff']);
   for(let i=0;i<90;i++){
     const c=document.createElement('div'); c.className='confetti';
@@ -4169,7 +4524,11 @@ async function handleTurnLoopError(e){
       netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token,protocolVersion:PROTOCOL_VERSION});
     else scheduleReconnect();
   }else if(G&&!G.over){
-    toast('Something went wrong with that move - try Menu → Resume, or reload the page.',5000);
+    // 2026-07-25 (item S of the UI polish batch): the old text was "try Menu -> Resume, or
+    // reload the page." There has been no "Menu" button since v0.27 (it is QUIT), "Menu ->
+    // Resume" was never a real path anyway, and "reload the page" means nothing inside the iOS
+    // app. Plain language, and it names something that actually exists on screen.
+    toast('That move did not go through. Tap Pause, then Save & leave - your game is kept and you can pick it right back up.',6000);
   }
 }
 // Turn-loop crash guard (fix, v0.10.2 - the freeze half of Blake's 2026-07-12 report). Neither
@@ -4529,7 +4888,29 @@ function enableSelection(seat,moves){
     c.classList.toggle('playable',has);
     c.classList.toggle('dead',!has);
     if(has)c.onclick=()=>selectCard(ci,c);
+    // 2026-07-25 (item P of the UI polish batch): a card you can't play this turn used to have
+    // NO handler at all - tapping it did nothing, said nothing, and the only hint it wasn't
+    // available was opacity:.45, which reads as "slightly dim", not as "this one is out". For a
+    // family player that is "I tapped my 3 and the game ignored me", which is indistinguishable
+    // from the app being broken. Now it answers, in one plain line, with the actual reason.
+    else c.onclick=()=>toast(deadCardReason(G.hands[seat]&&G.hands[seat][ci]),4000);
   });
+}
+/* 2026-07-25 item P: one plain-language sentence explaining why a card can't be played right
+   now. Deliberately reason-BY-CARD rather than a generic "you can't play that" - the specific
+   rules are the ones a new player at the table is still learning, and this is the natural moment
+   to teach them. Falls back to the generic line for anything unexpected, so a missing/odd card
+   can never produce a blank or broken message. Kept short enough to fit the message bubble on a
+   320px phone (see .toast's min-height, § STYLE, which now grows for a long one anyway). */
+function deadCardReason(card){
+  const r=card&&card.r;
+  if(r==='K')return 'A King only brings a tee out of the stable - nothing to bring out, or your start hole is blocked.';
+  if(r==='A')return 'An Ace brings a tee out or moves one 1 hole - neither works for you right now.';
+  if(r==='J')return "A Jack trades one of your tees on the track with somebody else's - you need a tee out there, and somebody to trade with.";
+  if(r==='Q')return 'A Queen moves a tee 12 holes - no tee of yours has room for that this turn.';
+  if(r==='3')return "A 3 moves a tee 3 holes BACKWARD - none of yours have room to go back right now.";
+  if(r)return `No tee of yours can move ${r} holes this turn - pick another card.`;
+  return 'That card has no move you can make this turn - pick another one.';
 }
 /* Big tap bubbles above every pickable tee - easy to see and hit with a thumb.
    v0.19: a bubble's little arrow just barely touches its own tee by default, always - no more
@@ -4589,16 +4970,82 @@ function enableSelection(seat,moves){
    picks + each crowd's one above-keeper), completely untouched by this fix, still avoiding every
    tee on the board exactly as before. Per Blake's own framing, this ask was specifically about
    pegs "still in the stable" - track bubbles keep their existing dodge behavior unchanged. */
+/* 2026-07-25 (item D of the UI polish batch) - TAP_TARGET_PX is the RENDERED (screen) diameter
+   every tee bubble must reach, a hair over the 44px comfortable-tap floor the rest of the app
+   has honoured since v0.10. Everything inside showBubbles() is in BOARD space, which #boardScale
+   then shrinks by roughly 0.28-0.41 on a phone, so a fixed board-space size can never make a
+   promise about what a thumb actually gets - see the .teeBubble CSS comment (§ STYLE) for the
+   measured before-numbers. currentBoardScale() reads the live scale straight off the rendered
+   element (not recomputed from viewport arithmetic, so it is right even mid-animation or before
+   the first fitBoard()), and R below is simply "whichever is bigger: the historical 42, or
+   whatever radius renders 46 screen px at today's scale". Bigger R automatically widens every
+   spacing rule in this function too (TAP_MIN, the formation's xMag/GAP/XGAP, the clamps), which
+   is exactly what keeps the bubbles from merely growing into each other. */
+const TAP_TARGET_PX=46;
+function currentBoardScale(){
+  const bs=$('boardScale'); if(!bs)return 1;
+  const w=bs.getBoundingClientRect().width;
+  return w>0?w/1000:1;
+}
+/* 2026-07-25 item D: showBubbles() is now a thin wrapper around buildBubblePlan(), which does
+   ALL the placement work exactly as before but returns a plan instead of touching the DOM. Why:
+   a 46px-rendered bubble is a big object in board space on a small phone (about 172 board-px
+   across at 320x568), and there are board states where that many circles genuinely cannot be
+   laid out without touching - the worst case being one seat with several tees on CONSECUTIVE
+   track holes, all legal for the same card. Rather than either shipping overlapping tap targets
+   or giving up on the 44px floor, the size is now negotiated: try the full comfortable size
+   first, and only if the plan still has a real overlap, shrink and try again - down to a HARD
+   FLOOR of the historical 42 (84px board / the pre-2026-07-25 size), so the result is never
+   worse than what shipped before, and is the biggest non-overlapping size the board can take
+   the rest of the time. Every measured layout in the regression suite lands on the first
+   attempt; the retry only fires on genuinely crowded boards. */
 function showBubbles(list,cls){
   clearBubbles();
   const layer=$('bubbleLayer');
-  const R=42, six=G.n===6;
-  const tipGap=six?42:47;                    // anchor offset that puts the arrow tip on the tee head
+  const want=Math.max(42,(TAP_TARGET_PX/2)/currentBoardScale());
+  let plan=buildBubblePlan(list,want);
+  for(let R=want;plan.overlap&&R>42;){
+    R=Math.max(42,R*0.88);
+    plan=buildBubblePlan(list,R);
+  }
+  plan.specs.forEach(sp=>{
+    const b=document.createElement('div');
+    b.className='teeBubble'+(sp.side?' side'+sp.side:'')+(cls?' '+cls:'');
+    // 2026-07-25 item D: the live, scale-compensated size. --bubD is the outer diameter
+    // (box-sizing:border-box is global, so this INCLUDES the border - which is why the
+    // rendered width is exactly --bubD * boardScale and the >=44px promise is checkable);
+    // --bubScale drives the border/arrow/tee-glyph so the whole thing grows in proportion.
+    b.style.setProperty('--bubD',(2*plan.R)+'px');
+    b.style.setProperty('--bubScale',plan.bubScale);
+    b.style.left=sp.anchorX+'px';
+    b.style.top=sp.anchorY+'px';
+    b.innerHTML=teeSVG(G.seats[sp.it.s].color,true);
+    b.addEventListener('click',e=>{e.stopPropagation();onTeeClick(sp.it.s,sp.it.pi);});
+    layer.appendChild(b);
+  });
+}
+function buildBubblePlan(list,R){
+  const six=G.n===6;
+  const bubScale=R/42;                       // everything the CSS scales off (border, arrow, glyph)
+  // The arrow grows with the bubble, so the anchor has to back off by the extra arrow height or
+  // the tip would punch straight through the tee head instead of just touching it.
+  const tipGap=(six?42:47)+12*(bubScale-1);  // anchor offset that puts the arrow tip on the tee head
+  /* 2026-07-25 item D: the two vertical limits below used to be the literals 96 and 24. Both
+     were derived from the historical R=42 (96 = 2R+12, i.e. "a bubble may not START higher than
+     its own full height plus its arrow"; 24 = "as high as the v0.6.2 stagger ever climbed",
+     which is 2R-60 at R=42). Left as bare numbers they would have meant something completely
+     different once R grew - a bubble anchored at y=24 with R=86 has its TOP at -148, well off
+     the canvas. Re-expressed in terms of R so both keep their original MEANING at any size, and
+     both evaluate to exactly 96 and 24 at R=42, so nothing changes on a screen big enough not
+     to need the compensation. */
+  const yTop=2*R+12;                         // highest anchor a bubble may start from
+  const yFloor=Math.max(24,2*R-60);          // highest anchor the upward sweep may climb to
   const tw=six?14:17, tUp=six?31:37, tDn=7;  // tee art box around its pos: half width / above / below
   const pad=six?40:20;                       // CANVAS_PAD (§ RENDER fitBoard) - board-space margin
   const pegs=[];                             // every tee on the board is a "do not cover" zone
   for(let s=0;s<G.n;s++)for(let pi=0;pi<5;pi++)pegs.push({s,pi,p:teePos(s,pi)});
   const placed=[];                           // circle CENTERS ({x,y}) of every bubble placed so far
+  const specs=[];                            // what showBubbles() will actually render, once a size is settled
   const pegPenalty=(cx,cy,selfS,selfPi)=>{
     let pen=0;
     pegs.forEach(t=>{
@@ -4615,16 +5062,10 @@ function showBubbles(list,cls){
     // pass below, so only the default above-the-tee shape gets the historical clamps here.
     if(!side){
       anchorX=Math.min(1000+pad-R-4,Math.max(-pad+R+4,anchorX));
-      anchorY=Math.max(96,anchorY);
+      anchorY=Math.max(yTop,anchorY);
     }
     placed.push(side?{x:side==='L'?anchorX-R:anchorX+R,y:anchorY}:{x:anchorX,y:anchorY-R});
-    const b=document.createElement('div');
-    b.className='teeBubble'+(side?' side'+side:'')+(cls?' '+cls:'');
-    b.style.left=anchorX+'px';
-    b.style.top=anchorY+'px';
-    b.innerHTML=teeSVG(G.seats[it.s].color,true);
-    b.addEventListener('click',e=>{e.stopPropagation();onTeeClick(it.s,it.pi);});
-    layer.appendChild(b);
+    specs.push({it,anchorX,anchorY,side});
   };
 
   // --- formation pass: EVERY seat's pickable BASE piece(s) get the quincunx layout, 1 or more
@@ -4683,7 +5124,7 @@ function showBubbles(list,cls){
       const plan=[]; let pen=0;
       order.forEach(o=>{
         const ax=clampX(bc.x+o.cs*xMag);
-        const startAy=Math.max(96,o.pos.y-tipGap);
+        const startAy=Math.max(yTop,o.pos.y-tipGap);
         let ay=startAy,best=startAy,bp=Infinity;
         for(;;){
           const cy=ay-R;
@@ -4692,7 +5133,7 @@ function showBubbles(list,cls){
           placed.forEach(q=>{const d=Math.hypot(q.x-ax,q.y-cy);if(d<2*R+GAP)p+=2*R+GAP-d;});
           if(p===0){best=ay;bp=0;break;}
           if(p<bp){bp=p;best=ay;}
-          if(ay<=24)break;                // same floor as the sweep below
+          if(ay<=yFloor)break;            // same floor as the sweep below
           ay-=6;
         }
         plan.push({o,ax,ay:best}); pen+=bp;
@@ -4717,7 +5158,7 @@ function showBubbles(list,cls){
   const rest=list.filter(it=>!formationKeys.has(it.s+'-'+it.pi));
   const info=rest.map(it=>{
     const pos=teePos(it.s,it.pi);
-    const T0=Math.max(96,pos.y-tipGap);
+    const T0=Math.max(yTop,pos.y-tipGap);
     return {it,pos,cx:pos.x,cy:T0-R,track:(G.pieces[it.s][it.pi]||{}).state==='track'};
   });
   const tr=info.filter(o=>o.track);
@@ -4752,13 +5193,13 @@ function showBubbles(list,cls){
       pen+=pegPenalty(pos.x,cy,it.s,it.pi);
       return pen;
     };
-    const T0=Math.max(96,pos.y-tipGap);   // bubble anchor (arrow tip = T0+12, touching the tee)
+    const T0=Math.max(yTop,pos.y-tipGap);   // bubble anchor (arrow tip = T0+12*bubScale, touching the tee)
     let T=T0,best=T0,bestPen=Infinity;
     for(;;){
       const pen=overlapAt(T-R);
       if(pen===0){ best=T; break; }
       if(pen<bestPen){ bestPen=pen; best=T; }
-      if(T<=24)break;                     // 24 = as high as the old stagger ever reached
+      if(T<=yFloor)break;                  // as high as the old stagger ever reached (see yFloor)
       T-=6;
     }
     place(it,pos.x,best);
@@ -4772,7 +5213,9 @@ function showBubbles(list,cls){
     // prefers whichever side has more open canvas.
     let pref=o.cx>cenX?1:o.cx<cenX?-1:((1000+pad-o.pos.x)>=(o.pos.x+pad)?1:-1);
     const candAt=(sd,ext)=>{
-      const ax=o.pos.x+sd*(tw+12+ext);      // arrow tip = ax -/+ 12 = the tee's side edge when ext=0
+      // arrow tip = ax -/+ (12 * bubScale) = the tee's side edge when ext=0 (2026-07-25 item D:
+      // the side arrow scales with the bubble too, so this offset has to follow it)
+      const ax=o.pos.x+sd*(tw+12*bubScale+ext);
       const ay=Math.max(R+8,o.pos.y-vOff);
       return {sd,ax,ay,cx:ax+sd*R,cy:ay};
     };
@@ -4786,7 +5229,7 @@ function showBubbles(list,cls){
     let best=null,bp=Infinity;
     outer:
     for(const sd of [pref,-pref]){
-      for(let ext=0;ext<=48;ext+=8){        // push outward in small steps; arrow stays aimed at the tee
+      for(let ext=0;ext<=48*bubScale;ext+=8*bubScale){   // push outward in small steps; arrow stays aimed at the tee
         const c=candAt(sd,ext);
         if(!onCanvas(c))continue;
         const p=penAt(c);
@@ -4797,6 +5240,18 @@ function showBubbles(list,cls){
     if(!best)best=candAt(pref,0);           // both sides off-canvas can't happen on this board; belt and braces
     place(o.it,best.ax,best.ay,best.sd===-1?'L':'R');
   });
+
+  // 2026-07-25 item D: does this plan actually keep every tap circle distinct? `placed` already
+  // holds every bubble's CENTER in board space (both the above-the-tee and the sideways shapes
+  // push their true circle center, not their anchor), so a plain pairwise distance check against
+  // the diameter is the whole test. 2px of tolerance for float rounding, matching the tolerance
+  // the existing bubble regression suite uses. showBubbles() reads this to decide whether to
+  // retry one size smaller.
+  let overlap=false;
+  for(let i=0;i<placed.length&&!overlap;i++)
+    for(let j=i+1;j<placed.length;j++)
+      if(Math.hypot(placed[i].x-placed[j].x,placed[i].y-placed[j].y)<2*R-2){overlap=true;break;}
+  return {specs,placed,R,bubScale,overlap};
 }
 function clearBubbles(){ $('bubbleLayer').innerHTML=''; }
 /* Soft preview of where each pickable tee would travel and land with the selected card.
@@ -4890,7 +5345,14 @@ function clearSelection(keepTurn){
   clearHighlights();
   document.querySelectorAll('#handRow .card.selCard').forEach(c=>c.classList.remove('selCard'));
   SEL=null;
-  if(keepTurn)turnPrompt(`Your turn - tap a card`,true);
+  // 2026-07-25 (item T of the UI polish batch): this used to re-prompt WITHOUT the name, so
+  // simply tapping a card and changing your mind quietly dropped the only whose-turn cue there
+  // is in pass-and-play. CUR_SEAT is the seat this hand was armed for (enableSelection(), above)
+  // and is exactly what the original prompt used, so the two now read identically.
+  if(keepTurn){
+    const nm=(G&&CUR_SEAT!=null&&G.seats[CUR_SEAT])?G.seats[CUR_SEAT].name:null;
+    turnPrompt(nm?`Your turn, ${nm} - tap a card`:`Your turn - tap a card`,true);
+  }
 }
 
 /* ============================= § NET (online multiplayer) =============================
@@ -5286,7 +5748,7 @@ function updateConnIndicator(){
   // Recalibrating simply persists; the player can always leave via Menu. A pre-game lobby
   // still says "Reconnecting..." - there's no board to recalibrate there, and that word was
   // never the scary one.
-  el.textContent=(G&&!G.over)?'Recalibrating...':'Reconnecting...';
+  el.textContent=(G&&!G.over)?'Catching the game back up…':'Getting you back online…';
   el.classList.add('reconnecting'); el.classList.remove('connLost');
   positionConnIndicator();
 }
@@ -6244,7 +6706,7 @@ function renderAwayLine(){
     cpu.textContent=`Have the computer play this turn for ${name}`;
     cpu.onclick=()=>{
       netSend({type:'playTurnForAway',seat});
-      cpu.disabled=true; cpu.textContent='Asking the computer...';
+      cpu.disabled=true; cpu.textContent='Asking the computer…';
     };
     aa.appendChild(cpu);
   }
@@ -6518,13 +6980,14 @@ $('hostTeams').onclick=()=>{CFG.teams=true;saveCfg();renderHostSetup();};
 function openHostSpeedOverlay(){
   renderHostSetup();
   const wrap=$('hostSpeedBtns'); wrap.innerHTML='';
-  const base=(SPEED_OPTS.find(o=>o[1]==='Normal')||SPEED_OPTS[0])[0];
-  SPEED_OPTS.forEach(([val,label])=>{
-    const ratio=Math.round((val/base)*10)/10;
-    const mult=(Number.isInteger(ratio)?String(ratio):ratio.toFixed(1))+'x';
+  // 2026-07-25 item N: the multiplier subtitle ("1x"/"2.8x"/"4.3x") is gone - it was the one
+  // piece of copy in the app that only made sense if you already knew what the baseline was.
+  // The plain-English subtitle now comes straight from SPEED_OPTS (§ UTIL), the same source the
+  // first-run picker reads, so the two screens can never say different things again.
+  SPEED_OPTS.forEach(([val,label,sub])=>{
     const b=document.createElement('button');
     b.className='btn primary';
-    b.innerHTML=`${label}${val===USER_SPEED?' ✓':''}<br><small style="font-weight:400">${mult}</small>`;
+    b.innerHTML=`${label}${val===USER_SPEED?' ✓':''}<br><small style="font-weight:400">${sub}</small>`;
     b.onclick=()=>{ $('hostSpeedOverlay').classList.add('hidden'); hostCreateRoom(val); };
     wrap.appendChild(b);
   });
@@ -6617,14 +7080,14 @@ function renderRoomScreen(){
     }else{
       const statusTxt=mine?'You'
         :s.claimedBy!=null?(ready.has(s.claimedBy)?'Ready ✓':'Joined - not ready yet')
-        :s.type==='cpu'?'CPU - tap to join'
+        :s.type==='cpu'?'Computer - tap to join'
         :'Tap to sit here';
       row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(s.name)}</span><span class="st">${statusTxt}</span>`;
       if(mine){
         // v0.24: pencil glyph added for the same "obviously editable" consistency as the
         // offline seat list's .editPencil (§ STYLE/MENU) - the text label already made this
         // discoverable pre-v0.24, this just matches the visual language.
-        const btn=document.createElement('button'); btn.textContent='✏️ Rename';
+        const btn=document.createElement('button'); btn.textContent='Rename';
         btn.onclick=e=>{e.stopPropagation(); ROOM_EDIT_NAME={draft:s.name}; renderRoomScreen();};
         row.appendChild(btn);
       }else if(open){
@@ -6634,7 +7097,7 @@ function renderRoomScreen(){
         // always accepted server-side; this row click was the missing piece).
         row.onclick=()=>netSend({type:'claimSeat',seatIndex:i,name:hostMySeatName()});
         const btn=document.createElement('button');
-        btn.textContent=s.type==='cpu'?'Make human':'Make CPU';
+        btn.textContent=s.type==='cpu'?'Make human':'Make computer';
         btn.onclick=e=>{e.stopPropagation(); netSend({type:'setSeat',seatIndex:i,patch:{type:s.type==='cpu'?'human':'cpu'}});};
         row.appendChild(btn);
         // 2026-07-24 (Blake's follow-up: "give me the option to set the cpu difficulty when
@@ -6750,7 +7213,7 @@ function renderJoinSeatStep(){
     const statusTxt=isHostSeat?'Host'
       :mine?(iAmReady?'You - Ready ✓':'You')
       :s.claimedBy!=null?(ready.has(s.claimedBy)?'Ready ✓':'Taken')
-      :s.type==='cpu'?'CPU - tap to join':'Tap to sit here';
+      :s.type==='cpu'?'Computer - tap to join':'Tap to sit here';
     // 2026-07-24 (Blake's follow-up: "give me the option to set the cpu difficulty when
     // playing an online game") - "Every player in the lobby should be able to SEE each CPU
     // seat's difficulty... even though only the host can change it." Read-only twin of
@@ -6768,7 +7231,7 @@ function renderJoinSeatStep(){
   const haveSeat=NET.lobby.seats.some(s=>s.claimedBy===NET.playerId);
   $('joinNote').textContent=iAmReady?"You're ready! The game starts as soon as the host starts it."
     :haveSeat?'Tap Ready up to lock your seat in.'
-    :'Pick any open seat above - even ones marked CPU.';
+    :'Pick any open seat above - even ones marked Computer.';
   const btn=$('btnJoinReady');
   btn.classList.toggle('hidden',!haveSeat||iAmReady);
   btn.disabled=false;
@@ -6874,7 +7337,7 @@ function renderMenu(){
     r.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span>
       <span class="nameWrap"><input value="${esc(s.name)}" maxlength="${NAME_MAX}" aria-label="player name, tap to edit"><span class="editPencil">✏️</span></span>
       <select class="typeSel"><option value="human"${s.type==='human'?' selected':''}>Human</option>
-        <option value="cpu"${s.type==='cpu'?' selected':''}>CPU</option></select>
+        <option value="cpu"${s.type==='cpu'?' selected':''}>Computer</option></select>
       <select class="diffSel" ${s.type==='human'?'style="visibility:hidden"':''}>
         <option value="easy"${s.diff==='easy'?' selected':''}>Easy</option>
         <option value="medium"${s.diff==='medium'?' selected':''}>Tricky</option>
@@ -7195,6 +7658,19 @@ function openSurrenderConfirm(){
 $('btnMenu').onclick=()=>openSurrenderConfirm();
 $('btnLeaveDiscard').onclick=()=>openSurrenderConfirm();
 $('btnLeaveForGood').onclick=()=>openSurrenderConfirm();
+/* 2026-07-25 (item E of the UI polish batch) - the free way out of the concede confirm. See the
+   surrenderConfirmOverlay markup comment for why this exists: QUIT is the most obvious exit in
+   the app and it used to offer no safe answer at all. This deliberately calls the exact same
+   doLeaveGame(true) that the Pause sheet's "Save & leave" and the Save button's confirm already
+   call - one implementation, so "safe" here provably means what it means everywhere else
+   (offline: flushes the save slot; online: keeps the room rejoinable; neither ever writes a
+   loss). doLeaveGame() closes the sheet/pause overlays and releases a sheet-started pause on
+   its own; this only has to close THIS overlay first. */
+$('btnSurrenderSave').onclick=()=>{
+  $('surrenderConfirmOverlay').classList.add('hidden');
+  { const cc=$('surrenderConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
+  doLeaveGame(true);
+};
 $('btnSurrenderCancel').onclick=()=>{
   // Cancel leaves everything exactly as it was - game keeps running, no stat write. Releases a
   // pause the Pause/Save sheet started, if this confirm was reached from there (harmless no-op
@@ -7699,8 +8175,8 @@ function buildGameKoTableHtml(){
 // Caption under the table changes per tab - the Solo/Teams points explainer doesn't apply to KOs.
 function updateLbCaption(){
   $('lbCaption').textContent=lbTab==='ko'
-    ?"KOs = pegs you've sent back to base. KO'd = times your own peg got sent back. Ratio = KOs per KO'd (Perfect = never been KO'd yet) - humans only, CPUs never show up here."
-    :'Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a human - humans only, CPUs never show up here.';
+    ?"KOs = tees you've sent back to base. KO'd = times your own tee got sent back. Ratio = KOs per KO'd (Perfect = never been KO'd yet) - people only, computers never show up here."
+    :'Points per win: 1 for each Easy computer you beat, 2 for Tricky, 3 for Nasty or a person - people only, computers never show up here.';
 }
 function setLbTab(tab){
   lbTab=tab;
@@ -7771,9 +8247,15 @@ $('btnSpeed').onclick=()=>{
 // v0.19: one-time speed picker buttons - indices into SPEED_OPTS, not raw numbers, so a future
 // ladder edit can't silently desync the buttons from the array. See gateOnSpeedPicker()/
 // pickSpeed(), § UTIL, and the #speedPickerOverlay markup.
-SPEED_OPTS.forEach((opt,i)=>{
-  const b=$('btnSpeedPick'+i);
-  if(b)b.onclick=()=>pickSpeed(opt[0]);
+// 2026-07-25 item N: the four tiles are BUILT here now rather than hardcoded in the markup, off
+// the same SPEED_OPTS list the host picker uses - one wording, two screens. Ids and index-based
+// binding are exactly as before.
+SPEED_OPTS.forEach(([val,label,sub],i)=>{
+  const b=document.createElement('button');
+  b.className='btn primary'; b.id='btnSpeedPick'+i;
+  b.innerHTML=`${label}<br><small style="font-weight:400">${sub}</small>`;
+  b.onclick=()=>pickSpeed(val);
+  $('speedPickerBtns').appendChild(b);
 });
 // v0.15 (Blake, 2026-07-15): NO Skip button in online games, period - Skip only ever made
 // sense as a personal "fast-forward MY OWN wait" tool for pass-and-play/solo; online, the
