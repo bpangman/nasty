@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = 'b3712518-fee7-42a5-a6bb-b3e4ea740386'
+BUILD_SUBMISSION_ID = 'e301ff6b-2a12-4393-86e3-f04cace40e8a'
 
 
 def current_build():
@@ -87,7 +87,7 @@ try:
             # tell Blake a rejection happened rather than staying silent
             body = '/tmp/nasty_beta_rejected.html'
             open(body, 'w').write(
-                '<p>Blake, Apple flagged something in the family beta review (a rejection). '
+                '<p>Blake, Apple flagged something in the beta review (a rejection). '
                 'No action needed from you: mention it to Cortana in the Claude session and '
                 "she'll read Apple's notes and fix whatever they want changed.</p>")
             subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
@@ -99,15 +99,16 @@ try:
     body = '/tmp/nasty_beta_live.html'
     open(body, 'w').write(f'''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
-<h1 style="color:#1a5c38">Build {BUILD} reached the family</h1>
-<p>Apple approved the beta - the family can install the real app right now.</p>
-<p>Three things Blake reported after playing the last build, all fixed:</p>
+<h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
+<p>Apple approved the beta - everyone can install the real app right now.</p>
+<p>What is in this one:</p>
 <ul>
-<li><b>Accepting an invite while another game was open used to lose the lobby.</b> The online rules box would pop up, and after tapping through it there was no lobby and no list of open seats - the only way out was conceding. That is fixed. You always land on the seat list now, and if a local game is still on the go it is saved and put away for you instead of sitting underneath. There is also a proper Cancel on that screen, and the app now checks after every screen closes that you can still get somewhere.</li>
-<li><b>Joining a lobby that never starts no longer leaves a saved game behind.</b> Before, joining a room put a "Resume - online game" tile on your menu straight away, even if nobody ever started, and the only way to clear it was to concede. Now that tile only appears once a game has genuinely been dealt.</li>
-<li><b>The little tee buttons stay next to their peg.</b> On a busy board they used to fly halfway across it to avoid whatever was underneath. Now they only nudge a tiny amount, and only to get clear of another tee you can actually pick or another button, on both the 4 player and 6 player boards.</li>
+<li><b>The computer players act like partners now in Teams games.</b> They stop parking a tee right in front of their own partner, which used to wall them in (you can never pass your partner). They use a Jack to trade tees when it helps the pair rather than just themselves. And they push harder to get their own five home, because the first partner home starts playing their cards for the other one.</li>
+<li><b>Straight answer on how much harder they are: a bit, not a lot.</b> Two people who play well together used to win about 5.4 games in 10 against two Nasty computers at four players, and now win about 5.2. At six players it went from about 4.0 in 10 to about 3.7. It is a real improvement and it is the right direction, but it is not the step change Blake asked for. What would actually get there is giving the computer a proper look ahead, which is a separate project and is written down.</li>
+<li><b>Nothing changed for solo or free-for-all games.</b> That was checked rather than assumed: with the teamwork switched off the computer made byte for byte the same decisions as the last build. Easy is also untouched on purpose.</li>
+<li><b>The welcome screen has room to breathe.</b> More space around the NASTY sign, better wording, and it says plainly that guests can play everything and just do not appear on the leaderboard.</li>
 </ul>
-<h3>The link to text the family:</h3>
+<h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
 <a href="https://testflight.apple.com/join/d79YpZea">https://testflight.apple.com/join/d79YpZea</a></p>
 <p>They tap it, install Apple's free "TestFlight" app if asked, tap Install, and NASTY is on their phone. Works for up to 10,000 testers, so invite the whole clan.</p>
@@ -120,7 +121,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live for the family', body], check=True)
+                    f'NASTY: build {BUILD} is live - the CPUs play as a team now', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
