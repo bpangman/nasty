@@ -22,6 +22,41 @@ const JWT_MAX_AGE_MS = 45 * 60 * 1000; // Apple allows reusing a token up to ~60
 
 function log(...a: unknown[]) { console.log(new Date().toISOString(), "[apns]", ...a); }
 
+/* ---------------------------------------------------------------------------------------
+ * OUTCOME COUNTERS (2026-07-26 push audit) - exact twin of ../apns.js's block. See that file
+ * for the full rationale. Short version: this module was log-only, nobody reads Deno Deploy
+ * logs, so a week of "push is live" hid the fact that ZERO real pushes had ever been sent.
+ * These counters make /admin/push answer "is push actually working" in one GET.
+ * ------------------------------------------------------------------------------------- */
+const stats = {
+  attempts: 0,        // sendTurnPush() calls that had a token to send to
+  delivered: 0,       // APNs answered 2xx
+  rejected: 0,        // APNs answered non-2xx (bad token, bad key, bad topic...)
+  failed: 0,          // never reached APNs (network/TLS/crypto threw)
+  skippedNoKey: 0,    // no key material - the graceful no-op path
+  lastStatus: null as number | null,
+  lastReason: null as string | null,
+  lastAttemptAt: null as string | null,
+  lastDeliveredAt: null as string | null,
+  lastFailureAt: null as string | null,
+};
+export function getApnsStats(): Record<string, unknown> {
+  const k = loadKey();
+  return {
+    keyLoaded: !!k,
+    keyId: k ? k.keyId : null,   // an identifier, not a secret - already logged in plaintext above
+    teamId: TEAM_ID,
+    topic: TOPIC,
+    host: APNS_HOST,
+    ...stats,
+  };
+}
+// Apple's error body is {"reason":"BadDeviceToken"} - pull just that word out, never echo a
+// whole response body into a diagnostic surface.
+function reasonOf(body: string): string | null {
+  try { const r = JSON.parse(body).reason; return typeof r === "string" ? r : null; } catch (_e) { return null; }
+}
+
 type KeyInfo = { key: string; keyId: string };
 // undefined = not checked yet, null = confirmed unavailable, KeyInfo = loaded and cached.
 let cached: KeyInfo | null | undefined = undefined;
@@ -104,12 +139,18 @@ export async function sendTurnPush(
 ): Promise<{ ok: boolean }> {
   const { token, playerName, title, body } = opts;
   if (!apnsKeyAvailable()) {
+    stats.skippedNoKey++; stats.lastAttemptAt = new Date().toISOString();
     log(`would send push to token ${token} for player ${playerName}`);
     return { ok: false };
   }
+  stats.attempts++; stats.lastAttemptAt = new Date().toISOString();
   try {
     const jwt = await buildJwt();
-    if (!jwt) { log(`would send push to token ${token} for player ${playerName}`); return { ok: false }; }
+    if (!jwt) {
+      stats.skippedNoKey++;
+      log(`would send push to token ${token} for player ${playerName}`);
+      return { ok: false };
+    }
     const res = await fetch(`${APNS_HOST}/3/device/${token}`, {
       method: "POST",
       headers: {
@@ -121,11 +162,18 @@ export async function sendTurnPush(
       },
       body: JSON.stringify({ aps: { alert: { title, body }, sound: "default" } }),
     });
-    if (res.ok) { log("push sent", "player=" + playerName, "status=" + res.status); return { ok: true }; }
+    if (res.ok) {
+      stats.delivered++; stats.lastStatus = res.status; stats.lastDeliveredAt = new Date().toISOString();
+      log("push sent", "player=" + playerName, "status=" + res.status);
+      return { ok: true };
+    }
     const text = await res.text().catch(() => "");
+    stats.rejected++; stats.lastStatus = res.status;
+    stats.lastReason = reasonOf(text); stats.lastFailureAt = new Date().toISOString();
     log("push rejected by APNs", "player=" + playerName, "status=" + res.status, text);
     return { ok: false };
   } catch (e) {
+    stats.failed++; stats.lastReason = (e as Error).message; stats.lastFailureAt = new Date().toISOString();
     log("push send failed", "player=" + playerName, (e as Error).message);
     return { ok: false };
   }

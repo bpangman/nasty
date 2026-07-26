@@ -30,7 +30,7 @@ const fs = require("fs");
 const path = require("path");
 const { WebSocketServer } = require("ws");
 const { createEngine } = require("./engine.js");
-const { sendTurnPush } = require("./apns.js");
+const { sendTurnPush, getApnsStats } = require("./apns.js");
 
 const PORT = process.env.NASTY_PORT ? parseInt(process.env.NASTY_PORT, 10) : 8484;
 // v0.8: two different prune windows. A lobby that never started is cheap to lose (nothing
@@ -2948,6 +2948,27 @@ async function handleAdminRoute(req, res, url) {
       players: Array.from(r.players.values()).map(p => ({ id: p.id, name: p.name, isHost: p.isHost, connected: p.connected, push: !!p.pushToken })),
     }));
     sendJson(res, 200, list);
+    return true;
+  }
+  /* -------------------------------------------------------------------------------------
+   * GET /admin/push - push health in one request (2026-07-26 push audit).
+   *
+   * WHY: /admin/rooms already reports `push: !!p.pushToken` per player, which answers "did a
+   * phone ever register a token" - and that flag is exactly what proved the field failure
+   * (every real player false, only a test probe true). What NOTHING reported was the other
+   * half: whether an attempted send was actually ACCEPTED by Apple. That half was log-only,
+   * on a Deno Deploy instance whose logs nobody reads, so a revoked key or a rejected token
+   * would have looked identical to everything working. This endpoint closes that gap.
+   *
+   * Read-only, admin-token-gated, no secrets: the key ID is an identifier (already logged in
+   * plaintext by apns.js), and lastReason is Apple's short reason word only, never a body.
+   * ----------------------------------------------------------------------------------- */
+  if (parts.length === 2 && parts[1] === "push" && req.method === "GET") {
+    let playersWithToken = 0, playersTotal = 0;
+    for (const r of rooms.values()) {
+      for (const p of r.players.values()) { playersTotal++; if (p.pushToken) playersWithToken++; }
+    }
+    sendJson(res, 200, Object.assign({ rooms: rooms.size, playersTotal, playersWithToken }, getApnsStats()));
     return true;
   }
   if (parts.length === 3 && parts[1] === "rooms" && req.method === "DELETE") {

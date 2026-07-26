@@ -46,4 +46,36 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return ApplicationDelegateProxy.shared.application(application, continue: userActivity, restorationHandler: restorationHandler)
     }
 
+    /* ------------------------------------------------------------------------------------
+     * PUSH NOTIFICATIONS - "It's your turn in NASTY" (root cause of Blake's "I never get
+     * push notifications still", found 2026-07-26).
+     *
+     * These two methods are the REQUIRED setup step from @capacitor/push-notifications'
+     * README ("After enabling the Push Notifications capability, add the following to your
+     * app's AppDelegate.swift"). They had never been added - this file was still the stock
+     * template `npx cap add ios` generated on 2026-06-19.
+     *
+     * Why their absence killed the whole feature, silently:
+     *   - index.html's registerPushIfGranted() calls PushNotifications.register().
+     *   - The plugin's register() calls UIApplication.shared.registerForRemoteNotifications().
+     *   - iOS gets a device token from APNs and hands it to THIS app delegate, right here.
+     *   - The plugin never sees that token directly. It only listens on NotificationCenter
+     *     for .capacitorDidRegisterForRemoteNotifications (see PushNotificationsPlugin's
+     *     load()), and Capacitor does NOT swizzle the app delegate to post it for you.
+     *   - With no one posting it, the plugin's 'registration' listener never fired, so
+     *     index.html's PUSH_TOKEN stayed null forever, so sendPushToken() was a permanent
+     *     no-op, so no player record on either server ever had a pushToken, so
+     *     maybeSendTurnPush() always took its "no token registered" early return.
+     *
+     * Nothing downstream was broken: the APNs key, team id, topic and production host all
+     * verify against Apple. The chain simply had no token to send to. Do not remove these.
+     * ---------------------------------------------------------------------------------- */
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        NotificationCenter.default.post(name: .capacitorDidFailToRegisterForRemoteNotifications, object: error)
+    }
+
 }

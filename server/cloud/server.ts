@@ -79,7 +79,7 @@
 // its API is documented in the generated file's own header).
 // deno-lint-ignore-file no-explicit-any
 import { createEngine } from "./engine.js";
-import { sendTurnPush } from "./apns.ts";
+import { getApnsStats, sendTurnPush } from "./apns.ts";
 
 const PORT = Number(Deno.env.get("NASTY_PORT") ?? 8484);
 const KV_PATH = Deno.env.get("NASTY_KV_PATH") || undefined; // undefined = Deploy's managed KV / local default
@@ -2710,6 +2710,27 @@ async function handleAdminRoute(req: Request, url: URL): Promise<Response> {
       });
     }
     return json(200, out);
+  }
+  /* -------------------------------------------------------------------------------------
+   * GET /admin/push - twin of server.js's endpoint (2026-07-26 push audit).
+   *
+   * WHY: /admin/rooms already reports `push: !!p.pushToken` per player, which answers "did a
+   * phone ever register a token" - and that flag is exactly what proved the field failure
+   * (every real player false, only a test probe true). What NOTHING reported was the other
+   * half: whether an attempted send was actually ACCEPTED by Apple. That half was log-only,
+   * on a Deno Deploy instance whose logs nobody reads, so a revoked key or a rejected token
+   * would have looked identical to everything working. This endpoint closes that gap.
+   *
+   * Read-only, admin-token-gated, no secrets: the key ID is an identifier (already logged in
+   * plaintext by apns.ts), and lastReason is Apple's short reason word only, never a body.
+   * ----------------------------------------------------------------------------------- */
+  if (parts.length === 2 && parts[1] === "push" && req.method === "GET") {
+    let playersWithToken = 0, playersTotal = 0, roomCount = 0;
+    for await (const e of kv.list<RoomMeta>({ prefix: ["room"] })) {
+      roomCount++;
+      for (const p of e.value.players) { playersTotal++; if (p.pushToken) playersWithToken++; }
+    }
+    return json(200, { rooms: roomCount, playersTotal, playersWithToken, ...getApnsStats() });
   }
   if (parts.length === 3 && parts[1] === "rooms" && req.method === "DELETE") {
     const code = parts[2].toUpperCase();
