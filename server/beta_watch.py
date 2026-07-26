@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '84e49604-238d-41bd-b81a-fbeaaa2d6990'
+BUILD_SUBMISSION_ID = '33bf13b5-f1bd-48ef-a6ac-cfad02edc5a4'
 
 
 def current_build():
@@ -101,12 +101,12 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>Three things from your own feedback, all about how the game screen looks and behaves:</p>
+<p>Four things from your own feedback, all about how the screens look and read:</p>
 <ul>
-<li>The Rules and Mute buttons are gone from the top row. In their place is a round button with the first letter of your name on it, in your own colour. Tap it for the rules, sound on or off, changing your name, and fixing your connection. Sign in, sign out and delete account are shown there too, greyed out until accounts are ready.</li>
-<li>That leaves four buttons up top instead of six, so Quit, Pause, Save and Speed are all noticeably wider and easier to hit, especially on a smaller phone.</li>
-<li>Tapping Pause now shows one clean PAUSED screen with all the choices on it, instead of a second screen sitting on top of the first one.</li>
-<li>The board sits in the middle of the screen again: the same amount of space above it as below it, on every size of phone.</li>
+<li>The top of the screen is one tidy row now: the NASTY sign right at the very top in the middle, one Pause button on the left, and your circle on the right. The button and the circle are exactly the same distance from the top and from their own side, so nothing looks closer to the edge than anything else.</li>
+<li>Quit and Save are not buttons up top any more. Everything they did is on the Paused screen, which already had Return to game, Save and leave, Leave without saving, and hand my seat to a CPU. The game speed moved into your circle's menu, right next to Sound.</li>
+<li>Your saved games now say what the game was: whether it was Teams or FFA, and how many of your five tees were already home. Still two short lines, no more.</li>
+<li>On the setup screen the option buttons have a bit more space away from their labels, and both rows still start at exactly the same place. Computer players are called CPU again everywhere, and "Everyone for themselves" is now FFA.</li>
 <li>Nothing about how the game plays has changed.</li>
 </ul>
 <h3>The link to text the family:</h3>
