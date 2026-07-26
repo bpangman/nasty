@@ -1951,7 +1951,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.36</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.37</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -3017,6 +3017,49 @@ function closeOverlay(x){
     if(allowed&&backEl&&isManagedOverlay(backEl)){ openOverlay(backEl); restored=true; }
   }
   if(!restored)syncAmbientPause();
+  ensureScreenReachable();   // 2026-07-26 (v0.37 item 1) - see below
+}
+/* ===================== ensureScreenReachable (2026-07-26, v0.37 item 1) =====================
+   THE SAFETY NET Blake did not have. When the online-rules popup failed to hand the lobby back
+   (see maybeShowOnlineRules(), § LOBBY READY, for the root cause) he was left with no lobby, no
+   menu button, and nothing on screen that could take him anywhere - the only exit the app
+   offered was conceding a game he had never played. A single bad hand-off should never be able
+   to do that, no matter what causes it, so this runs after EVERY overlay close and once per
+   frame from the same rAF-coalesced observer the rest of this section rides.
+   It answers one question - "can the player still get somewhere from here?" - and fixes it two
+   ways, cheapest first:
+     1. Nothing at all is visible (no overlay, no board, no menu). Show the menu. There is no
+        legitimate state in this app that looks like that.
+     2. This device is in an online room whose game has NOT started (NET.started, § NET) and no
+        full-screen page is up. The lobby is the only place that state has anything to say, so
+        put it back: the host's room screen if we are hosting, the join/seat screen otherwise.
+   Both branches are strictly "add something back", never "take something away", and both are
+   no-ops the instant they have worked - so this cannot fight the observer that calls it (the
+   converge-by-construction rule this whole section is built on). The board and the menu are
+   plain divs, not .overlay elements, so nothing here can disturb the never-two-full-screen-pages
+   invariant above. */
+function ensureScreenReachable(){
+  try{
+    const menu=$('menu'), game=$('game');
+    if(!menu||!game)return;
+    const anyOverlay=visibleModalOverlays().length>0;
+    const menuUp=!menu.classList.contains('hidden');
+    const gameUp=!game.classList.contains('hidden');
+    if(!anyOverlay&&!menuUp&&!gameUp){
+      menu.classList.remove('hidden');
+      try{ updateMenuResumeButtons(); }catch(e){}
+      return;
+    }
+    // A lobby with nothing on screen: the exact shape of Blake's dead end.
+    if(!anyOverlay&&typeof NET!=='undefined'&&NET&&NET.online&&!NET.started){
+      const want=NET.isHost?'roomOverlay':'joinOverlay';
+      const el=$(want);
+      if(el&&el.classList.contains('hidden')){
+        if(!gameUp&&!menuUp)menu.classList.remove('hidden');
+        openOverlay(el);
+      }
+    }
+  }catch(e){/* pre-boot (NET not initialized yet) - nothing to rescue */}
 }
 function enforceSingleOverlay(){
   const vis=visibleModalOverlays();
@@ -3116,7 +3159,10 @@ try{
       // written years from now that forgets openOverlay() - is corrected within one frame.
       // Order matters: settle which single page is visible FIRST, then let the ambient paused
       // page take the field if it is now free, then measure scroll hints on what is actually up.
-      try{ enforceSingleOverlay(); syncAmbientPause(); }catch(e){/* pre-boot, see syncAmbientPause */}
+      // 2026-07-26 (v0.37 item 1): the "there is always a way out" backstop rides here too, LAST
+      // of the three settle steps - it has to see the final answer to "which single page is up"
+      // before it can tell whether the player is stranded. See ensureScreenReachable().
+      try{ enforceSingleOverlay(); syncAmbientPause(); ensureScreenReachable(); }catch(e){/* pre-boot, see syncAmbientPause */}
       updateScrollHints();
     });
   };
@@ -5811,6 +5857,14 @@ function deadCardReason(card){
   return 'That card has no move you can make this turn - pick another one.';
 }
 /* Big tap bubbles above every pickable tee - easy to see and hit with a thumb.
+   2026-07-26 (v0.37 item 3) READ THIS FIRST - it supersedes parts of the history below. The
+   rule for a TRACK badge is now: sit directly above your own peg; you may move only a small,
+   hard-capped amount, and only to avoid another PICKABLE peg or another badge. Covering holes,
+   plaques or pegs that are not part of this decision is fine and is no longer a reason to move
+   at all. The cap is MAX_BADGE_SHIFT = 3 x holeR = 39 board px (4P) / 31.5 (6P). Full reasoning,
+   including exactly which older behaviour was reversed, is in the block comment inside
+   buildBubblePlan() where those constants are defined. The STABLE (base) formation pass is
+   NOT affected - Blake asked for that tidy symmetrical arrangement and it stays.
    v0.19: a bubble's little arrow just barely touches its own tee by default, always - no more
    blanket every-other-bubble stagger (v0.6.2's wide spacing left lone bubbles floating high over
    open track). A bubble only lifts when it would REALLY cover another tee on the board or an
@@ -5906,6 +5960,9 @@ function showBubbles(list,cls){
     R=Math.max(42,R*0.88);
     plan=buildBubblePlan(list,R);
   }
+  // 2026-07-26 (v0.37 item 3): the settled plan, for the regression suite (and for anyone
+  // debugging a badge-placement report from a real phone). Read-only, nothing renders from it.
+  try{ window.LAST_BUBBLE_PLAN=plan; }catch(e){}
   plan.specs.forEach(sp=>{
     const b=document.createElement('div');
     b.className='teeBubble'+(sp.side?' side'+sp.side:'')+(cls?' '+cls:'');
@@ -5917,6 +5974,10 @@ function showBubbles(list,cls){
     b.style.setProperty('--bubScale',plan.bubScale);
     b.style.left=sp.anchorX+'px';
     b.style.top=sp.anchorY+'px';
+    // 2026-07-26 (v0.37 item 3): which peg this badge belongs to, and how far it was nudged off
+    // that peg (board px). Display-inert - purely so the badge-placement regression suite can
+    // measure the hard cap on real rendered output. See buildBubblePlan()'s MAX_BADGE_SHIFT.
+    b.dataset.s=sp.it.s; b.dataset.pi=sp.it.pi; b.dataset.shift=(sp.shift||0).toFixed(2);
     b.innerHTML=teeSVG(G.seats[sp.it.s].color,true);
     b.addEventListener('click',e=>{e.stopPropagation();onTeeClick(sp.it.s,sp.it.pi);});
     layer.appendChild(b);
@@ -5940,8 +6001,47 @@ function buildBubblePlan(list,R){
   const yFloor=Math.max(24,2*R-60);          // highest anchor the upward sweep may climb to
   const tw=six?14:17, tUp=six?31:37, tDn=7;  // tee art box around its pos: half width / above / below
   const pad=six?40:20;                       // CANVAS_PAD (§ RENDER fitBoard) - board-space margin
-  const pegs=[];                             // every tee on the board is a "do not cover" zone
-  for(let s=0;s<G.n;s++)for(let pi=0;pi<5;pi++)pegs.push({s,pi,p:teePos(s,pi)});
+  /* ============ 2026-07-26 (v0.37 item 3): HOW FAR A BADGE MAY EVER MOVE ============
+     Blake, after playing v0.36: "Regardless of 4 player or 6 player, stop moving the selection
+     badges above the pegs if they overlap with something on the board. When the board is
+     clustered, this has caused selection buttons to be waaaay away from the actual peg and be
+     confusing. Only slightly move to the side (or point from the side of a peg) if it's right
+     next to another active peg or their badges would bump into each other. But this should only
+     be a slight adjustment not half the board away from the peg."
+     This SUPERSEDES v0.23's crowded-track relocation policy. Two things changed, and both are
+     deliberate reversals - do not put either back:
+       1. WHAT COUNTS AS A REASON TO MOVE. `pegs` below used to be EVERY tee on the board, so a
+          badge dodged opponents' pegs, this seat's own non-pickable pegs, and (via the sweep's
+          long climb) effectively any busy region of the board. Blake's ruling is that covering
+          ordinary board art - holes, plaques, pegs that are not part of this decision - is fine
+          and must NOT trigger a move. Only the pegs the player is actually CHOOSING BETWEEN
+          right now (the ones in `list`, which are exactly the pegs wearing a badge) still need
+          to stay visible, so those are the only ones in `pegs` now. Badge-on-badge collision is
+          still a full reason to move, unchanged.
+       2. HOW FAR IT MAY MOVE. There is now a hard cap, and it is expressed in HOLE RADII so it
+          scales with the board exactly like everything else here:
+            MAX_BADGE_SHIFT = 3 x holeR  =  39 board px on a 4P board, 31.5 on a 6P board.
+          holeR is buildLayout()'s own cfg.holeR (13 / 10.5, § LAYOUT). Neighbouring holes sit
+          71.7 (4P) / 59.4 (6P) board px apart, so the cap is well under half a hole step - a
+          nudge, never a relocation. On a phone (board scale ~0.3) that is about 12 rendered px.
+     WHAT "SHIFT" MEANS, precisely, because it has to mean the same thing for both badge shapes:
+     it is the GAP between the badge's little arrow tip and the peg it points at. Zero = the
+     arrow is touching the peg, which is where every badge starts.
+       - default (above the peg): shift = how far the badge climbed, T0 - anchorY.
+       - .sideL/.sideR (v0.23's side variant, kept - it already points at the peg correctly):
+         shift = `ext`, how far past touching it was pushed outward.
+     The on-canvas clamp in place() is NOT a shift - a badge near the board edge is held on
+     screen by geometry, not by avoidance - so it is measured separately and is not capped here.
+     If a board is so crowded that nothing inside the cap avoids an overlap, showBubbles()'s
+     existing size negotiation shrinks every badge and tries again (down to the historical 84
+     board-px floor). Shrinking is now the answer to crowding; wandering is not. */
+  const holeR=six?10.5:13;                   // buildLayout()'s cfg.holeR, § LAYOUT
+  const MAX_BADGE_SHIFT=3*holeR;             // 39 board px (4P) / 31.5 (6P) - see above
+  /* Only the pegs that are PICKABLE RIGHT NOW ("active pegs", Blake's words) are a do-not-cover
+     zone. 2026-07-26: was every tee on the board - see the block comment above for why that is
+     now wrong. */
+  const pegs=[];
+  list.forEach(it=>pegs.push({s:it.s,pi:it.pi,p:teePos(it.s,it.pi)}));
   const placed=[];                           // circle CENTERS ({x,y}) of every bubble placed so far
   const specs=[];                            // what showBubbles() will actually render, once a size is settled
   const pegPenalty=(cx,cy,selfS,selfPi)=>{
@@ -5954,7 +6054,7 @@ function buildBubblePlan(list,R){
     });
     return pen;
   };
-  const place=(it,anchorX,anchorY,side)=>{
+  const place=(it,anchorX,anchorY,side,shift)=>{
     // side (v0.23): 'L'/'R' = a crowded-track side bubble - the anchor is the arrow-side
     // edge midpoint (see the .sideL/.sideR CSS), already validated/clamped by the crowd
     // pass below, so only the default above-the-tee shape gets the historical clamps here.
@@ -5963,7 +6063,10 @@ function buildBubblePlan(list,R){
       anchorY=Math.max(yTop,anchorY);
     }
     placed.push(side?{x:side==='L'?anchorX-R:anchorX+R,y:anchorY}:{x:anchorX,y:anchorY-R});
-    specs.push({it,anchorX,anchorY,side});
+    // 2026-07-26 (v0.37 item 3): `shift` = the arrow-tip-to-peg gap this badge was moved by, in
+    // board px. Carried onto the rendered element as data-shift so the permanent regression
+    // suite can measure the cap directly instead of re-deriving it from screen coordinates.
+    specs.push({it,anchorX,anchorY,side,shift:shift||0});
   };
 
   // --- formation pass: EVERY seat's pickable BASE piece(s) get the quincunx layout, 1 or more
@@ -6092,15 +6195,24 @@ function buildBubblePlan(list,R){
       return pen;
     };
     const T0=Math.max(yTop,pos.y-tipGap);   // bubble anchor (arrow tip = T0+12*bubScale, touching the tee)
+    /* 2026-07-26 (v0.37 item 3) - THE CAPPED SWEEP. This loop used to climb 6px at a time all
+       the way to `yFloor` (24, or 2R-60), which on a phone-sized R is several hundred board px -
+       that is literally Blake's "waaaay away from the actual peg... half the board away". It now
+       stops at MAX_BADGE_SHIFT past the touching position (see the block comment above), so the
+       worst a badge can do is sit one small nudge higher than its own peg. `yFloor` is left
+       defined and still used by the STABLE formation pass above, which is a different layout
+       Blake explicitly asked to keep (its column has to stack clear of its own group-mates), so
+       it must not inherit this cap. */
+    const sweepStop=T0-MAX_BADGE_SHIFT;
     let T=T0,best=T0,bestPen=Infinity;
     for(;;){
       const pen=overlapAt(T-R);
       if(pen===0){ best=T; break; }
       if(pen<bestPen){ bestPen=pen; best=T; }
-      if(T<=yFloor)break;                  // as high as the old stagger ever reached (see yFloor)
-      T-=6;
+      if(T<=sweepStop)break;               // hard cap - never more than a nudge from the peg
+      T=Math.max(sweepStop,T-6);
     }
-    place(it,pos.x,best);
+    place(it,pos.x,best,null,T0-best);
   });
 
   // --- v0.23: place the crowded track bubbles sideways, left-to-right, each seeing every
@@ -6110,12 +6222,18 @@ function buildBubblePlan(list,R){
     // preferred side: away from the group's center; a pure vertical stack (no x spread)
     // prefers whichever side has more open canvas.
     let pref=o.cx>cenX?1:o.cx<cenX?-1:((1000+pad-o.pos.x)>=(o.pos.x+pad)?1:-1);
-    const candAt=(sd,ext)=>{
+    /* 2026-07-26 (v0.37 item 3): `dy` is new. The side badge used to be able to move in exactly
+       ONE direction - straight outwards - so once that ran out of room (and with the cap below
+       it runs out sooner) there was nowhere left to go. Since the cap is a distance, not a
+       direction, the badge may spend the same small budget going a little up or down instead,
+       which is what actually separates two badges whose pegs sit side by side. The arrow keeps
+       pointing horizontally at the peg either way; a few px of vertical is still "beside it". */
+    const candAt=(sd,ext,dy)=>{
       // arrow tip = ax -/+ (12 * bubScale) = the tee's side edge when ext=0 (2026-07-25 item D:
       // the side arrow scales with the bubble too, so this offset has to follow it)
       const ax=o.pos.x+sd*(tw+12*bubScale+ext);
-      const ay=Math.max(R+8,o.pos.y-vOff);
-      return {sd,ax,ay,cx:ax+sd*R,cy:ay};
+      const ay=Math.max(R+8,o.pos.y-vOff+(dy||0));
+      return {sd,ax,ay,cx:ax+sd*R,cy:ay,shift:Math.hypot(ext,dy||0)};
     };
     const onCanvas=c=>c.cx-R>=-pad+4&&c.cx+R<=1000+pad-4;
     const penAt=c=>{
@@ -6124,19 +6242,32 @@ function buildBubblePlan(list,R){
       pen+=pegPenalty(c.cx,c.cy,o.it.s,o.it.pi);
       return pen;
     };
-    let best=null,bp=Infinity;
-    outer:
+    /* 2026-07-26 (v0.37 item 3): the outward push used to run to 48*bubScale - about 98 board px
+       on a phone, which is a badge floating a hole and a half clear of the peg it is pointing at.
+       Every candidate is now inside MAX_BADGE_SHIFT of the peg (see the block comment at the top
+       of this function) and they are tried SMALLEST MOVE FIRST, so a badge that does not need to
+       move does not move, and one that does moves as little as the board allows. Both sides are
+       still tried before giving up - only the distance is limited, never the choice of side. */
+    const STEPS=4;                                   // 0, 1/4, 1/2, 3/4, full of the budget
+    const cands=[];
     for(const sd of [pref,-pref]){
-      for(let ext=0;ext<=48*bubScale;ext+=8*bubScale){   // push outward in small steps; arrow stays aimed at the tee
-        const c=candAt(sd,ext);
-        if(!onCanvas(c))continue;
-        const p=penAt(c);
-        if(p===0){best=c;bp=0;break outer;}
-        if(p<bp){bp=p;best=c;}
+      for(let i=0;i<=STEPS;i++)for(let j=-STEPS;j<=STEPS;j++){
+        const ext=MAX_BADGE_SHIFT*i/STEPS, dy=MAX_BADGE_SHIFT*j/STEPS;
+        if(Math.hypot(ext,dy)>MAX_BADGE_SHIFT+1e-6)continue;
+        cands.push(candAt(sd,ext,dy));
       }
     }
-    if(!best)best=candAt(pref,0);           // both sides off-canvas can't happen on this board; belt and braces
-    place(o.it,best.ax,best.ay,best.sd===-1?'L':'R');
+    // Smallest move wins ties; the preferred side wins a tie on distance (it is pushed first).
+    cands.sort((a,b)=>a.shift-b.shift);
+    let best=null,bp=Infinity;
+    for(const c of cands){
+      if(!onCanvas(c))continue;
+      const p=penAt(c);
+      if(p===0){best=c;bp=0;break;}
+      if(p<bp){bp=p;best=c;}
+    }
+    if(!best)best=candAt(pref,0,0);         // both sides off-canvas can't happen on this board; belt and braces
+    place(o.it,best.ax,best.ay,best.sd===-1?'L':'R',best.shift);
   });
 
   // 2026-07-25 item D: does this plan actually keep every tap circle distinct? `placed` already
@@ -6416,6 +6547,22 @@ const NET={
                            // seat selection - host: when the room opens; guest: on reaching
                            // the seat step) has been shown for THIS room session. Reset by
                            // leaveOnlineToMenu(). See maybeShowOnlineRules().
+  /* 2026-07-26 (v0.37 item 1, Blake's lost-lobby report - THE fix for it). "Has the ONLINE
+     game for the room I am currently in actually started?" Set to true by the only two
+     functions that can ever put an online board on screen (bootGameFromNetwork - the live
+     Start - and bootGameFromSnapshot - a reconnect/rejoin/reclaim into a running game), and
+     back to false the moment this device enters a NEW room ('created'/'joined') or leaves
+     online entirely (leaveOnlineToMenu).
+     WHY IT HAD TO EXIST, and why the obvious substitutes are all wrong:
+       - `$('game').classList.contains('hidden')` - what v0.33 used - answers "is SOME board on
+         screen", which is a different question entirely. Blake had a LOCAL game running when
+         he accepted an invite, so that test said "a board is up" while the online game had not
+         started at all. That is the whole bug: see maybeShowOnlineRules() below.
+       - `NET.online` only says "I am connected to a room", which is true in the lobby too.
+       - `G` / `G.over` describe whatever game object this device happens to hold, which during
+         an invite-accept is still the LOCAL game's.
+     One boolean, owned by the online room's own lifecycle, is the only honest answer. */
+  started:false,
   recalActive:false,       // v0.20: true from the moment ANY recalibration attempt starts
                            // (a foreground event, a websocket reopen, or a manual "Reset
                            // connection" tap) until a fresh authoritative snapshot actually
@@ -7008,6 +7155,11 @@ function resetNetUiFlow(){
 // empty array as "no local deck, don't call freshDeck()").
 function bootGameFromNetwork(action){
   NETGEN++;   // invalidate any loop/animation chain left over from before this (re)boot
+  // 2026-07-26 (v0.37 item 1): set FIRST, before resetNetUiFlow() below takes the lobby screens
+  // down, so there is never a frame where this device is online, has no lobby on screen, and
+  // still claims the game has not started - that window is exactly what the lobby safety net
+  // (ensureScreenReachable, § OVERLAY LAYER) would otherwise try to "rescue".
+  NET.started=true;
   CUR_MOVES=[]; CUR_SEAT=-1; SEL=null;
   const cols=action.n===4?COLORS4:COLORS6;
   const seats=action.seats.map((s,i)=>({name:s.name,type:s.type,diff:s.diff,color:cols[i]}));
@@ -7067,6 +7219,8 @@ function bootGameFromNetwork(action){
 // response was in flight), INSTANT covers that narrow gap so it doesn't visibly replay.
 function bootGameFromSnapshot(snapshotG,paused,tableSpeed,appliedSeq){
   NETGEN++;
+  NET.started=true;   // 2026-07-26 (v0.37 item 1): see bootGameFromNetwork()'s matching line - a
+                      // reconnect/rejoin/reclaim lands on a game that is genuinely under way.
   CUR_MOVES=[]; CUR_SEAT=-1; SEL=null;
   const cols=snapshotG.n===4?COLORS4:COLORS6;
   snapshotG.seats.forEach((s,i)=>{ s.color=cols[i]; });   // engine data has no color field - see § STATE
@@ -7538,6 +7692,7 @@ function leaveOnlineToMenu(msg,keepRoom){
   if(NET.ws){ try{NET.ws.close();}catch(e){} }
   Object.assign(NET,{ws:null,online:false,isHost:false,code:null,playerId:null,token:null,mySeat:-1,
     lobby:null,seatOwners:null,actionQueue:[],pendingActionResolvers:[],pendingStateCheck:null,appliedSeq:-1,rulesShown:false,
+    started:false,   // 2026-07-26 (v0.37 item 1): the online game lifecycle ends here - see NET.started, § NET
     recalActive:false,recalKind:null,recalStartedAt:null,recalFailed:false});
   if(!keepRoom)clearLastRoom();   // v0.8: leaving is a deliberate choice - don't auto-rejoin this one later
   CONVERTED_SEATS=new Set();      // v0.25 items 6+7: display state, never outlives the session
@@ -7673,20 +7828,67 @@ function renderAwayLine(){
     aa.appendChild(cpu);
   }
 }
+/* 2026-07-26 (v0.37 item 1, second half of Blake's lost-lobby report) - PARK THE LOCAL GAME.
+   Blake accepted an invite while a local pass-and-play game was still on screen. Even with the
+   hand-back fixed (see maybeShowOnlineRules()), that leaves the app in a genuinely confusing
+   state: an online lobby floating over a live local board, with the local game's own turn loop,
+   autosave and animations all still running underneath. Two games, one screen.
+   What happens to the local game: it is PARKED, never destroyed. Its current position is
+   flushed to its own save spot first (doSaveOffline - the same write its autosave does every
+   250ms anyway), then the board is put away and the menu comes back, so the lobby sits over the
+   menu like every other online screen does. The parked game reappears on the menu as its normal
+   "Resume saved game" tile the moment the player is back there, exactly as if they had tapped
+   Pause -> Save and leave themselves. Nothing is lost and nothing is silently thrown away.
+   Called at the POINT OF NO RETURN - the moment the server confirms this device is in a room
+   ('created'/'joined' below) - deliberately NOT when the join screen merely opens: backing out
+   of the code/name steps must still drop the player straight back onto the game they were
+   playing. */
+function parkLocalGameForOnline(){
+  if(!G||NET.started)return;          // nothing local running, or this IS the online game
+  if($('game').classList.contains('hidden'))return;   // already on the menu - nothing to park
+  if(location.hash.indexOf('autotest')>=0)return;     // the headless soak fixture drives #game directly
+  try{ if(!G.over)doSaveOffline(); }catch(e){}
+  NETGEN++;   // v0.26's stale-chain defense: stop the local turn loop from writing to the screen
+              // (or to G, which is about to be dropped) once it resumes from its next await
+  G=null;
+  SAVE_SLOT=null;
+  $('game').classList.add('hidden');
+  $('menu').classList.remove('hidden');
+  clearToasts();
+  try{ updateMenuResumeButtons(); }catch(e){}
+}
 function handleNetMessage(m){
   switch(m.type){
     case 'created':
-      NET.online=true; NET.isHost=true; NET.wantConnection=true;
+      NET.online=true; NET.isHost=true; NET.wantConnection=true; NET.started=false;
       NET.code=m.code; NET.playerId=m.playerId; NET.token=m.token; NET.lobby=m.lobby;
-      saveNetSession(); saveLastRoom(m.code,false); updateConnIndicator(); renderRoomScreen();
+      // 2026-07-26 (v0.37 item 2): saveLastRoom() is NOT called here anymore - see the 'joined'
+      // case just below for the whole reason. A room you opened but never started must leave
+      // nothing behind either.
+      saveNetSession(); parkLocalGameForOnline(); updateConnIndicator(); renderRoomScreen();
       $('onlineOverlay').classList.add('hidden'); openOverlay('roomOverlay');
       maybeShowOnlineRules();   // v0.25 item 1: rules BEFORE seat/invite work - see § LOBBY READY
       sendPushToken();          // v0.25 item 3: register the push token as soon as an online identity exists
       return;
     case 'joined':
-      NET.online=true; NET.isHost=false; NET.wantConnection=true;
+      NET.online=true; NET.isHost=false; NET.wantConnection=true; NET.started=false;
       NET.code=m.code; NET.playerId=m.playerId; NET.token=m.token; NET.lobby=m.lobby;
-      saveNetSession(); saveLastRoom(m.code,false); updateConnIndicator(); advanceJoinToSeatStep();
+      /* 2026-07-26 (v0.37 item 2) - A LOBBY YOU NEVER PLAYED LEAVES NOTHING BEHIND.
+         Blake: "There should also be an option if you accept an invite but then the game never
+         starts, it shouldn't save the game - because then it still wouldn't let me join since it
+         had already glitched out and I had to 'concede' the game."
+         This line used to be `saveLastRoom(m.code,false)` - it wrote the "last online room"
+         record the instant the server said hello, BEFORE any game existed. That record is what
+         paints the menu's "Resume - online game" tile (updateMenuResumeButtons), and the only
+         way to get rid of that tile is its trash can, which asks you to CONCEDE. So a lobby that
+         never started could hand you a permanent tile for a game that never happened, and charge
+         you a loss to clear it. That is exactly what happened to Blake.
+         The record is now written ONLY from the two places where a real game genuinely exists:
+         bootGameFromNetwork() and bootGameFromSnapshot(), both `saveLastRoom(NET.code,true)`.
+         Reconnect is unaffected - it is driven by that same started-game record plus the
+         per-room rejoin session (saveNetSession, still written right here, still keyed by code),
+         which is what a ?join=CODE link and the saved-game tile both actually use. */
+      saveNetSession(); parkLocalGameForOnline(); updateConnIndicator(); advanceJoinToSeatStep();
       sendPushToken();          // v0.25 item 3: register the push token as soon as an online identity exists
       return;
     case 'joinError':
@@ -7737,7 +7939,12 @@ function handleNetMessage(m){
     case 'lobby':
       NET.lobby=m.lobby;
       if(m.isHost!=null){
-        NET.online=true; NET.wantConnection=true; NET.isHost=m.isHost;
+        // This branch is a REJOIN that landed in a room whose game has not started (the server
+        // answers a rejoin with 'lobby' instead of 'sync' in exactly that case). 2026-07-26
+        // (v0.37 item 1): same two housekeeping steps as 'created'/'joined' - no game is running
+        // in this room, and a local game must not be left live under the lobby.
+        NET.online=true; NET.wantConnection=true; NET.isHost=m.isHost; NET.started=false;
+        parkLocalGameForOnline();
         updateConnIndicator();
         if(NET.isHost){ $('onlineOverlay').classList.add('hidden'); $('joinOverlay').classList.add('hidden'); renderRoomScreen(); openOverlay('roomOverlay'); }
         else advanceJoinToSeatStep();
@@ -8228,8 +8435,24 @@ function maybeShowOnlineRules(){
      while this is up and handed back when it is dismissed, which is what the player already
      experienced visually, minus the second page showing through. backIf refuses the hand-back
      once the board is up - if the game started while this popup was open, the right place to
-     land is the table, not a stale lobby screen. */
-  openOverlay('onlineRulesOverlay',{backToCurrent:true,backIf:()=>$('game').classList.contains('hidden')});
+     land is the table, not a stale lobby screen.
+
+     2026-07-26 (v0.37 item 1) - THE LOST LOBBY. Blake: "I had been playing a separate local
+     game (was on a different app though, but it was still open) and when I accepted my friends
+     invite it brought me to the nasty app again but never loaded the lobby. It even had the box
+     pop up that said the online rules were different but never showed me the available
+     players."
+     Reproduced exactly, and the line above is the cause. The INTENT of backIf was "if the
+     ONLINE game started while this popup was open, land on the table rather than a stale
+     lobby". What it actually asked was "is ANY board on screen" - and Blake had a local
+     pass-and-play game sitting right there, so #game was visible, backIf returned false, the
+     join screen was never handed back, and he was left staring at his old local board with an
+     invisible online room attached to it and no way out but conceding.
+     The question is now asked of the ONLINE room's own lifecycle instead (NET.started, see its
+     comment in § NET) - which is what "the game started" always meant. A local game on screen
+     is now completely irrelevant to it, as it always should have been.
+     DO NOT put a `$('game')` test back here. It cannot tell the two games apart. */
+  openOverlay('onlineRulesOverlay',{backToCurrent:true,backIf:()=>!NET.started});
 }
 $('btnJoinReady').onclick=()=>{
   netSend({type:'readyUp',willSeat:true});
@@ -9444,10 +9667,21 @@ $('btnJoinGame').onclick=()=>{ $('onlineOverlay').classList.add('hidden');
   confirmOverwriteThenRun(()=>{ const qs=new URLSearchParams(location.search); openJoinOverlay(qs.get('join')); }); };
 $('btnJoinCodeNext').onclick=advanceJoinToNameStep;
 $('btnJoinNameNext').onclick=joinSubmitName;
+/* 2026-07-26 (v0.37 item 1, the safety net): Cancel on the join screen used to do nothing but
+   hide the card. That was fine on the code/name steps (nothing has happened yet), but on the
+   SEAT step this device is already IN the room - so hiding the card left the player online,
+   seatless, with no lobby on screen and no button anywhere that could bring it back. Combined
+   with the lost-lobby bug above, that was Blake's dead end: conceding was the only exit.
+   Cancel now means the same thing on every step: I am done with this, put me on the menu. Once
+   the room has actually been joined it goes through the normal leave (which closes the socket,
+   clears the online state and lands on the menu); before that it is the old cheap hide, so
+   backing out of the code box still just drops you where you were. */
 $('btnJoinClose').onclick=()=>{
+  if(NET.online&&!NET.started){ leaveOnlineToMenu(); return; }
   NET.wantConnection=false;
   if(NET.ws&&!NET.online){ try{NET.ws.close();}catch(e){} }
   $('joinOverlay').classList.add('hidden');
+  ensureScreenReachable();   // never leave a blank screen behind - § OVERLAY LAYER
 };
 $('btnRoomCancel').onclick=()=>{ leaveOnlineToMenu(); };
 $('btnRoomStart').onclick=()=>{
