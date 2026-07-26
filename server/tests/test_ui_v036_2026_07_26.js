@@ -152,8 +152,14 @@ async function partA(browser) {
 
   const copy = await page.evaluate(() => document.getElementById("welcomeOverlay").textContent);
   ok(/continue as a guest/i.test(copy), "A2 there is a Continue as a guest choice");
-  ok(/guests do not show up on the family leaderboard/i.test(copy),
-    "A3 it says plainly that guests are not on the family leaderboard");
+  // v0.38 (2026-07-26): Blake asked for punchier copy and for the word "family" to disappear from
+  // everything a player reads, so the exact sentence this pinned is gone. The CONTRACT is
+  // unchanged and still asserted - the screen must still tell a guest, in plain words, that they
+  // will not be on the leaderboard - it just no longer pins one phrasing. New copy: "Guests can
+  // play every single thing. They just do not appear on the leaderboard."
+  ok(/guests/i.test(copy) && /do not appear on the leaderboard/i.test(copy),
+    "A3 it still says plainly that guests are not on the leaderboard");
+  ok(!/family/i.test(copy), "A3b the word family appears nowhere on the first-run screen (Blake, 2026-07-26)");
   ok(/ages 13 and up/i.test(copy) && /younger/i.test(copy) && /guest/i.test(copy),
     "A4 the age line is there: accounts are 13+, younger players continue as a guest");
   ok(/admin/i.test(copy) && /change it any time/i.test(copy),

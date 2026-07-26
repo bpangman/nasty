@@ -684,6 +684,150 @@ function createEngine(){
     }
     return v;
   }
+  /* ==============================================================================================
+     § AI TEAMWORK  (v0.38, 2026-07-26)
+     ==============================================================================================
+     Blake's ask, verbatim: "on teams mode (both local and online) the CPU's need to work together
+     as a team better. Make them be strategic to move their partner into a good place if there isn't
+     an immediate opportunity for them to get in better position themselves. Otherwise, when 2 human
+     players work together well, even on Nasty difficulty it isn't all that hard." Asked how hard he
+     wanted it: "I want the nasty teams to be genuinely hard to beat (but obviously still at the
+     mercy of the cards they're dealt)."
+
+     THE HARD LINE FIRST. Everything below uses PUBLIC information only: peg positions, whose turn
+     it is, how many cards each seat holds, and the acting seat's own legal moves. It never reads
+     G.deck and never reads any other seat's G.hands - INCLUDING THE PARTNER'S. RULES.md is explicit
+     that partners' cards stay hidden from each other, so two cooperating CPUs must look like two
+     good players who agreed on a plan out loud, not like one player holding both hands. That is now
+     a TEST, not a promise: server/tests/test_ai_teams_fairness.js re-deals the hidden cards 24
+     different ways behind an identical public position and asserts the decision never changes, and
+     carries a deliberately-peeking positive control so a pass cannot be vacuous. It also statically
+     scans this whole § AI block for G.deck / G.hands access. See also the v0.21 audit
+     (HANDOFF.md) - the AI was caught peeking once; it must never happen again.
+
+     WHAT A TEAM ACTUALLY NEEDS, mechanically, and what this models:
+     1. FINISHING IS WORTH MORE IN TEAMS THAN IN A FREE-FOR-ALL. The moment one partner has all 5
+        home, actingOwner() hands their cards to the partner's pegs (RULES.md "Finishing") - the
+        team's card flow through the surviving partner literally doubles. So getting a peg home
+        earns TEAM_W.finish, plus TEAM_W.rush per peg already home: rush the last ones in and set
+        that assist phase up as early as possible. This is the "pre-endgame play sets up the
+        finished-partner assist" half of the brief.
+     2. PARTNERS ARE WALLS TO EACH OTHER. You can never pass your partner's peg (RULES.md, both
+        directions), so a peg parked 1-12 holes IN FRONT of a partner peg blocks every card that
+        would carry them past it - the closer it sits, the more cards it kills, hence the (13-gap)
+        shape. Parking inside the partner's final six holes before their porch is worse again
+        (TEAM_W.funnel per partner peg still short of that hole) because that is the funnel every
+        one of their pegs has to come through to finish. This is scored as a BEFORE-minus-AFTER
+        DELTA, so it rewards both halves of Blake's ask at once: stepping out of the partner's way
+        when you have nothing better to do, and not creating a new wall when you do.
+     3. JACKS ARE THE ONLY WAY TO DIRECTLY IMPROVE A PARTNER'S POSITION before you are finished.
+        scoreMove() already values a partner swap's own gain; TEAM_W.mateSwap adds weight on the
+        PARTNER's side of the trade specifically, so a Jack that dumps a stranded partner peg
+        somewhere useful competes properly against a selfish swap.
+     4. A TEAM WIN NEEDS BOTH PARTNERS HOME, so the Nasty tier's lookahead has to value the
+        opposing TEAM properly, not just the seat sitting across from it - see TEAM_OPP_W at
+        rolloutValue() below.
+
+     HOW BIG IS THE EFFECT? SMALL. Read this before you believe any number below.
+     Final, properly powered measurement (paired: the SAME decks and the same fixed reference pair
+     run against both engine builds back to back, so the only difference is the AI):
+         4P teams, N=3000 games: a coordinated reference pair won 53.5% before, 51.8% after
+         6P teams, N=800  games: 40.4% before, 37.1% after
+     That is roughly two points at 4P and three at 6P - real, in the right direction in both board
+     sizes and in every single ablation, but modest. Each size alone sits just under the 95%
+     significance bar (McNemar z=1.43 and z=1.41 on the paired outcomes); combined across the two
+     independent board sizes it clears it (Stouffer z=2.0, p=0.04). It is NOT the step change
+     "genuinely hard to beat" asks for. See HANDOFF.md's v0.38 section for what would be.
+
+     AND A WARNING THAT COST THIS SESSION HOURS: 150-250 game samples are NOWHERE NEAR enough to
+     measure a change this size, and they lie confidently. One single UNCHANGED control
+     configuration measured 61.3% at N=150, 58.0% at N=250, 54.5% at N=1500 and 53.5% at N=3000 -
+     a drift of eight points with nothing changed at all. The first version of this teamwork layer
+     was tuned against N=250 runs and appeared to be worth TEN points; at N=3000 it is worth two.
+     If you tune this code, use N>=1500 and the paired comparator, or you are fitting noise.
+
+     THINGS THAT WERE TRIED AND MEASURABLY DID NOT WORK - recorded so a future session does not
+     burn a day rediscovering them. CAVEAT: these were screened at 250 games each, which per the
+     warning above is only enough to rule out a LARGE effect. Treat them as "not worth chasing",
+     not as "proven worthless":
+       - Bigger versions of every weight here. The v0.17 lesson repeated exactly: raising the whole
+         teamwork layer's weight from 1 to 1.8 or 3 cost 4-6 points of win rate, and doubling the
+         wall weights (unblock .30 / funnel 6) cost 7. These bonuses are meant to TIE-BREAK between
+         moves the tactical score already rates close, never to overrule a clearly better play.
+       - "Protect the partner": extra credit for a kick that removes an opponent peg which was
+         within striking distance of a partner peg. Dead neutral (47.6% vs 47.2%) - kick scores
+         already dominate that decision, so it never changed a choice.
+       - "Hit the closest-to-winning TEAM": scaling kick value by the victim's whole team's home
+         count, and a flat bonus for kicking the surviving half of a team whose other player is
+         already finished. Slightly NEGATIVE (62.0% vs 61.3% in the first sweep). In 4P teams both
+         opponents share one team score, so it is a constant across kick choices and only inflates
+         kicks in general, which is not an improvement.
+       - "Shield the partner" (deliberately parking in front of a partner peg): neutral at 4P and
+         clearly worse at 6P.
+       - Averaging 3 or 6 independent rollouts instead of 1 to cut the sampling noise: no gain
+         (49.2% / 46.8% vs 47.2%), and it multiplies the per-decision cost.
+       - A deeper rollout horizon (ROLLOUT_PLY 48 -> 80): worse, 56.4%.
+       - Turning the lookahead's influence UP (LOOKAHEAD_W x2, x4): worse, 52.8% / 56.0%.
+       - Making the `closing` discount team-based rather than per-seat: worse, 51.6%.
+       - Giving the rollout's internal 1-ply policy its own teamwork term: no better at 4P (49.6%),
+         and it multiplies the cost by the number of simulated plies.
+     ============================================================================================== */
+  const TEAM_W={
+    unblock:0.15,   // per unit of partner-wall relieved; unit = (13 - holes in front of that peg)
+    funnel:3,       // per partner peg still short of a hole I would park in their final six
+    mateSwap:0.6,   // weight on the PARTNER's gain in a partner Jack swap
+    finish:8,       // a peg reaching home is worth this much extra in teams...
+    rush:3,         // ...plus this per peg already home (get to the assist phase sooner)
+  };
+  /* Returns a small, tie-breaking bonus for how well `m` serves the TEAM, on top of scoreMove()'s
+     tactical value and strategyBonus()'s strategic layer. Zero for free-for-all games and for any
+     tier whose P.team is 0 (Easy - see AI_TIERS), so those code paths are provably untouched.
+     `m.owner` is actingOwner()'s answer, so when a finished player is playing cards for their
+     partner this evaluates from the PARTNER's chair, and the "partner" it looks at is the finished
+     player - whose pegs are all home, so every board term below correctly collapses to nothing. */
+  function teamworkBonus(m,P){
+    if(!G.teams||!P.team)return 0;
+    const owner=m.owner, mate=partnerOf(owner);
+    if(mate<0||mate===owner)return 0;
+    const L=LAY.L; let v=0;
+    // fromAbs / destAbs: where MY peg sits before and after, as absolute board holes (null = not on
+    // the shared track at that moment - in the stable, or in a private home row, where it can
+    // neither block nor be blocked).
+    let destAbs=null,fromAbs=null;
+    if(m.type==='enter')destAbs=entryIdx(owner);
+    else if(m.type==='move'||m.type==='back'){
+      const p=G.pieces[owner][m.pi];
+      if(p.state==='track')fromAbs=loopIdx(owner,p.steps);
+      if(m.to<L)destAbs=loopIdx(owner,m.to);
+      else v+=TEAM_W.finish+TEAM_W.rush*piecesHome(owner);   // (1) finishing doubles the team's cards
+    }
+    else if(m.type==='swap'){
+      const a=G.pieces[owner][m.pi],b=G.pieces[m.ts][m.tpi];
+      fromAbs=loopIdx(owner,a.steps); destAbs=loopIdx(m.ts,b.steps);
+      if(m.ts===mate){                                        // (3) a Jack aimed at helping my partner
+        const bn=(fromAbs-entryIdx(mate)+L)%L;                // their peg's steps after the trade
+        v+=(bn-b.steps)*TEAM_W.mateSwap;
+      }
+    }
+    // (2) the wall. Deliberate approximation on a partner swap: the partner's peg moves too, and
+    // this measures the wall against its PRE-swap position. Left as measured - modelling both sides
+    // of a partner swap exactly was not worth the extra work at this weight.
+    const mateTrack=G.pieces[mate].filter(p=>p.state==='track');
+    if(mateTrack.length){
+      const wall=abs=>{
+        let w=0;
+        for(const b of mateTrack){
+          const d=(abs-loopIdx(mate,b.steps)+L)%L;
+          if(d>=1&&d<=12)w+=(13-d)*TEAM_W.unblock;            // inside their next-card reach
+        }
+        const rel=(abs-entryIdx(mate)+L)%L;
+        if(rel>=L-6)for(const b of mateTrack)if(b.steps<rel)w+=TEAM_W.funnel;   // in their final funnel
+        return w;
+      };
+      v+=(fromAbs!=null?wall(fromAbs):0)-(destAbs!=null?wall(destAbs):0);
+    }
+    return v;
+  }
   /* Tier ladder, tuned via a headless many-game harness against server/engine.js:
      Easy/Tricky numbers are the original v0.17 measurements, UNCHANGED this session (Blake only
      asked to sharpen Nasty): Tricky 76.4% vs Easy; Easy 76.2% vs a harness-only pure-random
@@ -693,10 +837,19 @@ function createEngine(){
      that separates the rungs (for Easy/Tricky; Nasty separates itself with ply2 + ruthless
      instead, see below). */
   const AI_TIERS={
-    easy:  {strat:0.15,jitter:95, deny:0.5, ply2:false, ruthless:0},    // UNCHANGED from v0.17
-    medium:{strat:0.5, jitter:35, deny:1,   ply2:false, ruthless:0},    // "Tricky" - UNCHANGED from v0.17
-    hard:  {strat:1,   jitter:0,  deny:2.4, ply2:true,  ruthless:150},   // "Nasty" - v0.18 overhaul, see below
+    easy:  {strat:0.15,jitter:95, deny:0.5, ply2:false, ruthless:0,   team:0},    // UNCHANGED from v0.17
+    medium:{strat:0.5, jitter:35, deny:1,   ply2:false, ruthless:0,   team:0.5},  // "Tricky" - v0.17 numbers + modest teamwork
+    hard:  {strat:1,   jitter:0,  deny:2.4, ply2:true,  ruthless:150, team:1},    // "Nasty" - v0.18 overhaul + full teamwork
   };
+  /* v0.38 (2026-07-26) `team`: how strongly the § AI TEAMWORK layer above weighs in. It is a pure
+     no-op outside teams games (teamworkBonus() returns 0 when !G.teams), so nothing about
+     free-for-all play changed in this release - which is also why test_ai_difficulty.js's numbers,
+     all measured on 4P FFA, are untouched.
+       - easy 0: Blake asked for Easy to STAY easy, so Easy gets no teamwork at all. With team:0 the
+         function returns before touching anything, so Easy's decisions are byte-for-byte what
+         v0.37 produced in every mode.
+       - medium 0.5 ("Tricky"): coordinates modestly, per the brief.
+       - hard 1 ("Nasty"): the tier Blake wants genuinely hard to beat. */
   /* v0.18 (2026-07-16, difficulty overhaul): Blake's ask was blunt - "make nasty difficulty damn
      near impossible." The v0.17 Nasty was still only a ONE-PLY scored move choice (the shared
      strategyBonus core, executed with zero noise). This session adds real lookahead to the hard
@@ -745,6 +898,7 @@ function createEngine(){
        is exactly the "ruthless when someone's a couple of moves from winning" behavior Blake asked
        for, without touching Easy/Tricky's math at all (P.ruthless is 0 there). */
   const LOOKAHEAD_W=0.05, LOOKAHEAD_WIN_BONUS=1e6;   // tuned via harness sweep, see HANDOFF.md's v0.18 section
+  const TEAM_OPP_W=1.6;   // v0.38: opposing-side weight inside rolloutValue(), teams games only - see its comment
   function cloneG(seat){                               // throwaway sim state - shares static fields, deep-copies mutable ones
     // deck MUST be a real copy (never the same array reference): rolloutValue() below can call
     // dealDecision() inside the simulation, which does G.deck.pop() - sharing the real deck array
@@ -768,9 +922,24 @@ function createEngine(){
     // Board/pieces state needs no change - it's always public, never hidden info. Total card count
     // is exactly preserved by construction (the pool's size never changes, only its order and how
     // it's sliced back out) - see server/tests/test_deck_conservation.js for the automated check.
+    //
+    // v0.38 (2026-07-26): the pool is SORTED into a canonical order (by card id) before it is
+    // shuffled. This is not a behaviour change - a Fisher-Yates shuffle of the same multiset is
+    // uniformly random either way - it exists to make the AI's blindness OBSERVABLE, which is what
+    // server/tests/test_ai_teams_fairness.js proves and what the v0.38 teamwork work needed. Before
+    // the sort, `pool` arrived in "whatever order the hidden cards happened to be sitting in", so
+    // two different deals of the SAME hidden cards produced two different imagined futures even
+    // from an identical RNG stream, and the AI could reach different (still blind, still honest)
+    // conclusions. With the sort, cloneG()'s output is a pure function of: the acting seat's own
+    // hand, the public discard, the public board, the public hand SIZES, and the MULTISET of
+    // unaccounted-for cards - the last of which any player at the table can work out by counting.
+    // It provably cannot depend on how those hidden cards are split between the other players'
+    // hands and the undealt deck, which is the actual hidden information. Do not remove the sort:
+    // the fairness test fails without it, and the guarantee it makes testable is the whole point.
     const pool=[];
     for(let s=0;s<G.n;s++)if(s!==seat)for(const c of G.hands[s])pool.push(c);
     for(const c of G.deck)pool.push(c);
+    pool.sort((a,b)=>a.id-b.id);
     for(let i=pool.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[pool[i],pool[j]]=[pool[j],pool[i]];}
     let pi=0;
     // fresh arrays every time (pool.slice()/h.slice()) - never a reference into `pool` itself or
@@ -821,7 +990,22 @@ function createEngine(){
     let theirs=0,cnt=0;
     for(let s=0;s<G.n;s++){ if(sameTeam(s,seat))continue; theirs+=evalForSeat(s); cnt++; }
     const mine=evalForSeat(seat)+(G.teams?evalForSeat(partnerOf(seat)):0);
-    return mine-(cnt?theirs/cnt:0);
+    // v0.38 (2026-07-26): `mine` is a SUM over my whole team but `theirs` is an AVERAGE over
+    // opposing SEATS, so in a teams game the opposition was structurally under-counted by half - my
+    // side got two players' worth of credit, theirs got one player's worth. TEAM_OPP_W corrects the
+    // weighting. It is applied ONLY in teams games (1 in free-for-all, where each opposing seat
+    // genuinely is a whole opposing side), so nothing about FFA lookahead changed. 1.6 rather than a
+    // clean 2.0 came out of a weight sweep.
+    //
+    // HONEST MEASUREMENT (paired ablation, N=1500 at 4P / N=800 at 6P - see the "how big is the
+    // effect" note in § AI TEAMWORK above): on its OWN this line is worth about ZERO at 4P teams
+    // (54.8% vs the unchanged 54.5%) and about one point at 6P (39.4% vs 40.4%). An early
+    // under-powered 250-game sweep credited it with five points at 4P; that was noise, and this
+    // comment used to say so. It is KEPT for two reasons, not because it is a big win: the full
+    // combination of it plus teamworkBonus measured better than either half at BOTH board sizes
+    // (4P 52.4%, 6P 37.1%), and the asymmetry it removes is a genuine modelling bug rather than a
+    // tuning preference. If a future session is cutting things, this is the cheapest thing to cut.
+    return mine-(cnt?(theirs/cnt)*(G.teams?TEAM_OPP_W:1):0);
   }
   function chooseAI(seat,moves){
     const P=AI_TIERS[G.seats[seat].diff]||AI_TIERS.medium;
@@ -830,7 +1014,10 @@ function createEngine(){
     // AI just scores within it (kickVal's partner penalty picks the least-bad partner peg to
     // send back). Own-landings are never offered at all.
     const pool=moves;
+    // v0.38 (2026-07-26): + P.team*teamworkBonus(m,P) - the teams cooperation layer (see § AI
+    // TEAMWORK above). Zero for free-for-all games and zero for Easy, so both are unchanged.
     const scored=pool.map(m=>({m,s:scoreMove(seat,m)+P.strat*strategyBonus(m,P)
+      +P.team*teamworkBonus(m,P)
       +(P.jitter?(Math.random()*2-1)*P.jitter:0)}));
     // v0.18 bug found via harness (a 200-game run came back a coin-flip against the frozen v0.17
     // policy): an earlier version of this only ran the depth-2 probe on the top LOOKAHEAD_TOPK
