@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '33bf13b5-f1bd-48ef-a6ac-cfad02edc5a4'
+BUILD_SUBMISSION_ID = '7e894e66-bc5c-44bd-856c-496caf018044'
 
 
 def current_build():
@@ -101,13 +101,14 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>Four things from your own feedback, all about how the screens look and read:</p>
+<p>One new thing, and it is completely optional:</p>
 <ul>
-<li>The top of the screen is one tidy row now: the NASTY sign right at the very top in the middle, one Pause button on the left, and your circle on the right. The button and the circle are exactly the same distance from the top and from their own side, so nothing looks closer to the edge than anything else.</li>
-<li>Quit and Save are not buttons up top any more. Everything they did is on the Paused screen, which already had Return to game, Save and leave, Leave without saving, and hand my seat to a CPU. The game speed moved into your circle's menu, right next to Sound.</li>
-<li>Your saved games now say what the game was: whether it was Teams or FFA, and how many of your five tees were already home. Still two short lines, no more.</li>
-<li>On the setup screen the option buttons have a bit more space away from their labels, and both rows still start at exactly the same place. Computer players are called CPU again everywhere, and "Everyone for themselves" is now FFA.</li>
-<li>Nothing about how the game plays has changed.</li>
+<li><b>You can now sign in with Apple if you want to.</b> Tap the round button with your initial at the top of the game screen and it is right there. Face ID, done, no password ever.</li>
+<li><b>Nobody has to.</b> The whole game works exactly the same signed out: playing on your own, passing one phone around, and online with the family. Nothing is locked behind it.</li>
+<li><b>What it actually does:</b> it makes your spot on the family leaderboard yours. Right now the board goes by whatever name somebody types, so two people who both type the same name share a row, and a new phone starts from nothing. Signed in, your row follows you.</li>
+<li><b>The leaderboard has not changed.</b> Guests still count, exactly as before. Nobody drops off it.</li>
+<li><b>Signing out and deleting your account</b> are on the same little menu, and deleting asks you first.</li>
+<li>Signing in on the website is not ready yet, so the website politely says so instead of offering a button that would not work.</li>
 </ul>
 <h3>The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
