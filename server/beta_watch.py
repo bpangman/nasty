@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = 'e301ff6b-2a12-4393-86e3-f04cace40e8a'
+BUILD_SUBMISSION_ID = 'e090cb53-b3af-4e04-aa1d-ff980773d2cc'
 
 
 def current_build():
@@ -103,10 +103,11 @@ try:
 <p>Apple approved the beta - everyone can install the real app right now.</p>
 <p>What is in this one:</p>
 <ul>
-<li><b>The computer players act like partners now in Teams games.</b> They stop parking a tee right in front of their own partner, which used to wall them in (you can never pass your partner). They use a Jack to trade tees when it helps the pair rather than just themselves. And they push harder to get their own five home, because the first partner home starts playing their cards for the other one.</li>
-<li><b>Straight answer on how much harder they are: a bit, not a lot.</b> Two people who play well together used to win about 5.4 games in 10 against two Nasty computers at four players, and now win about 5.2. At six players it went from about 4.0 in 10 to about 3.7. It is a real improvement and it is the right direction, but it is not the step change Blake asked for. What would actually get there is giving the computer a proper look ahead, which is a separate project and is written down.</li>
-<li><b>Nothing changed for solo or free-for-all games.</b> That was checked rather than assumed: with the teamwork switched off the computer made byte for byte the same decisions as the last build. Easy is also untouched on purpose.</li>
-<li><b>The welcome screen has room to breathe.</b> More space around the NASTY sign, better wording, and it says plainly that guests can play everything and just do not appear on the leaderboard.</li>
+<li><b>The sign in screen comes back after every update.</b> You asked for this one: it used to show up on somebody's very first launch and never again. Now it appears once after each new version of the app, whether that arrives through TestFlight or the App Store, and then stays quiet for the rest of that version no matter how many times the app is opened.</li>
+<li><b>It says out loud that one button does both jobs.</b> Right under the Apple button: "New here? It creates your account. Been here before? It signs you back in." The button itself still says Sign in with Apple, because Apple does not allow that button to be worded any other way.</li>
+<li><b>If you are already signed in, it just says hello.</b> "Welcome back to NASTY!" and a Keep playing button, instead of asking somebody with an account to sign in a second time. Switching to guest, or signing out, is still in ADMIN.</li>
+<li><b>More excitement, in the right places.</b> The sign in page, the win screen, a takeout, the first deal, picking a saved game back up. Everything that costs you something - conceding a game, deleting an account, leaving a game - still asks in the same plain words it always did. That was deliberate.</li>
+<li><b>A small fix on the way past:</b> on smaller phones the writing on that screen was rendering bigger than it was supposed to and pushing the last lines under the fade at the bottom. It fits properly now.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -121,7 +122,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - the CPUs play as a team now', body], check=True)
+                    f'NASTY: build {BUILD} is live - the sign in screen now says hello after every update', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
