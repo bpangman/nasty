@@ -32,6 +32,11 @@
  *     "instant, no dialog" item 9 assertion this file used to make.)
  */
 const { chromium } = require("/Users/jarvis/clawd/node_modules/playwright");
+// v0.36 (2026-07-26): seed the first-run sign-in screen's answer before the page boots, so
+// this suite runs as the returning player it was always written about. Real key, real code
+// path, no stub - see test_ui_v036_welcome_bypass.js.
+require("./test_ui_v036_welcome_bypass.js").patch(chromium);
+
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
@@ -553,7 +558,13 @@ async function main() {
     ];
     const code = await hostRoom(host, seatMeta, 4);
     const rulesText = await host.evaluate(() => document.getElementById("onlineRulesOverlay").textContent);
-    check(/When a player's name turns red, they are offline/.test(rulesText), "F: the online rules explain the red-name convention in plain language");
+    /* ASSERTION UPDATED 2026-07-26 (v0.36 item 4), deliberately. Blake: "when online, the other
+       human's names should only be highlighted in red when they're disconnected. They should
+       otherwise just glow which shows they're there." The rules panel is the only place the app
+       explains plaque colours, so it now has to explain BOTH, and this checks both halves rather
+       than one exact old sentence. */
+    check(/turns red/.test(rulesText) && /dropped off/.test(rulesText), "F: the online rules still explain the red name in plain language");
+    check(/glow/i.test(rulesText) && /connected/i.test(rulesText), "F: the online rules also explain the connected glow (v0.36 item 4)");
     check(!/[—–]/.test(rulesText), "F: the rules text has no em/en dashes");
     await host.evaluate(() => { const b = document.getElementById("btnOnlineRulesOk"); if (b) b.click(); });
 
@@ -580,6 +591,34 @@ async function main() {
     const plaqueColor = await host.evaluate(() => getComputedStyle(document.querySelector("#plaque-1 .nm")).color);
     check(/255, 84, 73|ff5449/i.test(plaqueColor.replace(/\s/g, "")) || plaqueColor === "rgb(255, 84, 73)",
       `F: the disconnected player's name plate renders in the red (#ff5449) color (got "${plaqueColor}")`);
+    /* NEW 2026-07-26 (v0.36 item 4). A REAL disconnect in a REAL online game is the only honest
+       way to test this - v0.25 found the offline-red rule had been permanently dead CSS for
+       several releases, and reading the stylesheet would not have caught it. So: the seat that
+       just dropped must be red and must NOT glow, and every OTHER seat's colour must be exactly
+       what it always was. */
+    const presence = await host.evaluate(() => {
+      const out = [];
+      for (let s = 0; s < window.G.n; s++) {
+        const el = document.getElementById("plaque-" + s);
+        out.push({
+          seat: s, type: window.G.seats[s].type, mine: s === window.NET.mySeat,
+          away: el.classList.contains("away"), here: el.classList.contains("here"),
+          shadow: getComputedStyle(el).boxShadow,
+          nameColor: getComputedStyle(el.querySelector(".nm")).color,
+        });
+      }
+      return out;
+    });
+    const gone = presence[1];
+    check(gone.away && !gone.here, "F: the disconnected seat is marked away and is NOT glowing");
+    check(!/126, 224, 160/.test(gone.shadow), `F: red is red - the disconnected plate carries no green presence ring (${gone.shadow})`);
+    const reds = presence.filter((p) => /255, 84, 73/.test(p.nameColor));
+    check(reds.length === 1 && reds[0].seat === 1,
+      `F: RED IS RESERVED - exactly one plate is red and it is the disconnected one (${JSON.stringify(reds.map((r) => r.seat))})`);
+    check(presence.filter((p) => p.here).length === 0,
+      "F: with the only other human gone, nothing on this board is glowing");
+    check(presence.filter((p) => p.type === "cpu").every((p) => !p.here && !p.away),
+      "F: CPU seats are never marked present or away - they are not people");
 
     check(!(host.__errors || []).length, "F: zero page errors while a seatmate goes offline");
     await ctxH.close(); await ctxG.close();

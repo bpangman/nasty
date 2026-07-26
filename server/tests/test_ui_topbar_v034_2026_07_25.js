@@ -26,6 +26,11 @@
  */
 
 const { chromium } = require("/Users/jarvis/clawd/node_modules/playwright");
+// v0.36 (2026-07-26): seed the first-run sign-in screen's answer before the page boots, so
+// this suite runs as the returning player it was always written about. Real key, real code
+// path, no stub - see test_ui_v036_welcome_bypass.js.
+require("./test_ui_v036_welcome_bypass.js").patch(chromium);
+
 const path = require("path");
 const fs = require("fs");
 
@@ -554,7 +559,15 @@ async function partF(browser) {
     ok(r.btns.every((b) => b.over <= 0.5), `${m.name}: no option button pokes out of the panel`);
     ok(r.docOver <= 0, `${m.name}: the menu page has zero horizontal overflow (${r.docOver})`);
     const ffa = r.btns.find((b) => b.id === "mFFA");
-    ok(ffa.text === "FFA", `${m.name}: the game-type button says FFA, not "Everyone for themselves" (got "${ffa.text}")`);
+    // ASSERTION UPDATED 2026-07-26 (v0.36 item 6), deliberately, not weakened. v0.34 renamed this
+    // button from "Everyone for themselves" to "FFA"; v0.36 is Blake changing his mind about the
+    // abbreviation: "make that FFA button actually say 'Free-for-All' it should only say FFA in
+    // the save state." The thing that must stay true forever is what the ORIGINAL assertion was
+    // really about - the old "Everyone for themselves" phrasing is gone - so that is what is
+    // checked, plus the new required wording. The saved tiles' short "FFA" has its own assertion
+    // in Part E above and in test_ui_v036_2026_07_26.js.
+    ok(ffa.text === "Free-for-All", `${m.name}: the game-type button spells out Free-for-All (got "${ffa.text}")`);
+    ok(!/everyone for themselves/i.test(ffa.text), `${m.name}: the old "Everyone for themselves" phrasing is still gone`);
     ok(errors.length === 0, `${m.name}: zero page errors`);
     if (m.w === 320 || m.w === 390) await page.screenshot({ path: path.join(SHOTDIR, `setup_${m.w}.png`), clip: { x: 0, y: 0, width: m.w, height: Math.min(m.h, 620) } });
     await ctx.close();

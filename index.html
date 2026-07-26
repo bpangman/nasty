@@ -35,6 +35,9 @@
     § UI .......... hand, card/piece selection, modals, menu
     § NET ......... online multiplayer: WS client, host/join lobby UI, deterministic
                     lockstep (server in /server, see HANDOFF.md "Online multiplayer")
+    § ACCOUNT ..... the ADMIN button's panel: rules, sound, table speed, name, connection
+    § ACCOUNT SIGN-IN ... Sign in with Apple (iPhone app only) + the one-time name claim
+    § WELCOME ..... the first-run sign-in screen, shown once ever (v0.36)
     Autotest: open with #autotest (4p FFA all-CPU) or #autotest6 (6p teams) - fast-forwards a full game.
 
   v0.8 additions (pause, save/resume, lifecycle survival - see HANDOFF.md "v0.8"):
@@ -500,7 +503,22 @@ button{font:inherit;cursor:pointer}
    one tidy stacked pair rather than a big button with a little one hanging off it.
    Both are scoped to .optRow so the leaderboard tabs keep sizing to their own text. */
 .optRow .segs{flex:1 1 auto;justify-content:flex-end}
-.optRow .seg{flex:1 1 auto}
+/* 2026-07-26 (Blake, v0.36 item 5): "On the menu page, the 4 players, 6 players, FFA, and Teams
+   buttons should all be the same size so it's symmetrical."
+   flex:1 1 0 (a ZERO basis), not the old flex:1 1 auto. With an `auto` basis each button starts
+   at its OWN text width and only the LEFTOVER room is split evenly, so "Free-for-All" came out
+   wider than "Teams" and "4 players" wider than "6 players" by exactly the difference in their
+   text. A zero basis throws every button's own content width away before the split, so the two
+   buttons inside one block are identical - and because the two .segs blocks are already the same
+   width as each other (the shared 6.6em label column above) with the same 6px internal gap and
+   the same two buttons each, ALL FOUR come out identical, across both rows. That is the whole
+   fix; nothing is hand-tuned to a pixel.
+   HEIGHT is the other half of "the same size". A button that wraps to two lines grows past the
+   44px floor and stops matching its neighbours, so .optRow .seg is white-space:nowrap and the
+   font is sized so the longest label ("Free-for-All", item 6 in the same batch) fits its equal
+   share at 320 with room to spare. nowrap here does NOT re-open the v0.32 clipping problem the
+   .segs internal flex-wrap exists for: that wrap is between the two BUTTONS and is untouched. */
+.optRow .seg{flex:1 1 0;white-space:nowrap}
 .seg{border:1px solid rgba(255,255,255,.25);background:transparent;color:var(--cream);
   padding:8px 10px;border-radius:10px;font-weight:700;font-size:13px;min-height:44px;
   flex:0 1 auto;min-width:0;line-height:1.2}
@@ -519,6 +537,13 @@ button{font:inherit;cursor:pointer}
   .optRow{--optGap:12px}
   .optRow label{font-size:12px;letter-spacing:.04em}
   .seg{font-size:12px;padding:8px 8px}
+  /* 2026-07-26 (v0.36 items 5+6): the four option buttons are now all the SAME width (see the
+     .optRow .seg rule above) and the longest label is "Free-for-All", so at 320 the equal share
+     is 76.4px and that word needed 63.4px of it against 58.4px of content box - a 5px clip. One
+     point of type and 2px a side of padding buys 4.3px of clearance instead, with no wrap and no
+     ellipsis. Scoped to .optRow so the leaderboard's own Solo/Teams/KOs tabs, which size to
+     their own text and were never part of this, keep the 12px they already had. */
+  .optRow .seg{font-size:11px;padding:8px 6px}
 }
 /* 2026-07-25: on a 320px phone the two tile rows have to carry real information (Blake's
    Teams/FFA + tees-home ask) in about 124px. These three small trims hand the text column back
@@ -795,28 +820,26 @@ button{font:inherit;cursor:pointer}
    left for the clamp floor to rescue. Numbers in
    server/tests/test_ui_topbar_v034_2026_07_25.js. */
 #topbar .iconBtn{text-transform:uppercase;padding:6px 12px;font-size:clamp(12px,3.6vw,15px)}
-/* 2026-07-25 (Blake: "replace the 'rules' and 'mute' buttons with an account (circle icon) that
-   is the first letter of their chosen name. When clicked, this opens a mini window that offers
-   the rules and mute buttons as well as other settings and things that belong on this kind of
-   panel"). The circle is deliberately NOT an .iconBtn:
-   - .iconBtn means "a text button in this row". A circle that took the same rule would either
-     stop being a circle or would have to carry a text label.
-   - So it is flex:0 0 auto at a fixed 44px square, which is the app's own tap-target floor
-     (v0.10), and it sits at the end of the row where a phone user's thumb already expects an
-     avatar. 44px is also EXACTLY the left button's height (see the #topbar .iconBtn rule
-     above), which is half of what makes Blake's "equal spacing on the right/top" true: same
-     height + align-items:start on the row = the same distance from the top edge for both.
-   Colour comes from the player's own seat (--acctBg/--acctInk, written by updateAccountButton(),
-   § ACCOUNT) so the circle reads as THEM - the same colour as their tees and their name plaque.
-   The fallback values here are what a pre-game/unknown-seat state paints, so it can never
-   render as an invisible or half-styled control. */
-#topbar .acctBtn{flex:0 0 auto;width:44px;height:44px;min-height:44px;padding:0;
-  border-radius:50%;display:flex;align-items:center;justify-content:center;
-  background:var(--acctBg,rgba(0,0,0,.28));color:var(--acctInk,var(--cream));
-  border:2px solid rgba(255,255,255,.55);box-shadow:0 2px 6px rgba(0,0,0,.35);
-  font-weight:900;font-size:18px;line-height:1;letter-spacing:0;text-transform:uppercase;
-  font-family:inherit;cursor:pointer;overflow:hidden}
-#topbar .acctBtn>span{display:block;pointer-events:none}
+/* 2026-07-25 -> 2026-07-26. HISTORY, because this control changed shape twice in two days and
+   the reasoning matters if anyone is tempted to change it a third time.
+   v0.33/v0.34: Blake asked for "an account (circle icon) that is the first letter of their
+   chosen name", so this was a 44px round .acctBtn with a coloured initial in it, deliberately
+   NOT an .iconBtn.
+   v0.36 (2026-07-26): after playing the app he asked for the opposite - "please change the
+   account circle button into a box like we did with the pause button and have it say 'admin'".
+   So there is no .acctBtn in the top bar at all anymore: #btnAccount is a plain #topbar .iconBtn
+   (see that rule above), which is the ONLY way to guarantee it is the same kind of box as PAUSE -
+   one rule sets the 44px height, the uppercase display, the padding and the responsive font for
+   both buttons, so they cannot drift apart. Everything the v0.34 top-row contract promised still
+   holds by construction: the grid still centres the logo on the screen, --topInset still feeds
+   all four insets, and both controls are still exactly 44px tall against align-items:start, so
+   PAUSE's top/left insets equal ADMIN's top/right insets.
+   The coloured initial did not die with the circle - it is still the avatar at the head of the
+   panel (.acctAvatar, below), which is where there is room for it and where it actually reads as
+   "this is you". --acctBg/--acctInk are still written by updateAccountButton(), § ACCOUNT, for
+   that avatar. If a round top-bar button is ever wanted again, restore a #topbar .acctBtn rule
+   here - but read the v0.34 measurements first, because a 44px circle and a text box do not have
+   the same width and the logo centring assertion is measured against both slots. */
 /* 2026-07-25 (Blake's post-game review request, item 4): once the game is over, the RESULTS
    button (see updateTopbarForGameOver(), § TURNS) gets a gold highlight so it reads as the
    obviously-important "look at the results again" button, not just another plain topbar label -
@@ -1036,6 +1059,31 @@ button{font:inherit;cursor:pointer}
    player can still be the on-turn seat - the gold ring shows through). */
 .plaque.away{opacity:.9}
 .plaque.away .nm{color:#ff5449;text-shadow:0 1px 2px rgba(0,0,0,.7)}
+/* 2026-07-26 (Blake, v0.36 item 4): "when online, the other human's names should only be
+   highlighted in red when they're disconnected. They should otherwise just glow which shows
+   they're there."
+   So RED IS NOW RESERVED, exclusively, for disconnected: it is written in exactly one place
+   (.plaque.away .nm, right above) and updatePresenceUI() (§ NET) is the only thing that ever
+   adds .away. Presence gets its own, much quieter signal - .here - a soft green ring, no
+   animation, no colour change to the name at all.
+   THREE THINGS THIS DELIBERATELY DOES NOT DO:
+   1. It never applies to a CPU seat or to your own seat. A CPU is not a person, and you already
+      know whether YOU are here; both would just be noise on a small board.
+   2. It never fights the gold. The selector EXCLUDES .turn and .revealed outright rather than
+      relying on source order: both of those are gold box-shadows at the same specificity as this
+      rule, and this rule happens to sit later in the file, so without the :not() the green would
+      quietly win on whichever plaque is on turn. Excluded, the on-turn seat keeps its gold ring
+      and its pulse exactly as shipped, and post-game review's .revealed ring is untouched.
+   3. It is not a pulse. The board already has exactly one animated thing at a time (the gold
+      turn pulse) and a table of six quietly throbbing plaques is precisely the "noisy board"
+      failure this was written to avoid.
+   The 6px spread is small on purpose: at the board's real rendered scale on a 320px phone a
+   plaque is only tens of pixels tall, so a bigger halo reads as a smudge rather than a glow.
+   HISTORY WORTH KNOWING: v0.25 found the offline-red rule had been permanently DEAD CSS for
+   several releases (a plain-class default colour on .plaque .nm was outranking it - see
+   drawPlaques(), § RENDER). Any change around here must be re-verified on a REAL disconnect,
+   not by reading the stylesheet. */
+.plaque.here:not(.turn):not(.revealed){box-shadow:0 0 0 2px rgba(126,224,160,.55),0 0 10px rgba(126,224,160,.35)}
 /* 2026-07-25 (Blake's post-game review request, item 3): "post-game review mode" - once the
    game is over, tapping a player's plaque flips their leftover hand face-up in the hand tray
    (see onPlaqueClick()/renderPostGameReveal(), § TURNS). #plaqueLayer only gets the
@@ -1624,6 +1672,21 @@ button{font:inherit;cursor:pointer}
 .acctNameEdit .acctNameBtns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .acctNameEdit .btn{min-height:44px;padding:11px 10px;font-size:15px}
 .acctWarn{font-size:12.5px;color:#ff9a9a;min-height:16px;margin:0 2px}
+/* 2026-07-26 (v0.36 item 3): the one-time name claim. Blake is opening a short window so people
+   who have been playing for months can attach the record they already have to their new account.
+   His rule: "only allowed to do this once and claim 1 name - no going back."
+   It is styled as a gold-edged notice rather than another grey settings row on purpose: it is a
+   decision with a permanent consequence, it appears for at most a few days, and it must not read
+   like a toggle somebody can flip back later. Two steps, both INSIDE this panel (never a second
+   full-screen page - § OVERLAY LAYER): the offer, then an explicit confirm that says in plain
+   words that it cannot be undone. See renderAccountClaim(), § ACCOUNT SIGN-IN. */
+.acctClaim{margin:0 0 14px;padding:12px;border-radius:12px;
+  border:1px solid rgba(244,197,66,.55);background:rgba(244,197,66,.10);
+  display:grid;grid-template-columns:1fr;gap:8px;text-align:left}
+.acctClaim b{font-size:15px;color:var(--gold)}
+.acctClaim p{font-size:13px;line-height:1.5;color:#dcefe1;margin:0}
+.acctClaim .acctClaimBtns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.acctClaim .btn{min-height:44px;padding:11px 10px;font-size:14.5px}
 /* Short screens: give the panel back a little of its own chrome so it needs less scrolling. The
    rows themselves are NOT shrunk - they sit on the app's 44px tap-target floor and stay there.
    At 375x667 this is the difference between a card that scrolls and one that does not; at
@@ -1637,6 +1700,46 @@ button{font:inherit;cursor:pointer}
   .acctSoon{margin-top:10px;padding-top:9px}
   .acctNote{font-size:12px}
   #accountOverlay .bigBtns{margin-top:12px}
+}
+/* ---------- 2026-07-26 (v0.36 item 1): the first-run sign-in screen ----------
+   Blake: "if it's a person's first time opening the app (or they don't have an account) they
+   should see a login screen with an apple button to create an account with their Apple ID.
+   Below that, there should be an option to continue as a guest with the knowledge that they
+   wouldn't be on the leaderboard. This is the only time this would happen though (don't make
+   them select guest every time) just let them know they can always change this by clicking the
+   admin button."
+   It is a plain .overlay so it inherits the § OVERLAY LAYER invariant for free, with one
+   deliberate difference: an OPAQUE backdrop. Every other overlay is rgba(5,15,9,.9) so the page
+   underneath ghosts through, which is right for a sheet over a live board and wrong for the very
+   first thing a person ever sees - the menu showing faintly behind a welcome screen reads as a
+   rendering fault. This is the only .solid overlay in the app.
+   The layout is deliberately un-clever: one column, everything above the fold at 320x568, the
+   two choices as full-width 44px+ buttons in the order Blake asked for (Apple first, guest
+   underneath), and every sentence a real sentence rather than fine print. */
+.overlay.solid{background:radial-gradient(120% 95% at 50% 28%,var(--felt1),var(--felt2) 78%)}
+#welcomeOverlay .modalCard{max-width:420px}
+#welcomeOverlay .sign{margin:0 auto 6px}
+.welcomeBtns{display:grid;grid-template-columns:1fr;gap:10px;margin-top:14px}
+.welcomeBtns .btn{width:100%;min-height:48px;font-size:16px}
+/* The guest choice sits UNDER the Apple button (Blake's word: "below that") and is visually the
+   quieter of the two, but it is a normal full-size button, never a link - it must be as easy to
+   tap as the other one, because for a child at this table it is the RIGHT answer. */
+#btnWelcomeGuest{font-weight:700}
+.welcomeNote{font-size:13px;line-height:1.5;color:#cfe8d6;margin:10px 2px 0;text-align:left}
+.welcomeFine{font-size:12.5px;line-height:1.45;color:#a9d2b5;margin:8px 2px 0;text-align:left}
+/* The shortest phone in the matrix is 568px tall and this card has a sign, a heading, two
+   full-width buttons and four short paragraphs on it. It is allowed to scroll there - the rules
+   panel and the leaderboard already do at that size, and .overlay.canScroll paints the "more
+   below - swipe up" hint - but the two CHOICES and the age line must be above the fold, because
+   those are the things a person has to act on. Measured at 320x568 after this block. */
+@media (max-height:640px){
+  #welcomeOverlay .modalCard{padding:12px 14px}
+  #welcomeOverlay .sign{transform:scale(.62);transform-origin:top center;margin:0 auto -14px}
+  #welcomeOverlay h3{font-size:18px;margin:2px 0 6px}
+  .welcomeNote{margin-top:4px}
+  .welcomeFine{margin-top:6px;font-size:12px}
+  .welcomeBtns{margin-top:10px;gap:8px}
+  .welcomeBtns .btn{min-height:46px;font-size:15px}
 }
 .lbScroll{margin:6px 0 10px}
 .lbTable{width:100%;border-collapse:collapse;table-layout:fixed;font-variant-numeric:tabular-nums}
@@ -1698,11 +1801,11 @@ button{font:inherit;cursor:pointer}
      plain .iconBtn line above, so overriding only `height` here would leave a 44px min-height
      fighting a 36px height and the button would stay 44 while the circle shrank to 36. The two
      controls must stay the SAME height or their bottom edges stop lining up. */
+  /* 2026-07-26 (v0.36 item 2): ADMIN is an .iconBtn now, so this ONE line shrinks both
+     controls together on this pathological aspect ratio and their bottom edges cannot come
+     apart. The separate #topbar .acctBtn 36px override that used to sit here is gone with the
+     circle it existed for. */
   #topbar .iconBtn{height:36px;min-height:36px}
-  /* 2026-07-25: the account circle shrinks with the rest of the row on this one pathological
-     aspect ratio, so it stays the same height as the text buttons beside it instead of
-     standing 8px taller than everything else. Same deliberate 36px tradeoff as the line above. */
-  #topbar .acctBtn{width:36px;height:36px;min-height:36px;font-size:15px}
   #handBar{min-height:0;padding-top:2px;padding-bottom:calc(4px + env(safe-area-inset-bottom));gap:3px}
   #handInfo{font-size:12px;min-height:14px}
   #handRow{gap:4px}
@@ -1829,7 +1932,11 @@ button{font:inherit;cursor:pointer}
       <div class="segs"><button class="seg" id="p4">4 players</button><button class="seg" id="p6">6 players</button></div>
     </div>
     <div class="optRow"><label>Game type</label>
-      <div class="segs"><button class="seg" id="mFFA">FFA</button><button class="seg" id="mTeams">Teams</button></div>
+      <!-- 2026-07-26 (Blake, v0.36 item 6): "make that FFA button actually say 'Free-for-All' it
+           should only say FFA in the save state." So the BUTTON spells it out; saveTypeShort()
+           (§ MENU) is the only place that still says FFA, because a saved tile has about 150px
+           of room at 320 and is guaranteed to stay two rows. -->
+      <div class="segs"><button class="seg" id="mFFA">Free-for-All</button><button class="seg" id="mTeams">Teams</button></div>
     </div>
     <div id="teamNote"></div>
     <div id="seatList"></div>
@@ -1844,7 +1951,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.35</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.36</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -1893,8 +2000,18 @@ button{font:inherit;cursor:pointer}
          2026-07-25 (the top-row rebuild): it sits in its own right-hand slot now, at exactly the
          same distance from the top and side edges as the left button - Blake: "account circle
          looks closer and I don't like that." -->
+    <!-- 2026-07-26 (Blake, v0.36 item 2): "please change the account circle button into a box
+         like we did with the pause button and have it say 'admin'". So it is an .iconBtn now -
+         the SAME class PAUSE/RESULTS use, which is what makes "the same kind of box" true by
+         construction rather than by copying numbers: one rule sets the height (44px), the
+         uppercase display, the padding and the font clamp for both of them. The v0.34 contract
+         is unchanged - PAUSE far left, the logo centred at the very top, this button far right,
+         and --topInset feeding all four insets so PAUSE's top/left equal ADMIN's top/right.
+         Same id, same panel, same handler as the old circle. The circle itself is not gone: it
+         is still the avatar at the top of the panel (#acctAvatar), where there is room for a
+         coloured initial and it means something. -->
     <div class="topSlot topSlotR">
-      <button class="acctBtn" id="btnAccount" aria-label="Your settings"><span id="acctInitial">?</span></button>
+      <button class="iconBtn" id="btnAccount" aria-label="Admin - your settings and account">Admin</button>
     </div>
   </div>
   <div id="boardWrap">
@@ -2112,7 +2229,9 @@ button{font:inherit;cursor:pointer}
       <li>The host picks the game speed for the table.</li>
       <li>Anyone can pause for everyone.</li>
       <li>You can switch apps anytime. The game keeps going and catches you up when you return. If your board ever looks stuck, close and reopen the app.</li>
-      <li>When a player's name turns red, they are offline. The game keeps going and they catch up when they come back.</li>
+      <!-- 2026-07-26 (v0.36 item 4): the rules panel is the only place the app explains the
+           plaque colours, so it has to describe BOTH of them now, not just the red one. -->
+      <li>Everyone else's name plate has a soft green glow while they are connected. If a name turns red, that person has dropped off. The game keeps going and they catch up when they come back.</li>
       <li>Need to leave for good? Hand your seat to a CPU (under Pause).</li>
     </ul>
     <div class="bigBtns"><button class="btn primary" id="btnOnlineRulesOk">Got it, let's play</button></div>
@@ -2127,7 +2246,7 @@ button{font:inherit;cursor:pointer}
 <div id="speedPickerOverlay" class="overlay hidden">
   <div class="modalCard">
     <h3>How fast should the game play?</h3>
-    <p>Pick a pace for moves and animations. You can change it anytime during the game - tap your circle in the top corner, then Table speed.</p>
+    <p>Pick a pace for moves and animations. You can change it anytime during the game - tap ADMIN in the top corner, then Table speed.</p>
     <!-- 2026-07-25 (item N of the UI polish batch): this is now the same 2x2 grid the host
          speed picker uses (#speedPickerBtns shares #hostSpeedBtns' rule, § STYLE) instead of a
          .bigBtns flex-wrap pile that came out four different widths. The four tiles' labels and
@@ -2159,11 +2278,12 @@ button{font:inherit;cursor:pointer}
       <div class="segs"><button class="seg" id="hostP4">4 players</button><button class="seg" id="hostP6">6 players</button></div>
     </div>
     <div class="optRow"><label>Game type</label>
-      <div class="segs"><button class="seg" id="hostFFA">FFA</button><button class="seg" id="hostTeams">Teams</button></div>
+      <!-- 2026-07-26 (v0.36 item 6): the host's own setup reads the same as the offline one. -->
+      <div class="segs"><button class="seg" id="hostFFA">Free-for-All</button><button class="seg" id="hostTeams">Teams</button></div>
     </div>
     <div id="hostTeamNote" style="font-size:13px;color:#ffe9a8;margin:2px 2px 10px;min-height:18px"></div>
     <h4 style="margin:14px 0 4px;color:var(--gold);font-size:15px">How fast should the table play?</h4>
-    <p>This sets the game speed for everyone at your table. You can change it anytime during the game - tap your circle in the top corner, then Table speed.</p>
+    <p>This sets the game speed for everyone at your table. You can change it anytime during the game - tap ADMIN in the top corner, then Table speed.</p>
     <div class="bigBtns" id="hostSpeedBtns"></div>
     <div class="bigBtns"><button class="btn ghost" id="btnHostSpeedCancel">Cancel</button></div>
   </div>
@@ -2214,6 +2334,40 @@ button{font:inherit;cursor:pointer}
   </div>
 </div>
 
+<!-- ================= 2026-07-26 (v0.36 item 1): the first-run sign-in screen =================
+     Blake: "if it's a person's first time opening the app (or they don't have an account) they
+     should see a login screen with an apple button to create an account with their Apple ID.
+     Below that, there should be an option to continue as a guest with the knowledge that they
+     wouldn't be on the leaderboard. This is the only time this would happen though (don't make
+     them select guest every time) just let them know they can always change this by clicking the
+     admin button."
+     ONCE, EVER. Whichever button they tap, the answer is written to localStorage AND mirrored
+     into IndexedDB (see rememberWelcomeChoice(), § WELCOME) so an iOS localStorage eviction -
+     which this app has a documented history of, see the IndexedDB mirror the offline saves use -
+     cannot make this screen come back and ask a second time.
+     THE WEBSITE HAS NO APPLE BUTTON. accountsAvailableHere() is false in a plain browser, so
+     #btnWelcomeApple is removed from the flow entirely and #welcomeWebNote takes its place. A
+     dead button that does nothing would be worse than an honest sentence, and the guest path is
+     always right there either way - nobody is ever blocked from playing.
+     THE AGE LINE is deliberate and deliberately low-friction: one plain sentence, no birthday
+     picker, no gate. Accounts are 13+; younger players continue as a guest and lose nothing but
+     a row on the shared board. -->
+<div id="welcomeOverlay" class="overlay solid hidden">
+  <div class="modalCard">
+    <div class="sign"><b>NASTY</b></div>
+    <h3>Welcome to NASTY</h3>
+    <p class="welcomeNote">Sign in so the family leaderboard remembers you - your record follows you, even on a new phone. Or just start playing.</p>
+    <div class="welcomeBtns">
+      <button class="btn primary" id="btnWelcomeApple">Sign in with Apple</button>
+      <button class="btn ghost" id="btnWelcomeGuest">Continue as a guest</button>
+    </div>
+    <p class="welcomeFine" id="welcomeWebNote">Signing in is coming soon on the website. In the iPhone app you can sign in with Apple.</p>
+    <p class="welcomeFine">Guests do not show up on the family leaderboard. Everything else in the game works exactly the same.</p>
+    <p class="welcomeFine">Accounts are for ages 13 and up. Anyone younger should continue as a guest.</p>
+    <p class="welcomeFine">You will only be asked this once. You can change it any time - tap ADMIN at the top of the game screen.</p>
+  </div>
+</div>
+
 <!-- 2026-07-25 (Blake's account-panel feedback, see the #btnAccount markup comment above).
      The "mini window" behind the top bar's circle. One overlay, one column, everything a
      player might want that is not a live game action:
@@ -2234,9 +2388,37 @@ button{font:inherit;cursor:pointer}
      nothing in this game is gated on signing in, here or anywhere else. -->
 <div id="accountOverlay" class="overlay hidden">
   <div class="modalCard">
+    <!-- 2026-07-26 (v0.36 item 2): the button that opens this panel says ADMIN now, so the panel
+         says Admin too - a player who taps a button called ADMIN and lands on an untitled page
+         has no way to know they arrived. The coloured initial that used to be the top-bar circle
+         is the avatar right below it. -->
+    <h3 id="acctTitle">Admin</h3>
     <div class="acctHead">
       <div class="acctAvatar" id="acctAvatar">?</div>
       <div class="acctWho"><b id="acctWhoName">Player</b><small id="acctWhoSub">Playing on this phone</small></div>
+    </div>
+    <!-- 2026-07-26 (v0.36 item 3): THE ONE-TIME NAME CLAIM. Hidden unless the server says the
+         window is open AND there really is history sitting under this account's name. Blake:
+         "only allowed to do this once and claim 1 name - no going back." Two steps: the offer,
+         then a confirm that says it cannot be undone in exactly those words. Written by
+         renderAccountClaim(), § ACCOUNT SIGN-IN - nothing here is ever shown by markup alone.
+         Nothing is deleted either way: names nobody claims stay on the board as history, and
+         the copy says so rather than leaving anyone guessing.
+         WHY IT IS UP HERE, above the settings rows: the window is open for days, not forever,
+         and measured at 390x844 the panel already scrolls - put at the bottom this landed below
+         the fold, which for a time-limited offer is the same as not offering it. -->
+    <div class="acctClaim hidden" id="acctClaim">
+      <b id="acctClaimTitle">Is this you?</b>
+      <p id="acctClaimText"></p>
+      <p id="acctClaimWarn" class="hidden">This cannot be undone. You can only do this once, for one name, and the offer goes away for good afterwards.</p>
+      <div class="acctClaimBtns" id="acctClaimOffer">
+        <button class="btn primary" id="btnAcctClaimYes">Yes, that is me</button>
+        <button class="btn ghost" id="btnAcctClaimNo">No, start fresh</button>
+      </div>
+      <div class="acctClaimBtns hidden" id="acctClaimConfirm">
+        <button class="btn danger" id="btnAcctClaimSure">Yes, move it</button>
+        <button class="btn ghost" id="btnAcctClaimBack">Go back</button>
+      </div>
     </div>
     <div class="acctRows">
       <button class="btn ghost acctRow" id="btnAcctRules">How to play</button>
@@ -2431,7 +2613,11 @@ button{font:inherit;cursor:pointer}
      See HANDOFF.md "God mode" for how Blake uses this. -->
 <div id="adminOverlay" class="overlay hidden">
   <div class="modalCard" style="max-width:560px">
-    <h3>Admin</h3>
+    <!-- 2026-07-26 (v0.36 item 2): retitled "God mode". The player-facing settings panel is
+         called Admin now (Blake's word, on his own button), and two different pages both headed
+         "Admin" would be genuinely confusing for the one person who ever sees both. Nothing else
+         about this developer panel changed: same secret 7-tap gesture, same token, same ids. -->
+    <h3>God mode</h3>
     <div id="adminLocked">
       <p>Enter the admin token (saved on this device after the first time).</p>
       <div class="optRow"><label>Token</label>
@@ -6355,19 +6541,36 @@ async function registerPushIfGranted(){
    genuinely never-asked device consumes the one-time ask. Best-effort throughout: a denied
    permission, an unsupported plugin, or any thrown error just means push never activates for
    this player - never anything that could break or interrupt the game itself. */
+/* 2026-07-26 (the push audit, v0.36). Has iOS actually SETTLED the question?
+   'granted' and 'denied' are the only two answers that mean it has. 'prompt' and
+   'prompt-with-rationale' mean iOS is still willing to ask - so we must stay willing too. */
+function pushAnswerIsFinal(perm){ return !!(perm&&(perm.receive==='granted'||perm.receive==='denied')); }
+/* The whole once-ever flow, taking the plugin as an argument rather than looking it up. That is
+   what makes it drivable from a test with a stub plugin without having to pretend a browser is a
+   native app (faking Capacitor.isNativePlatform would flip IS_APP and start the whole native boot
+   sequence, which is a far bigger lie than the one thing under test). Returns a plain word for
+   what happened, purely so a test can read it - nothing in the app uses the return value. */
+async function requestPushPermissionOnce(PN){
+  const st=await PN.checkPermissions();
+  if(st&&st.receive==='granted'){ await PN.register(); return 'already'; }
+  if(st&&st.receive==='denied')return 'denied';
+  try{ if(localStorage.getItem('nasty-push-asked'))return 'asked'; }catch(e){}
+  const perm=await PN.requestPermissions();
+  /* THE FIX. This flag used to be written BEFORE the prompt was shown, so a prompt that was
+     dismissed without an answer - swiped away, interrupted by a call, the app pushed to the
+     background - permanently locked that phone out of ever being asked again, on every future
+     launch, forever. That is part of why push has never worked for anybody. The flag is only
+     spent now once the answer is final. */
+  if(pushAnswerIsFinal(perm)){ try{ localStorage.setItem('nasty-push-asked','1'); }catch(e){} }
+  if(perm&&perm.receive==='granted'){ await PN.register(); return 'granted'; }
+  return (perm&&perm.receive==='denied')?'denied':'undetermined';
+}
 async function maybeRequestPushPermission(){
   if(!IS_APP)return;
   const PN=CAP&&CAP.Plugins&&CAP.Plugins.PushNotifications;
   if(!PN)return;
-  try{
-    const st=await PN.checkPermissions();
-    if(st&&st.receive==='granted'){ await PN.register(); return; }
-    if(st&&st.receive==='denied')return;
-    try{ if(localStorage.getItem('nasty-push-asked'))return; }catch(e){}
-    try{ localStorage.setItem('nasty-push-asked','1'); }catch(e){}
-    const perm=await PN.requestPermissions();
-    if(perm&&perm.receive==='granted')await PN.register();
-  }catch(e){ /* permission flow unsupported/denied - never let this affect the game */ }
+  try{ await requestPushPermissionOnce(PN); }
+  catch(e){ /* permission flow unsupported/denied - never let this affect the game */ }
 }
 /* Cheap FNV-1a-style digest of the parts of G that must be identical everywhere - used only
    for the integrity check below (see doDeal), never for game logic. Deliberately includes
@@ -7378,13 +7581,50 @@ function maybeSendSeated(){
   NET.seatedSent=true;
   netSend({type:'seated'});
 }
+/* 2026-07-26 (Blake, v0.36 item 4): "when online, the other human's names should only be
+   highlighted in red when they're disconnected. They should otherwise just glow which shows
+   they're there."
+   Both classes are decided here, from the SAME one fact, so they can never both be on and can
+   never disagree: for another player's human seat, `here` is exactly `!away`.
+     .away  - red name (the only red on a plaque anywhere in the app)
+     .here  - a soft green presence ring (see .plaque.here, § STYLE)
+   Who is "another player": a seat whose type is human AND that has an owner id AND that owner is
+   not me. That excludes, on purpose:
+     - every CPU seat (not a person, nothing to be present or absent),
+     - my own seat (I know whether I am here; and my seat already carries the gold turn ring),
+     - a human seat nobody has claimed yet in a room that is still filling up (pid == null) -
+       there is no one to be present, so an empty ring would be a lie.
+   Offline there is no such thing as presence, so the NET.online guard leaves every plaque plain,
+   exactly as before.
+
+   THE BUG BLAKE WAS ACTUALLY REPORTING - found 2026-07-26 by driving a real two-browser online
+   game and reading the rendered colours, which is the only way this was ever going to show up.
+   `NET.presence` is a map of playerId -> connected. It is populated in exactly two places: a
+   'sync' snapshot (only sent to somebody who just connected or reconnected) and the 'presence'
+   broadcast (only sent when somebody's connection actually changes). A player who creates or
+   joins a room and simply stays connected therefore has an EMPTY presence map for the whole
+   game - measured: `{}` on BOTH the host and the guest a full second after the first deal.
+   The old test `!NET.presence[pid]` read that empty map as "not connected", so from the very
+   first frame of every online game every other human's name was RED. That is precisely what
+   Blake saw and precisely why he asked for red to mean something.
+   THE RULE NOW: only an EXPLICIT `false` from the server means away. "We have not been told
+   anything about this player" is not evidence that they are gone - the server tells us within
+   seconds when somebody really drops (heartbeat + the presence broadcast), and until it does,
+   somebody who readied up and took a seat is here.
+   Deliberately NOT changed: the reunion lobby's own `allHere` check (§ TURNS, updatePauseUI)
+   still requires a positive `NET.presence[id]`. There, "we do not know" must NOT count as
+   "everybody is back" - that gate exists to stop a game resuming without the table. Same map,
+   opposite safe direction, on purpose. */
 function updatePresenceUI(){
   if(!G||!NET.online||!NET.seatOwners)return;
   for(let s=0;s<G.n;s++){
     const el=$(`plaque-${s}`); if(!el)continue;
     const pid=NET.seatOwners[s];
-    const away=G.seats[s].type==='human'&&pid!=null&&pid!==NET.playerId&&!NET.presence[pid];
+    const other=G.seats[s].type==='human'&&pid!=null&&pid!==NET.playerId;
+    const told=other&&Object.prototype.hasOwnProperty.call(NET.presence||{},pid);
+    const away=told&&!NET.presence[pid];
     el.classList.toggle('away',away);
+    el.classList.toggle('here',other&&!away);
   }
 }
 let AWAY_STATE=null;   // {seat, stage, name} while the server's ladder has a stage on screen
@@ -7764,7 +8004,8 @@ function saveHostName(){
    already have real names the moment anyone's claimed them - more useful than the offline setup
    panel's own color-name preview (teamNote, § MENU), which predates any real names existing. */
 function lobbyModeText(lobby){
-  return `${lobby.n} players · ${lobby.teams?'Teams':'Free for all'}`;
+  // 2026-07-26 (v0.36 item 6): "Free-for-All" in full wherever there is room to write it.
+  return `${lobby.n} players · ${lobby.teams?'Teams':'Free-for-All'}`;
 }
 function lobbyPairingText(lobby){
   if(!lobby.teams)return'';
@@ -8518,18 +8759,17 @@ function accountColors(){
   if(i>=0&&cols[i])return {bg:cols[i].c,ink:inkFor(cols[i].c)};
   return {bg:ACCT_FALLBACK_BG,ink:ACCT_FALLBACK_INK};
 }
-// Paints the top bar's circle. Every write is guarded ("is it already that?") - this runs from
-// syncAll() after every move, and the account panel's own avatar lives inside an .overlay that
-// the scroll-hint MutationObserver watches (§ UTIL).
+// Paints the top bar's ADMIN button and the panel's own coloured avatar. Every write is guarded
+// ("is it already that?") - this runs from syncAll() after every move, and the account panel's
+// avatar lives inside an .overlay that the scroll-hint MutationObserver watches (§ UTIL).
+// 2026-07-26 (v0.36 item 2): the top-bar control is a text box reading ADMIN now, so the only
+// thing written to it here is the accessible label. The letter and the seat colour still get
+// written - to the avatar at the head of the panel, which is where the initial lives now.
 function updateAccountButton(){
   const btn=$('btnAccount');
   if(!btn)return;
   const name=chosenName(), letter=accountInitial(name), c=accountColors();
-  const span=$('acctInitial');
-  if(span&&span.textContent!==letter)span.textContent=letter;
-  if(btn.style.getPropertyValue('--acctBg')!==c.bg)btn.style.setProperty('--acctBg',c.bg);
-  if(btn.style.getPropertyValue('--acctInk')!==c.ink)btn.style.setProperty('--acctInk',c.ink);
-  const label=name?('Your settings - '+name):'Your settings';
+  const label=name?('Admin - your settings and account, '+name):'Admin - your settings and account';
   if(btn.getAttribute('aria-label')!==label)btn.setAttribute('aria-label',label);
   const av=$('acctAvatar');
   if(av){
@@ -8567,6 +8807,11 @@ function renderAccountPanel(){
 function openAccountPanel(){
   renderAccountPanel();
   openOverlay('accountOverlay');
+  // v0.36 item 3: the one-time name claim. probeClaimOffer() is a no-op unless somebody is
+  // signed in AND the server has said the window is open AND it has not already asked once this
+  // page load - so on the website, signed out, or (as in production today) with the window shut,
+  // this costs exactly nothing and no request is sent.
+  try{ probeClaimOffer().catch(()=>{}); }catch(e){}
 }
 $('btnAccount').onclick=openAccountPanel;
 $('btnAcctClose').onclick=()=>{ ACCT_NOTICE=''; closeOverlay('accountOverlay'); };
@@ -8760,9 +9005,15 @@ async function bindAccountName(){
   const want=cleanName(chosenName(),'');
   if(want&&!isBadName(want)){
     const r=await accountFetch('/account/name',{auth:ACCT.token,name:want});
-    // r.body.pendingClaim is ignored on purpose - see the section header.
     if(r.status===200&&r.body&&r.body.gameName){
       ACCT.gameName=r.body.gameName;
+      // v0.36 item 3: this ONE call is also how the claim gets discovered on a first sign-in -
+      // the server reports any history sitting under this name right here, so there is no second
+      // request to make. CLAIM_PROBED is set so the later probe does not repeat it.
+      if(r.body.claimWindow)ACCT.claimWindow=r.body.claimWindow;
+      CLAIM_PROBED=true;
+      if(r.body.pendingClaim&&ACCT.claimWindow&&ACCT.claimWindow.open)
+        ACCT_CLAIM=Object.assign({name:ACCT.gameName},r.body.pendingClaim);
       toast('Signed in. You are '+ACCT.gameName+' on the family board.');
       return;
     }
@@ -8797,6 +9048,14 @@ async function accountSignIn(){
     }
     ACCT=Object.assign({token:r.body.sessionToken},r.body);
     saveAcctToken(r.body.sessionToken);
+    // v0.36 item 1: signing in IS choosing an account, so the first-run screen never has to ask
+    // again - including for a guest who chose "continue as a guest" months ago and changed their
+    // mind from the Admin panel. Written before the name binding so a slow /account/name call
+    // cannot leave the answer unrecorded.
+    rememberWelcomeChoice('account');
+    // v0.36 item 3: a fresh sign-in is a fresh account, so any leftover offer from a previous
+    // session on this page must not carry over.
+    ACCT_CLAIM=null; CLAIM_PROBED=false;
     await bindAccountName();
   } finally {
     ACCT_BUSY=false;
@@ -8811,6 +9070,8 @@ async function accountSignIn(){
 async function accountSignOut(){
   const t=ACCT&&ACCT.token;
   ACCT=null; ACCT_NOTICE='';
+  // v0.36 item 3: the offer belongs to the account, not to this phone.
+  ACCT_CLAIM=null; ACCT_CLAIM_STEP='offer'; CLAIM_PROBED=false;
   saveAcctToken('');
   renderAccountRows(); updateAccountButton();
   toast('Signed out. Everything on this phone works exactly the same.');
@@ -8840,6 +9101,7 @@ async function accountDelete(eraseBoard){
     return;
   }
   ACCT=null;
+  ACCT_CLAIM=null; ACCT_CLAIM_STEP='offer'; CLAIM_PROBED=false;   // v0.36 item 3
   saveAcctToken('');
   closeAcctDeleteConfirm();
   // Apple keeps its own list of the apps you have used Sign in with Apple on, and only the person
@@ -8877,7 +9139,108 @@ function renderAccountRows(){
   else if(on)txt='Signed in with Apple'+(ACCT.gameName?(' as '+ACCT.gameName):'')+'. That only keeps your place on the family leaderboard yours - nothing else changes.';
   else txt='Signing in is optional. It keeps your place on the family leaderboard yours on any phone. Everything works without it.';
   if(note.textContent!==txt)note.textContent=txt;
+  // v0.36 item 3: signing in or out has to repaint the claim block too, or a signed-out panel
+  // could be left showing an offer that belongs to nobody.
+  renderAccountClaim();
 }
+/* ---------------- 2026-07-26 (v0.36 item 3): the one-time name claim ----------------
+   Blake is opening a short window so people who have been playing under a typed name for months
+   can attach that record to their new account. His rule, verbatim: "only allowed to do this once
+   and claim 1 name - no going back."
+
+   HOW THE CLIENT FINDS OUT THERE IS ANYTHING TO CLAIM. Two facts, both from the server, never
+   guessed here:
+     - `claimWindow:{open,closesAt}` rides on EVERY account response (/account/apple, /account/me,
+       /account/name), so "is the window open" is known without trying anything and failing.
+     - `pendingClaim:{games,wins,points,koDealt,koTaken}` comes back from POST /account/name. That
+       endpoint is idempotent and FREE when the name you send is the name you already have (the
+       fold is what identity is enforced on, so re-sending it is a label edit, not a rename, and
+       it never touches the 30-day rename cooldown) - which is exactly what makes it safe to use
+       as a read here for somebody who signed in weeks ago and already has a name.
+   The probe runs AT MOST ONCE per page load (CLAIM_PROBED), and never at all when the window is
+   shut, when nobody is signed in, or when this account already declined. In production today the
+   window is CLOSED, so the probe is not even sent and the block never appears.
+
+   WHICH NAME. There is only ever one: the account's own game name. The server matches unclaimed
+   rows by the folded form of that name, so there is nothing for a player to pick and no way to
+   claim somebody else's row by choosing it from a list. One account, one name, once.
+
+   NOTHING IS DESTROYED. The merge moves the old row onto the account; rows nobody claims are
+   frozen and stay visible on the board forever (accounts-design.md 7.4). The copy below says
+   "moves onto your account" and "names nobody claims stay on the board", never "delete".
+
+   EVERY FAILURE IS QUIET. A 410 means the window shut while the panel was open - the block simply
+   goes away with the server's own plain sentence, no error, no dead button. A dead network leaves
+   the offer where it was so it can be tapped again. */
+let ACCT_CLAIM=null;        // {name,games,wins,points,koDealt,koTaken} while an offer is on screen
+let ACCT_CLAIM_STEP='offer';// 'offer' or 'confirm'
+let CLAIM_PROBED=false;     // the /account/name read has already been done this page load
+let CLAIM_BUSY=false;
+function claimWindowOpen(){ return !!(ACCT&&ACCT.claimWindow&&ACCT.claimWindow.open); }
+// Turns the server's counters into one plain English sentence. Games and wins always; the rest
+// only when there is something to say, so a brand-new row does not read as a list of zeroes.
+function claimOfferText(c){
+  const g=c.games|0, w=c.wins|0;
+  const bits=[g+(g===1?' game':' games'), w+(w===1?' win':' wins')];
+  if(c.points)bits.push((c.points|0)+' points');
+  return 'There '+(g===1?'is':'are')+' already '+bits.join(', ')+' on the family leaderboard under the name '+c.name+
+         '. If that is you, we can move it onto your account.';
+}
+function renderAccountClaim(){
+  const box=$('acctClaim');
+  if(!box)return;
+  const show=!!(ACCT&&ACCT.uid&&ACCT_CLAIM&&claimWindowOpen());
+  if(box.classList.contains('hidden')!==!show)box.classList.toggle('hidden',!show);
+  if(!show){ ACCT_CLAIM_STEP='offer'; return; }
+  const t=$('acctClaimText'), warn=$('acctClaimWarn'), offer=$('acctClaimOffer'), conf=$('acctClaimConfirm');
+  const txt=claimOfferText(ACCT_CLAIM);
+  if(t.textContent!==txt)t.textContent=txt;
+  const confirming=ACCT_CLAIM_STEP==='confirm';
+  warn.classList.toggle('hidden',!confirming);
+  offer.classList.toggle('hidden',confirming);
+  conf.classList.toggle('hidden',!confirming);
+  const title=$('acctClaimTitle'), want=confirming?'Are you sure?':'Is this you?';
+  if(title.textContent!==want)title.textContent=want;
+  ['btnAcctClaimYes','btnAcctClaimNo','btnAcctClaimSure','btnAcctClaimBack'].forEach(id=>{ const b=$(id); if(b)b.disabled=CLAIM_BUSY; });
+}
+// Ask the server, once, whether this account has history waiting under its own name.
+async function probeClaimOffer(){
+  if(CLAIM_PROBED||!ACCT||!ACCT.token||!ACCT.gameName)return;
+  if(!claimWindowOpen()||ACCT.claimDeclined)return;
+  CLAIM_PROBED=true;
+  const r=await accountFetch('/account/name',{auth:ACCT.token,name:ACCT.gameName});
+  if(r.status!==200||!r.body)return;
+  if(r.body.claimWindow)ACCT.claimWindow=r.body.claimWindow;
+  if(r.body.pendingClaim&&claimWindowOpen())ACCT_CLAIM=Object.assign({name:ACCT.gameName},r.body.pendingClaim);
+  renderAccountClaim();
+}
+// The window shut under us, or there was nothing left to claim. Clear the offer for good and say
+// whatever the server said, in its own plain words.
+function claimGoneAway(msg){
+  ACCT_CLAIM=null; ACCT_CLAIM_STEP='offer';
+  if(ACCT&&ACCT.claimWindow)ACCT.claimWindow=Object.assign({},ACCT.claimWindow,{open:false});
+  renderAccountClaim(); renderAccountRows();
+  if(msg)toast(msg);
+}
+async function doAccountClaim(decline){
+  if(!ACCT||!ACCT.token||CLAIM_BUSY||!ACCT_CLAIM)return;
+  CLAIM_BUSY=true; renderAccountClaim();
+  const body={auth:ACCT.token};
+  if(decline)body.decline=true;
+  const r=await accountFetch('/account/claim',body);
+  CLAIM_BUSY=false;
+  if(r.status===410){ claimGoneAway((r.body&&r.body.message)||'That one-time window has closed. Your older name stays on the board as history.'); return; }
+  if(r.status!==200){ renderAccountClaim(); toast((r.body&&r.body.message)||"That couldn't be finished right now. Please try again."); return; }
+  const moved=ACCT_CLAIM;
+  ACCT_CLAIM=null; ACCT_CLAIM_STEP='offer';
+  if(decline){ if(ACCT)ACCT.claimDeclined=true; toast('Started fresh. '+moved.name+"'s older games stay on the board as history."); }
+  else toast('Done. Those '+(moved.games|0)+' games are on your account now.');
+  renderAccountClaim(); renderAccountRows();
+}
+$('btnAcctClaimYes').onclick=()=>{ ACCT_CLAIM_STEP='confirm'; renderAccountClaim(); };
+$('btnAcctClaimBack').onclick=()=>{ ACCT_CLAIM_STEP='offer'; renderAccountClaim(); };
+$('btnAcctClaimSure').onclick=()=>{ doAccountClaim(false); };
+$('btnAcctClaimNo').onclick=()=>{ doAccountClaim(true); };
 $('btnAcctSignIn').onclick=()=>{ if(accountsAvailableHere())accountSignIn(); };
 $('btnAcctSignOut').onclick=()=>{ accountSignOut(); };
 $('btnAcctDelete').onclick=()=>{ if(ACCT&&ACCT.uid)openAcctDeleteConfirm(); };
@@ -8896,6 +9259,21 @@ window.__acct={
             note:$('acctSoonNote').textContent,available:accountsAvailableHere(),
             confirmOpen:!$('acctDelConfirm').classList.contains('hidden')};
   },
+  // v0.36 item 3: what the claim block is actually showing right now, read straight off the DOM
+  // so a test cannot pass by inspecting a variable the player never sees.
+  claim:()=>{
+    const box=$('acctClaim');
+    return {shown:!!box&&!box.classList.contains('hidden'),
+            step:ACCT_CLAIM_STEP,
+            windowOpen:claimWindowOpen(),
+            title:$('acctClaimTitle').textContent,
+            text:$('acctClaimText').textContent,
+            warn:$('acctClaimWarn').textContent,
+            warnShown:!$('acctClaimWarn').classList.contains('hidden'),
+            offerShown:!$('acctClaimOffer').classList.contains('hidden'),
+            confirmShown:!$('acctClaimConfirm').classList.contains('hidden')};
+  },
+  probe:()=>probeClaimOffer(),
 };
 // Boot: if this phone is carrying a session, ask the server whether it is still good. This never
 // blocks anything - a guest and a signed-in player take the identical path to the menu.
@@ -8904,6 +9282,133 @@ if(accountsAvailableHere()&&loadAcctToken()){
 }
 renderAccountRows();
 updateAccountButton();
+
+/* ======================== § WELCOME (v0.36 item 1, 2026-07-26) ========================
+   Blake: "if it's a person's first time opening the app (or they don't have an account) they
+   should see a login screen with an apple button to create an account with their Apple ID.
+   Below that, there should be an option to continue as a guest with the knowledge that they
+   wouldn't be on the leaderboard. This is the only time this would happen though (don't make
+   them select guest every time) just let them know they can always change this by clicking the
+   admin button."
+
+   THE ONE HARD REQUIREMENT IS "ONCE". Everything below exists to make that true even on a phone
+   that loses its localStorage, which iOS really does do - ITP can evict a site's localStorage
+   after enough days without a visit, and this app already carries a full IndexedDB mirror of the
+   offline saves for exactly that reason (see the "IndexedDB mirror" block, § SAVE). The answer is
+   written to BOTH stores, and the boot check reads both before deciding to ask.
+
+   WHY THE BOOT CHECK IS ASYNC AND WHY IT IS BOUNDED. IndexedDB has no synchronous API, so the
+   only way to consult the mirror is to wait for it. Waiting risks the opposite failure - a phone
+   where IndexedDB is blocked or wedged would never reach the menu - so the read races a 1500ms
+   timer and a timeout is treated as "we do not know", which shows the screen. Being asked twice
+   in a freak case is a small annoyance; being unable to start a game is not, and this screen must
+   never trap anybody. Nothing else about the boot is blocked either way: the menu is already
+   painted underneath before this ever runs.
+
+   WHO IS NEVER ASKED:
+     - anybody who has already answered, either store;
+     - anybody already signed in (a session token on this phone IS an answer - it is recorded on
+       the spot, so a v0.35 player who signed in yesterday is never asked);
+     - the #autotest harnesses, which drive straight into a game;
+     - a launch that is already mid-flow: a deep-link join, a game in progress, or any other
+       full-screen page already up. Those simply do not record an answer, so the screen appears on
+       the next ordinary launch instead. That is the safe direction to be wrong in.
+
+   ON THE WEBSITE there is no native Apple sheet, so the Apple button is REMOVED (not disabled)
+   and an honest sentence takes its place. The guest button is always there; nobody is ever
+   blocked from playing, on either platform. */
+const WELCOME_KEY='nasty-welcome-choice';
+const WELCOME_IDB_KEY='welcome';
+let WELCOME_SHOWN=false;
+function loadWelcomeChoice(){ try{ return localStorage.getItem(WELCOME_KEY)||''; }catch(e){ return ''; } }
+// Writes both stores. localStorage first and synchronously, because that is the copy the very
+// next boot reads; the IndexedDB mirror is best-effort and never awaited by a caller.
+function rememberWelcomeChoice(choice){
+  const v=(choice==='account')?'account':'guest';
+  try{ localStorage.setItem(WELCOME_KEY,v); }catch(e){}
+  try{ idbPutSave({choice:v,ts:Date.now()},WELCOME_IDB_KEY); }catch(e){}
+}
+// "Has this ever been answered?" - localStorage first (free), then the mirror, which also heals
+// localStorage on the way past so the question is answered synchronously from then on.
+async function welcomeAnswered(){
+  if(loadWelcomeChoice())return true;
+  let rec=null;
+  try{ rec=await idbGetSave(WELCOME_IDB_KEY); }catch(e){ rec=null; }
+  if(rec&&rec.choice){ try{ localStorage.setItem(WELCOME_KEY,rec.choice); }catch(e){} return true; }
+  return false;
+}
+function closeWelcome(){
+  WELCOME_SHOWN=false;
+  closeOverlay('welcomeOverlay');
+}
+/* Deliberately silent. The screen they just closed ends with "You can change it any time - tap
+   ADMIN at the top of the game screen", so a toast would only repeat it - and the toast band sits
+   right over the seat rows on the menu, which is a poor first thing to see on a first launch. */
+function chooseGuest(){
+  rememberWelcomeChoice('guest');
+  closeWelcome();
+}
+/* The Apple button. accountSignIn() records the choice itself the moment a session exists, so
+   this only has to close the screen once that happened. A cancel or a failure leaves the screen
+   exactly where it was, with the guest button still sitting under it - there is always a way
+   forward. */
+async function welcomeSignIn(){
+  const btn=$('btnWelcomeApple');
+  if(!accountsAvailableHere()||ACCT_BUSY)return;
+  if(btn)btn.disabled=true;
+  try{ await accountSignIn(); }
+  catch(e){}
+  if(btn)btn.disabled=false;
+  if(ACCT&&ACCT.uid)closeWelcome();
+}
+$('btnWelcomeApple').onclick=()=>{ welcomeSignIn(); };
+$('btnWelcomeGuest').onclick=chooseGuest;
+function openWelcome(){
+  const here=accountsAvailableHere();
+  // REMOVED, not merely disabled: a greyed-out "Sign in with Apple" on the website is still a
+  // dead Apple button, and Blake's family reads a greyed button as "broken", not "not yet".
+  $('btnWelcomeApple').classList.toggle('hidden',!here);
+  $('welcomeWebNote').classList.toggle('hidden',here);
+  WELCOME_SHOWN=true;
+  openOverlay('welcomeOverlay');
+}
+// Is this launch a plain "opened the app" launch, with nothing else going on?
+function welcomeLaunchIsPlain(){
+  if(location.hash.indexOf('autotest')>=0)return false;
+  try{ if(new URLSearchParams(location.search).get('join'))return false; }catch(e){}
+  if(typeof G!=='undefined'&&G&&G.seats)return false;              // a game is already running
+  if(!$('menu')||$('menu').classList.contains('hidden'))return false;
+  if(visibleModalOverlays().length)return false;                   // something else is already up
+  return true;
+}
+async function maybeShowWelcome(){
+  try{
+    if(!welcomeLaunchIsPlain())return;
+    // Already signed in on this phone: that IS the answer, so record it and never ask.
+    if(loadAcctToken()&&accountsAvailableHere()){ rememberWelcomeChoice('account'); return; }
+    const answered=await Promise.race([
+      welcomeAnswered(),
+      new Promise(r=>setTimeout(()=>r(false),1500)),
+    ]);
+    if(answered)return;
+    if(!welcomeLaunchIsPlain())return;   // re-checked: 1500ms is long enough for a tap to land
+    openWelcome();
+  }catch(e){}
+}
+/* Test hook, same spirit as window.__acct: it reads the real DOM and drives the real handlers.
+   reset() clears BOTH stores so a suite can prove the screen comes back only when the answer is
+   genuinely gone, and comes back exactly once. */
+window.__welcome={
+  shown:()=>{ const o=$('welcomeOverlay'); return !!o&&!o.classList.contains('hidden'); },
+  choice:()=>loadWelcomeChoice(),
+  appleVisible:()=>!$('btnWelcomeApple').classList.contains('hidden'),
+  webNoteVisible:()=>!$('welcomeWebNote').classList.contains('hidden'),
+  show:()=>openWelcome(),
+  check:()=>maybeShowWelcome(),
+  reset:async()=>{ try{ localStorage.removeItem(WELCOME_KEY); }catch(e){} try{ await idbDeleteSave(WELCOME_IDB_KEY); }catch(e){} },
+};
+maybeShowWelcome();
+
 /* sendInvite: shared by the online room's invite button (btnRoomText) and the reunion lobby's
    "Nudge" button - real invites only ever happen from inside the host lobby flow, once a room
    actually exists to invite someone into (v0.9.1: removed the leftover standalone "Text an
@@ -9764,7 +10269,8 @@ function saveSlotLabel(s){
   const who=humans.length?humans.join(' & '):'All CPU';
   const home=saveTeesHome(g);
   const homeBit=home===null?'':` · ${home} of 5 home`;
-  return `${who} · ${g.n} players · ${g.teams?'teams':'free for all'}${homeBit} · saved ${timeAgo(s.ts)}`;
+  // 2026-07-26 (v0.36 item 6): this button wraps, so it spells the game type out in full.
+  return `${who} · ${g.n} players · ${g.teams?'Teams':'Free-for-All'}${homeBit} · saved ${timeAgo(s.ts)}`;
 }
 function updateMenuResumeButtons(){
   const entries=[];

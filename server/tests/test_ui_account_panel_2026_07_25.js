@@ -49,6 +49,11 @@
  * Run: node test_ui_account_panel_2026_07_25.js
  */
 const { chromium } = require("/Users/jarvis/clawd/node_modules/playwright");
+// v0.36 (2026-07-26): seed the first-run sign-in screen's answer before the page boots, so
+// this suite runs as the returning player it was always written about. Real key, real code
+// path, no stub - see test_ui_v036_welcome_bypass.js.
+require("./test_ui_v036_welcome_bypass.js").patch(chromium);
+
 const path = require("path");
 const fs = require("fs");
 
@@ -158,13 +163,23 @@ async function partA(browser) {
         });
         const label = `${m.name} ${n}P ${postGame ? "post-game" : "in-game"}`;
         ok(r.overflow === 0, `${label}: ZERO horizontal overflow on the whole row (scrollWidth - clientWidth = ${r.overflow})`);
-        ok(r.textW.length === 1,
-          `${label}: exactly ONE text button is visible in the row - ${JSON.stringify(r.textIds)} (v0.34 consolidation)`);
+        // ASSERTION UPDATED 2026-07-26 (v0.36 item 2), deliberately, not weakened. v0.34's rule
+        // was "one text button plus the circle". Blake then asked for the circle to become a box
+        // that says ADMIN ("please change the account circle button into a box like we did with
+        // the pause button"), so the row is TWO text buttons now. What actually has to stay true
+        // is the v0.34 shape - the row is exactly THREE things, one on the left, the logo, one on
+        // the right - and that is what is checked here, by id, rather than by counting a class.
+        ok(r.textW.length === 2 && r.textIds[1] === "btnAccount",
+          `${label}: the row is exactly two boxes, the left slot and ADMIN - ${JSON.stringify(r.textIds)}`);
+        ok(Math.abs(r.textH[0] - r.textH[1]) < 0.01,
+          `${label}: ADMIN is exactly the same height as the left button (${r.textH[0]} vs ${r.textH[1]})`);
         ok(r.clipped.every((c) => c <= 0), `${label}: no text button clips its own label`);
         ok(r.textH.every((h) => h >= 44), `${label}: text buttons clear the 44px tap floor - ${JSON.stringify(r.textH)}`);
-        ok(!r.hidden && r.circle.h >= 44 && r.circle.w >= 44, `${label}: the account circle is a real 44px+ tap target (${r.circle.w}x${r.circle.h})`);
-        ok(r.circle.left >= -0.5 && r.circle.right <= r.vw + 0.5, `${label}: the circle is fully on screen`);
-        ok(r.circle.letter.length >= 1, `${label}: the circle is never blank (shows "${r.circle.letter}")`);
+        ok(!r.hidden && r.circle.h >= 44 && r.circle.w >= 44, `${label}: the ADMIN box is a real 44px+ tap target (${r.circle.w}x${r.circle.h})`);
+        ok(r.circle.left >= -0.5 && r.circle.right <= r.vw + 0.5, `${label}: the ADMIN box is fully on screen`);
+        // ASSERTION UPDATED 2026-07-26 (v0.36 item 2): it used to hold a single letter and the
+        // point was that it is never blank. It says ADMIN now, and that is what is checked.
+        ok(/^admin$/i.test(r.circle.letter), `${label}: the top-right box says ADMIN (shows "${r.circle.letter}")`);
         ok(!r.rules2 && !r.oldMute, `${label}: the old RULES and MUTE top-bar buttons are gone from the app entirely`);
         if (postGame) {
           // v0.34: review mode is RESULTS / logo / circle. The way back to the menu moved into the
@@ -192,24 +207,30 @@ async function partA(browser) {
   }
 }
 
-/* ============================= Part B - the circle's letter and colour ============================= */
+/* ===================== Part B - the coloured initial's letter and colour =====================
+   UPDATED 2026-07-26 (v0.36 item 2). This part used to read the TOP BAR's round button, which no
+   longer exists: Blake asked for "a box like the pause button... have it say 'admin'", so the top
+   bar's right slot is a text box now. The coloured initial itself did NOT go away - it is the
+   avatar at the head of the account panel (#acctAvatar), painted by the SAME updateAccountButton()
+   with the SAME accountInitial()/inkFor()/accountColors() helpers. So every assertion below is
+   the same assertion about the same behaviour, read from where that behaviour now shows. */
 async function partB(browser) {
-  console.log("\n=== Part B: the circle shows the right letter in the right colour, and updates the moment the name changes ===");
+  console.log("\n=== Part B: the coloured initial shows the right letter in the right colour, and updates the moment the name changes ===");
   const { ctx, page, errors } = await newCtx(browser, MATRIX[2]);
   await humanBoard(page, 4);
 
   const first = await page.evaluate(() => ({
-    letter: document.getElementById("acctInitial").textContent,
+    letter: document.getElementById("acctAvatar").textContent,
     name: window.chosenName(),
     seat: window.accountSeatIndex(),
-    bg: document.getElementById("btnAccount").style.getPropertyValue("--acctBg"),
+    bg: document.getElementById("acctAvatar").style.getPropertyValue("--acctBg"),
     seatColor: window.G.seats[0].color.c,
     aria: document.getElementById("btnAccount").getAttribute("aria-label"),
   }));
-  ok(first.seat === 0, "offline, the circle belongs to the first human seat (seat 0)");
+  ok(first.seat === 0, "offline, the coloured initial belongs to the first human seat (seat 0)");
   ok(first.letter === first.name.slice(0, 1).toUpperCase(), `the letter is the first letter of the chosen name ("${first.name}" -> "${first.letter}")`);
-  ok(first.bg.toLowerCase() === first.seatColor.toLowerCase(), `the circle is painted in that seat's own board colour (${first.bg} === ${first.seatColor})`);
-  ok(/./.test(first.aria) && first.aria.indexOf(first.name) >= 0, `the circle has a real accessible label ("${first.aria}")`);
+  ok(first.bg.toLowerCase() === first.seatColor.toLowerCase(), `the initial is painted in that seat's own board colour (${first.bg} === ${first.seatColor})`);
+  ok(/./.test(first.aria) && first.aria.indexOf(first.name) >= 0, `the ADMIN box has a real accessible label that still names the player ("${first.aria}")`);
 
   // Pure-function edge cases - the ones a family will actually produce.
   const cases = await page.evaluate(() => {
@@ -237,19 +258,19 @@ async function partB(browser) {
   ok(ink.yellow !== ink.green && ink.white !== ink.navy, "light seat colours (Yellow/White) get different ink from dark ones (Green/Navy)");
   ok(!!ink.junk, "an unparseable colour still returns a real ink value (never blank)");
 
-  // A yellow seat really does paint a yellow circle with dark ink.
+  // A yellow seat really does paint a yellow avatar with dark ink.
   const yellow = await page.evaluate(() => {
     window.G.seats[0].type = "cpu";
     window.G.seats[3].type = "human";
     window.updateAccountButton();
-    const b = document.getElementById("btnAccount");
+    const b = document.getElementById("acctAvatar");
     return { seat: window.accountSeatIndex(), bg: b.style.getPropertyValue("--acctBg"), ink: b.style.getPropertyValue("--acctInk"), c: window.G.seats[3].color.c };
   });
-  ok(yellow.seat === 3 && yellow.bg.toLowerCase() === yellow.c.toLowerCase(), `a Yellow seat paints a Yellow circle (${yellow.bg})`);
-  ok(yellow.ink === "#14210f", `a Yellow circle uses dark ink so the letter is readable (${yellow.ink})`);
+  ok(yellow.seat === 3 && yellow.bg.toLowerCase() === yellow.c.toLowerCase(), `a Yellow seat paints a Yellow avatar (${yellow.bg})`);
+  ok(yellow.ink === "#14210f", `a Yellow avatar uses dark ink so the letter is readable (${yellow.ink})`);
   await page.evaluate(() => { window.G.seats[3].type = "cpu"; window.G.seats[0].type = "human"; window.updateAccountButton(); });
 
-  // Change the name: circle, plaque, setup screen and stored config all move together.
+  // Change the name: the initial, the plaque, the setup screen and stored config all move together.
   const renamed = await page.evaluate(async () => {
     document.getElementById("btnAccount").click();
     document.getElementById("btnAcctName").click();
@@ -258,7 +279,7 @@ async function partB(browser) {
     await new Promise((r) => setTimeout(r, 120));
     const cfg = JSON.parse(localStorage.getItem("nasty-setup") || "{}");
     return {
-      letter: document.getElementById("acctInitial").textContent,
+      letter: document.getElementById("acctAvatar").textContent,
       avatar: document.getElementById("acctAvatar").textContent,
       who: document.getElementById("acctWhoName").textContent,
       seatName: window.G.seats[0].name,
@@ -268,14 +289,14 @@ async function partB(browser) {
       chosen: window.chosenName(),
     };
   });
-  ok(renamed.letter === "Z", `the circle's letter updates IMMEDIATELY after a name change (now "${renamed.letter}")`);
+  ok(renamed.letter === "Z", `the coloured initial updates IMMEDIATELY after a name change (now "${renamed.letter}")`);
   ok(renamed.avatar === "Z" && renamed.who === "Zelda", "the panel's own avatar and name update too");
   ok(renamed.seatName === "Zelda" && renamed.plaque === "Zelda", "the live game's seat and its board name plate are renamed as well (offline)");
   ok(renamed.cfg4 === "Zelda" && renamed.cfg6 === "Zelda", "the stored setup name is updated for BOTH table sizes, so it is the same name next game");
   ok(renamed.editorHidden, "the inline name editor closes itself after saving");
   ok(renamed.chosen === "Zelda", "chosenName() - the one value the setup screen and the online join screen read - is the new name");
 
-  // Rejected names never get through, and never blank the circle.
+  // Rejected names never get through, and never blank the initial.
   const rejected = await page.evaluate(async () => {
     document.getElementById("btnAcctName").click();
     document.getElementById("acctNameInput").value = "shit";
@@ -287,11 +308,11 @@ async function partB(browser) {
     await new Promise((r) => setTimeout(r, 80));
     const warn2 = document.getElementById("acctNameWarn").textContent;
     document.getElementById("btnAcctNameCancel").click();
-    return { warn1, warn2, still: window.chosenName(), letter: document.getElementById("acctInitial").textContent };
+    return { warn1, warn2, still: window.chosenName(), letter: document.getElementById("acctAvatar").textContent };
   });
   ok(/nicer/i.test(rejected.warn1), `a blocked name is refused with a friendly message ("${rejected.warn1}")`);
   ok(/name/i.test(rejected.warn2), `an empty name is refused with a friendly message ("${rejected.warn2}")`);
-  ok(rejected.still === "Zelda" && rejected.letter === "Z", "a refused name never changes the stored name or the circle");
+  ok(rejected.still === "Zelda" && rejected.letter === "Z", "a refused name never changes the stored name or the coloured initial");
 
   // The join screen pre-fills with the same one name.
   const prefilled = await page.evaluate(async () => {
@@ -381,13 +402,20 @@ async function partC(browser) {
   ok(!/apple/i.test(rows.btnAcctSignIn.text), `no dead Apple button in a browser - the row just reads "${rows.btnAcctSignIn.text}"`);
 
   /* This used to be "no /account/* call may exist anywhere in the app". As of v0.35 exactly one
-     provider is wired up, so the assertion becomes the narrower thing that must hold: Apple is
-     live, and Google, Facebook, the email code, the one-time claim and the account-aware
-     /leaderboard/v2 are all still parked. */
+     provider is wired up, so the assertion became the narrower thing that must hold.
+     UPDATED 2026-07-26 (v0.36 item 3), deliberately: the one-time name claim is now BUILT in the
+     client (Blake is opening a 72-hour window for it), so /account/claim is legitimately present.
+     Google, Facebook, the email code and the account-aware /leaderboard/v2 are still parked and
+     this still asserts that. What replaces the claim half of the old assertion is stronger than
+     it was: the claim UI must be invisible and must send NOTHING whenever the server says the
+     window is shut, which is checked live against a real closed-window server in
+     test_ui_v036_2026_07_26.js Part D, and structurally right here. */
   const src = fs.readFileSync(path.resolve(__dirname, "..", "..", "index.html"), "utf8");
   ok(/\/account\/apple/.test(src) && /\/account\/nonce/.test(src), "the client calls Apple's account endpoints (live since v0.35)");
-  ok(!/\/account\/(google|facebook|email)/.test(src) && !/\/account\/claim/.test(src) && !/\/leaderboard\/v2/.test(src),
-    "Google, Facebook, the email code, the name-claim window and /leaderboard/v2 are all still parked");
+  ok(!/\/account\/(google|facebook|email)/.test(src) && !/\/leaderboard\/v2/.test(src),
+    "Google, Facebook, the email code and /leaderboard/v2 are all still parked");
+  ok(/claimWindowOpen\(\)/.test(src) && /if\(!claimWindowOpen\(\)\|\|ACCT\.claimDeclined\)return;/.test(src),
+    "the claim is gated on the SERVER's own claimWindow.open before anything is sent or shown");
 
   // Sound really toggles, and persists.
   const sound = await page.evaluate(async () => {

@@ -46,6 +46,11 @@
  */
 
 const { chromium } = require('/Users/jarvis/clawd/node_modules/playwright');
+// v0.36 (2026-07-26): seed the first-run sign-in screen's answer before the page boots, so
+// this suite runs as the returning player it was always written about. Real key, real code
+// path, no stub - see test_ui_v036_welcome_bypass.js.
+require("./test_ui_v036_welcome_bypass.js").patch(chromium);
+
 const path = require('path');
 const fs = require('fs');
 

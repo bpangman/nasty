@@ -48,6 +48,11 @@
 // Run: node test_topbar_buttons.js
 
 const { chromium } = require('/Users/jarvis/clawd/node_modules/playwright');
+// v0.36 (2026-07-26): seed the first-run sign-in screen's answer before the page boots, so
+// this suite runs as the returning player it was always written about. Real key, real code
+// path, no stub - see test_ui_v036_welcome_bypass.js.
+require("./test_ui_v036_welcome_bypass.js").patch(chromium);
+
 const path = require('path');
 
 const URL = 'file://' + path.resolve(__dirname, '..', '..', 'index.html');
@@ -127,13 +132,20 @@ async function partA_labels(browser) {
       // the last button anywhere inside #topbar, not a direct child.
       last: [...document.querySelectorAll('#topbar button')].pop().id };
   });
-  ok(circle.inTopbar, 'the account circle lives inside #topbar');
-  ok(!circle.isIconBtn, 'the account circle is deliberately NOT an .iconBtn (it never joins the equal-width share)');
-  ok(circle.text.length >= 1, `the account circle is never blank (shows "${circle.text}")`);
-  ok(!EMOJI.test(circle.text), 'the account circle shows a letter, not an emoji');
-  ok(/50%|9999px|22px/.test(circle.radius), `the account circle is round (border-radius ${circle.radius})`);
-  ok(circle.w >= 44 && circle.h >= 44, `the account circle is a real tap target (${circle.w}x${circle.h})`);
-  ok(circle.last === 'btnAccount', 'the account circle is the last control in the row');
+  /* ASSERTIONS UPDATED 2026-07-26 (v0.36 item 2), deliberately. These encoded a round button:
+     "an account (circle icon) that is the first letter of their chosen name" was Blake's v0.33
+     ask. His v0.36 ask reverses it - "please change the account circle button into a box like we
+     did with the pause button and have it say 'admin'" - so the shape assertions become the
+     opposite shape assertions, and the ones that were never about shape (it is in the row, it is
+     last, it is never blank, it is a real tap target) are untouched. */
+  ok(circle.inTopbar, 'the ADMIN button lives inside #topbar');
+  ok(circle.isIconBtn, 'the ADMIN button IS an .iconBtn - the same class PAUSE uses, which is what makes it the same kind of box');
+  ok(circle.text.length >= 1, `the ADMIN button is never blank (shows "${circle.text}")`);
+  ok(/^admin$/i.test(circle.text), `the ADMIN button says Admin (got "${circle.text}")`);
+  ok(!EMOJI.test(circle.text), 'the ADMIN button shows a word, not an emoji');
+  ok(!/50%/.test(circle.radius), `the ADMIN button is a box, not a circle (border-radius ${circle.radius})`);
+  ok(circle.w >= 44 && circle.h >= 44, `the ADMIN button is a real tap target (${circle.w}x${circle.h})`);
+  ok(circle.last === 'btnAccount', 'the ADMIN button is the last control in the row');
 
   // Visual: real rendered glyphs are uppercase on screen even though textContent is mixed case.
   const rendered = await page.evaluate(() => {
@@ -255,7 +267,7 @@ async function partB2_zeroHorizontalOverflowMatrix(browser) {
 // ("Turbo") speed-button labels - the case most likely to silently break equal sizing again if
 // a future change reintroduces per-button width overrides.
 async function partB3_equalWidthMatrix(browser) {
-  console.log('\n=== Part B3 (v0.34): exactly ONE text button in the row, the circle is deliberately its own square shape, full matrix ===');
+  console.log('\n=== Part B3 (v0.34, updated v0.36): PAUSE and ADMIN are two boxes of the same height, neither stretched, full matrix ===');
   const MATRIX = [
     { w: 320, h: 568, top: 0, bottom: 0 },
     { w: 375, h: 667, top: 0, bottom: 0 },
@@ -284,10 +296,27 @@ async function partB3_equalWidthMatrix(browser) {
         return { clientWidth: tb.clientWidth, scrollWidth: tb.scrollWidth, btns, circleW: c.width, circleH: c.height };
       });
       const widths = info.btns.map((b) => b.w);
-      ok(info.btns.length === 1, `${m.w}x${m.h}: the row shows exactly ONE text button (${JSON.stringify(info.btns.map((b) => b.id))}) - v0.34 consolidation`);
-      ok(widths[0] > 0 && widths[0] < m.w * 0.5, `${m.w}x${m.h} speed setting ${speed}: the single text button sizes to its own label (${widths[0].toFixed(2)}px), never stretched across the row`);
-      ok(Math.abs(info.circleW - info.circleH) < 1, `${m.w}x${m.h}: the account circle is square (${info.circleW.toFixed(1)}x${info.circleH.toFixed(1)}) - a circle, not a tab`);
-      ok(Math.abs(info.circleW - widths[0]) >= 1, `${m.w}x${m.h}: the circle is deliberately NOT the text buttons' width (circle ${info.circleW.toFixed(1)} vs text ${widths[0].toFixed(1)})`);
+      /* ASSERTIONS UPDATED 2026-07-26 (v0.36 item 2), deliberately, not weakened. The account
+         control was a 44px CIRCLE from v0.33 to v0.35 and these three lines encoded that shape.
+         Blake then asked for the opposite: "please change the account circle button into a box
+         like we did with the pause button and have it say 'admin'". So the row holds two boxes
+         now. The thing that always mattered - and is still asserted - is that NEITHER button is
+         stretched across its column (which is what would drag the logo off centre and make the
+         row read as one giant bar), that both clear the 44px floor, and that the row still has
+         exactly two controls with the logo between them. */
+      ok(info.btns.length === 2 && info.btns[1].id === 'btnAccount',
+        `${m.w}x${m.h}: the row shows exactly two boxes, the left slot and ADMIN (${JSON.stringify(info.btns.map((b) => b.id))})`);
+      ok(widths.every((w) => w > 0 && w < m.w * 0.5),
+        `${m.w}x${m.h} speed setting ${speed}: each box sizes to its own label (${widths.map((w) => w.toFixed(2)).join(', ')}px), never stretched across the row`);
+      ok(Math.abs(info.btns[0].h - info.btns[1].h) < 0.01 && info.circleH >= 44,
+        `${m.w}x${m.h}: ADMIN is exactly as tall as the left button and clears the tap floor (${info.btns[0].h.toFixed(1)} vs ${info.circleH.toFixed(1)})`);
+      /* UPDATED 2026-07-26 (v0.36 item 2): this used to assert the circle was deliberately a
+         DIFFERENT width from the text button. Both are text boxes now and each sizes to its own
+         label, so what has to hold is that neither is stretched to fill its grid column - if
+         either were, the logo would stop being centred on the screen. Checked as "each box is
+         narrower than its own column", which is the real invariant. */
+      ok(info.circleW < m.w / 2 - 1 && widths[0] < m.w / 2 - 1,
+        `${m.w}x${m.h}: neither box is stretched across its column (ADMIN ${info.circleW.toFixed(1)}, left ${widths[0].toFixed(1)}, column ~${(m.w / 2).toFixed(0)})`);
       ok(info.btns.every((b) => b.scrollW <= b.clientW + 0.5), `${m.w}x${m.h}: no button's own label overflows its box (scrollWidth<=clientWidth per button) - ${JSON.stringify(info.btns.map((b) => `${b.id}:${b.scrollW}/${b.clientW}`))}`);
       ok(info.scrollWidth === info.clientWidth, `${m.w}x${m.h}: topbar itself has zero horizontal overflow (scrollWidth ${info.scrollWidth} === clientWidth ${info.clientWidth})`);
       ok(info.btns.every((b) => b.h >= 44), `${m.w}x${m.h}: every button still at/above the 44px tap-target floor`);

@@ -8,6 +8,11 @@
 //      winner's deltas exactly once, and a client reconnect after the win does not double them.
 // All against a private Node server instance (never prod).
 const { chromium } = require('/Users/jarvis/clawd/node_modules/playwright');
+// v0.36 (2026-07-26): seed the first-run sign-in screen's answer before the page boots, so
+// this suite runs as the returning player it was always written about. Real key, real code
+// path, no stub - see test_ui_v036_welcome_bypass.js.
+require("./test_ui_v036_welcome_bypass.js").patch(chromium);
+
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');

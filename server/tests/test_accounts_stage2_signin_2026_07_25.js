@@ -30,6 +30,11 @@
  * Run: node test_accounts_stage2_signin_2026_07_25.js
  */
 const { chromium } = require("/Users/jarvis/clawd/node_modules/playwright");
+// v0.36 (2026-07-26): seed the first-run sign-in screen's answer before the page boots, so
+// this suite runs as the returning player it was always written about. Real key, real code
+// path, no stub - see test_ui_v036_welcome_bypass.js.
+require("./test_ui_v036_welcome_bypass.js").patch(chromium);
+
 const path = require("path");
 const fs = require("fs");
 const K = require("./test_accounts_kit.js");
@@ -393,7 +398,15 @@ function partE() {
     "E1 the client really does call the account endpoints now (this replaces v0.33's 'it must not' assertion)");
   ok(!/\/account\/(google|facebook|email)/.test(src),
     "E2 Google, Facebook and the email code are NOT wired up - they stay parked");
-  ok(!/\/account\/claim/.test(src), "E3 the one-time claim flow is NOT wired up - it stays parked");
+  /* ASSERTION UPDATED 2026-07-26 (v0.36 item 3), deliberately. v0.35 left the one-time name claim
+     unbuilt on the client, so "the call must not exist" was the right check. Blake is opening a
+     72-hour claim window with v0.36, so the client now has it - and the check becomes the thing
+     that has to stay true for the rest of this file's Part D, which boots a production-shaped
+     server with the window SHUT: the claim is never offered and never sent unless the SERVER's
+     own claimWindow.open says so. Part D below proves that live; this proves it structurally. */
+  ok(/\/account\/claim/.test(src), "E3 the one-time claim flow IS wired up now (v0.36 item 3)");
+  ok(/if\(!claimWindowOpen\(\)\|\|ACCT\.claimDeclined\)return;/.test(src),
+    "E3b and it is gated on the server's own claimWindow before a single request is sent");
   ok(!/\/leaderboard\/v2/.test(src), "E4 the client still reads the plain /leaderboard, not the account-aware v2");
   ok(!/acct\s*:/.test(src.replace(/[a-zA-Z]acct\s*:/g, "")) || !/'acct'|"acct"/.test(src),
     "E5 no acct field is sent on host/join - the websocket wire is unchanged from v0.34");
