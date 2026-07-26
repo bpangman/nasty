@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '7e894e66-bc5c-44bd-856c-496caf018044'
+BUILD_SUBMISSION_ID = 'ea9128e0-fe4c-47e6-b9b7-06e2dbe1fc84'
 
 
 def current_build():
@@ -101,14 +101,14 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>One new thing, and it is completely optional:</p>
+<p>Six things Blake asked for after playing the last build, plus one real fix:</p>
 <ul>
-<li><b>You can now sign in with Apple if you want to.</b> Tap the round button with your initial at the top of the game screen and it is right there. Face ID, done, no password ever.</li>
-<li><b>Nobody has to.</b> The whole game works exactly the same signed out: playing on your own, passing one phone around, and online with the family. Nothing is locked behind it.</li>
-<li><b>What it actually does:</b> it makes your spot on the family leaderboard yours. Right now the board goes by whatever name somebody types, so two people who both type the same name share a row, and a new phone starts from nothing. Signed in, your row follows you.</li>
-<li><b>The leaderboard has not changed.</b> Guests still count, exactly as before. Nobody drops off it.</li>
-<li><b>Signing out and deleting your account</b> are on the same little menu, and deleting asks you first.</li>
-<li>Signing in on the website is not ready yet, so the website politely says so instead of offering a button that would not work.</li>
+<li><b>A welcome screen the first time you open it.</b> Sign in with Apple so the family leaderboard remembers you, or tap "Continue as a guest" and start playing. You only get asked once, ever. Guests do not appear on the family leaderboard, and the screen says so plainly. Accounts are for ages 13 and up; anyone younger should carry on as a guest.</li>
+<li><b>The round button with your initial is now a box that says ADMIN.</b> Same panel behind it, and that is where you change your mind about signing in, at any time.</li>
+<li><b>If you have been playing under a name for a while, you can claim it.</b> Sign in and the app will offer to move that record onto your account. It tells you exactly what it will move, asks you to confirm, and it can only be done once. Nothing is ever deleted: names nobody claims stay on the board as history.</li>
+<li><b>Online games read properly now.</b> Everybody else's name plate has a soft green glow while they are connected, and a name only turns red when that person has actually dropped off. Before this, other people's names were red for the whole game, which is why that never made sense.</li>
+<li><b>The menu buttons are all the same size,</b> and the game type button spells out "Free-for-All" instead of "FFA".</li>
+<li><b>Turn notifications.</b> This build carries the fix for push notifications never arriving on anybody's phone. If it asks about notifications, say yes.</li>
 </ul>
 <h3>The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
