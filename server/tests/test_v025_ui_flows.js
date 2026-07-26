@@ -22,7 +22,7 @@
  *  D. Counterpart: if the other human never actually left (still connected), tapping the tile
  *     goes STRAIGHT to the live board - no rejoin lobby ever appears (items 6+7).
  *  E. Pause/Save opens the single-screen options sheet directly (no separate PAUSED screen
- *     first) with the exact "Have a computer take over my seat" wording (items 4+9).
+ *     first) with the exact "Hand my seat to a CPU" wording (items 4+9, CPU rename 2026-07-25).
  *  F. A disconnected player's name renders red (not just dimmed) and the online rules text
  *     explains it in plain language (item 5).
  *  G. v0.27: the topbar button (Quit, was "Menu" through v0.26) asks for confirmation before
@@ -368,12 +368,12 @@ async function main() {
     // Convert Guest1's seat to a CPU via the real Easy/Tricky/Nasty picker.
     const openedPicker = await host.evaluate(() => {
       const btns = [...document.querySelectorAll("#reunionSeats button")];
-      const cpuBtn = btns.find((b) => b.textContent === "Have a computer take over");
+      const cpuBtn = btns.find((b) => b.textContent === "Hand this seat to a CPU");
       if (!cpuBtn) return false;
       cpuBtn.click();
       return true;
     });
-    check(openedPicker, "C: opened the difficulty picker via the real 'Have a computer take over' button");
+    check(openedPicker, "C: opened the difficulty picker via the real 'Hand this seat to a CPU' button");
     const pickedTricky = await host.evaluate(() => {
       const btns = [...document.querySelectorAll("#reunionSeats button")];
       const trickyBtn = btns.find((b) => b.textContent === "Tricky");
@@ -497,7 +497,7 @@ async function main() {
 
   /* ===================================================================================
    * Scenario E: Pause/Save opens the single-screen options sheet directly, with the exact
-   * "Have a computer take over my seat" wording (items 4+9).
+   * "Hand my seat to a CPU" wording (items 4+9, CPU rename 2026-07-25).
    * =================================================================================== */
   log("--- Scenario E: single-screen pause sheet wording ---");
   {
@@ -523,7 +523,7 @@ async function main() {
       paused: window.G.paused,
     }));
     check(sheetState.leaveConfirmHidden === false, "E: Pause/Save opens the options sheet directly (single screen)");
-    check(sheetState.leaveForGoodText === "Have a computer take over my seat", `E: exact wording preserved (got "${sheetState.leaveForGoodText}")`);
+    check(sheetState.leaveForGoodText === "Hand my seat to a CPU", `E: exact wording preserved (got "${sheetState.leaveForGoodText}")`);
     check(sheetState.paused === true, "E: the table is genuinely paused while the sheet is up");
 
     await page.evaluate(() => document.getElementById("btnLeaveCancel").click());
@@ -605,7 +605,9 @@ async function main() {
     await page.evaluate(() => window.netSend({ type: "start", protocolVersion: PROTOCOL_VERSION, willSeat: true }));
     await page.waitForFunction(() => window.G != null, { timeout: 10000 });
 
-    await page.evaluate(() => document.getElementById("btnMenu").click());
+    // 2026-07-25 (v0.34): the top bar's QUIT button was consolidated away; the identical concede
+    // path is opened by the PAUSED sheet's "Leave without saving" (same openSurrenderConfirm()).
+    await page.evaluate(() => { document.getElementById("btnPause").click(); document.getElementById("btnLeaveDiscard").click(); });
     const afterTap = await page.evaluate(() => ({
       surrenderHidden: document.getElementById("surrenderConfirmOverlay").classList.contains("hidden"),
       leaveConfirmHidden: document.getElementById("leaveConfirmOverlay").classList.contains("hidden"),
@@ -613,9 +615,9 @@ async function main() {
       menuHidden: document.getElementById("menu").classList.contains("hidden"),
       gameHidden: document.getElementById("game").classList.contains("hidden"),
     }));
-    check(!afterTap.surrenderHidden, "G: tapping Quit shows the surrender confirm overlay");
-    check(afterTap.leaveConfirmHidden && afterTap.pauseHidden, "G: the OTHER sheet/pause overlays stay hidden - this is a separate dialog");
-    check(afterTap.menuHidden && !afterTap.gameHidden, "G: the game is still showing - Quit alone does NOT leave until confirmed");
+    check(!afterTap.surrenderHidden, "G: choosing Leave without saving shows the surrender confirm overlay");
+    check(afterTap.leaveConfirmHidden && afterTap.pauseHidden, "G: the sheet it came from and the ambient pause page are both hidden - exactly one page is up");
+    check(afterTap.menuHidden && !afterTap.gameHidden, "G: the game is still showing - the confirm alone does NOT leave until confirmed");
 
     // Cancel: everything stays exactly as it was.
     await page.evaluate(() => document.getElementById("btnSurrenderCancel").click());
@@ -628,14 +630,14 @@ async function main() {
     check(!afterCancel.gameHidden && afterCancel.gOver === false, "G: Cancel leaves the game running, untouched");
 
     // Confirm: lands on the menu (the full loss-recording assertions live in test_surrender.js).
-    await page.evaluate(() => { document.getElementById("btnMenu").click(); document.getElementById("btnSurrenderConfirm").click(); });
+    await page.evaluate(() => { document.getElementById("btnPause").click(); document.getElementById("btnLeaveDiscard").click(); document.getElementById("btnSurrenderConfirm").click(); });
     await page.waitForFunction(() => !document.getElementById("menu").classList.contains("hidden"), { timeout: 5000 });
     const afterConfirm = await page.evaluate(() => ({
       menuHidden: document.getElementById("menu").classList.contains("hidden"),
       gameHidden: document.getElementById("game").classList.contains("hidden"),
     }));
     check(!afterConfirm.menuHidden && afterConfirm.gameHidden, "G: confirming the surrender lands on the menu");
-    check(!(page.__errors || []).length, "G: zero page errors on the Quit/surrender path");
+    check(!(page.__errors || []).length, "G: zero page errors on the concede/surrender path");
 
     await ctx.close();
   }

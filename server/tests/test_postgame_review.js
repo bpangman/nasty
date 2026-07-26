@@ -244,18 +244,25 @@ async function partC(browser) {
 
   // Topbar is already repurposed WHILE the popup is still open (updateTopbarForGameOver ran
   // inside showWin(), before the X is ever tapped) - verify that first.
+  // 2026-07-25 (v0.34 top-row rebuild): the row is one left button + the centred logo + the
+  // circle now, so post-game review mode is RESULTS / logo / circle rather than MENU / RESULTS /
+  // circle. RESULTS is its own button instead of the SAVE button relabelled, and the free way
+  // back to the menu moved to the account panel's "Back to the menu" row (plus the win popup's
+  // own Back to menu button, which never changed). Same actions, same freedoms, new homes.
   const topbarBefore = await page.evaluate(() => ({
     pauseHidden: document.getElementById("btnPause").classList.contains("hidden"),
-    speedHidden: document.getElementById("btnSpeed").classList.contains("hidden"),
-    menuText: document.getElementById("btnMenu").textContent,
-    saveText: document.getElementById("btnSave").textContent,
-    saveHighlighted: document.getElementById("btnSave").classList.contains("postGameHighlight"),
+    resultsHidden: document.getElementById("btnResults").classList.contains("hidden"),
+    resultsText: document.getElementById("btnResults").textContent,
+    resultsHighlighted: document.getElementById("btnResults").classList.contains("postGameHighlight"),
+    menuRowHidden: document.getElementById("btnAcctMenu").classList.contains("hidden"),
+    oldButtons: !!document.getElementById("btnMenu") || !!document.getElementById("btnSave") || !!document.getElementById("btnSpeed"),
   }));
   check(topbarBefore.pauseHidden, "Pause is hidden once the game is over");
-  check(topbarBefore.speedHidden, "Speed is hidden once the game is over");
-  check(topbarBefore.menuText === "Menu", `Quit is relabeled "Menu" once the game is over - got "${topbarBefore.menuText}"`);
-  check(topbarBefore.saveText === "Results", `Save is relabeled "Results" once the game is over - got "${topbarBefore.saveText}"`);
-  check(topbarBefore.saveHighlighted, "Results gets the gold post-game highlight");
+  check(!topbarBefore.resultsHidden, "Results appears in the left slot once the game is over");
+  check(topbarBefore.resultsText === "Results", `the post-game button reads "Results" - got "${topbarBefore.resultsText}"`);
+  check(topbarBefore.resultsHighlighted, "Results gets the gold post-game highlight");
+  check(!topbarBefore.menuRowHidden, 'the account panel offers "Back to the menu" once the game is over');
+  check(!topbarBefore.oldButtons, "the old QUIT / SAVE / SPEED top-bar buttons are gone from the app (v0.34 consolidation)");
 
   // X closes the popup - reveals the board, no consequence.
   await page.click("#btnWinClose");
@@ -319,10 +326,10 @@ async function partC(browser) {
 
   // "Results" reopens the SAME popup - closing the X is not a one-way door - and the reveal
   // state (plaque-2 still selected) survives the round trip since only a fresh game resets it.
-  await page.click("#btnSave");
+  await page.click("#btnResults");
   await page.waitForTimeout(150);
   let reopened = await page.evaluate(() => !document.getElementById("winOverlay").classList.contains("hidden"));
-  check(reopened, 'tapping the repurposed "Results" button reopens the win popup');
+  check(reopened, 'tapping the "Results" button reopens the win popup');
   await page.click("#btnWinClose");
   await page.waitForTimeout(120);
   const stillRevealed = await page.evaluate(() => document.getElementById("plaque-2").classList.contains("revealed"));
@@ -377,7 +384,11 @@ async function partE(browser) {
   const statsAfterWin = await page.evaluate(() => localStorage.getItem("nasty-stats"));
   await page.click("#btnWinClose");
   await page.waitForTimeout(100);
-  await page.click("#btnMenu"); // repurposed "Menu" in post-game mode - must NOT open the surrender dialog
+  // v0.34: the free post-game exit is the account panel's "Back to the menu" row - must NOT open
+  // the surrender dialog (a finished game has nothing left to concede).
+  await page.click("#btnAccount");
+  await page.waitForTimeout(150);
+  await page.click("#btnAcctMenu");
   await page.waitForTimeout(200);
   const state = await page.evaluate(() => ({
     onMenu: !document.getElementById("menu").classList.contains("hidden"),
@@ -700,15 +711,15 @@ async function partG(kind, port, scratch) {
 
     const topbarState = await page.evaluate(() => ({
       pauseHidden: document.getElementById("btnPause").classList.contains("hidden"),
-      menuText: document.getElementById("btnMenu").textContent,
-      saveText: document.getElementById("btnSave").textContent,
+      resultsShown: !document.getElementById("btnResults").classList.contains("hidden"),
+      resultsText: document.getElementById("btnResults").textContent,
     }));
-    check(topbarState.pauseHidden && topbarState.menuText === "Menu" && topbarState.saveText === "Results",
+    check(topbarState.pauseHidden && topbarState.resultsShown && topbarState.resultsText === "Results",
       `(${kind}) a client that RECONNECTS directly into an already-finished game still gets the correct post-game topbar - got ${JSON.stringify(topbarState)}`);
 
     // Tap "Results" - populated (winner name, at least) even though this client never called
     // showWin() itself (see bootGameFromSnapshot()'s comment, index.html).
-    await page.click("#btnSave");
+    await page.click("#btnResults");
     await sleep(150);
     const resultsPopup = await page.evaluate(() => ({
       visible: !document.getElementById("winOverlay").classList.contains("hidden"),
@@ -733,7 +744,9 @@ async function partG(kind, port, scratch) {
       `(${kind}) the reveal shows the exact right card count for seat ${revealSeat}`);
 
     // Leaving from post-game on this real client works too, and is free (no surrender dialog).
-    await page.click("#btnMenu");
+    await page.click("#btnAccount");
+    await sleep(150);
+    await page.click("#btnAcctMenu");
     await sleep(200);
     const state = await page.evaluate(() => ({
       onMenu: !document.getElementById("menu").classList.contains("hidden"),

@@ -215,8 +215,8 @@ async function partC_pathologicalTinyViewport(browser) {
   // weakened. The 5th button in this sheet was "Fix my connection", which Blake asked to be moved
   // OUT of the leave/pause sheet and into the new account panel ("Reset connection ... currently
   // buried in the Pause/leave sheet, where it does not belong"). The sheet's remaining four
-  // online buttons (Return to game / Save & leave / Leave without saving / Have a computer take
-  // over my seat) are all still asserted present and reachable by scrolling, which is what this
+  // online buttons (Return to game / Save & leave / Leave without saving / Hand my seat to a CPU)
+  // are all still asserted present and reachable by scrolling, which is what this
   // check has always actually been about. The moved row has its own coverage in
   // test_ui_account_panel_2026_07_25.js (it must exist in the account panel, online-only).
   ok(r.btnCount >= 4, `every button is still present in the DOM, reachable by scrolling (found ${r.btnCount})`);
@@ -372,7 +372,10 @@ const CONFIRM_OVERLAYS = [
   // badge with a pause message instead"), and it carries four online buttons instead of six.
   // Label text only - every assertion below measures the rendered badge, not the wording.
   { id: 'leaveConfirmOverlay', label: 'PAUSED (pause sheet, online button list)', open: () => { window.NET.online = true; window.openLeaveConfirm(); } },
-  { id: 'saveLeaveConfirmOverlay', label: 'SAVE & LEAVE?', open: () => window.openSaveConfirm() },
+  // 2026-07-25 (v0.34): the SAVE & LEAVE? page is gone - Blake asked for the top bar's SAVE
+  // button to be consolidated away, and it was that button's own confirm. Its action ("Save &
+  // leave", the same doLeaveGame(true)) is a button on the PAUSED sheet directly above, which is
+  // measured here already.
   { id: 'overwriteWarnOverlay', label: 'REPLACE GAME?', open: () => document.getElementById('overwriteWarnOverlay').classList.remove('hidden') },
   { id: 'slotReplaceOverlay', label: 'REPLACE A SAVE?', open: () => document.getElementById('slotReplaceOverlay').classList.remove('hidden') },
 ];
@@ -498,13 +501,12 @@ async function partG_320pxMarginBand(browser) {
 //    margin on each side (the hard floor, separate from Part G's own check of "REPLACE A SAVE?",
 //    the overall widest heading, which lives in its own smaller override group).
 async function partH_perHeadingBigTarget(browser) {
-  console.log('\n=== Part H: PERMANENT - CONCEDE?/LEAVE GAME?/SAVE & LEAVE? each independently fill ~86-88% of the screen width on Blake\'s phone class (390-430px), and each keeps >=5% margin at the narrowest 320px phone ===');
+  console.log('\n=== Part H: PERMANENT - CONCEDE?/PAUSED each independently fill ~86-88% of the screen width on Blake\'s phone class (390-430px), and each keeps >=5% margin at the narrowest 320px phone (SAVE & LEAVE? left this list in v0.34 - the page no longer exists) ===');
   const CASES = [
     { id: 'surrenderConfirmOverlay', label: 'CONCEDE?', open: () => window.openSurrenderConfirm() },
     // 2026-07-25: heading is PAUSED now (see the CONFIRM_OVERLAYS note above). The badge was
     // re-tuned for the shorter word so it still hits this part's own 86-88% target.
     { id: 'leaveConfirmOverlay', label: 'PAUSED (pause sheet)', open: () => { window.NET.online = true; window.openLeaveConfirm(); } },
-    { id: 'saveLeaveConfirmOverlay', label: 'SAVE & LEAVE?', open: () => window.openSaveConfirm() },
   ];
   async function measure(id, open, w, h) {
     const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1 });

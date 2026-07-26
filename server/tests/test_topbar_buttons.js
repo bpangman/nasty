@@ -6,6 +6,25 @@
 //       Speed, Rules, Mute) - the fixed-position Skip button below the board is OUT of scope
 //       (it lives outside #topbar entirely, see index.html's own topbar history).
 //
+// 2026-07-25 UPDATE #2 (Blake's top-row feedback, v0.34) - READ THIS FIRST. Blake, after
+// playing v0.33: "consolidate the 'quit' 'pause' and 'save' buttons into just a pause button in
+// the top left and the account icon in the top right." So the row this file was written about no
+// longer exists. What it is now, at all times, is exactly three things: ONE text button on the
+// left (PAUSE during play, RESULTS once the game is over), the NASTY logo centred on the screen,
+// and the account circle on the right. Assertions were UPDATED, not deleted:
+//   - Part A checks the one remaining text button (plain text, all-caps display, no emoji)
+//     instead of four, and the sound-toggle/circle checks are unchanged;
+//   - Part B3's "the four text buttons share one width" has nothing left to compare, so it became
+//     "exactly one text button is visible, and the circle is deliberately its own square shape";
+//   - Part C was the SAVE button's own confirm dialog. Both are gone; the identical safe exit
+//     ("Save & leave", same doLeaveGame(true)) lives on the PAUSED sheet, and Part C now proves
+//     exactly the same properties there - the save really happens, no loss is recorded, and a
+//     real resume tile appears afterwards.
+// QUIT's action (concede) is reached from the PAUSED sheet's "Leave without saving" and is
+// covered by test_surrender.js. SPEED moved to the account panel and is covered there.
+// The equal-inset / centred-logo geometry has its own permanent suite,
+// test_ui_topbar_v034_2026_07_25.js.
+//
 // 2026-07-25 UPDATE (Blake's account-panel feedback, v0.33): RULES and MUTE are no longer topbar
 // buttons at all - they are rows in the new account panel, and a circular account button
 // (#btnAccount, showing the first letter of the player's chosen name in their seat colour) took
@@ -60,7 +79,9 @@ async function partA_labels(browser) {
   page.on('pageerror', (e) => console.log('  [pageerror]', String(e)));
   await newGame(page);
 
-  const ids = ['btnMenu', 'btnPause', 'btnSave', 'btnSpeed'];   // 2026-07-25: Rules/Mute left the row
+  // 2026-07-25 (v0.34): one text button left in the row. btnResults is its post-game twin - it
+  // is in the DOM the whole time (hidden during play), so both are checked here.
+  const ids = ['btnPause', 'btnResults'];
   for (const id of ids) {
     const info = await page.evaluate((elId) => {
       const el = document.getElementById(elId);
@@ -102,7 +123,9 @@ async function partA_labels(browser) {
     const r = b.getBoundingClientRect();
     return { inTopbar: !!b.closest('#topbar'), isIconBtn: b.classList.contains('iconBtn'),
       text: (b.textContent || '').trim(), radius: cs.borderRadius, w: r.width, h: r.height,
-      last: document.querySelector('#topbar > button:last-of-type').id };
+      // v0.34: the controls sit in left/right slot wrappers, so "last control in the row" is
+      // the last button anywhere inside #topbar, not a direct child.
+      last: [...document.querySelectorAll('#topbar button')].pop().id };
   });
   ok(circle.inTopbar, 'the account circle lives inside #topbar');
   ok(!circle.isIconBtn, 'the account circle is deliberately NOT an .iconBtn (it never joins the equal-width share)');
@@ -114,10 +137,10 @@ async function partA_labels(browser) {
 
   // Visual: real rendered glyphs are uppercase on screen even though textContent is mixed case.
   const rendered = await page.evaluate(() => {
-    const b = document.getElementById('btnMenu');
+    const b = document.getElementById('btnPause');
     return getComputedStyle(b, null).textTransform;
   });
-  ok(rendered === 'uppercase', 'Quit button computed style is uppercase (display-only, textContent unaffected)');
+  ok(rendered === 'uppercase', 'Pause button computed style is uppercase (display-only, textContent unaffected)');
 
   await page.close();
 }
@@ -129,11 +152,15 @@ async function partB_widthMatrix(browser) {
     const page = await browser.newPage({ viewport: { width: w, height: 844 } });
     page.on('pageerror', (e) => console.log('  [pageerror]', String(e)));
     await newGame(page);
+    // v0.34: only the VISIBLE text button counts here - #btnResults is in the DOM the whole time
+    // but is display:none until the game is over, so it legitimately measures 0x0 during play.
     const btns = await page.evaluate(() => {
-      return [...document.querySelectorAll('#topbar .iconBtn')].map((b) => {
-        const r = b.getBoundingClientRect();
-        return { id: b.id, h: r.height, w: r.width };
-      });
+      return [...document.querySelectorAll('#topbar .iconBtn')]
+        .filter((b) => !b.classList.contains('hidden'))
+        .map((b) => {
+          const r = b.getBoundingClientRect();
+          return { id: b.id, h: r.height, w: r.width };
+        });
     });
     const heights = btns.map((b) => b.h);
     const uniform = heights.every((h) => Math.abs(h - heights[0]) < 1);
@@ -186,7 +213,7 @@ async function partB2_zeroHorizontalOverflowMatrix(browser) {
     await page.waitForTimeout(100);
     const info = await page.evaluate(() => {
       const tb = document.getElementById('topbar');
-      const btns = [...tb.querySelectorAll('.iconBtn')].map((b) => {
+      const btns = [...tb.querySelectorAll('.iconBtn')].filter((b) => !b.classList.contains('hidden')).map((b) => {
         const r = b.getBoundingClientRect();
         return { id: b.id, text: b.textContent, h: r.height, left: r.left, right: r.right };
       });
@@ -228,7 +255,7 @@ async function partB2_zeroHorizontalOverflowMatrix(browser) {
 // ("Turbo") speed-button labels - the case most likely to silently break equal sizing again if
 // a future change reintroduces per-button width overrides.
 async function partB3_equalWidthMatrix(browser) {
-  console.log('\n=== Part B3: the four topbar TEXT buttons share ONE equal width (symmetry), the circle is deliberately its own shape, full matrix ===');
+  console.log('\n=== Part B3 (v0.34): exactly ONE text button in the row, the circle is deliberately its own square shape, full matrix ===');
   const MATRIX = [
     { w: 320, h: 568, top: 0, bottom: 0 },
     { w: 375, h: 667, top: 0, bottom: 0 },
@@ -249,7 +276,7 @@ async function partB3_equalWidthMatrix(browser) {
       await page.waitForTimeout(80);
       const info = await page.evaluate(() => {
         const tb = document.getElementById('topbar');
-        const btns = [...tb.querySelectorAll('.iconBtn')].map((b) => {
+        const btns = [...tb.querySelectorAll('.iconBtn')].filter((b) => !b.classList.contains('hidden')).map((b) => {
           const r = b.getBoundingClientRect();
           return { id: b.id, text: b.textContent, w: r.width, h: r.height, scrollW: b.scrollWidth, clientW: b.clientWidth };
         });
@@ -257,12 +284,11 @@ async function partB3_equalWidthMatrix(browser) {
         return { clientWidth: tb.clientWidth, scrollWidth: tb.scrollWidth, btns, circleW: c.width, circleH: c.height };
       });
       const widths = info.btns.map((b) => b.w);
-      const uniform = widths.every((w) => Math.abs(w - widths[0]) < 1);
-      ok(info.btns.length === 4, `${m.w}x${m.h}: the row has exactly four text buttons (${JSON.stringify(info.btns.map((b) => b.id))})`);
-      ok(uniform, `${m.w}x${m.h} speed="${info.btns.find((b) => b.id === 'btnSpeed').text}": all four text buttons within 1px of the same width - ${JSON.stringify(widths.map((w) => Math.round(w * 100) / 100))}`);
+      ok(info.btns.length === 1, `${m.w}x${m.h}: the row shows exactly ONE text button (${JSON.stringify(info.btns.map((b) => b.id))}) - v0.34 consolidation`);
+      ok(widths[0] > 0 && widths[0] < m.w * 0.5, `${m.w}x${m.h} speed setting ${speed}: the single text button sizes to its own label (${widths[0].toFixed(2)}px), never stretched across the row`);
       ok(Math.abs(info.circleW - info.circleH) < 1, `${m.w}x${m.h}: the account circle is square (${info.circleW.toFixed(1)}x${info.circleH.toFixed(1)}) - a circle, not a tab`);
       ok(Math.abs(info.circleW - widths[0]) >= 1, `${m.w}x${m.h}: the circle is deliberately NOT the text buttons' width (circle ${info.circleW.toFixed(1)} vs text ${widths[0].toFixed(1)})`);
-      ok(info.btns.every((b) => b.scrollW <= b.clientW), `${m.w}x${m.h}: no button's own label overflows its box (scrollWidth<=clientWidth per button) - ${JSON.stringify(info.btns.map((b) => `${b.id}:${b.scrollW}/${b.clientW}`))}`);
+      ok(info.btns.every((b) => b.scrollW <= b.clientW + 0.5), `${m.w}x${m.h}: no button's own label overflows its box (scrollWidth<=clientWidth per button) - ${JSON.stringify(info.btns.map((b) => `${b.id}:${b.scrollW}/${b.clientW}`))}`);
       ok(info.scrollWidth === info.clientWidth, `${m.w}x${m.h}: topbar itself has zero horizontal overflow (scrollWidth ${info.scrollWidth} === clientWidth ${info.clientWidth})`);
       ok(info.btns.every((b) => b.h >= 44), `${m.w}x${m.h}: every button still at/above the 44px tap-target floor`);
       ok(errors.length === 0, `${m.w}x${m.h}: zero page errors`);
@@ -271,56 +297,60 @@ async function partB3_equalWidthMatrix(browser) {
   }
 }
 
-async function partC_saveButtonBehavior(browser) {
-  console.log('\n=== Part C: item 5 - Save button (offline) ===');
+/* 2026-07-25 (v0.34): this part used to drive the top bar's own SAVE button and its SAVE &
+   LEAVE? confirm. Blake asked for that button to be consolidated away, so both are gone. The
+   ACTION did not go anywhere - "Save & leave" has always been a button on the PAUSED sheet, and
+   it has always called the identical doLeaveGame(true). Every property this part was written to
+   protect is still asserted here, just through the button that survives:
+     - the game really is on disk afterwards,
+     - leaving this way records NO loss (it is not a concede path),
+     - the menu really does offer a resumable tile afterwards.
+   The one thing that genuinely changed is that "the save already happened before you answered
+   the confirm" no longer has a confirm to be before: an offline game writes its slot
+   continuously anyway, which this part now asserts directly instead. */
+async function partC_saveAndLeaveFromPauseSheet(browser) {
+  console.log('\n=== Part C (v0.34): "Save & leave" on the PAUSED sheet is the consolidated Save button ===');
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   page.on('pageerror', (e) => console.log('  [pageerror]', String(e)));
   await newGame(page);
 
-  const savedBeforeTap = await page.evaluate(() => Object.keys(localStorage).some((k) => k.startsWith('nasty-save')));
-  ok(!savedBeforeTap, 'sanity: no offline save exists yet, fresh game');
+  const gone = await page.evaluate(() => ({
+    save: !!document.getElementById('btnSave'),
+    menu: !!document.getElementById('btnMenu'),
+    speed: !!document.getElementById('btnSpeed'),
+    confirm: !!document.getElementById('saveLeaveConfirmOverlay'),
+  }));
+  ok(!gone.save && !gone.menu && !gone.speed, 'the SAVE, QUIT and SPEED top-bar buttons are gone from the app entirely (Blake: consolidate to one Pause button)');
+  ok(!gone.confirm, 'the SAVE & LEAVE? confirm page went with them (nothing could open it any more)');
 
-  await page.click('#btnSave');
+  // An offline game is already on disk while it is being played - "the game is saved regardless"
+  // is a property of the game loop, not of a button.
+  await page.waitForTimeout(400);
+  const savedDuringPlay = await page.evaluate(() => Object.keys(localStorage).some((k) => k.startsWith('nasty-save')));
+  ok(savedDuringPlay, 'an offline game writes its save slot while it is being played, with no button involved');
+
+  await page.click('#btnPause');
   await page.waitForTimeout(200);
-  const overlayShown = await page.evaluate(() => !document.getElementById('saveLeaveConfirmOverlay').classList.contains('hidden'));
-  ok(overlayShown, 'tapping Save opens the save-leave confirm overlay');
-
-  const savedAfterTapBeforeAnswer = await page.evaluate(() => Object.keys(localStorage).some((k) => k.startsWith('nasty-save')));
-  ok(savedAfterTapBeforeAnswer, 'THE SAVE ALREADY HAPPENED before the confirm is answered at all (Blake: "the game is saved regardless")');
-
-  // Pause was NEVER requested by this path (no PAUSED_BY_SHEET-style freeze for a quick save tap).
-  const pausedWhileConfirmOpen = await page.evaluate(() => window.G.paused);
-  ok(pausedWhileConfirmOpen === false, 'the table is NOT paused while the Save confirm is open (unlike the Pause sheet)');
-
-  // Cancel: stays in the game, save persists (harmless - it already happened).
-  await page.click('#btnSaveLeaveCancel');
-  await page.waitForTimeout(150);
-  const stillInGame = await page.evaluate(() => !document.getElementById('game').classList.contains('hidden'));
-  ok(stillInGame, 'Cancel ("Keep Playing") returns to the SAME game, does not leave');
-  const overlayHiddenAfterCancel = await page.evaluate(() => document.getElementById('saveLeaveConfirmOverlay').classList.contains('hidden'));
-  ok(overlayHiddenAfterCancel, 'Cancel closes the confirm overlay');
+  const sheetShown = await page.evaluate(() => !document.getElementById('leaveConfirmOverlay').classList.contains('hidden'));
+  ok(sheetShown, 'PAUSE opens the PAUSED sheet, which is where Save & leave now lives');
 
   const statsBefore = await page.evaluate(() => localStorage.getItem('nasty-stats'));
-
-  // Tap Save again, this time confirm Leave.
-  await page.click('#btnSave');
-  await page.waitForTimeout(150);
-  await page.click('#btnSaveLeaveConfirm');
-  await page.waitForTimeout(200);
+  await page.click('#btnLeaveSave');
+  await page.waitForTimeout(300);
   const onMenu = await page.evaluate(() => !document.getElementById('menu').classList.contains('hidden'));
-  ok(onMenu, 'confirming Leave lands back on the menu');
+  ok(onMenu, '"Save & leave" lands back on the menu');
 
   const savedAfterLeave = await page.evaluate(() => Object.keys(localStorage).some((k) => k.startsWith('nasty-save')));
   ok(savedAfterLeave, 'the save is still on disk after leaving (this is "Save & leave", not a discard)');
 
   const statsAfter = await page.evaluate(() => localStorage.getItem('nasty-stats'));
-  ok(statsBefore === statsAfter, 'no stat/loss was recorded by Save & Leave (never a surrender/concede path)');
+  ok(statsBefore === statsAfter, 'no stat/loss was recorded by Save & leave (never a surrender/concede path)');
 
   const resumeTileVisible = await page.evaluate(() => {
-    const t1 = [...document.querySelectorAll('.t1')].find((e) => /Resume Saved Game/i.test(e.textContent));
-    return !!t1 && !t1.closest('.hidden');
+    const t1 = [...document.querySelectorAll('.savedTile .t1')].find((e) => /^Resume/i.test(e.textContent.trim()));
+    return !!t1 && !t1.closest('.savedTile').classList.contains('hidden');
   });
-  ok(resumeTileVisible, 'the menu shows a real "Resume Saved Game" tile afterward - the save is genuine and resumable');
+  ok(resumeTileVisible, 'the menu shows a real resume tile afterward - the save is genuine and resumable');
 
   await page.close();
 }
@@ -347,7 +377,7 @@ async function partD_pauseButtonUnchanged(browser) {
   ok(labels.some((t) => /return to game/i.test(t)), 'sheet still offers "Return to Game"');
   ok(labels.some((t) => /save.*leave/i.test(t)), 'sheet still offers "Save & leave"');
   ok(labels.some((t) => /leave without saving/i.test(t)), 'sheet still offers "Leave without saving"');
-  ok(!labels.some((t) => /have a computer take over/i.test(t)), 'offline: "Have a computer take over" correctly hidden (online-only, unchanged gating)');
+  ok(!labels.some((t) => /hand my seat to a cpu/i.test(t)), 'offline: "Hand my seat to a CPU" correctly hidden (online-only, unchanged gating)');
 
   await page.evaluate(() => document.getElementById('btnLeaveCancel').click());
   await page.waitForTimeout(150);
@@ -363,7 +393,7 @@ async function main() {
   await partB_widthMatrix(browser);
   await partB2_zeroHorizontalOverflowMatrix(browser);
   await partB3_equalWidthMatrix(browser);
-  await partC_saveButtonBehavior(browser);
+  await partC_saveAndLeaveFromPauseSheet(browser);
   await partD_pauseButtonUnchanged(browser);
   await browser.close();
   console.log(`\n${pass} passed, ${fail} failed`);

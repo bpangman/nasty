@@ -276,6 +276,7 @@ async function partOptRows(browser) {
             // v0.31 layout had the buttons starting strictly BELOW the label's bottom edge.
             sameLine: sb.top < lb.bottom - 0.5 && lb.top < sb.bottom - 0.5,
             labelBottom: +lb.bottom.toFixed(2), segsTop: +sb.top.toFixed(2),
+            labelRight: +lb.right.toFixed(2),
             segsLeft: +sb.left.toFixed(2), segsW: +sb.width.toFixed(2),
             rowOver: +Math.max(0, panel.left - b.left, b.right - panel.right).toFixed(2),
             segsScrollOver: segsEl.scrollWidth - segsEl.clientWidth,
@@ -299,15 +300,26 @@ async function partOptRows(browser) {
       `${m.w}: the PLAYERS and GAME TYPE option blocks are the same width (${players.segsW} vs ${gameType.segsW}px)`);
     ok(Math.abs(players.segsLeft - gameType.segsLeft) <= 0.5,
       `${m.w}: the two option blocks start at the same left edge (${players.segsLeft} vs ${gameType.segsLeft}px)`);
+    /* 2026-07-25 (Blake, v0.34): "Can you make the buttons have a little space away from 'game
+       type' but still have them start even with the ones above them?" The gap between the label
+       column and the first button must be a real, visible gap on BOTH rows, and the same one. */
+    for (const [label, row] of [['PLAYERS', players], ['GAME TYPE', gameType]]) {
+      const gap = +(row.segsLeft - row.labelRight).toFixed(2);
+      ok(gap >= 10, `${m.w}: ${label}'s buttons stand clear of its label (${gap}px of gap)`);
+    }
+    ok(Math.abs((players.segsLeft - players.labelRight) - (gameType.segsLeft - gameType.labelRight)) <= 0.5,
+      `${m.w}: both rows use the SAME label-to-buttons gap (${(players.segsLeft - players.labelRight).toFixed(2)} vs ${(gameType.segsLeft - gameType.labelRight).toFixed(2)}px)`);
 
-    /* Within a block, every LINE of buttons fills the block edge to edge - so when "Teams"
-       does drop under "Everyone for themselves" on a narrow phone the two read as one tidy
-       stacked pair (both full width) rather than a big button with a little one hanging off
-       it, and when they do fit side by side they still fill the row. Deliberately NOT "both
-       buttons are the same width": at 430 they sit on one line and share it in proportion to
-       their own text, which is what a segmented control should look like. Forcing equal
-       halves there would squeeze "Everyone for themselves" into two lines of text for no
-       reason. Blake's okay was for the block being two rows thick, not for ragged widths. */
+    /* Within a block, every LINE of buttons fills the block edge to edge - so if a button ever
+       does drop under its neighbour on a narrow phone the two read as one tidy stacked pair
+       (both full width) rather than a big button with a little one hanging off it, and when they
+       fit side by side they still fill the row. Deliberately NOT "both buttons are the same
+       width": they share their line in proportion to their own text, which is what a segmented
+       control should look like.
+       2026-07-25 (v0.34): "Everyone for themselves" was renamed to "FFA" (Blake asked for the
+       free-for-all phrasing), which is short enough that the GAME TYPE block now sits on ONE line
+       at every width in this matrix, 320 included. This check is unchanged and simply passes with
+       one line per block instead of two on the narrow sizes. */
     for (const [label, row] of [['PLAYERS', players], ['GAME TYPE', gameType]]) {
       const lines = {};
       row.btns.forEach((b) => { (lines[Math.round(b.top)] = lines[Math.round(b.top)] || []).push(b.w); });
@@ -421,7 +433,13 @@ async function partComments() {
   console.log('\n=== Part 5: the WHY is recorded in the source, so nobody flips this back ===');
   const src = fs.readFileSync(path.resolve(__dirname, '..', '..', 'index.html'), 'utf8');
   ok(/flex-wrap:nowrap;gap:var\(--seatGap\)/.test(src), 'index.html: .seatRow is nowrap (one line per seat)');
-  ok(/\.optRow\{display:flex;flex-wrap:nowrap/.test(src), 'index.html: .optRow is nowrap (label and options share a line)');
+  // 2026-07-25 (v0.34): .optRow gained a --optGap custom property on its first line (Blake asked
+  // for real space between each label and its buttons), so the rule no longer starts with
+  // `display:flex`. The property this assertion exists to protect - nowrap, i.e. the label and
+  // its options always share a line - is unchanged and is what is matched here.
+  ok(/\.optRow\{[^}]*flex-wrap:nowrap/.test(src), 'index.html: .optRow is nowrap (label and options share a line)');
+  ok(/\.optRow\{--optGap:\d/.test(src) && /gap:var\(--optGap\)/.test(src),
+    'index.html: the label-to-buttons gap is ONE custom property shared by both option rows (so they can never drift apart)');
   ok(/all fit on 1\s*\n?\s*row/.test(src) || /all fit on 1/.test(src), 'index.html: Blake\'s item-1 wording is quoted next to the .seatRow rules');
   ok(/2 rows thick for symmetry/.test(src), 'index.html: Blake\'s item-2 wording is quoted next to the .optRow rules');
   ok(/item J/.test(src) && /item G/.test(src), 'index.html: both v0.31 items this reverses are named, with their original overflow numbers kept');

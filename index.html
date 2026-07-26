@@ -396,8 +396,18 @@ button{font:inherit;cursor:pointer}
 .savedTile{display:block;width:100%;text-align:left;border:none;border-radius:14px;
   padding:14px 16px;margin-bottom:12px;background:linear-gradient(135deg,rgba(244,197,66,.22),rgba(244,197,66,.08));
   border:1px solid rgba(244,197,66,.5);color:var(--cream)}
-.savedTile .t1{font-weight:800;font-size:15.5px;color:var(--gold)}
-.savedTile .t2{font-size:13px;color:#dcefe1;margin-top:2px}
+/* 2026-07-25 (Blake: "Still don't make this longer than 2 rows"): a tile is EXACTLY two rows of
+   text, guaranteed by construction rather than by hoping the strings stay short - each row is
+   nowrap and ellipsises if it runs out of column. That matters because the column is genuinely
+   tiny on a small phone: measured, .savedTileMain gets about 145px at 320px wide once the panel
+   padding, the tile padding and the Concede button have taken their share. The strings are built
+   most-important-first for exactly this reason - see saveSlotTitle()/saveSlotDetail(), § MENU.
+   The .savedTileConfirm panel's own .t1 is deliberately exempt (see its rule below): that one is
+   a warning sentence and must be readable in full, so it wraps. */
+.savedTile .t1{font-weight:800;font-size:15.5px;color:var(--gold);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.savedTile .t2{font-size:13px;color:#dcefe1;margin-top:2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* v0.18.1: trash-can delete, 2-tap confirm. The tile itself is no longer a <button> (a nested
    button is invalid HTML and unreliable on iOS Safari) - .savedTileMain (role="button") is the
    resume tap target, .savedTileTrash is a separate real <button>, and .savedTileConfirm swaps
@@ -413,7 +423,9 @@ button{font:inherit;cursor:pointer}
 .savedTileTrash{flex:none;min-width:44px;height:44px;padding:0 12px;display:flex;align-items:center;justify-content:center;
   background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.22);border-radius:10px;
   font-size:13px;font-weight:800;letter-spacing:.02em;line-height:1;color:#ffb4a8;white-space:nowrap}
-.savedTileConfirm .t1{color:#ffb4a8}
+/* The concede warning is a whole sentence and must never be cut off - it opts back out of the
+   one-line rule the two normal tile rows follow. */
+.savedTileConfirm .t1{color:#ffb4a8;white-space:normal;overflow:visible;text-overflow:clip}
 .savedTileConfirmRow{display:flex;gap:10px;margin-top:10px}
 .savedTileConfirmRow .btn{flex:1;min-height:44px;padding:10px 14px;font-size:14.5px}
 .btn.danger{background:var(--red);color:#fff}
@@ -423,7 +435,8 @@ button{font:inherit;cursor:pointer}
    natural width by default (min-width:auto), so the label + the two segmented buttons together
    demanded 29px more than the .panel/.modalCard content box actually has at a 320px phone, and
    the whole row was silently sliced by the card's own clipping - measured directly on the host
-   setup screen ("Everyone for themselves" + "Teams"). Even at 375/390/393/430 the headroom was
+   setup screen (the game-type buttons, "Everyone for themselves" + "Teams" at the time). Even
+   at 375/390/393/430 the headroom was
    only about 3px, so this was one label wording change away from breaking on every phone.
    Fix: let the row WRAP (the label keeps its own line, the buttons drop underneath and get the
    full width) and give both children min-width:0 so they can actually shrink first. The row
@@ -444,12 +457,27 @@ button{font:inherit;cursor:pointer}
        the squeeze instead of the row overflowing,
      - .seg itself is flex:0 1 auto + min-width:0 with a smaller font and tighter padding, and
        .segs keeps flex-wrap:wrap INTERNALLY - so when the two buttons genuinely cannot sit
-       side by side, "Teams" drops UNDER "Everyone for themselves" inside their own column and
-       the block just gets two buttons tall. Blake explicitly okayed that: "it's okay to make
-       these buttons 2 rows thick for symmetry like it was before."
+       side by side, the second one drops UNDER the first inside their own column and the block
+       just gets two buttons tall. Blake explicitly okayed that: "it's okay to make these buttons
+       2 rows thick for symmetry like it was before." (2026-07-25 LATER: with "Everyone for
+       themselves" renamed to "FFA" - see item 2 of the same day's batch - the GAME TYPE block
+       fits on ONE line at every width in the matrix, so the internal wrap is now a safety net
+       rather than something anyone sees. It stays, because a future wording change should bend,
+       not clip.)
    Net effect: zero overflow at 320/375/390/393/430 (verified by measurement, see
    server/tests/test_ui_setup_rows_2026_07_25.js), and the label never loses its line. */
-.optRow{display:flex;flex-wrap:nowrap;gap:8px;align-items:center;justify-content:space-between;margin:10px 2px}
+/* 2026-07-25 (Blake, after playing v0.33): "Can you make the buttons have a little space away
+   from 'game type' but still have them start even with the ones above them? (Might need to move
+   the player buttons a tiny bit further away to match)". --optGap is that space, and it is ONE
+   number used by the row's flex gap, so BOTH rows move together by construction - the PLAYERS
+   buttons and the GAME TYPE buttons can never end up at different left edges because of it.
+   (They already shared a left edge, thanks to the shared 6.6em label column right below; what
+   Blake was reacting to was the buttons sitting tight against the labels, which reads as the two
+   blocks being crammed rather than aligned.) 8px -> 18px, and 6px -> 12px on the narrow tier.
+   The extra pixels come out of the options column, which the FFA rename in the same batch gave
+   plenty of slack to spare - re-measured for zero overflow at every width. */
+.optRow{--optGap:18px;
+  display:flex;flex-wrap:nowrap;gap:var(--optGap);align-items:center;justify-content:space-between;margin:10px 2px}
 .optRow>*{min-width:0}
 /* min-width holds every label to one shared column width (6.6em is just over the longest label
    on the setup screen, "GAME TYPE"), which is what makes the PLAYERS options block and the GAME
@@ -468,8 +496,8 @@ button{font:inherit;cursor:pointer}
    Solo/Teams/KOs tabs) keeps its normal left alignment.
    flex:1 1 auto on the column plus flex:1 1 auto on the buttons is what makes the PLAYERS and
    GAME TYPE blocks the SAME width as each other and makes every button in a block the same
-   width as its neighbour - so when "Teams" does drop under "Everyone for themselves" the two
-   read as one tidy stacked pair rather than a big button with a little one hanging off it.
+   width as its neighbour - so if a button ever does drop under its neighbour the two read as
+   one tidy stacked pair rather than a big button with a little one hanging off it.
    Both are scoped to .optRow so the leaderboard tabs keep sizing to their own text. */
 .optRow .segs{flex:1 1 auto;justify-content:flex-end}
 .optRow .seg{flex:1 1 auto}
@@ -479,19 +507,34 @@ button{font:inherit;cursor:pointer}
 .seg.on{background:var(--gold);border-color:var(--gold);color:#3a2c05}
 /* Same narrow-phone budget idea as .seatRow below: at 359px and under the label sheds a point of
    size and most of its letter-spacing and the buttons tighten. 375 and up never see this block.
-   The longest button label, "Everyone for themselves", needs 166.6px here against 164.8px of
-   column, so at 320 that ONE button carries its text on two lines inside itself and comes out
-   46.8px tall instead of 44. That is deliberate and is not worth chasing: nothing clips either
-   way (the button grows taller, the column does not get wider), the two buttons still fill their
-   column edge to edge, and Blake's okay covers it - "it's okay to make these buttons 2 rows thick
-   for symmetry". Shaving 2px off this padding does buy the single line back in the test browser,
-   but only by about 2px, which a slightly wider device font would eat anyway - so it would be a
-   fragile promise, not a real one. Leave it. */
+   HISTORY (kept because it explains the shape of these rules): the longest button label used to
+   be "Everyone for themselves", which needed 166.6px against 164.8px of column at 320, so that
+   one button carried its text on two lines and came out 46.8px tall instead of 44. Blake renamed
+   that option to "FFA" on 2026-07-25, which removed the squeeze entirely - every option button
+   now sits on one line at every width in the matrix, and the leftover room is what paid for the
+   bigger label-to-buttons gap he asked for in the same batch. The two-line-inside-a-button
+   behaviour is still possible by design (see .segs' internal flex-wrap) and is still preferable
+   to clipping if a future label ever gets long again. */
 @media (max-width:359px){
-  .optRow{gap:6px}
+  .optRow{--optGap:12px}
   .optRow label{font-size:12px;letter-spacing:.04em}
   .seg{font-size:12px;padding:8px 8px}
 }
+/* 2026-07-25: on a 320px phone the two tile rows have to carry real information (Blake's
+   Teams/FFA + tees-home ask) in about 124px. These three small trims hand the text column back
+   roughly 20px without touching the 44px tap floor on either the tile or its Concede button:
+   a slightly tighter tile inset, a slightly tighter Concede button, and one point off the
+   second row's type. 375 and up never see this block. */
+@media (max-width:359px){
+  .savedTile{padding:12px 11px}
+  .savedTileTrash{padding:0 7px;font-size:12px;letter-spacing:0}
+  .savedTile .t1{font-size:14px}
+}
+/* One point off the detail row on every phone narrower than a Pro Max. Measured: it is what
+   makes a real family-length name plus the tees-home count plus "2h ago" fit on one line at
+   375, 390 and 393 with no ellipsis at all. 430 keeps the original 13px because it never needed
+   the help. */
+@media (max-width:399px){ .savedTile .t2{font-size:12px} }
 #teamNote{font-size:13px;color:#ffe9a8;margin:2px 2px 8px;min-height:18px}
 /* 2026-07-25 - Blake's setup-screen feedback, his item 1. READ THIS BEFORE CHANGING THE FOUR
    RULES BELOW, and read it together with the .optRow note above (his item 2).
@@ -517,7 +560,7 @@ button{font:inherit;cursor:pointer}
         the sizing rule rather than a pile of hand-tuned pixel widths that could drift apart.
      2. A human seat hides its difficulty dropdown with visibility:hidden (see renderSeats,
         § MENU) - NOT display:none - so the hidden control still holds its column open and a
-        human row lines up exactly with a computer row. Do not "tidy" that into display:none.
+        human row lines up exactly with a CPU row. Do not "tidy" that into display:none.
      3. .nameWrap is the ONLY flexible child (flex:1 1 0, min-width:0), so it takes whatever is
         left over and is identical on every row of a given screen. It shrinks instead of the row
         overflowing, which is why nothing can ever poke out of the panel.
@@ -597,10 +640,59 @@ button{font:inherit;cursor:pointer}
 #game{position:fixed;inset:0;display:flex;flex-direction:column}
 /* 2026-07-23 (fix, item 12 follow-up): gap/side-padding tightened (5px->4px, 8px->5px) as part
    of fitting all 6 buttons with ZERO horizontal scroll on every current iPhone - see the
-   #topbar .iconBtn rule below for the rest of that fix and the full before/after measurements. */
-#topbar{display:flex;align-items:center;gap:4px;padding:calc(8px + env(safe-area-inset-top)) 5px 8px;
+   #topbar .iconBtn rule below for the rest of that fix and the full before/after measurements.
+
+   2026-07-25 (Blake, after playing v0.33 on his phone) - THE TOP ROW REBUILD. His words:
+   "Please move the nasty logo up to the very top (centered) and then consolidate the 'quit'
+   'pause' and 'save' buttons into just a pause button in the top left and the account icon in
+   the top right but make it equal spacing on the right/top (as far as distance from the top and
+   side of the screen) as the pause button is (account circle looks closer and I don't like
+   that."
+
+   THREE SLOTS, and a GRID is what makes the middle one honest:
+     minmax(0,1fr) auto minmax(0,1fr)
+   splits every spare pixel EQUALLY between the two side columns, so the middle column - the
+   NASTY sign - is centred on the SCREEN itself, not merely dropped into whatever space the two
+   controls happened to leave over. A flex row with space-between cannot promise that: the logo
+   would sit in the middle of the LEFTOVER space and would visibly drift left or right the
+   moment either side changed width (PAUSE vs RESULTS, a 44px circle vs a 36px one in landscape).
+   minmax(0,...) rather than plain 1fr on purpose - a plain 1fr column refuses to shrink below
+   its own content, which would push the logo off-centre on a pathologically narrow screen
+   instead of just letting the columns stay equal.
+
+   EQUAL INSETS - the exact thing Blake complained about ("account circle looks closer"):
+     - --topInset is ONE number used on all three edges, so the PAUSE button's distance from the
+       top edge and from the left edge is the SAME number as the circle's distance from the top
+       edge and from the right edge, by construction rather than by hand-tuning.
+     - env(safe-area-inset-left/right/top) are added on top of it, so the promise still holds on
+       a notched iPhone where the usable screen does not start at x=0.
+     - align-items:start (NOT center) is what makes the two TOP insets equal: both controls'
+       top edges land exactly on the content-box top. Centring them would push each down by
+       half its own leftover height against the taller logo block, which is precisely the
+       "one of them looks closer to the edge" effect being fixed.
+     - The two controls are also the SAME height (44px, the app's tap-target floor - see the
+       .iconBtn/.acctBtn rules below), so their bottom edges line up too.
+   The bottom padding is deliberately SMALLER than the side/top inset and must stay <= fitBoard()'s
+   BOARD_GAP_MIN (10px): the logo now lives in this row, so the board is centred against the
+   logo's bottom, which sits exactly this many pixels above #boardWrap's own top edge. If this
+   padding ever grew past BOARD_GAP_MIN the board's top would be asked to sit above #boardWrap
+   (which is overflow:hidden) on the shortest screens and would clip. See fitBoard(), § RENDER. */
+#topbar{--topInset:10px;
+  display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:start;gap:6px;
+  padding:calc(var(--topInset) + env(safe-area-inset-top))
+          calc(var(--topInset) + env(safe-area-inset-right))
+          6px
+          calc(var(--topInset) + env(safe-area-inset-left));
   flex:none;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
 #topbar::-webkit-scrollbar{display:none}
+/* The two side slots. A wrapper (rather than putting the buttons straight into the grid) exists
+   because the LEFT slot holds two buttons of which exactly one is ever visible: PAUSE while the
+   game is live, RESULTS once it is over (see updateTopbarForGameOver(), § TURNS). Without the
+   wrapper, grid auto-placement would hand the second button its own column and shove the logo
+   off centre the moment the game ended. */
+#topbar .topSlot{display:flex;align-items:flex-start;gap:6px;min-width:0}
+#topbar .topSlotL{justify-content:flex-start}
+#topbar .topSlotR{justify-content:flex-end}
 /* one row, always the same height - the deal chip shrinks/ellipsizes instead of wrapping.
    Topbar (v0.11 item 4) is Menu / Pause-Save / Speed / Rules / Sound - Skip moved OUT of the
    topbar entirely (see #btnSkip below, now fixed-position below the board) so there's no more
@@ -633,8 +725,19 @@ button{font:inherit;cursor:pointer}
    The old #btnPause/#btnSave-only rule (flex:1 0 auto + font-weight:800) is gone - folding
    their sizing into this shared rule (and letting their font-weight fall back to the generic
    .iconBtn 700, same as the other four) is what actually makes the row read as ONE consistent
-   set of tabs instead of two visually bolder buttons bolted onto four plainer ones. */
-#topbar .iconBtn{flex:1 1 0;min-width:0;min-height:48px}
+   set of tabs instead of two visually bolder buttons bolted onto four plainer ones.
+   2026-07-25 (the top-row rebuild - see the #topbar rule above): there is no longer a ROW of
+   equal text tabs to keep symmetrical. QUIT and SAVE are gone from this row entirely (their
+   jobs live on the PAUSED screen now) and SPEED moved into the account panel, so the only text
+   button left is the single left-slot button. flex:1 1 0 would stretch that one button across
+   its whole 1fr column, which would look like a giant PAUSE bar and would also drag the logo's
+   centring assertion into an argument about where the button "really" ends - so it is
+   flex:0 0 auto, sized to its own label, sitting hard against the left inset.
+   The fixed 44px height (not just min-height) is deliberate: the circle on the other side is
+   exactly 44px too, so the two controls' top edges AND bottom edges line up, which is the
+   symmetry Blake actually looked at. 44px is the app's tap-target floor (v0.10). */
+#topbar .iconBtn{flex:0 0 auto;min-width:0;min-height:44px;height:44px;
+  display:flex;align-items:center;justify-content:center}
 /* 2026-07-23 (Blake's item 12): "Make Quit all caps with no x on the button. Same with Pause
    but no pause emoji. Same with Save in all caps - same for all the buttons at the top
    actually!" Scoped to `#topbar .iconBtn` specifically (not a blanket .iconBtn rule) so the
@@ -684,19 +787,25 @@ button{font:inherit;cursor:pointer}
    10/3vw/13 -> 11/3.5vw/14.5. Re-measured at every width in the matrix with the worst-case
    labels (NORMAL is still the widest single word) - every label stays one unclipped word, all
    four stay exactly equal to each other, and the row still has ZERO horizontal overflow with
-   the circle in it. Numbers in server/tests/test_ui_account_panel_2026_07_25.js. */
-#topbar .iconBtn{text-transform:uppercase;padding:6px 7px;font-size:clamp(11px,3.5vw,14.5px)}
+   the circle in it. Numbers in server/tests/test_ui_account_panel_2026_07_25.js.
+   2026-07-25 LATER (the top-row rebuild): one text button left, and it no longer has to share a
+   width with anything, so it can simply be comfortable - roomier side padding (7px -> 12px) and
+   a slightly bigger, steadier type size (11/3.5vw/14.5 -> 12/3.6vw/15). The label is one short
+   word (PAUSE, or RESULTS after the game) at every width in the matrix, so there is nothing
+   left for the clamp floor to rescue. Numbers in
+   server/tests/test_ui_topbar_v034_2026_07_25.js. */
+#topbar .iconBtn{text-transform:uppercase;padding:6px 12px;font-size:clamp(12px,3.6vw,15px)}
 /* 2026-07-25 (Blake: "replace the 'rules' and 'mute' buttons with an account (circle icon) that
    is the first letter of their chosen name. When clicked, this opens a mini window that offers
    the rules and mute buttons as well as other settings and things that belong on this kind of
    panel"). The circle is deliberately NOT an .iconBtn:
-   - .iconBtn means "one of the equal-width text tabs" (flex:1 1 0, see the rule above, the
-     v0.31 symmetry contract). A circle that joined that share would either stop being a circle
-     or drag the four text buttons narrower again - the exact opposite of what Blake asked for.
+   - .iconBtn means "a text button in this row". A circle that took the same rule would either
+     stop being a circle or would have to carry a text label.
    - So it is flex:0 0 auto at a fixed 44px square, which is the app's own tap-target floor
      (v0.10), and it sits at the end of the row where a phone user's thumb already expects an
-     avatar. #topbar .iconBtn selectors elsewhere (CSS and tests alike) therefore keep meaning
-     exactly what they always meant: the text buttons, all equal, nothing else.
+     avatar. 44px is also EXACTLY the left button's height (see the #topbar .iconBtn rule
+     above), which is half of what makes Blake's "equal spacing on the right/top" true: same
+     height + align-items:start on the row = the same distance from the top edge for both.
    Colour comes from the player's own seat (--acctBg/--acctInk, written by updateAccountButton(),
    § ACCOUNT) so the circle reads as THEM - the same colour as their tees and their name plaque.
    The fallback values here are what a pre-game/unknown-seat state paints, so it can never
@@ -708,12 +817,16 @@ button{font:inherit;cursor:pointer}
   font-weight:900;font-size:18px;line-height:1;letter-spacing:0;text-transform:uppercase;
   font-family:inherit;cursor:pointer;overflow:hidden}
 #topbar .acctBtn>span{display:block;pointer-events:none}
-/* 2026-07-25 (Blake's post-game review request, item 4): once the game is over, the repurposed
-   Save->Results button (see updateTopbarForGameOver(), § TURNS) gets a gold highlight so it
-   reads as the obviously-important "look at the results again" button, not just another plain
-   topbar label - the same gold-accent language the rest of the app already uses for anything
-   the player should notice (turn ring, points, etc). */
-#btnSave.postGameHighlight{background:rgba(244,197,66,.22);border-color:rgba(244,197,66,.55);
+/* 2026-07-25 (Blake's post-game review request, item 4): once the game is over, the RESULTS
+   button (see updateTopbarForGameOver(), § TURNS) gets a gold highlight so it reads as the
+   obviously-important "look at the results again" button, not just another plain topbar label -
+   the same gold-accent language the rest of the app already uses for anything the player should
+   notice (turn ring, points, etc).
+   2026-07-25 LATER (the top-row rebuild): this used to be the SAVE button relabelled. SAVE is
+   gone from the row, so RESULTS is its own button (#btnResults) that lives in the same left
+   slot PAUSE occupies during play - exactly one of the two is ever visible, so the row is
+   always the same three things: one left button, the centred logo, the circle. */
+#btnResults.postGameHighlight{background:rgba(244,197,66,.22);border-color:rgba(244,197,66,.55);
   color:var(--gold);font-weight:800}
 @keyframes netPulse{50%{opacity:.4}}
 /* v0.16: problem-only connection indicator (see updateConnIndicator()) - USED to be a small
@@ -1003,8 +1116,15 @@ button{font:inherit;cursor:pointer}
 @media (prefers-reduced-motion: reduce){ .teeBubble{animation:none} }
 
 /* ---------- In-game logo ---------- */
-#gameLogo{position:absolute;top:4px;left:50%;transform:translateX(-50%);text-align:center;
-  pointer-events:none;z-index:2;width:100%}
+/* 2026-07-25 (Blake: "Please move the nasty logo up to the very top (centered)"): this used to
+   be an absolutely-positioned overlay pinned 4px below #boardWrap's top edge, floating OVER the
+   board with pointer-events:none. It is now a real, in-flow item in the top row's middle grid
+   column (see the #topbar rule above) - the very top of the screen, centred on the screen
+   itself. Nothing here positions it any more: the grid does, which is what makes "centred" mean
+   centred on the viewport rather than centred in the leftover space between two controls.
+   pointer-events:none stays (it is decoration, and a stray tap near the top of the screen
+   should never feel like it hit something). */
+#gameLogo{text-align:center;pointer-events:none;justify-self:center;min-width:0}
 #gameLogo .sign{padding:5px 16px 4px;border-width:3px;outline-width:2px;border-radius:9px}
 #gameLogo .sign b{font-size:20px;letter-spacing:.12em;text-shadow:0 2px 0 rgba(0,0,0,.35)}
 #gameLogo .sub2{margin-top:9px;font-size:9.5px;letter-spacing:.24em;color:#9ec7aa;text-transform:uppercase}
@@ -1218,7 +1338,7 @@ button{font:inherit;cursor:pointer}
    sheet plus the five true confirm dialogs) - every .modalCard overlay (rules, leaderboard, host
    setup, join, etc.) keeps the original 22px .overlay padding untouched, confirmed directly
    (computed style + rendered position, see server/tests/test_overlay_sizing.js). */
-#pauseOverlay,#leaveConfirmOverlay,#surrenderConfirmOverlay,#saveLeaveConfirmOverlay,
+#pauseOverlay,#leaveConfirmOverlay,#surrenderConfirmOverlay,
 #overwriteWarnOverlay,#slotReplaceOverlay{padding:10px}
 .overlay h2{margin:16px 0 6px;font-size:26px}
 .overlay p{color:#cfe8d6;max-width:420px;line-height:1.55;font-size:15.5px}
@@ -1265,7 +1385,7 @@ button{font:inherit;cursor:pointer}
    its own text, so the leave sheet's five options rendered at five different widths at a 320px
    phone - 167 / 130 / 195 / 296 / 167px, measured - reading as a ragged pile rather than a list
    of choices. Worse, size then implied importance in a dialog where the widest button ("Have a
-   computer take over my seat") is one of the two that COSTS you a loss. One column, one width,
+   my seat to a CPU") is one of the two that COSTS you a loss. One column, one width,
    in the deliberate order the markup lists them: safe options first, expensive ones last, all
    equally weighted so the WORDS and the danger colour are what distinguish them. Only scoped to
    .confirmCard, so the menu's own .bigBtns rows and the two speed pickers are untouched. */
@@ -1357,9 +1477,11 @@ button{font:inherit;cursor:pointer}
    of the screen width on Blake's own phone class (390-430px) with its own real end-margin - not
    sized off any other heading at all anymore. "SAVE & LEAVE?" keeps using the main rule above
    unchanged (it was already at its own one-line wrap limit, per the follow-up #2 comment) - now
-   that CONCEDE?/LEAVE GAME? have their own rules, the main rule effectively only serves
-   saveLeaveConfirmOverlay and the pause sheet ("PAUSED", short enough to have plenty of room
-   either way). Font grew about 1.67x for "CONCEDE?" and about 1.32x for "LEAVE GAME?" relative to
+   that CONCEDE?/LEAVE GAME? have their own rules, the main rule effectively only serves the
+   pause sheet ("PAUSED", short enough to have plenty of room either way) and the remaining
+   warn/replace dialogs. (2026-07-25: the SAVE & LEAVE? page itself is gone with the SAVE button
+   - see the § SAVE comment in § MENU - but its measured sizing is what these numbers came from,
+   which is why it is still described here.) Font grew about 1.67x for "CONCEDE?" and about 1.32x for "LEAVE GAME?" relative to
    the original v0.28.2 numbers - different multipliers because they are different lengths of
    text, but the same real target (~86-88% of the screen) governs both, exactly like "SAVE & LEAVE?"
    already had. Padding/border scaled right alongside each font so the whole badge grows as a unit,
@@ -1557,8 +1679,16 @@ button{font:inherit;cursor:pointer}
    Tap targets shrink from the usual 44px floor to 36px here - a deliberate, narrow tradeoff for
    the one pathological aspect ratio in the matrix, not the general phone case. */
 @media (max-height:480px) and (orientation:landscape){
-  #topbar{padding-top:4px;padding-bottom:4px}
+  /* 2026-07-25 (the top-row rebuild): --topInset is the ONE number the row's top/left/right
+     insets are built from, so shrinking the chrome on this pathological aspect ratio is a
+     single edit and Blake's "equal spacing on the right/top" survives it untouched. */
+  #topbar{--topInset:6px;padding-bottom:4px}
   .iconBtn{min-height:36px;padding:5px 7px}
+  /* height AND min-height - the base #topbar .iconBtn rule sets both (44px), and it outranks the
+     plain .iconBtn line above, so overriding only `height` here would leave a 44px min-height
+     fighting a 36px height and the button would stay 44 while the circle shrank to 36. The two
+     controls must stay the SAME height or their bottom edges stop lining up. */
+  #topbar .iconBtn{height:36px;min-height:36px}
   /* 2026-07-25: the account circle shrinks with the rest of the row on this one pathological
      aspect ratio, so it stays the same height as the text buttons beside it instead of
      standing 8px taller than everything else. Same deliberate 36px tradeoff as the line above. */
@@ -1689,7 +1819,7 @@ button{font:inherit;cursor:pointer}
       <div class="segs"><button class="seg" id="p4">4 players</button><button class="seg" id="p6">6 players</button></div>
     </div>
     <div class="optRow"><label>Game type</label>
-      <div class="segs"><button class="seg" id="mFFA">Everyone for themselves</button><button class="seg" id="mTeams">Teams</button></div>
+      <div class="segs"><button class="seg" id="mFFA">FFA</button><button class="seg" id="mTeams">Teams</button></div>
     </div>
     <div id="teamNote"></div>
     <div id="seatList"></div>
@@ -1704,7 +1834,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.33</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.34</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -1712,13 +1842,35 @@ button{font:inherit;cursor:pointer}
   <div id="topbar">
     <!-- 2026-07-23: Quit/Pause/Save/Mute all had their leading emoji dropped (Blake's item 12 -
          "no x on the button", "no pause emoji", same for every top button) - #topbar .iconBtn's
-         new text-transform:uppercase (§ STYLE) handles the all-caps display for every one of
-         these, so the literal strings below stay plain mixed-case. Pause/Save split into two
-         buttons this same session (item 5) - see openSaveConfirm()/openPauseSheet(), § MENU. -->
-    <button class="iconBtn" id="btnMenu">Quit</button>
-    <button class="iconBtn" id="btnPause">Pause</button>
-    <button class="iconBtn" id="btnSave">Save</button>
-    <button class="iconBtn" id="btnSpeed">Speed: Normal</button>
+         text-transform:uppercase (§ STYLE) handles the all-caps display, so the literal strings
+         below stay plain mixed-case.
+         2026-07-25 (Blake, after playing v0.33 on his phone): "consolidate the 'quit' 'pause'
+         and 'save' buttons into just a pause button in the top left and the account icon in the
+         top right." So this row is now exactly THREE things at all times:
+           left slot  - PAUSE while the game is live, RESULTS once it is over (never both)
+           middle     - the NASTY logo, centred on the screen (moved up out of the board area)
+           right slot - the account circle
+         QUIT and SAVE are not gone as ACTIONS - they are the PAUSED screen's own buttons now
+         (Return to game / Save & leave / Leave without saving / Hand my seat to a CPU), which is
+         where a player already goes to step away. SPEED moved into the account panel next to
+         Sound (see #btnAcctSpeed, § ACCOUNT). -->
+    <div class="topSlot topSlotL">
+      <button class="iconBtn" id="btnPause">Pause</button>
+      <!-- Post-game review mode (v0.30). Reopens the win popup, which carries its own "Back to
+           menu" button; the account panel also grows a "Back to the menu" row once the game is
+           over, so both post-game actions stay one tap away without adding a fourth thing to
+           this row. See updateTopbarForGameOver(), § TURNS. -->
+      <button class="iconBtn postGameHighlight hidden" id="btnResults">Results</button>
+    </div>
+    <!-- 2026-07-25: the in-game logo LIVES HERE now (it used to be an absolutely-positioned
+         overlay floating over the top of the board inside #boardWrap). Blake: "Please move the
+         nasty logo up to the very top (centered)". fitBoard() (§ RENDER) still centres the board
+         between this block's bottom edge and the message band, so the gap above the board and
+         the gap below it stay equal - the reference just moved up here with the logo. -->
+    <div id="gameLogo">
+      <div class="sign"><b>NASTY</b></div>
+      <div class="sub2">Est. 1993</div>
+    </div>
     <!-- 2026-07-25 (Blake, after playing v0.32 on his phone): "replace the 'rules' and 'mute'
          buttons with an account (circle icon) that is the first letter of their chosen name.
          When clicked, this opens a mini window that offers the rules and mute buttons as well
@@ -1727,14 +1879,15 @@ button{font:inherit;cursor:pointer}
          buttons spacier up top especially on smaller phones)." RULES and MUTE are gone from
          this row entirely - they are rows in #accountOverlay now (see § ACCOUNT). The circle
          is the only non-.iconBtn in the top bar on purpose; see its CSS comment, § STYLE.
-         The letter and colour are written by updateAccountButton() - never left blank. -->
-    <button class="acctBtn" id="btnAccount" aria-label="Your settings"><span id="acctInitial">?</span></button>
+         The letter and colour are written by updateAccountButton() - never left blank.
+         2026-07-25 (the top-row rebuild): it sits in its own right-hand slot now, at exactly the
+         same distance from the top and side edges as the left button - Blake: "account circle
+         looks closer and I don't like that." -->
+    <div class="topSlot topSlotR">
+      <button class="acctBtn" id="btnAccount" aria-label="Your settings"><span id="acctInitial">?</span></button>
+    </div>
   </div>
   <div id="boardWrap">
-    <div id="gameLogo">
-      <div class="sign"><b>NASTY</b></div>
-      <div class="sub2">Est. 1993</div>
-    </div>
     <!-- v0.16: problem-only connection indicator - lives in the gap below the logo, above the
          board (see #connIndicator's CSS + positionConnIndicator(), § RENDER). Hidden by
          default; updateConnIndicator() (§ NET) is the only thing that ever shows it. -->
@@ -1770,7 +1923,7 @@ button{font:inherit;cursor:pointer}
 </div>
 
 <div id="toasts"></div>
-<!-- v0.22 P3: away-ladder action buttons (Nudge again / Have the computer play this turn) -
+<!-- v0.22 P3: away-ladder action buttons (Nudge again / Have a CPU play this turn) -
      rendered by renderAwayLine(), § NET; empty and invisible the rest of the time. -->
 <div id="awayActions"></div>
 
@@ -1788,7 +1941,7 @@ button{font:inherit;cursor:pointer}
   <div class="sign"><b id="winTitle">-</b><small id="winSub">wins the game</small></div>
   <p id="winText"></p>
   <p id="winPoints" style="font-weight:800;color:var(--gold);font-size:14.5px"></p>
-  <!-- Per-game knockout scoreboard, every seat (human and computer) - see
+  <!-- Per-game knockout scoreboard, every seat (human and CPU) - see
        buildGameKoTableHtml(), § TURNS. -->
   <div id="winKoWrap"></div>
   <div class="bigBtns">
@@ -1847,7 +2000,7 @@ button{font:inherit;cursor:pointer}
       <button class="seg" id="lbTabKo">KOs</button>
     </div>
     <div id="lbBody"></div>
-    <p id="lbCaption" style="font-size:12.5px;color:#9ec7aa">Points per win: 1 for each Easy computer you beat, 2 for Tricky, 3 for Nasty or a person - people only, computers never show up here.</p>
+    <p id="lbCaption" style="font-size:12.5px;color:#9ec7aa">Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a person - people only, CPUs never show up here.</p>
     <div class="bigBtns"><button class="btn primary" id="btnLbClose">Close</button></div>
   </div>
 </div>
@@ -1950,7 +2103,7 @@ button{font:inherit;cursor:pointer}
       <li>Anyone can pause for everyone.</li>
       <li>You can switch apps anytime. The game keeps going and catches you up when you return. If your board ever looks stuck, close and reopen the app.</li>
       <li>When a player's name turns red, they are offline. The game keeps going and they catch up when they come back.</li>
-      <li>Need to leave for good? Have a computer take over your seat (under Pause).</li>
+      <li>Need to leave for good? Hand your seat to a CPU (under Pause).</li>
     </ul>
     <div class="bigBtns"><button class="btn primary" id="btnOnlineRulesOk">Got it, let's play</button></div>
   </div>
@@ -1964,7 +2117,7 @@ button{font:inherit;cursor:pointer}
 <div id="speedPickerOverlay" class="overlay hidden">
   <div class="modalCard">
     <h3>How fast should the game play?</h3>
-    <p>Pick a pace for moves and animations. You can change this anytime in the game with the Speed button.</p>
+    <p>Pick a pace for moves and animations. You can change it anytime during the game - tap your circle in the top corner, then Table speed.</p>
     <!-- 2026-07-25 (item N of the UI polish batch): this is now the same 2x2 grid the host
          speed picker uses (#speedPickerBtns shares #hostSpeedBtns' rule, § STYLE) instead of a
          .bigBtns flex-wrap pile that came out four different widths. The four tiles' labels and
@@ -1979,7 +2132,7 @@ button{font:inherit;cursor:pointer}
 <!-- v0.25 item 2: the host picks the TABLE speed before the room (and the invite) even
      exists - this seeds the server's shared tableSpeed, closing the v0.19-flagged gap where
      an online table always started at the server default no matter what the host wanted.
-     Defaults to the host's own speed choice; the in-game Speed button still changes it live
+     Defaults to the host's own speed choice; the in-game Table speed row still changes it live
      (host-only), exactly as before. -->
 <div id="hostSpeedOverlay" class="overlay hidden">
   <div class="modalCard">
@@ -1996,11 +2149,11 @@ button{font:inherit;cursor:pointer}
       <div class="segs"><button class="seg" id="hostP4">4 players</button><button class="seg" id="hostP6">6 players</button></div>
     </div>
     <div class="optRow"><label>Game type</label>
-      <div class="segs"><button class="seg" id="hostFFA">Everyone for themselves</button><button class="seg" id="hostTeams">Teams</button></div>
+      <div class="segs"><button class="seg" id="hostFFA">FFA</button><button class="seg" id="hostTeams">Teams</button></div>
     </div>
     <div id="hostTeamNote" style="font-size:13px;color:#ffe9a8;margin:2px 2px 10px;min-height:18px"></div>
     <h4 style="margin:14px 0 4px;color:var(--gold);font-size:15px">How fast should the table play?</h4>
-    <p>This sets the game speed for everyone at your table. You can change it anytime during the game with the Speed button.</p>
+    <p>This sets the game speed for everyone at your table. You can change it anytime during the game - tap your circle in the top corner, then Table speed.</p>
     <div class="bigBtns" id="hostSpeedBtns"></div>
     <div class="bigBtns"><button class="btn ghost" id="btnHostSpeedCancel">Cancel</button></div>
   </div>
@@ -2011,13 +2164,13 @@ button{font:inherit;cursor:pointer}
      also opens live for every OTHER player already at the table (see 'reunionStatus' in
      handleNetMessage) - nobody's return silently resumes the game out from under someone else.
      Per MISSING player: "Send rejoin link" (share sheet with the room's invite link) and "Have
-     a computer take over" with an Easy/Tricky/Nasty picker (server converts the seat to a real
+     this seat to a CPU" with an Easy/Tricky/Nasty picker (server converts the seat to a real
      CPU - takeOverSeat, same seatToCpu machinery as leave-for-good). Everyone who IS present
      taps "I'm ready" - play resumes automatically, on its own, once every connected human has. -->
 <div id="reunionOverlay" class="overlay hidden">
   <div class="modalCard">
     <h3>Getting the table back together</h3>
-    <p>Tap Ready up when you're at the table - play picks back up on its own once everyone connected is ready. Missing someone? Send them a rejoin link, or hand their seat to a computer.</p>
+    <p>Tap Ready up when you're at the table - play picks back up on its own once everyone connected is ready. Missing someone? Send them a rejoin link, or hand their seat to a CPU.</p>
     <!-- 2026-07-24 (Blake's item 14): if this game is Teams, say so - a rejoin already
          correctly restores the real team pairing (it's just part of the same saved game state
          every reconnect already restores), this just makes that visible. -->
@@ -2076,8 +2229,21 @@ button{font:inherit;cursor:pointer}
     <div class="acctRows">
       <button class="btn ghost acctRow" id="btnAcctRules">How to play</button>
       <button class="btn ghost acctRow" id="btnAcctSound">Sound: on</button>
+      <!-- 2026-07-25 (Blake's top-row feedback): SPEED left the top bar and landed here, next to
+           Sound, because it is the same kind of thing - a setting for this phone, not an action
+           in the game. Behaviour is character-for-character the old top-bar button's: tap to
+           step to the next speed, and in an ONLINE game only the host may change the table
+           speed. Everyone else sees that written on the row itself (a toast would be invisible
+           behind this full-screen panel) and the row is disabled for them. See
+           $('btnAcctSpeed') and speedRowLabel(), § MENU. -->
+      <button class="btn ghost acctRow" id="btnAcctSpeed">Table speed: Normal</button>
       <button class="btn ghost acctRow" id="btnAcctName">Change your name</button>
       <button class="btn ghost acctRow hidden" id="btnAcctReset">Fix my connection<small>Reconnects this phone to the online game</small></button>
+      <!-- 2026-07-25 (the top-row rebuild): once the game is OVER the top row's left slot shows
+           RESULTS, so the way back to the menu lives here (and on the win popup's own "Back to
+           menu" button). Hidden during play - there is a whole PAUSED screen for leaving a game
+           that is still going, with the right warnings on it. -->
+      <button class="btn ghost acctRow hidden" id="btnAcctMenu">Back to the menu<small>This game is finished - nothing left to lose</small></button>
     </div>
     <div class="acctNameEdit hidden" id="acctNameEdit">
       <input id="acctNameInput" maxlength="10" aria-label="Your name" autocomplete="off" autocapitalize="words">
@@ -2108,8 +2274,8 @@ button{font:inherit;cursor:pointer}
 <!-- v0.11 item 3: leaving a game now offers BOTH explicit choices instead of one vague
      confirm() - shared by the topbar's Menu/Quit button and the pause overlay's "Leave game"
      button (see doLeaveGame() / openLeaveConfirm()). v0.16 item 2: a THIRD, online-only choice
-     - btnLeaveForGood - permanently hands your seat to a computer for the rest of THIS game.
-     v0.27: "Leave without saving" (btnLeaveDiscard) and "Have a computer take over my seat"
+     - btnLeaveForGood - permanently hands your seat to a CPU for the rest of THIS game.
+     v0.27: "Leave without saving" (btnLeaveDiscard) and "Hand my seat to a CPU"
      (btnLeaveForGood) BOTH now permanently end an unfinished game, so BOTH now route through the
      surrenderConfirmOverlay warning below before doing anything (see openSurrenderConfirm()/
      doSurrenderCurrentGame(), § MENU) - only "Save & leave" (btnLeaveSave) and "Return to Game"
@@ -2146,14 +2312,14 @@ button{font:inherit;cursor:pointer}
       <button class="btn primary" id="btnLeaveCancel">Return to game</button>
       <button class="btn ghost" id="btnLeaveSave">Save &amp; leave</button>
       <button class="btn danger" id="btnLeaveDiscard">Leave without saving</button>
-      <button class="btn danger hidden" id="btnLeaveForGood">Have a computer take over my seat</button>
+      <button class="btn danger hidden" id="btnLeaveForGood">Hand my seat to a CPU</button>
     </div>
   </div>
 </div>
 
-<!-- v0.27: shared concede-confirm overlay - reached from THREE places now: the topbar Quit
-     button (was "Menu" through v0.26), and this sheet's own "Leave without saving" and "Have a
-     computer take over my seat" buttons (see openSurrenderConfirm()/doSurrenderCurrentGame(),
+<!-- v0.27: shared concede-confirm overlay - reached from the PAUSED screen's own "Leave
+     without saving" and "Hand my seat to a CPU" buttons (until 2026-07-25 the top bar's QUIT
+     button was a third door into it; QUIT left the row in the top-row rebuild) (see openSurrenderConfirm()/doSurrenderCurrentGame(),
      § MENU). Permanently ends an unfinished game - normally a real loss on the leaderboard, not a
      safe pause. "Save & leave"/"Return to Game" (above) and Cancel (here) are the only
      consequence-free choices left. Cancel here leaves the game running exactly as it was, no
@@ -2193,27 +2359,11 @@ button{font:inherit;cursor:pointer}
   </div>
 </div>
 
-<!-- 2026-07-23 (Blake's item 5): the new standalone Save button's own tiny confirm. Saving
-     already happened the instant Save was tapped, before this dialog even opens - see
-     openSaveConfirm(), § MENU - Blake's own words: "Save would just auto save the game and ask
-     if they're sure they want to save and leave - but the game is saved regardless (this is just
-     a confirmation message in case they accidentally pressed it)". This is NOT a surrender path -
-     confirming reuses doLeaveGame(true), the exact same "Save & leave" the Pause sheet's own
-     button already does, so it means exactly what it always has: completely consequence-free,
-     never a concede/loss (contrast surrenderConfirmOverlay above, which IS one). "Keep Playing"
-     is the primary/first button, same lesson v0.27.1 already learned from "Return to Game" -
-     a bare "Cancel" in a dialog about LEAVING doesn't obviously read as "get me back in the
-     game," so the safe way back is spelled out and put first. -->
-<div id="saveLeaveConfirmOverlay" class="overlay hidden">
-  <div class="confirmCard">
-    <div class="sign"><b>SAVE &amp; LEAVE?</b></div>
-    <p>Your game is saved - you can come back to it anytime. Leave to the menu now?</p>
-    <div class="bigBtns">
-      <button class="btn primary" id="btnSaveLeaveCancel">Keep playing</button>
-      <button class="btn ghost" id="btnSaveLeaveConfirm">Leave</button>
-    </div>
-  </div>
-</div>
+<!-- 2026-07-25: the SAVE & LEAVE? confirm page used to live here. It existed for exactly one
+     button - the top bar's SAVE - and Blake asked for that button to be consolidated away
+     ("consolidate the 'quit' 'pause' and 'save' buttons into just a pause button in the top
+     left"). Its action lives on unchanged as the PAUSED screen's own "Save & leave" button,
+     which always called the identical doLeaveGame(true). See the § SAVE comment in § MENU. -->
 
 <!-- v0.11 item 3, reworked v0.17: offline games now have TWO save spots of their own (see
      slotReplaceOverlay below), so this warning is only about ONLINE games - hosting or joining
@@ -2855,7 +3005,7 @@ function applySpeed(){
 // (new or existing - existing devices haven't set the flag either, and Blake wants everyone
 // to see it once) loads into an actual game, any mode. Gated on 'nasty-speed-chosen' so it
 // truly shows only once - see the two ways that flag gets set: pickSpeed() below (any choice
-// from the picker) and the Speed button handler (§ UI/MENU, near updateSpeedButtonLabel) if
+// from the picker) and the Table speed row handler (§ UI/MENU, near updateSpeedButtonLabel) if
 // they change speed in-game before ever seeing the picker. Deliberately skipped for
 // #autotest/#autotest6 (headless soak tests, see HANDOFF.md) - those boot straight through
 // startGame() with no human present to dismiss a modal, and popping it there would leave it
@@ -4147,16 +4297,26 @@ function currentCanvasPad(){ return CANVAS_PAD_BY_N[(G&&G.n)||4]; }
                   getBBox() is the real painted board, which is what "the board" means to Blake.
    Everything is then centred: gapAbove === gapBelow at every viewport, to the pixel.
 
-   Two candidate top edges, resolved deterministically (never a feedback loop):
-     1. the whole logo BLOCK including the "EST. 1993" line (its box is always in layout - item C
-        only ever toggles `visibility`, never `display`);
-     2. just the NASTY sign, when there is not enough height for (1) and the est line has to be
-        hidden anyway - which is exactly what item C already does on short phones.
-   We try (1) first and only fall back to (2) when (1) would force the board smaller, so the est
-   line stays visible whenever it can and the board stays as large as possible when it cannot.
-   fitBoard() decides this now and hands the answer to updateLogoSub2(), instead of
-   updateLogoSub2() measuring the board afterwards - the old order could not work once the board
-   position depends on the logo's height.
+   2026-07-25 LATER THE SAME DAY (Blake's top-row rebuild): THE LOGO MOVED. It used to be an
+   absolutely-positioned overlay hanging over the top of the board inside #boardWrap; it is now
+   the middle column of the top row, above #boardWrap entirely. The rule Blake set is unchanged
+   and is still what this function enforces - "always an equal amount of space between the nasty
+   plaque at the top and the board as there is between the board at the bottom and the word
+   bubbles" - only the reference edge moved up with the logo. Because both edges are read as
+   VIEWPORT rects (getBoundingClientRect), the arithmetic did not have to change at all.
+   What DID change: the old two-candidate anchor (the whole logo block, or just the NASTY sign
+   when "EST. 1993" had to be hidden to buy the board room) no longer means anything. That line
+   is only ever hidden with `visibility`, so its box still holds its place in the top row; hiding
+   it now frees exactly zero pixels for the board, because the board cannot rise above
+   #boardWrap's top edge no matter what. So there is ONE anchor - the bottom of the logo block -
+   and the est line simply always shows in game (updateLogoSub2() keeps its own measurement as a
+   belt-and-braces second opinion; it can no longer fire, since the two elements are now in
+   different rows of the page and cannot overlap).
+   THE ONE COUPLING TO REMEMBER: the logo's bottom sits #topbar's bottom padding above
+   #boardWrap's top. #boardWrap is overflow:hidden, so if that padding ever grew past
+   BOARD_GAP_MIN the board's top edge would be asked to sit above #boardWrap and would be
+   clipped. The topbar rule (§ STYLE) says the same thing from its own side; today it is 6px
+   against a 10px BOARD_GAP_MIN.
 
    SCALE: `sMax` is the historical formula, unchanged, and it is a CEILING - this can only ever
    make the board smaller, never bigger, so no existing screen suddenly grows a board that used
@@ -4191,19 +4351,18 @@ function fitBoard(){
   const art=boardArtBox();
   const wr=wrap.getBoundingClientRect();
   const band=$('toasts').getBoundingClientRect();
-  const logoEl=$('gameLogo'), signEl=document.querySelector('#gameLogo .sign');
+  // 2026-07-25 (the top-row rebuild): ONE anchor - the bottom of the logo block, wherever it is
+  // on screen. The logo now lives in the top row rather than over the board, so hiding the
+  // "EST. 1993" line can no longer buy the board any height (see this function's comment) and
+  // the old two-candidate sign/block choice is gone with it. If the logo element is somehow
+  // missing, #boardWrap's own top is the honest fallback, exactly as before.
+  const logoEl=$('gameLogo');
   const logoBottom=logoEl?logoEl.getBoundingClientRect().bottom:wr.top;
-  const signBottom=signEl?signEl.getBoundingClientRect().bottom:logoBottom;
   const fit=(anchor)=>(band.top-anchor-2*BOARD_GAP_MIN)/art.h;   // scale that leaves MIN_GAP top and bottom
-  let anchor=logoBottom, s=Math.min(sMax,fit(logoBottom)), showSub=true;
-  if(s<sMax){
-    // Not enough height for the est-1993 line AND an equally-spaced board: hand its 18px to the
-    // board instead, exactly like item C already does on these same short screens.
-    const sSign=Math.min(sMax,fit(signBottom));
-    if(sSign>s){ s=sSign; anchor=signBottom; showSub=false; }
-  }
+  const anchor=logoBottom;
+  let s=Math.min(sMax,fit(anchor));
   s=Math.max(s,sMax*BOARD_SCALE_FLOOR);
-  LOGO_SUB2_WANTED=showSub;
+  LOGO_SUB2_WANTED=true;
   const bs=$('boardScale');
   bs.style.transform=`scale(${s})`;
   bs.style.left=((w-1000*s)/2)+'px';
@@ -5100,7 +5259,7 @@ function tallyKnockout(owner,kick){
   if(G.seats[owner].type==='human')G.koDealt[owner]=(G.koDealt[owner]||0)+1;
   if(G.seats[kick.seat].type==='human')G.koTaken[kick.seat]=(G.koTaken[kick.seat]||0)+1;
   /* 2026-07-25 (Blake's post-game review request, item 1) - the win popup's new per-game
-     scoreboard shows EVERY seat, human AND computer. G.koDealt/G.koTaken directly above stay
+     scoreboard shows EVERY seat, human AND CPU. G.koDealt/G.koTaken directly above stay
      human-only ON PURPOSE - they feed the shared LIFETIME leaderboard's human-only KOs tab (see
      buildResultEntries()/recordOfflineSurrenderLoss() below), and the entire permanent
      server/tests/test_knockout_leaderboard.js suite hard-asserts that exact human-only shape
@@ -5983,7 +6142,7 @@ function clearSelection(keepTurn){
 // online game"): STAYS at 5, still not bumped. `diff` has ridden every seat object (the `host`
 // message's seats:[{name,type,diff}], room.lobby.seats, lobbySnapshot(), and the setSeat
 // {patch:{diff}} case) since v0.15/v0.25 - the server already stored and honored a per-seat
-// diff (takeOverSeat already sent one from the reunion lobby's "have a computer take over"
+// diff (takeOverSeat already sent one from the reunion lobby's "hand this seat to a CPU"
 // picker). This batch adds server-side validation to setSeat's diff patch (restrict to the
 // three real tiers, same allowlist takeOverSeat already used - a defense-in-depth tightening,
 // not a new field or a new meaning for an old one) and a client-side control + read-only
@@ -6285,10 +6444,11 @@ function updateConnIndicator(){
    the top of the scaled #boardScale - not a guessed/fixed pixel offset, since that gap's size
    depends on the device's aspect ratio the same way #boardWrap's own letterbox margin does
    (see fitBoard()'s comment above positionPlaques() - portrait phones eat that margin
-   differently than landscape/desktop). Both #gameLogo and #boardScale are already
-   `position:absolute` siblings inside #boardWrap (position:relative) - adding this indicator
-   as a third absolutely-positioned sibling means it can never push either one's layout, exactly
-   the "must not shift the board or logo" requirement. Falls back to sitting just under the logo
+   differently than landscape/desktop). #boardScale is `position:absolute` inside #boardWrap
+   (position:relative) and this indicator is a second absolutely-positioned sibling, so it can
+   never push the board's layout, exactly the "must not shift the board or logo" requirement.
+   (2026-07-25: #gameLogo used to be a third absolute sibling here; it moved into the top row -
+   see the top-row rebuild note in fitBoard(). It is still measured, just from further up.) Falls back to sitting just under the logo
    if the two would ever overlap (an extremely tight viewport) rather than rendering off-screen
    or on top of the board. Called whenever the indicator's shown/re-shown and on every
    fitBoard() (resize/orientation change), so it stays correctly centered live. */
@@ -6297,7 +6457,11 @@ function positionConnIndicator(){
   const wrap=$('boardWrap'), logo=$('gameLogo'), board=$('boardScale');
   if(!wrap||!logo||!board)return;
   const wrapR=wrap.getBoundingClientRect(), logoR=logo.getBoundingClientRect(), boardR=board.getBoundingClientRect();
-  const gapTop=logoR.bottom-wrapR.top, gapBottom=boardR.top-wrapR.top;
+  // 2026-07-25 (the top-row rebuild): the logo is in the TOP ROW now, not inside #boardWrap, so
+  // its bottom edge sits a few pixels ABOVE this wrap - a negative offset. Clamp at 0 (the wrap's
+  // own top) so the indicator is centred in the real, visible gap instead of being placed partly
+  // up inside the top bar where it would be clipped.
+  const gapTop=Math.max(0,logoR.bottom-wrapR.top), gapBottom=boardR.top-wrapR.top;
   const elH=el.offsetHeight||28;
   let top;
   if(gapBottom-gapTop>=elH+8){
@@ -6633,7 +6797,7 @@ function bootGameFromNetwork(action){
   // whatever applySpeed()'s one-time page-load bootstrap call left it at) stayed at SPEED===0.6
   // for the ENTIRE game - NET.tableSpeed was correct, but the actual rendered pacing was every
   // player's own stale leftover value, completely unsynced, exactly matching Blake's report.
-  // (The Speed button's LIVE mid-game change path, case 'tableSpeed' in handleNetMessage, was
+  // (The Table speed row's LIVE mid-game change path, case 'tableSpeed' in handleNetMessage, was
   // ALWAYS correct - it already calls applySpeed() - which is exactly why the host COULD nudge
   // it into working by tapping Speed again, just never landing on the actually-intended value
   // from the start.) updateSpeedButtonLabel() is called alongside it so the topbar text is
@@ -6838,7 +7002,7 @@ async function applyServerAction(action,myGen){
     if(myGen===NETGEN&&G&&G.seats[action.seat]){
       G.seats[action.seat].type='cpu';
       G.seats[action.seat].diff=action.diff;
-      toast(`${action.name} left. A computer plays their seat now.`,3400);
+      toast(`${action.name} left. A CPU plays their seat now.`,3400);
     }
   }
 }
@@ -6968,7 +7132,7 @@ function onSync(m){
    two options, unchanged since v0.25:
    - "Send rejoin link": native share sheet with the room's invite link (the existing invite
      machinery) plus a best-effort live nudge through the server.
-   - "Have a computer take over": an Easy/Tricky/Nasty picker, then {type:'takeOverSeat'} -
+   - "Hand this seat to a CPU": an Easy/Tricky/Nasty picker, then {type:'takeOverSeat'} -
      the server converts the seat to a REAL CPU (same seatToCpu broadcast as leave-for-good)
      and locks the original player out of it for the rest of the game.
    Every player who IS present must tap "Ready up" ({type:'tableReadyUp'}) - this is the actual
@@ -6996,7 +7160,7 @@ function humanSeatList(){
   return NET.seatOwners.map((pid,seat)=>({seat,playerId:pid,name:G.seats[seat].name}))
     .filter(x=>x.playerId!=null&&!CONVERTED_SEATS.has(x.seat)&&G.seats[x.seat].type==='human');
 }
-let REUNION_PICKING=null;   // seat index whose "Have a computer take over" difficulty picker is open
+let REUNION_PICKING=null;   // seat index whose "Hand this seat to a CPU" difficulty picker is open
 function sendTableReadyUp(){ netSend({type:'tableReadyUp'}); }
 // 2026-07-24 (Blake's item 14): a rejoin/reunion already correctly restores the real team
 // pairing with NO new code - G.teams/G.seats/G.pieces are just part of the same saved/synced
@@ -7045,7 +7209,7 @@ function renderReunionOverlay(){
           netSend({type:'nudge',targetPlayerId:h.playerId});
           sendInvite(`We're starting NASTY back up - come rejoin! ${inviteLink(NET.code)}`);
         };
-        const cpu=document.createElement('button'); cpu.textContent='Have a computer take over';
+        const cpu=document.createElement('button'); cpu.textContent='Hand this seat to a CPU';
         cpu.onclick=()=>{ REUNION_PICKING=h.seat; renderReunionOverlay(); };
         btns.appendChild(link); btns.appendChild(cpu);
       }
@@ -7171,7 +7335,7 @@ function leaveOnlineToMenu(msg,keepRoom){
    LADDER"): while the on-turn HUMAN's socket is disconnected/silent, the server broadcasts
    additive 'awayStatus' messages old clients simply ignore. Stages: 'nudged' (~30s - status
    line + a re-nudge button for anyone), 'cpuOffer' (~2.5min - adds a one-tap "have the
-   computer play this one turn" button; the SERVER plays that single turn with the Tricky AI,
+   CPU play this one turn" button; the SERVER plays that single turn with the Tricky AI,
    the seat STAYS human, its owner can rejoin normally), 'clear' (they're back / turn moved
    on). No automatic forfeits, no auto-CPU-conversion - "Leave for good" (v0.16) remains the
    only permanent seat conversion, and it remains the player's OWN choice. */
@@ -7237,10 +7401,10 @@ function renderAwayLine(){
   aa.appendChild(nudge);
   if(stage==='cpuOffer'){
     const cpu=document.createElement('button');
-    cpu.textContent=`Have the computer play this turn for ${name}`;
+    cpu.textContent=`Have a CPU play this turn for ${name}`;
     cpu.onclick=()=>{
       netSend({type:'playTurnForAway',seat});
-      cpu.disabled=true; cpu.textContent='Asking the computer…';
+      cpu.disabled=true; cpu.textContent='Asking the CPU…';
     };
     aa.appendChild(cpu);
   }
@@ -7419,7 +7583,7 @@ function handleNetMessage(m){
       // v0.27.1: broadcast the INSTANT the first human concedes THIS game (server.js/
       // server.ts's "surrender" case) - every other player still AT the table sees
       // NET.anySurrenderOccurred flip live, so if THEY later open the concede confirm (topbar
-      // Quit, "Leave without saving", "Have a computer take over"), openSurrenderConfirm()
+      // Quit, "Leave without saving", "Hand my seat to a CPU"), openSurrenderConfirm()
       // already shows the no-fault wording before they commit, not just after the fact. A
       // plain sticky boolean - never sent again after the first time (see the server's
       // beforeConvert hook, which only broadcasts on the actual false->true transition).
@@ -7576,7 +7740,7 @@ function saveHostName(){
    already have real names the moment anyone's claimed them - more useful than the offline setup
    panel's own color-name preview (teamNote, § MENU), which predates any real names existing. */
 function lobbyModeText(lobby){
-  return `${lobby.n} players · ${lobby.teams?'Teams':'Everyone for themselves'}`;
+  return `${lobby.n} players · ${lobby.teams?'Teams':'Free for all'}`;
 }
 function lobbyPairingText(lobby){
   if(!lobby.teams)return'';
@@ -7614,7 +7778,7 @@ function renderRoomScreen(){
     }else{
       const statusTxt=mine?'You'
         :s.claimedBy!=null?(ready.has(s.claimedBy)?'Ready ✓':'Joined - not ready yet')
-        :s.type==='cpu'?'Computer - tap to join'
+        :s.type==='cpu'?'CPU - tap to join'
         :'Tap to sit here';
       row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(s.name)}</span><span class="st">${statusTxt}</span>`;
       if(mine){
@@ -7631,7 +7795,7 @@ function renderRoomScreen(){
         // always accepted server-side; this row click was the missing piece).
         row.onclick=()=>netSend({type:'claimSeat',seatIndex:i,name:hostMySeatName()});
         const btn=document.createElement('button');
-        btn.textContent=s.type==='cpu'?'Make human':'Make computer';
+        btn.textContent=s.type==='cpu'?'Make human':'Make CPU';
         btn.onclick=e=>{e.stopPropagation(); netSend({type:'setSeat',seatIndex:i,patch:{type:s.type==='cpu'?'human':'cpu'}});};
         row.appendChild(btn);
         // 2026-07-24 (Blake's follow-up: "give me the option to set the cpu difficulty when
@@ -7641,14 +7805,14 @@ function renderRoomScreen(){
         // server - so a type==='cpu' seat is never `mine`), which is why this lives in the
         // SAME open-only branch as that toggle rather than needing a new branch. Same three
         // real tiers/labels as the offline setup screen's .diffSel and the reunion lobby's
-        // "have a computer take over" picker (easy/medium/hard -> Easy/Tricky/Nasty, see
+        // "hand this seat to a CPU" picker (easy/medium/hard -> Easy/Tricky/Nasty, see
         // DIFF_LABEL, § UI/HUD) - matched exactly, not reinvented. Sends the existing host-only
         // setSeat message with a {diff} patch - already fully wired server-side (validated
         // against the same three tiers, see server.js/server.ts's setSeat case) - this was
         // purely a missing lobby control, not a protocol gap; PROTOCOL_VERSION does NOT bump
         // (see the dated note by PROTOCOL_VERSION's definition, § NET).
         if(s.type==='cpu'){
-          const sel=document.createElement('select'); sel.setAttribute('aria-label','computer difficulty');
+          const sel=document.createElement('select'); sel.setAttribute('aria-label','CPU difficulty');
           sel.addEventListener('click',ev=>ev.stopPropagation());   // don't also trigger the row's claimSeat tap
           [['easy','Easy'],['medium','Tricky'],['hard','Nasty']].forEach(([val,label])=>{
             const o=document.createElement('option'); o.value=val; o.textContent=label;
@@ -7663,15 +7827,15 @@ function renderRoomScreen(){
     list.appendChild(row);
   });
   // v0.8: Start is never blocked on EMPTY seats - any seat nobody's sitting in when you tap
-  // Start just plays as a computer. v0.25 item 1: it IS blocked on claimed-but-not-ready
+  // Start just plays as a CPU. v0.25 item 1: it IS blocked on claimed-but-not-ready
   // guests now - every guest locks their seat in with "Ready up" on their own screen, and
   // Start (the host's own ready) only lights up once they all have. Server enforces the same
   // rule (guestsAllReady(), both servers) - this is just the honest button state.
   const allReady=NET.lobby.seats.every(s=>s.claimedBy==null||s.claimedBy===NET.playerId||ready.has(s.claimedBy));
   $('btnRoomStart').disabled=!allReady;
   $('roomNote').textContent=allReady
-    ?'Tap any open seat to sit there, or Rename to change your name. Open seats become computer players when you start.'
-    :'Waiting for everyone to tap Ready up on their phone. Open seats become computer players when you start.';
+    ?'Tap any open seat to sit there, or Rename to change your name. Open seats become CPU players when you start.'
+    :'Waiting for everyone to tap Ready up on their phone. Open seats become CPU players when you start.';
 }
 
 /* ---- Join a game ---- */
@@ -7753,7 +7917,7 @@ function renderJoinSeatStep(){
     const statusTxt=isHostSeat?'Host'
       :mine?(iAmReady?'You - Ready ✓':'You')
       :s.claimedBy!=null?(ready.has(s.claimedBy)?'Ready ✓':'Taken')
-      :s.type==='cpu'?'Computer - tap to join':'Tap to sit here';
+      :s.type==='cpu'?'CPU - tap to join':'Tap to sit here';
     // 2026-07-24 (Blake's follow-up: "give me the option to set the cpu difficulty when
     // playing an online game") - "Every player in the lobby should be able to SEE each CPU
     // seat's difficulty... even though only the host can change it." Read-only twin of
@@ -7771,7 +7935,7 @@ function renderJoinSeatStep(){
   const haveSeat=NET.lobby.seats.some(s=>s.claimedBy===NET.playerId);
   $('joinNote').textContent=iAmReady?"You're ready! The game starts as soon as the host starts it."
     :haveSeat?'Tap Ready up to lock your seat in.'
-    :'Pick any open seat above - even ones marked Computer.';
+    :'Pick any open seat above - even ones marked CPU.';
   const btn=$('btnJoinReady');
   btn.classList.toggle('hidden',!haveSeat||iAmReady);
   btn.disabled=false;
@@ -7851,7 +8015,7 @@ let CFG=JSON.parse(localStorage.getItem('nasty-setup')||'null')||{
   seatMeta:{}
 };
 // v0.9 item 5: players/mode no longer persist across a fresh load - every visit starts at
-// 4 players + Everyone for themselves, no matter what was picked last time. Seat names/types
+// 4 players + FFA (free for all), no matter what was picked last time. Seat names/types
 // (seatMeta below) still remember what you customized, same as before.
 CFG.n=4; CFG.teams=false;
 function seatDefaults(n){
@@ -7885,7 +8049,7 @@ function renderMenu(){
     r.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span>
       <span class="nameWrap"><input value="${esc(s.name)}" maxlength="${NAME_MAX}" aria-label="player name, tap to edit"><span class="editPencil">✏️</span></span>
       <select class="typeSel"><option value="human"${s.type==='human'?' selected':''}>Human</option>
-        <option value="cpu"${s.type==='cpu'?' selected':''}>Computer</option></select>
+        <option value="cpu"${s.type==='cpu'?' selected':''}>CPU</option></select>
       <select class="diffSel" ${s.type==='human'?'style="visibility:hidden"':''}>
         <option value="easy"${s.diff==='easy'?' selected':''}>Easy</option>
         <option value="medium"${s.diff==='medium'?' selected':''}>Tricky</option>
@@ -8025,8 +8189,8 @@ $('btnAgain').onclick=()=>{$('winOverlay').classList.add('hidden');
 // 2026-07-25 (Blake's post-game review request, item 4): this handler is now the ONE shared
 // "leave a finished game" implementation - see leaveFinishedGameToMenu(), § TURNS (defined next
 // to the rest of post-game review mode, right after showWin()) - reused by BOTH this button and
-// the topbar's repurposed post-game "Menu" button (openSurrenderConfirm()'s new G.over branch
-// below), same "one implementation, not several" convention § SURRENDER already follows. Body is
+// the account panel's post-game "Back to the menu" row (§ ACCOUNT), same "one implementation,
+// not several" convention § SURRENDER already follows. Body is
 // byte-for-byte the same as before this session (v0.26's NETGEN-bump stale-chain defense and all)
 // - only the NAME changed, so this button's own behavior is provably unchanged.
 $('btnWinMenu').onclick=()=>leaveFinishedGameToMenu();
@@ -8104,60 +8268,32 @@ $('btnLeaveCancel').onclick=()=>{
   { const cc=$('leaveConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
   releaseSheetPause();   // v0.25 item 4: cancelling the sheet resumes a pause the sheet started
 };
-/* 2026-07-23 § SAVE (Blake's item 5) - "split up the pause and save button into 2 different
-   buttons. Pause would have all the options that dual button already has - while Save would
-   just auto save the game and ask if they're sure they want to save and leave - but the game is
-   saved regardless (this is just a confirmation message in case they accidentally pressed it)."
-   #btnPause above is completely UNCHANGED - still openPauseSheet(), still every option the
-   combined button ever had. #btnSave is new and deliberately much smaller: it does the actual
-   save FIRST, synchronously, before the confirm even opens (so the answer to the confirm can
-   never affect whether the save happened), then asks one plain yes/no question. Confirming
-   calls the EXACT SAME doLeaveGame(true) the Pause sheet's own "Save & leave" button already
-   uses - not a new/parallel implementation - so this is provably the identical safe, never-a-
-   loss meaning, not a lookalike that could quietly diverge later. Unlike openPauseSheet(), this
-   never calls requestPause() - a quick two-button "are you sure" doesn't need to freeze the
-   whole online table while it's open, the same no-pause precedent the topbar Quit/Concede
-   confirm already set (openSurrenderConfirm() below never pauses either). */
-function openSaveConfirm(){
-  if(!G)return;
-  // 2026-07-25 (Blake's post-game review request, item 4): nothing left to save once the game's
-  // over - recordWin() already ran the instant it ended. Repurpose the SAME topbar button (now
-  // labeled "Results", see updateTopbarForGameOver()) into reopening the win popup instead of the
-  // old silent no-op, so closing the X is never a one-way door.
-  if(G.over){ reopenWinOverlay(); return; }
-  // Offline: written to the save slot right now, regardless of what's tapped next.
-  // Online: doSaveOffline() itself no-ops (see its own `NET.online` guard) - there is nothing
-  // extra to trigger, the server has already been persisting this room continuously after every
-  // mutation since v0.8 (see HANDOFF.md's "Online persistence (server)" section), so "saved
-  // regardless" is already true the moment this function runs, before this comment even matters.
-  doSaveOffline();
-  openOverlay('saveLeaveConfirmOverlay');
-  fitConfirmCard($('saveLeaveConfirmOverlay'));
-}
-$('btnSave').onclick=openSaveConfirm;
-$('btnSaveLeaveConfirm').onclick=()=>{
-  $('saveLeaveConfirmOverlay').classList.add('hidden');
-  { const cc=$('saveLeaveConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
-  doLeaveGame(true);   // identical "Save & leave" meaning as the Pause sheet's own button - never a surrender/loss
-};
-$('btnSaveLeaveCancel').onclick=()=>{
-  $('saveLeaveConfirmOverlay').classList.add('hidden');
-  { const cc=$('saveLeaveConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
-  // no releaseSheetPause() here on purpose - this path never pauses the table, see the comment above
-};
+/* 2026-07-23 § SAVE (Blake's item 5) split Pause and Save into two top-bar buttons, and Save
+   opened its own little "save and leave?" confirm.
+   2026-07-25 (Blake, after playing v0.33): "consolidate the 'quit' 'pause' and 'save' buttons
+   into just a pause button in the top left." So the SAVE button, and the confirm page that only
+   it could open, are both gone. Nothing was lost:
+     - "Save & leave" is a button on the PAUSED screen (btnLeaveSave, right above), and it always
+       called the exact same doLeaveGame(true) that Save's confirm called. One implementation,
+       one meaning - the safe exit that never writes a loss.
+     - "the game is saved regardless" is still true and is not something a button has to make
+       happen: an offline game writes its slot continuously (scheduleSaveOffline(), § MENU) and
+       an online room has been persisted server-side after every mutation since v0.8.
+   #btnPause is untouched - still openPauseSheet(), still every option it ever had. */
 /* v0.27 § SURRENDER - Blake's original ask (replace the topbar Menu button with a Quit button
    that warns before ending an unfinished game), extended by a follow-up scope correction to
-   cover every action that PERMANENTLY ends an unfinished game: the topbar Quit button, "Leave
-   without saving" AND "Have a computer take over my seat" (both under Pause/Save's
-   leaveConfirmOverlay sheet), the saved-tile trash delete, and the slotReplaceOverlay discard
+   cover every action that PERMANENTLY ends an unfinished game: "Leave without saving" AND
+   "Hand my seat to a CPU" (both on the PAUSED screen, and until 2026-07-25 the top bar's QUIT
+   button too - see the § SAVE note above for where the consolidated buttons went), the
+   saved-tile trash delete, and the slotReplaceOverlay discard
    (the last two handled separately - see deleteSavedTile()/chooseReplaceSlot(), § MENU). ONLY
    "Save & leave" and Cancel stay completely consequence-free - "Save & leave" (btnLeaveSave,
    unchanged above) remains the one truly safe way to step away and come back later.
-   All three of Quit / "Leave without saving" / "Have a computer take over" now open the SAME
+   All three of Quit / "Leave without saving" / "Hand my seat to a CPU" now open the SAME
    surrenderConfirmOverlay and, once confirmed, run the SAME doSurrenderCurrentGame() below -
    reusing one implementation rather than three. This isn't a stretch: offline, "Leave without
    saving" already meant "discard this game" - exactly what a surrender is now, once a loss is
-   recorded first. Online, "Have a computer take over" already meant "hand my seat to a CPU" -
+   recorded first. Online, "Hand my seat to a CPU" already meant exactly that -
    exactly what a surrender does server-side, once the loss is recorded first (see server.js/
    server.ts's "surrender" case). And "Leave without saving" online now gets that identical
    treatment too, since it's just as much a permanent abandon as the other two. The win screen's
@@ -8197,7 +8333,9 @@ function openSurrenderConfirm(){
   openOverlay('surrenderConfirmOverlay');
   fitConfirmCard($('surrenderConfirmOverlay'));
 }
-$('btnMenu').onclick=()=>openSurrenderConfirm();
+// 2026-07-25: the top bar's QUIT button used to be a third door into this same confirm. It is
+// gone from the row (Blake's consolidation ask); the two PAUSED-screen buttons below are the
+// ways in now, and they always ran through this identical function.
 $('btnLeaveDiscard').onclick=()=>openSurrenderConfirm();
 $('btnLeaveForGood').onclick=()=>openSurrenderConfirm();
 /* 2026-07-25 (item E of the UI polish batch) - the free way out of the concede confirm. See the
@@ -8216,7 +8354,7 @@ $('btnSurrenderSave').onclick=()=>{
 $('btnSurrenderCancel').onclick=()=>{
   // Cancel leaves everything exactly as it was - game keeps running, no stat write. Releases a
   // pause the Pause/Save sheet started, if this confirm was reached from there (harmless no-op
-  // for the topbar Quit path, which never pauses) - same never-leave-it-paused rule as
+  // for a path that never pauses) - same never-leave-it-paused rule as
   // btnLeaveCancel above.
   $('surrenderConfirmOverlay').classList.add('hidden');
   { const cc=$('surrenderConfirmOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; }
@@ -8379,6 +8517,13 @@ function renderAccountPanel(){
   const subTxt=NET.online?'Playing online in this game':'Playing on this phone';
   if(sub&&sub.textContent!==subTxt)sub.textContent=subTxt;
   const snd=$('btnAcctSound'); if(snd&&snd.textContent!==soundRowLabel())snd.textContent=soundRowLabel();
+  // 2026-07-25: the table-speed row (moved here from the top bar). Online, only the host may
+  // change it - so for everyone else the row says so in plain words on the row ITSELF and is
+  // disabled, rather than firing a toast that this full-screen panel would hide.
+  updateSpeedButtonLabel();
+  // 2026-07-25: "Back to the menu" only exists once the game is finished - see the markup.
+  const bm=$('btnAcctMenu');
+  if(bm)bm.classList.toggle('hidden',!(G&&G.over));
   // "Fix my connection" only means something in an online game - the same gating it had in the
   // pause sheet it moved out of (there is no server to re-reach in an offline game).
   const rst=$('btnAcctReset');
@@ -8467,6 +8612,14 @@ $('btnAcctNameSave').onclick=()=>{
 $('btnAcctReset').onclick=()=>{
   closeOverlay('accountOverlay');
   hardResetConnection();
+};
+// 2026-07-25 (the top-row rebuild): the post-game "Menu" button used to be the top bar's Quit
+// button relabelled. The top row only has three slots now, so the free exit from a FINISHED
+// game lives here. Same leaveFinishedGameToMenu() the win popup's own "Back to menu" calls -
+// one implementation, so "free exit, nothing recorded" provably means the same thing both ways.
+$('btnAcctMenu').onclick=()=>{
+  closeOverlay('accountOverlay');
+  leaveFinishedGameToMenu();
 };
 // The three dormant rows. They are disabled in the markup; these handlers exist ONLY so a tap
 // on a disabled-looking row still explains itself if a browser ever delivers the click, and
@@ -8635,7 +8788,7 @@ function recordWin(){
   localStorage.setItem('nasty-stats',JSON.stringify(st));
   submitOrQueueSoloResult(G.gameId,entries,getKnownLocalEpoch());   // v0.13: also sync this offline result to the shared global board
 }
-/* v0.27 § SURRENDER (offline half) - Blake's ask: the topbar Quit button, deleting a saved-game
+/* v0.27 § SURRENDER (offline half) - Blake's ask: the quit/concede path, deleting a saved-game
    tile, and giving up a slot in the slotReplaceOverlay chooser all PERMANENTLY end an unfinished
    game, and that now counts as a loss on the leaderboard - same stat shape a normal completed
    loss already has (hg<mode>+1, no hw<mode>, no points), just recorded without G.over ever
@@ -8888,7 +9041,7 @@ function renderLbKo(st){
       <td>${koRatioStr(dealt(n),taken(n))}</td></tr>`).join('')+`</table></div>`;
 }
 /* 2026-07-25 (Blake's post-game review request, item 1) - the win popup's own per-game
-   scoreboard: EVERY seat (human AND computer), using THIS game's own numbers
+   scoreboard: EVERY seat (human AND CPU), using THIS game's own numbers
    (G.koDealtAll/G.koTakenAll - see tallyKnockout()'s comment above for why these are a separate
    pair from the human-only G.koDealt/G.koTaken the lifetime leaderboard feeds from), never the
    lifetime hkoDealt/hkoTaken. Reuses the leaderboard KOs tab's own column styling (.lbTable.lbKo)
@@ -8928,8 +9081,8 @@ function buildGameKoTableHtml(){
 // Caption under the table changes per tab - the Solo/Teams points explainer doesn't apply to KOs.
 function updateLbCaption(){
   $('lbCaption').textContent=lbTab==='ko'
-    ?"KOs = tees you've sent back to base. KO'd = times your own tee got sent back. Ratio = KOs per KO'd (Perfect = never been KO'd yet) - people only, computers never show up here."
-    :'Points per win: 1 for each Easy computer you beat, 2 for Tricky, 3 for Nasty or a person - people only, computers never show up here.';
+    ?"KOs = tees you've sent back to base. KO'd = times your own tee got sent back. Ratio = KOs per KO'd (Perfect = never been KO'd yet) - people only, CPUs never show up here."
+    :'Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a person - people only, CPUs never show up here.';
 }
 function setLbTab(tab){
   lbTab=tab;
@@ -8978,9 +9131,32 @@ function speedLabel(){
   const found=SPEED_OPTS.find(o=>o[0]===cur);
   return found?found[1]:String(cur);
 }
-function updateSpeedButtonLabel(){ $('btnSpeed').textContent=speedLabel(); }
+/* 2026-07-25 (Blake's top-row feedback): SPEED is a row in the account panel now, next to Sound,
+   instead of a button in the top bar. Two consequences worth writing down:
+   1. The row spells out what it is ("Table speed: Normal"). The old top-bar button had to drop
+      its "Speed: " prefix in 2026-07-23 purely to fit six buttons across a phone - that pressure
+      is gone, and a bare "NORMAL" sitting in a list of settings would mean nothing.
+   2. Online, only the host may change the table speed (v0.15 - one shared pace for the whole
+      table, see the big § NET comment). The old button toasted that at everyone else; a toast is
+      painted UNDER this full-screen panel, so it would have been invisible. The row itself now
+      carries the explanation and is disabled for a non-host guest. The click handler keeps the
+      toast guard anyway - a disabled button should not fire, but if a browser ever delivers the
+      click the rule still holds and still explains itself. */
+function speedRowLabel(){ return 'Table speed: '+speedLabel(); }
+function updateSpeedButtonLabel(){
+  const b=$('btnAcctSpeed'); if(!b)return;
+  const guest=!!(NET.online&&!NET.isHost);
+  const txt=speedRowLabel();
+  const sub=guest?'Only the host can change the table speed.':'';
+  const want=txt+(sub?sub:'');
+  if(b.textContent!==want||(!!b.querySelector('small'))!==!!sub){
+    b.textContent=txt;
+    if(sub){ const s=document.createElement('small'); s.textContent=sub; b.appendChild(s); }
+  }
+  if(b.disabled!==guest)b.disabled=guest;
+}
 updateSpeedButtonLabel();
-$('btnSpeed').onclick=()=>{
+$('btnAcctSpeed').onclick=()=>{
   if(NET.online){
     if(!NET.isHost){ toast('Only the host can change the table speed.'); return; }
     const i=SPEED_OPTS.findIndex(o=>o[0]===NET.tableSpeed);
@@ -9023,6 +9199,11 @@ $('btnSkip').onclick=()=>{ if(!NET.online)startSkip(); };
 // second "Leave game" tap) is gone for the tapper; everyone else still sees the normal
 // paused overlay, and its own Leave game button still opens the same sheet.
 $('btnPause').onclick=openPauseSheet;
+// 2026-07-25 (the top-row rebuild): post-game review mode's own left-slot button. It replaces
+// the old "Save button relabelled Results" trick with a real button of its own, and it does the
+// one thing it says - reopen the win popup. reopenWinOverlay() guards on G.over itself, so this
+// is inert if it is ever somehow tapped mid-game.
+$('btnResults').onclick=()=>reopenWinOverlay();
 $('pauseOverlay').addEventListener('pointerdown',()=>{
   // 2026-07-23 (item 2): during an open reunion, tapping this screen reopens the real ready-up
   // lobby instead of resuming - PAUSE_TAP_ALLOWED is already false here (see updatePauseUI()),
@@ -9090,7 +9271,7 @@ function showWin(){
    SEL/CUR_SEAT above (§ UI) - it's pure post-game DISPLAY state, never read by any engine/turn
    code, so it doesn't need to ride G or survive a save/reload. */
 let REVEAL_SEAT=-1;
-// Shared by the win popup's own X button and the topbar's repurposed post-game "Menu" button
+// Shared by the win popup's own X button and the post-game review row/panel exits
 // (openSurrenderConfirm()'s G.over branch below) - resets the reveal + the topbar back to their
 // normal in-game look, exactly like every fresh/resumed game boot already needs to do (see the
 // four call sites at bootGameFromNetwork/bootGameFromSnapshot/startGame/resumeOfflineGame).
@@ -9099,7 +9280,7 @@ function resetPostGameReviewState(){
   updateTopbarForGameOver(false);
 }
 // Item 4 - the ONE shared "leave a finished game, for free" implementation - reused by the win
-// popup's own "Back to menu" button AND the topbar's repurposed post-game "Menu" button
+// popup's own "Back to menu" button AND the account panel's post-game "Back to the menu" row
 // (openSurrenderConfirm()'s G.over branch below), same "one implementation, not several"
 // convention § SURRENDER already follows for every OTHER way to leave a game. Always free: the
 // game already finished and was already recorded by recordWin()/the server the instant it ended
@@ -9129,10 +9310,11 @@ function leaveFinishedGameToMenu(){
 // MENU / RESULTS / circle.
 function updateTopbarForGameOver(over){
   $('btnPause').classList.toggle('hidden',over);
-  $('btnSpeed').classList.toggle('hidden',over);
-  $('btnMenu').textContent=over?'Menu':'Quit';
-  $('btnSave').textContent=over?'Results':'Save';
-  $('btnSave').classList.toggle('postGameHighlight',over);
+  $('btnResults').classList.toggle('hidden',!over);
+  // The account panel grows/loses its "Back to the menu" row with the same flip, if it happens
+  // to be open (it is also re-evaluated every time the panel opens - see renderAccountPanel()).
+  const bm=$('btnAcctMenu');
+  if(bm)bm.classList.toggle('hidden',!over);
 }
 // Item 2 - the X button. Closing never touches G, never concedes, never deletes a save beyond
 // what showWin() already did - it just hides the popup and refreshes the reveal hint/hand tray
@@ -9145,7 +9327,7 @@ function closeWinOverlay(){
 $('btnWinClose').onclick=closeWinOverlay;
 // The other half of "closing the X is not a one-way door" - reopens the SAME popup (no replayed
 // confetti/sound, no re-running recordWin() - showWin() already ran exactly once). Reachable via
-// the topbar's repurposed "Results" button (openSaveConfirm()'s G.over branch below).
+// the top row's post-game RESULTS button (#btnResults, see updateTopbarForGameOver()).
 function reopenWinOverlay(){
   if(!G||!G.over)return;   // defensive - "Results" only ever means something once the game's over
   openOverlay('winOverlay');
@@ -9194,7 +9376,28 @@ function renderPostGameReveal(){
    the single tile grew into up to three, sorted newest-first (every record carries a
    timestamp already). With exactly one saved game this looks identical to the old single
    tile. Each tile's second line says whose game it is in plain language: the human players'
-   names (or "All computer"), 4/6 players, teams or not, and how long ago it was saved. */
+   names (or "All CPU"), 4/6 players, teams or not, and how long ago it was saved.
+
+   2026-07-25 (Blake, after playing v0.33): "on the saves please have the icon give details on
+   the game - meaning if it was teams or FFA (free for all) (change the everyone for themselves
+   phrasing) and also say how many pegs you had home. Still don't make this longer than 2 rows."
+
+   So a tile now says, in TWO rows and never more:
+     row 1 (gold)  Resume · 4P FFA        <- the table size and whether it was Teams or FFA
+     row 2         3/5 home · Blake +1 · 5m ago
+   Both rows are single-line-by-construction (white-space:nowrap + text-overflow:ellipsis, see
+   .savedTile .t1/.t2 in § STYLE) - that is what makes "never more than 2 rows" a guarantee at
+   ANY width with ANY name, rather than a promise that holds until someone types a long name on
+   a small phone. Row 2 is ordered by what Blake asked for FIRST: on a 320px phone there is only
+   about 145px of text column next to the Concede button, so if anything has to be trimmed it is
+   the "5m ago" at the end, never the tees-home count.
+
+   WHOSE tees are counted (the judgement call): the seat this phone belongs to. That is the seat
+   whose name matches the name saved on this phone (chosenName(), § ACCOUNT) if one does; failing
+   that the FIRST human seat, which for a pass-and-play game on one phone is the person who set
+   the game up and typed their name first, and is also the name row 2 shows first. An all-CPU
+   save has no such seat and simply shows no count. accountSeatIndex() applies the same "first
+   human seat" rule to a LIVE game, so the circle in the top corner and this tile agree. */
 let SAVED_GAMES=[];   // [{kind:'offline',slot,data,ts}|{kind:'online',last,ts}, ...] newest first
 let SAVED_GAME=null;  // the newest entry (or null) - kept for the older single-save call sites
 // v0.18.1: per-tile element ids, in tile order -
@@ -9220,13 +9423,73 @@ function timeAgo(ts){
   const d=Math.round(h/24);
   return d+(d===1?' day ago':' days ago');
 }
-// Plain-language one-liner for an offline save {G,ts} - shared by the resume tiles and the
-// replace-a-save chooser (startOfflineGameGate, § MENU).
+// 2026-07-25: the short form of timeAgo(), for the tiles - the long form ("12 minutes ago")
+// costs about 9 characters that a 320px phone genuinely does not have. Same buckets, same
+// rounding, so the two can never disagree about how old a save is.
+function shortAgo(ts){
+  if(!ts)return '';
+  const m=Math.round((Date.now()-ts)/60000);
+  if(m<1)return 'just now';
+  if(m<60)return m+'m ago';
+  const h=Math.round(m/60);
+  if(h<24)return h+'h ago';
+  return Math.round(h/24)+'d ago';
+}
+// 2026-07-25: which seat at this saved table is the person holding the phone. See the § MENU
+// block comment above for the reasoning; returns -1 for an all-CPU save.
+function saveOwnSeat(g){
+  if(!g||!Array.isArray(g.seats))return -1;
+  const mine=(typeof chosenName==='function'?chosenName():'')||'';
+  if(mine){
+    const exact=g.seats.findIndex(x=>x&&x.type==='human'&&x.name===mine);
+    if(exact>=0)return exact;
+  }
+  return g.seats.findIndex(x=>x&&x.type==='human');
+}
+// How many of that seat's five tees were already home in this saved game. Reads the saved
+// snapshot's own pieces exactly the way the live engine does (state 'home' covers the porch and
+// the whole safe row - see § STATE), so it can never drift from what the board actually showed.
+function saveTeesHome(g){
+  const seat=saveOwnSeat(g);
+  if(seat<0||!g.pieces||!g.pieces[seat])return null;
+  return g.pieces[seat].filter(p=>p&&p.state==='home').length;
+}
+// "4P FFA" / "6P Teams" - the tight form, for the tiles and any other narrow spot.
+function saveTypeShort(g){ return `${g.n}P ${g.teams?'Teams':'FFA'}`; }
+// The human players on this save, shortened so one long name can never push the rest of the row
+// out: one name as-is, more than one as "Name +2". NAME_MAX is 10, so the worst case is 13
+// characters however many people played.
+function saveWhoShort(g){
+  const humans=g.seats.filter(x=>x&&x.type==='human').map(x=>x.name).filter(Boolean);
+  if(!humans.length)return 'All CPU';
+  const seat=saveOwnSeat(g);
+  const first=(seat>=0&&g.seats[seat]&&g.seats[seat].name)||humans[0];
+  const rest=humans.length-1;
+  return rest>0?`${first} +${rest}`:first;
+}
+// Row 1 of a tile: the action, plus the two facts Blake asked to see at a glance.
+function saveSlotTitle(s){ return `Resume · ${saveTypeShort(s.G)}`; }
+// Row 2 of a tile: the tees-home count first (see the block comment - it must never be the thing
+// that gets trimmed on a narrow phone), then who, then how long ago.
+function saveSlotDetail(s){
+  const home=saveTeesHome(s.G);
+  const bits=[];
+  if(home!==null)bits.push(`${home}/5 home`);
+  bits.push(saveWhoShort(s.G));
+  const ago=shortAgo(s.ts);
+  if(ago)bits.push(ago);
+  return bits.join(' · ');
+}
+// Plain-language one-liner for an offline save {G,ts} - the replace-a-save chooser
+// (startOfflineGameGate, § MENU) uses this one. It sits on a full-width button inside a confirm
+// card with room to wrap, so it can afford to spell everything out where a tile cannot.
 function saveSlotLabel(s){
   const g=s.G;
   const humans=g.seats.filter(x=>x.type==='human').map(x=>x.name).filter(Boolean);
-  const who=humans.length?humans.join(' & '):'All computer';
-  return `${who} · ${g.n} players${g.teams?' · teams':''} · saved ${timeAgo(s.ts)}`;
+  const who=humans.length?humans.join(' & '):'All CPU';
+  const home=saveTeesHome(g);
+  const homeBit=home===null?'':` · ${home} of 5 home`;
+  return `${who} · ${g.n} players · ${g.teams?'teams':'free for all'}${homeBit} · saved ${timeAgo(s.ts)}`;
 }
 function updateMenuResumeButtons(){
   const entries=[];
@@ -9243,7 +9506,15 @@ function updateMenuResumeButtons(){
   TILE_IDS.forEach(([row,content,main,detail,trash,confirm],i)=>{
     const e=entries[i];
     $(row).classList.toggle('hidden',!e);
-    if(e)$(detail).textContent=e.kind==='offline'?saveSlotLabel(e.data):`Room ${e.last.code} · online`;
+    // 2026-07-25: the tile's FIRST line is written here too (it used to be a fixed "Resume saved
+    // game" in the markup) - it carries the table size and Teams/FFA now. The .t1 is found
+    // through the tile's own main element rather than by a new id, so TILE_IDS keeps its exact
+    // shape and every existing positional destructure of it stays correct.
+    if(e){
+      const t1=$(main).querySelector('.t1');
+      if(t1)t1.textContent=e.kind==='offline'?saveSlotTitle(e.data):'Resume · online game';
+      $(detail).textContent=e.kind==='offline'?saveSlotDetail(e.data):`Room ${e.last.code} · online`;
+    }
     $(content).classList.remove('hidden');
     $(confirm).classList.add('hidden');
   });
@@ -9322,7 +9593,7 @@ function hideDeleteConfirm(){
 }
 // v0.27: deleting ANY saved-game tile abandons an unfinished game for good - the confirm panel's
 // wording now says so (see the .savedTileConfirm markup, § MENU), and confirming records the
-// loss here, same as the topbar Quit button and the slot-replace chooser.
+// loss here, same as the PAUSED screen's "Leave without saving" and the slot-replace chooser.
 function deleteSavedTile(i){
   const e=SAVED_GAMES[i];
   if(!e)return;

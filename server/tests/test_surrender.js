@@ -5,7 +5,8 @@
  * scope correction to cover every action that PERMANENTLY ends an unfinished game:
  *   - the topbar Quit button (was "Menu" through v0.26)
  *   - "Leave without saving" (Pause/Save sheet)
- *   - "Have a computer take over my seat" (Pause/Save sheet, online only)
+ *   - "Hand my seat to a CPU" (PAUSED sheet, online only; renamed from "Have a computer take
+ *     over my seat" on 2026-07-25 - Blake asked for CPU wording back)
  *   - the saved-tile trash delete (offline slot or a remembered online room)
  *   - the slotReplaceOverlay chooser discarding a slot when starting a new offline game with
  *     both save spots full
@@ -121,11 +122,21 @@ async function saveAndReturnToMenu(page) {
   await page.evaluate(() => { document.getElementById("btnPause").click(); document.getElementById("btnLeaveSave").click(); });
   await page.waitForFunction(() => !document.getElementById("menu").classList.contains("hidden"), { timeout: 5000 });
 }
+// 2026-07-25 (v0.34): the top bar's QUIT button was consolidated away (Blake: "just a pause
+// button in the top left and the account icon in the top right"). The concede path it opened is
+// unchanged and is reached from the PAUSED sheet's "Leave without saving", which has always run
+// through the same openSurrenderConfirm(). These two helpers keep their names and their meaning -
+// "the quit/concede flow" - and every assertion built on them is untouched.
+async function openQuitFlow(page) {
+  await page.evaluate(() => { document.getElementById("btnPause").click(); document.getElementById("btnLeaveDiscard").click(); });
+}
 async function quitConfirm(page) {
-  await page.evaluate(() => { document.getElementById("btnMenu").click(); document.getElementById("btnSurrenderConfirm").click(); });
+  await openQuitFlow(page);
+  await page.evaluate(() => document.getElementById("btnSurrenderConfirm").click());
 }
 async function quitCancel(page) {
-  await page.evaluate(() => { document.getElementById("btnMenu").click(); document.getElementById("btnSurrenderCancel").click(); });
+  await openQuitFlow(page);
+  await page.evaluate(() => document.getElementById("btnSurrenderCancel").click());
 }
 async function sheetDiscardConfirm(page) {
   await page.evaluate(() => { document.getElementById("btnPause").click(); document.getElementById("btnLeaveDiscard").click(); document.getElementById("btnSurrenderConfirm").click(); });
@@ -251,7 +262,7 @@ async function nofaultTwoHumanScenario(browser, port, leaveKind, aName, bName) {
     await sleep(700);
   } else {
     const wording = await guest.evaluate((kind) => {
-      if (kind === "quit") { document.getElementById("btnMenu").click(); }
+      if (kind === "quit") { document.getElementById("btnPause").click(); document.getElementById("btnLeaveDiscard").click(); }
       else if (kind === "discard") { document.getElementById("btnPause").click(); document.getElementById("btnLeaveDiscard").click(); }
       else if (kind === "takeover") { document.getElementById("btnPause").click(); document.getElementById("btnLeaveForGood").click(); }
       return {
@@ -473,9 +484,12 @@ async function main() {
     ];
     await startOffline(page, { n: 4, teams: false, seatMeta });
     await page.evaluate(() => { window.G.over = true; window.G.winners = [0]; });
-    await page.evaluate(() => document.getElementById("btnMenu").click());
-    const stillHidden = await page.evaluate(() => document.getElementById("surrenderConfirmOverlay").classList.contains("hidden"));
-    check(stillHidden, "WIN: tapping Quit on a G.over game shows no surrender dialog");
+    // v0.34: openPauseSheet() itself refuses to open once G.over is true, so the whole concede
+    // path is unreachable from a finished game - a stronger version of the old "Quit shows no
+    // surrender dialog" guarantee. Both the sheet and the confirm must stay hidden.
+    await page.evaluate(() => { document.getElementById("btnPause").click(); const d = document.getElementById("btnLeaveDiscard"); if (d) d.click(); });
+    const stillHidden = await page.evaluate(() => document.getElementById("surrenderConfirmOverlay").classList.contains("hidden") && document.getElementById("leaveConfirmOverlay").classList.contains("hidden"));
+    check(stillHidden, "WIN: the quit/concede path is unreachable on a G.over game - no sheet, no surrender dialog");
     await ctx.close();
   }
 
@@ -571,9 +585,9 @@ async function main() {
   }
 
   /* =================================================================================
-   * ONLINE-4: "Have a computer take over my seat" (sheet) now ALSO surrenders.
+   * ONLINE-4: "Hand my seat to a CPU" (sheet) now ALSO surrenders.
    * ================================================================================= */
-  log("--- ONLINE-4: sheet's 'Have a computer take over my seat' now surrenders too ---");
+  log("--- ONLINE-4: sheet's 'Hand my seat to a CPU' now surrenders too ---");
   {
     const ctxH = await browser.newContext({ reducedMotion: "reduce" });
     const ctxG = await browser.newContext({ reducedMotion: "reduce" });
@@ -595,7 +609,7 @@ async function main() {
       document.getElementById("btnLeaveForGood").click();
       return !document.getElementById("surrenderConfirmOverlay").classList.contains("hidden");
     });
-    check(shown, "ONLINE-4: 'Have a computer take over my seat' opens the surrender confirm first");
+    check(shown, "ONLINE-4: 'Hand my seat to a CPU' opens the surrender confirm first");
     await host.evaluate(() => document.getElementById("btnSurrenderConfirm").click());
     await host.waitForFunction(() => !document.getElementById("menu").classList.contains("hidden"), { timeout: 8000 });
     await guest.waitForFunction(() => window.G && window.G.seats[0].type === "cpu", { timeout: 8000 });
@@ -702,7 +716,7 @@ async function main() {
   log("--- NOFAULT-discard: after A concedes, B's 'Leave without saving' is a free no-fault exit ---");
   await nofaultTwoHumanScenario(browser, PORT3, "discard", "NoFaultDA", "NoFaultDB");
 
-  log("--- NOFAULT-takeover: after A concedes, B's 'Have a computer take over' is a free no-fault exit ---");
+  log("--- NOFAULT-takeover: after A concedes, B's 'Hand my seat to a CPU' is a free no-fault exit ---");
   await nofaultTwoHumanScenario(browser, PORT3, "takeover", "NoFaultTA", "NoFaultTB");
 
   log("--- NOFAULT-trash: after A concedes, B trash-deleting their remembered tile is a free no-fault exit ---");
@@ -769,7 +783,8 @@ async function main() {
     const flag = await page.evaluate(() => window.NET.anySurrenderOccurred);
     check(flag === false, "NOFAULT-4: a brand-new room/game starts with anySurrenderOccurred=false, confirmed live over the wire");
     const heading = await page.evaluate(() => {
-      document.getElementById("btnMenu").click();
+      document.getElementById("btnPause").click();
+      document.getElementById("btnLeaveDiscard").click();
       const h = document.getElementById("surrenderConfirmHeading").textContent;
       document.getElementById("btnSurrenderCancel").click();
       return h;

@@ -104,9 +104,20 @@ async function humanBoard(page, n) {
 
 const visibleOverlays = () => [...document.querySelectorAll(".overlay:not(.hidden)")].map((o) => o.id);
 
-/* ============================= Part A - the new top bar shape ============================= */
+/* ============================= Part A - the top bar shape =============================
+   2026-07-25 (v0.34): UPDATED, deliberately, for the top-row rebuild Blake asked for after
+   playing v0.33 - "consolidate the 'quit' 'pause' and 'save' buttons into just a pause button in
+   the top left and the account icon in the top right". The row is no longer FOUR equal text
+   buttons plus a circle; it is ONE text button (PAUSE, or RESULTS once the game is over), the
+   NASTY logo centred, and the circle. So the "all text buttons share one width" assertion has
+   nothing left to compare and is replaced by "exactly one text button is visible at a time",
+   which is the real contract now. Nothing else in this part was weakened: zero overflow, the
+   44px floor on both controls, the circle being on screen and never blank, and the old RULES /
+   MUTE buttons staying gone are all unchanged. The full new geometry contract (equal insets,
+   optical centring of the logo) has its own permanent suite,
+   test_ui_topbar_v034_2026_07_25.js. */
 async function partA(browser) {
-  console.log("\n=== Part A: four equal text buttons + one circle, zero overflow, every width, 4P/6P, in-game and post-game ===");
+  console.log("\n=== Part A: one text button + centred logo + one circle, zero overflow, every width, 4P/6P, in-game and post-game ===");
   for (const m of MATRIX) {
     for (const n of [4, 6]) {
       for (const postGame of [false, true]) {
@@ -118,12 +129,16 @@ async function partA(browser) {
           await page.evaluate(() => { window.G.over = true; window.G.winners = [0]; window.showWin(); window.closeWinOverlay(); });
           await page.waitForTimeout(200);
         }
-        // Worst case label: Turbo is the longest speed word.
+        // Worst case speed label: Turbo is the longest speed word. It lives in the account panel
+        // now (v0.34), so it no longer sizes anything in this row - set anyway, so this part still
+        // proves the row is unaffected by it.
         await page.evaluate(() => { USER_SPEED = 2.6; updateSpeedButtonLabel(); });
         await page.waitForTimeout(120);
         const r = await page.evaluate(() => {
           const tb = document.getElementById("topbar");
-          const shown = [...tb.children].filter((el) => el.tagName === "BUTTON" && !el.classList.contains("hidden"));
+          // v0.34: the buttons sit inside their own left/right slot wrappers, so this walks the
+          // whole row rather than only its direct children.
+          const shown = [...tb.querySelectorAll("button")].filter((el) => !el.classList.contains("hidden"));
           const text = shown.filter((b) => b.classList.contains("iconBtn"));
           const circle = document.getElementById("btnAccount");
           const cr = circle.getBoundingClientRect();
@@ -141,8 +156,8 @@ async function partA(browser) {
         });
         const label = `${m.name} ${n}P ${postGame ? "post-game" : "in-game"}`;
         ok(r.overflow === 0, `${label}: ZERO horizontal overflow on the whole row (scrollWidth - clientWidth = ${r.overflow})`);
-        ok(r.textW.length >= 2 && r.textW.every((w) => Math.abs(w - r.textW[0]) < 1),
-          `${label}: every text button is the same width - ${JSON.stringify(r.textW)} (${JSON.stringify(r.textIds)})`);
+        ok(r.textW.length === 1,
+          `${label}: exactly ONE text button is visible in the row - ${JSON.stringify(r.textIds)} (v0.34 consolidation)`);
         ok(r.clipped.every((c) => c <= 0), `${label}: no text button clips its own label`);
         ok(r.textH.every((h) => h >= 44), `${label}: text buttons clear the 44px tap floor - ${JSON.stringify(r.textH)}`);
         ok(!r.hidden && r.circle.h >= 44 && r.circle.w >= 44, `${label}: the account circle is a real 44px+ tap target (${r.circle.w}x${r.circle.h})`);
@@ -150,15 +165,21 @@ async function partA(browser) {
         ok(r.circle.letter.length >= 1, `${label}: the circle is never blank (shows "${r.circle.letter}")`);
         ok(!r.rules2 && !r.oldMute, `${label}: the old RULES and MUTE top-bar buttons are gone from the app entirely`);
         if (postGame) {
+          // v0.34: review mode is RESULTS / logo / circle. The way back to the menu moved into the
+          // account panel ("Back to the menu"), and the win popup keeps its own Back to menu too.
           const pg = await page.evaluate(() => ({
-            menu: document.getElementById("btnMenu").textContent,
-            save: document.getElementById("btnSave").textContent,
+            results: document.getElementById("btnResults").textContent,
+            resultsHidden: document.getElementById("btnResults").classList.contains("hidden"),
             pauseHidden: document.getElementById("btnPause").classList.contains("hidden"),
-            speedHidden: document.getElementById("btnSpeed").classList.contains("hidden"),
             circleHidden: document.getElementById("btnAccount").classList.contains("hidden"),
+            menuRowHidden: document.getElementById("btnAcctMenu").classList.contains("hidden"),
+            oldMenuBtn: !!document.getElementById("btnMenu"),
+            oldSaveBtn: !!document.getElementById("btnSave"),
           }));
-          ok(/menu/i.test(pg.menu) && /results/i.test(pg.save) && pg.pauseHidden && pg.speedHidden && !pg.circleHidden,
-            `${label}: review mode is MENU / RESULTS / circle (${pg.menu}, ${pg.save}, circle still there)`);
+          ok(/results/i.test(pg.results) && !pg.resultsHidden && pg.pauseHidden && !pg.circleHidden,
+            `${label}: review mode is RESULTS / logo / circle (${pg.results}, circle still there)`);
+          ok(!pg.menuRowHidden, `${label}: "Back to the menu" is offered in the account panel once the game is over`);
+          ok(!pg.oldMenuBtn && !pg.oldSaveBtn, `${label}: the old QUIT and SAVE top-bar buttons are gone from the app entirely`);
         }
         ok(errors.length === 0, `${label}: zero page errors`);
         if (m.w === 320 && n === 4 && !postGame) await page.screenshot({ path: path.join(SHOTDIR, "topbar_320.png") });
@@ -498,7 +519,6 @@ async function partE(browser) {
       ["rulesOverlay", () => window.openOverlay("rulesOverlay")],
       ["leaveConfirmOverlay", () => window.openLeaveConfirm()],
       ["surrenderConfirmOverlay", () => window.openSurrenderConfirm()],
-      ["saveLeaveConfirmOverlay", () => window.openSaveConfirm()],
       ["overwriteWarnOverlay", () => window.openOverlay("overwriteWarnOverlay")],
       ["slotReplaceOverlay", () => window.openOverlay("slotReplaceOverlay")],
       ["speedPickerOverlay", () => window.openOverlay("speedPickerOverlay")],
@@ -564,11 +584,15 @@ async function partE(browser) {
     await new Promise((r) => setTimeout(r, 200));
     out.afterCancel = snap();
     out.pausedAfterCancel = window.G.paused;
-    // save confirm
-    document.getElementById("btnSave").click();
+    // 2026-07-25 (v0.34 top-row rebuild): the SAVE button and its own SAVE & LEAVE? confirm are
+    // gone - Blake asked for the top row to consolidate down to one PAUSE button, and the safe
+    // "Save & leave" exit has always lived on this same PAUSED sheet, calling the identical
+    // doLeaveGame(true). Coverage did not move: the sheet's own Save & leave button is exercised
+    // right here, and it must still be exactly one page with nothing stacked under it.
+    document.getElementById("btnPause").click();
     await new Promise((r) => setTimeout(r, 120));
     out.save = snap();
-    document.getElementById("btnSaveLeaveCancel").click();
+    document.getElementById("btnLeaveCancel").click();
     await new Promise((r) => setTimeout(r, 120));
     out.afterSave = snap();
     // post-game (G.over for real - see Part A's note)
@@ -580,7 +604,7 @@ async function partE(browser) {
     window.closeWinOverlay();
     await new Promise((r) => setTimeout(r, 120));
     out.review = snap();
-    document.getElementById("btnSave").click();   // "Results" in review mode
+    document.getElementById("btnResults").click();   // the post-game RESULTS button (v0.34)
     await new Promise((r) => setTimeout(r, 150));
     out.results = snap();
     return out;
@@ -588,7 +612,7 @@ async function partE(browser) {
   ok(flows.sheet.length === 1 && flows.sheet[0] === "leaveConfirmOverlay", "pause sheet: one page");
   ok(flows.concede.length === 1 && flows.concede[0] === "surrenderConfirmOverlay", `the concede confirm reached FROM the pause sheet replaces it (${JSON.stringify(flows.concede)})`);
   ok(flows.afterCancel.length === 0, `cancelling the concede confirm leaves NO page up and resumes the table (paused=${flows.pausedAfterCancel})`);
-  ok(flows.save.length === 1 && flows.save[0] === "saveLeaveConfirmOverlay", "the Save confirm is one page");
+  ok(flows.save.length === 1 && flows.save[0] === "leaveConfirmOverlay", "the PAUSED sheet (which carries Save & leave) is one page");
   ok(flows.afterSave.length === 0, "closing it leaves the board clear");
   ok(flows.win.length === 1 && flows.win[0] === "winOverlay", "the win popup is one page");
   ok(flows.review.length === 0, "post-game review mode shows the finished board with no page over it");

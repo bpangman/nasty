@@ -346,9 +346,12 @@ async function partE(browser) {
   const { ctx, page } = await newCtx(browser, MATRIX[0]);
   await freshBoard(page, 4);
 
-  // 1. The concede confirm, reached from the topbar Quit button.
+  // 1. The concede confirm. 2026-07-25 (v0.34): reached from the PAUSED sheet's "Leave without
+  //    saving" now - the top bar's QUIT button was consolidated away (Blake: "just a pause button
+  //    in the top left"). Same openSurrenderConfirm(), same dialog, one door instead of two.
   const surr = await page.evaluate(() => {
-    document.getElementById('btnMenu').click();
+    document.getElementById('btnPause').click();
+    document.getElementById('btnLeaveDiscard').click();
     const btns = [...document.querySelectorAll('#surrenderConfirmOverlay .bigBtns .btn')];
     return {
       open: !document.getElementById('surrenderConfirmOverlay').classList.contains('hidden'),
@@ -358,7 +361,7 @@ async function partE(browser) {
       widths: btns.map((b) => +b.getBoundingClientRect().width.toFixed(1)),
     };
   });
-  ok(surr.open, 'the topbar Quit button still opens the concede confirm');
+  ok(surr.open, 'the PAUSED sheet\'s "Leave without saving" still opens the concede confirm');
   ok(surr.ids[0] === 'btnSurrenderCancel', `the SAFE option is first in the concede confirm (got ${JSON.stringify(surr.ids)})`);
   ok(surr.ids[surr.ids.length - 1] === 'btnSurrenderConfirm', 'the destructive option is LAST in the concede confirm');
   ok(/danger/.test(surr.classes[surr.classes.length - 1]), 'the destructive option is still the red danger button');
@@ -369,7 +372,8 @@ async function partE(browser) {
   // 2. "Save & leave instead" really is the safe path - the game is saved and no loss is written.
   const safeExit = await page.evaluate(() => {
     try { localStorage.removeItem('nasty-stats-v2'); } catch (e) {}
-    document.getElementById('btnMenu').click();
+    document.getElementById('btnPause').click();
+    document.getElementById('btnLeaveDiscard').click();
     document.getElementById('btnSurrenderSave').click();
     return {
       onMenu: !document.getElementById('menu').classList.contains('hidden'),
@@ -405,12 +409,13 @@ async function partE(browser) {
   const harmless = await page.evaluate(() => {
     const pick = (sel) => [...document.querySelectorAll(sel + ' .bigBtns .btn')].map((b) => b.id);
     return {
-      saveLeave: pick('#saveLeaveConfirmOverlay'),
+      // 2026-07-25 (v0.34): the SAVE & LEAVE? page is gone with the SAVE button that opened it.
+      // Its safe-first property lives on in the PAUSED sheet below, which is where "Save & leave"
+      // has always actually been, so no coverage was lost - only a duplicate.
       overwrite: pick('#overwriteWarnOverlay'),
       leave: pick('#leaveConfirmOverlay'),
     };
   });
-  ok(harmless.saveLeave[0] === 'btnSaveLeaveCancel', 'SAVE & LEAVE? still puts "Keep playing" first');
   ok(harmless.overwrite[0] === 'btnOverwriteConfirm', 'REPLACE GAME? layout unchanged');
   ok(harmless.leave[0] === 'btnLeaveCancel', 'the leave sheet still puts "Return to game" first');
   await ctx.close();
@@ -443,7 +448,7 @@ async function partF(browser) {
     const discard = r.find((b) => b.id === 'btnLeaveDiscard');
     const forGood = r.find((b) => b.id === 'btnLeaveForGood');
     ok(discard && /danger/.test(discard.cls), '"Leave without saving" is styled as costly (it records a loss)');
-    ok(forGood && /danger/.test(forGood.cls), '"Have a computer take over my seat" is styled as costly (it records a loss)');
+    ok(forGood && /danger/.test(forGood.cls), '"Hand my seat to a CPU" is styled as costly (it records a loss)');
     const save = r.find((b) => b.id === 'btnLeaveSave');
     ok(save && !/danger/.test(save.cls), '"Save & leave" is NOT styled as costly - it is the free one');
     ok(!r.some((b) => b.id === 'btnResetConnection'), 'the connection button is NOT in this sheet any more (2026-07-25: it moved to the account panel, covered there)');
@@ -592,7 +597,12 @@ async function partPolish(browser) {
   await page.goto(URL);
   await page.waitForSelector('#btnStart');
 
-  // L + M: no "CPU" left in user-visible copy, no leading glyphs on buttons, no Title Case strays
+  // L + M: ONE word for a computer player everywhere, no leading glyphs on buttons.
+  // 2026-07-25 (v0.34): this assertion is DELIBERATELY INVERTED. v0.31 item L unified the app on
+  // "computer" because it had been mixing the two words; Blake asked for the other one back after
+  // playing v0.33 - "Change it back to CPU instead of Computer". The point of item L was never
+  // which word won, it was that the app must not use both, so the check still enforces exactly
+  // that - just with CPU as the chosen word.
   const copy = await page.evaluate(() => {
     const texts = [];
     document.querySelectorAll('button,.btn,.t1,#lbCaption,h3,option').forEach((el) => {
@@ -600,8 +610,8 @@ async function partPolish(browser) {
     });
     return texts.filter((x) => x.t);
   });
-  const cpuLeft = copy.filter((x) => /\bCPUs?\b/.test(x.t));
-  ok(cpuLeft.length === 0, `(L) no user-visible control still says "CPU" (${JSON.stringify(cpuLeft.slice(0, 4))})`);
+  const computerLeft = copy.filter((x) => /\bcomputers?\b/i.test(x.t));
+  ok(computerLeft.length === 0, `(L) no user-visible control says "computer" any more - CPU is the one word (${JSON.stringify(computerLeft.slice(0, 4))})`);
   // An icon-ONLY control (the win overlay's close X, which carries a real aria-label and no text
   // label at all) is the icon, not a label with a glyph bolted on front - out of scope for item M,
   // which was about buttons whose WORDS were being prefixed.
@@ -609,13 +619,14 @@ async function partPolish(browser) {
   ok(glyphed.length === 0, `(M) no button starts with a decorative glyph any more (${JSON.stringify(glyphed.slice(0, 4))})`);
   const captions = await page.evaluate(() => document.getElementById('lbCaption').textContent);
   ok(!/\bpegs?\b/i.test(captions), `(L) the leaderboard caption says tees, not pegs (got "${captions.slice(0, 90)}...")`);
+  ok(/\bCPUs?\b/.test(captions) && !/\bcomputers?\b/i.test(captions), `(L) the leaderboard caption says CPU, not computer (got "${captions.slice(0, 90)}...")`);
 
   // V: one kind of ellipsis, the real one.
   // Checked against the SOURCE with comments removed rather than against innerHTML: this file's
   // dated comments deliberately quote the old wording to explain what changed and why, and a
   // check that could not tell a comment from a live string would be permanently red.
   const src = stripComments(fs.readFileSync(path.resolve(__dirname, '..', '..', 'index.html'), 'utf8'));
-  ok(!/Recalibrating\.\.\.|Reconnecting\.\.\.|Asking the computer\.\.\./.test(src), '(V) the three-dot spellings of the connection/computer wait messages are gone from the live copy');
+  ok(!/Recalibrating\.\.\.|Reconnecting\.\.\.|Asking the CPU\.\.\./.test(src), '(V) the three-dot spellings of the connection/CPU wait messages are gone from the live copy');
 
   // U: the deck-count chip's contrast
   const deck = await page.evaluate(() => {

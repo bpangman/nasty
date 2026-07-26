@@ -242,9 +242,12 @@ async function main() {
     const speeds = await Promise.all([host, guest].map((p) => p.evaluate(() => window.NET.tableSpeed)));
     check(speeds[0] === 1.7 && speeds[1] === 1.7, `5: both land at the host's 1.7 despite their own OPPOSITE local preferences (2.6 vs 0.6) (got ${JSON.stringify(speeds)})`);
 
-    // The Speed button's own LABEL also reads the shared speed, not the local one, for both.
-    const labels = await Promise.all([host, guest].map((p) => p.evaluate(() => document.getElementById("btnSpeed").textContent)));
-    check(labels.every((l) => /Fast/.test(l)), `5: the topbar Speed button reads "Fast" for BOTH players (got ${JSON.stringify(labels)})`);
+    // The speed control's own LABEL also reads the shared speed, not the local one, for both.
+    // 2026-07-25 (v0.34): that control is the account panel's "Table speed" row now, not a top-bar
+    // button (Blake asked for the top row to consolidate down to one PAUSE button). Same
+    // updateSpeedButtonLabel(), same source of truth, new element id.
+    const labels = await Promise.all([host, guest].map((p) => p.evaluate(() => document.getElementById("btnAcctSpeed").textContent)));
+    check(labels.every((l) => /Fast/.test(l)), `5: the Table speed row reads "Fast" for BOTH players (got ${JSON.stringify(labels)})`);
 
     // THE ACTUAL REGRESSION GUARD: the real SPEED variable (§ UTIL) every animation duration in
     // this file is computed from - not just the NET.tableSpeed data field - must also match.

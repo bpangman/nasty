@@ -246,7 +246,7 @@ async function main() {
         if (!/nudge/i.test(lineText)) log("note: bubble text at nudge stage:", lineText);
         // wait for the cpuOffer button
         const gotOffer = await g1.waitForFunction(() =>
-          [...document.querySelectorAll("#awayActions button")].some((b) => b.textContent.startsWith("Have the computer")),
+          [...document.querySelectorAll("#awayActions button")].some((b) => b.textContent.startsWith("Have a CPU")),
           { timeout: 9000 }).then(() => true).catch(() => false);
         if (gotOffer) {
           sawOffer = true;
@@ -259,7 +259,7 @@ async function main() {
             sawPauseClear = cleared;
             await g2.evaluate(() => window.netSend({ type: "pauseToggle", paused: false }));
             const rearmed = await g1.waitForFunction(() =>
-              [...document.querySelectorAll("#awayActions button")].some((b) => b.textContent.startsWith("Have the computer")),
+              [...document.querySelectorAll("#awayActions button")].some((b) => b.textContent.startsWith("Have a CPU")),
               { timeout: 15000 }).then(() => true).catch(() => false);
             sawRearm = rearmed;
             if (!rearmed) continue;
@@ -267,11 +267,11 @@ async function main() {
           // ANY other player, one tap, no vote: g2 taps this time if possible, else g1.
           const tapper = offeredTaps % 2 === 0 ? g2 : g1;
           const tapped = await tapper.evaluate(() => {
-            const b = [...document.querySelectorAll("#awayActions button")].find((x) => x.textContent.startsWith("Have the computer"));
+            const b = [...document.querySelectorAll("#awayActions button")].find((x) => x.textContent.startsWith("Have a CPU"));
             if (!b) return false; b.click(); return true;
           });
           if (!tapped) await g1.evaluate(() => {
-            const b = [...document.querySelectorAll("#awayActions button")].find((x) => x.textContent.startsWith("Have the computer"));
+            const b = [...document.querySelectorAll("#awayActions button")].find((x) => x.textContent.startsWith("Have a CPU"));
             if (b) b.click();
           });
           offeredTaps++;
@@ -294,7 +294,7 @@ async function main() {
   check(sawOffer, `${KIND}: away ladder stage 2 fired (cpuOffer button at ~${AWAY_ENV.NASTY_AWAY_CPU_MS}ms)`);
   check(sawPauseClear, `${KIND}: pausing the table clears the away ladder UI`);
   check(sawRearm, `${KIND}: resuming re-arms the ladder from zero (offer came back)`);
-  check(offeredTaps >= 1, `${KIND}: a guest's one-tap "have the computer play this turn" made the server play the frozen player's turn (taps=${offeredTaps})`);
+  check(offeredTaps >= 1, `${KIND}: a guest's one-tap "have a CPU play this turn" made the server play the frozen player's turn (taps=${offeredTaps})`);
   check(sawGreyPlate, `${KIND}: the frozen player's name plate greyed out on the guests (passive presence)`);
   const seatStillHuman = await g1.evaluate(() => window.G.seats[0].type === "human");
   check(seatStillHuman, `${KIND}: the away seat STAYED human after server-played turns (never auto-converted)`);
@@ -328,7 +328,7 @@ async function main() {
   while (Date.now() - zWindowStart < 15000) {
     await tryDriveMove(g1, 1); await tryDriveMove(g2, 2);
     await g1.evaluate(() => {
-      const b = [...document.querySelectorAll("#awayActions button")].find((x) => x.textContent.startsWith("Have the computer"));
+      const b = [...document.querySelectorAll("#awayActions button")].find((x) => x.textContent.startsWith("Have a CPU"));
       if (b && !b.disabled) b.click();
     }).catch(() => {});
     zg1Seq = await g1.evaluate(() => window.NET.appliedSeq);
