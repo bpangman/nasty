@@ -10,6 +10,20 @@ Run everything from this directory with plain `node <script>`; scripts that supp
 server take `SERVER=deno` as an env var, or `deno` as their first argument (per-suite, see the
 "How to run" column).
 
+### Harness gotcha: a raw WebSocket client MUST answer `ping`
+
+If you write a test that talks raw WebSocket instead of driving a browser page, it has to echo
+the server's app-level `{type:'ping'}` back as `{type:'pong'}`, the way `index.html` does. Both
+servers force-close any socket that goes 12 seconds without a single inbound application
+message (`SOCKET_STALE_MS`, see § HEARTBEAT in `server.js` and `cloud/server.ts`). A harness
+that stays silent gets torn down mid-game, which shows up as a mysterious stall rather than an
+error. Copy the two-line `ws.on("message", ...)` echo from `smoke_server.js` or
+`sim_paused_room_gate.js`.
+
+This bit **on 2026-07-26**: it used to be a Deno-only hazard on a 12s window while `server.js`
+ran a far more forgiving 25-50s protocol-frame rule, so a silent harness could get away with it
+against Node. Both servers now use the same rule and the same window.
+
 **To run the whole bar in one command**, from `server/`:
 
 ```

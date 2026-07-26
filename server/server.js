@@ -41,14 +41,31 @@ const STARTED_ROOM_TTL_MS = 7 * 24 * 60 * 60 * 1000; // started-but-unfinished g
 const PRUNE_EVERY_MS = 5 * 60 * 1000;
 // v0.22 P4: 30s -> 25s. Cellular NAT gateways drop idle mappings in as little as ~30s; the
 // standard sizing is a heartbeat at ~75% of the shortest infrastructure timeout. The same
-// interval now also carries an APP-LEVEL {type:'ping'} alongside the protocol-frame ping (see
-// the hb interval near the bottom) - a frozen WKWebView's networking process can keep
-// answering protocol-frame pings while the page's JS is suspended, so only an app-level echo
-// proves the CLIENT is actually alive. That app-level proof feeds the § AWAY LADDER's
-// "silent" detection; it is deliberately NOT used to terminate sockets (old builds 16-17
-// never echo app-level pings - the protocol-frame pong keeps governing termination, so
-// nothing changes for any old client).
-const HEARTBEAT_MS = 25 * 1000;
+// interval also carries an APP-LEVEL {type:'ping'} alongside the protocol-frame ping (see the
+// hb interval near the bottom) - a frozen WKWebView's networking process can keep answering
+// protocol-frame pings while the page's JS is suspended, so only an app-level echo proves the
+// CLIENT is actually alive. That app-level proof feeds the § AWAY LADDER's "silent" detection.
+//
+// 2026-07-26: 25s -> 4s, and the app-level echo now governs socket teardown too (it used to be
+// deliberately excluded, because builds 16-17 never sent one). TWO reasons, both measured:
+//   1. PARITY. server/cloud/server.ts - the server Blake's family actually plays on - has run
+//      HEARTBEAT_MS 4000 / SOCKET_STALE_MS 12000 keyed off the app-level echo since v0.16.
+//      This file sat at 25s keyed off the protocol-frame pong, so the two servers reported a
+//      dropped player at wildly different times: ~12-16s there, 25-50s here. The standing rule
+//      is exact behavioural parity, so this file now uses the cloud server's numbers and its
+//      rule. More frequent pings are strictly safer for the cellular-NAT concern above, not
+//      less, so the original sizing reasoning is untouched.
+//   2. The old carve-out is obsolete. Builds 16-17 cannot reach a room any more - the protocol
+//      gate rejects everything below the current PROTOCOL_VERSION outright (see the
+//      protocolMismatch path, and the pinned build 28/30/32 lockout legs in
+//      tests/test_freeze_recovery.js). Every client that can get in today echoes app-level
+//      pings, so nothing is left to protect.
+// The protocol-frame ping is still SENT (it is free and it keeps NAT mappings warm), it just no
+// longer decides anything - see the hb interval for why that matters.
+const HEARTBEAT_MS = 4 * 1000;
+// 2026-07-26: twin of server.ts's constant of the same name. ~1 missed reply is tolerated, 2 in
+// a row is not.
+const SOCKET_STALE_MS = HEARTBEAT_MS * 3;
 // v0.8: rooms directory for on-disk persistence (one JSON file per room). Override via
 // NASTY_ROOMS_DIR for tests, so a test server never touches production's saved rooms.
 const ROOMS_DIR = process.env.NASTY_ROOMS_DIR
@@ -2576,6 +2593,18 @@ const AWAY_SILENT_MS = envInt("NASTY_AWAY_SILENT_MS", 60 * 1000);
 const AWAY_SWEEP_MS = envInt("NASTY_AWAY_SWEEP_MS", Math.min(5000, Math.max(500, Math.floor(AWAY_NUDGE_MS / 3))));
 const AWAY_REPUSH_MIN_MS = 25 * 1000;   // re-nudge push rate limit per away stretch
 
+/* "Looks away" and "disconnected" are DIFFERENT ideas and this file uses both on purpose. This
+   one is the softer of the two: it feeds the ladder's escalation, which only ever concerns the
+   seat whose turn it is. The HARD one - a socket that is actually gone - is what drives the
+   'presence' broadcast, and therefore the red name plate on everybody else's board. Do not wire
+   the plate to this function: "hasn't said anything for a minute" is not "has left the table",
+   and Blake asked for red to mean the second thing.
+   2026-07-26 footnote: at the shipped defaults the third line below no longer decides much.
+   AWAY_SILENT_MS is 60s while § HEARTBEAT tears a silent socket down after 12s, so a genuinely
+   silent phone trips `!p.connected` on the line above it long before this one. It is kept
+   because it still catches the in-between shapes and because the tests turn AWAY_SILENT_MS down
+   below the socket window, where it does the work. (Same on server.ts - this was already true
+   over there, which is one of the drifts the parity pass closed.) */
 function playerLooksAway(p) {
   if (!p) return true;
   if (!p.connected) return true;
@@ -3177,13 +3206,14 @@ function gameSnapshotFields(room, isHost) {
 
 wss.on("connection", (ws, req) => {
   const ip = remoteIp(req);
-  ws.isAlive = true;
   // v0.22: app-level proof-of-life clock (twin of server.ts's socketLastSeen) - any inbound
   // APPLICATION message counts; protocol-frame pongs deliberately do NOT (a frozen WKWebView's
   // network stack can keep answering those with the page's JS fully suspended - the exact
   // "silent" shape the § AWAY LADDER needs to see through).
+  // 2026-07-26: this is now the ONLY proof of life on this socket. The old ws.isAlive flag and
+  // its 'pong' listener were removed with the heartbeat rewrite - they measured the protocol
+  // frame, which is exactly the thing a sleeping phone keeps answering. See § HEARTBEAT.
   ws.lastAppMsgAt = Date.now();
-  ws.on("pong", () => { ws.isAlive = true; });
   let ctx = null;
 
   ws.on("message", (raw) => {
@@ -3920,17 +3950,44 @@ wss.on("connection", (ws, req) => {
   }
 });
 
+/* § HEARTBEAT - twin of server.ts's block of the same name, keep the two in sync.
+ * 2026-07-26: rewritten to match the cloud server exactly. What changed and why:
+ *
+ * OLD RULE: terminate a socket that missed two PROTOCOL-FRAME pongs (so 25-50s at the old 25s
+ * interval). The flaw is not the timing, it is what was being measured. A backgrounded iOS
+ * WKWebView's NETWORKING process keeps answering protocol-frame pings all by itself while the
+ * page's JavaScript is completely suspended - that is the documented zombie shape this repo's
+ * freeze harness exists to reproduce. So the old rule could look at a phone that has been
+ * asleep in someone's pocket for five minutes and call it healthy.
+ *
+ * NEW RULE (server.ts's, since v0.16): measure the APP-LEVEL echo instead. ws.lastAppMsgAt is
+ * refreshed by any inbound application message, including the {type:'pong'} every live client
+ * sends back to the {type:'ping'} below. Protocol-frame pongs deliberately do NOT refresh it
+ * (see the ws.on("message") handler). Nothing inbound for SOCKET_STALE_MS means the CLIENT is
+ * gone, whatever the socket claims, so tear it down: ws.terminate() destroys the connection
+ * locally and fires 'close' immediately, which runs the normal disconnect bookkeeping and gets
+ * the 'presence' broadcast out to the rest of the table. (Node can do this in one step. The
+ * cloud server cannot - its platform only offers a close HANDSHAKE, which a dead pipe never
+ * completes - so server.ts has to call its disconnect path by hand. Same outcome, same timing,
+ * different amount of work to get there. See § THE DISCONNECT PATH over there.)
+ *
+ * The protocol-frame ping is still sent. It costs nothing and it keeps cellular NAT mappings
+ * warm; it just no longer decides whether anybody is alive. */
 const hb = setInterval(() => {
+  const now = Date.now();
+  // Collect first, terminate second: terminate() fires 'close' synchronously, and that handler
+  // can touch room state, so mutating anything mid-forEach is asking for trouble. (Twin of the
+  // same two-pass shape in server.ts's sweep.)
+  const stale = [];
   wss.clients.forEach(ws => {
-    if (ws.isAlive === false) { try { ws.terminate(); } catch (e) {} return; }
-    ws.isAlive = false;
+    if (now - (ws.lastAppMsgAt || now) > SOCKET_STALE_MS) { stale.push(ws); return; }
     try { ws.ping(); } catch (e) {}
-    // v0.22 P4: app-level ping too - the client echoes {type:'pong'} (index.html's 'ping'
-    // case, shipped v0.16/build 18), which refreshes ws.lastAppMsgAt and thereby the § AWAY
-    // LADDER's "silent" clock. Builds 16-17 ignore it silently - harmless, never terminated
-    // over it (see HEARTBEAT_MS's comment).
-    send(ws, { type: "ping", t: Date.now() });
+    // v0.22 P4: app-level ping - the client echoes {type:'pong'} (index.html's 'ping' case,
+    // shipped v0.16/build 18), which refreshes ws.lastAppMsgAt and thereby BOTH the § AWAY
+    // LADDER's "silent" clock and (since 2026-07-26) this loop's own staleness rule.
+    send(ws, { type: "ping", t: now });
   });
+  for (const ws of stale) { try { ws.terminate(); } catch (e) {} }
 }, HEARTBEAT_MS);
 
 const pruneTimer = setInterval(() => {

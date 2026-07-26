@@ -45,10 +45,35 @@ const PORT = 21200 + Math.floor(Math.random() * 700);
 const PROXY_PORT = PORT + 1000;
 const FREEZE_MS = Number(process.env.NASTY_TEST_FREEZE_MS) || 60000;
 const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), `nasty-freeze-${KIND}-`));
-// Shortened ladder thresholds (the servers' own env knobs - see § AWAY LADDER in both).
+/* Shortened ladder thresholds (the servers' own env knobs - see § AWAY LADDER in both).
+   Nothing about the ladder's real shipped defaults (30s nudge / 150s offer / 60s silent)
+   changes - this is only how fast this suite's own clock runs.
+
+   2026-07-26: shortened again, from 2500 silent / 3000 nudge / 8000 offer. THE REASON, and it
+   is worth understanding before touching these numbers again:
+
+   A frozen phone does not stay frozen forever from the SERVER's point of view. Both servers now
+   tear a dead-pipe socket down after SOCKET_STALE_MS = 12s (it used to take 25-50s on the node
+   one - see § HEARTBEAT in both). The moment that happens, this harness's "frozen" page
+   RESURRECTS ITSELF: the freeze proxy forwards NEW connections normally by design (scenario 4
+   depends on that), and CDP's Page.setWebLifecycleState 'frozen' does not actually stop the
+   page from dialling one. Measured 2026-07-26: presence on the guests went {} -> {"1":false} ->
+   {"1":true} between +11s and +13s of a nominal 60-second freeze, and the away ladder correctly
+   cleared itself because the player really was back.
+
+   So this suite has roughly a 12-second usable window per freeze, not 60. Everything the ladder
+   legs need to observe - nudge, offer, a tap, a pause, a re-arm, another offer - has to fit
+   inside it. At the old numbers just REACHING the offer cost SILENT + CPU = 10.5s, and the
+   pause/re-arm leg needed a second helping of that; it fit comfortably in a 25-50s teardown and
+   does not fit in 12s. At these numbers the offer lands ~3.5s in, so the full pause/re-arm
+   round trip finishes around +8s with margin to spare.
+
+   (The ladder itself is fine either way - it re-arms every time the resurrected page goes quiet
+   again, which it does within a second or two. These numbers are about the TEST being able to
+   watch it happen inside one clean window instead of straddling a reconnect.) */
 const AWAY_ENV = {
-  NASTY_AWAY_NUDGE_MS: "3000", NASTY_AWAY_CPU_MS: "8000",
-  NASTY_AWAY_SILENT_MS: "2500", NASTY_AWAY_SWEEP_MS: "400",
+  NASTY_AWAY_NUDGE_MS: "1200", NASTY_AWAY_CPU_MS: "2500",
+  NASTY_AWAY_SILENT_MS: "1000", NASTY_AWAY_SWEEP_MS: "300",
 };
 // Build 28's exact client (commit 9d19b46, the last pre-v0.22 commit) for the back-compat leg.
 const BUILD28_COMMIT = "9d19b46";
@@ -236,8 +261,46 @@ async function main() {
   const freezeStart = Date.now();
   log(`host frozen (proxy + JS runtime) for ${FREEZE_MS}ms - guests keep playing`);
 
+  /* REWRITTEN 2026-07-26. This used to be sampled by the driver loop below - one
+     `plaque-0.classList.contains("away")` read per pass - and it was wrong twice over:
+
+     1. IT MISSED. The loop's own awaits (three waitForFunction calls, up to 7s + 9s + 5s, plus a
+        15s one on the pause/re-arm pass) mean whole stretches go unsampled. Instrumented run of
+        2026-07-26: the driver sampled at +2s, then not again until +25s, then +26s, +34s, +35s,
+        and then nothing until +57s. Two blind holes over 20 seconds each.
+     2. WHAT IT IS LOOKING FOR IS TRANSIENT. The frozen page reconnects on its own the moment the
+        server tears the zombie socket down (the freeze proxy forwards NEW connections normally,
+        by design - see its header), so the red plate appears and then correctly goes away again
+        seconds later. Measured on that same run: the guest's presence map read {} at +35s and
+        {"1":true} at +57s - the false-then-true round trip happened entirely inside a blind hole.
+
+     So the fix is to stop sampling from out here and let the GUEST'S OWN PAGE latch it. A 100ms
+     in-page interval cannot be blocked by anything the driver is awaiting, and it re-reads
+     getElementById every tick so it survives the plaque being re-rendered. It records the first
+     moment the plate went red and how long that took, which is the number worth printing anyway.
+
+     Do not "simplify" this back into the loop. */
+  await g1.evaluate(() => {
+    window.__awayLatch = { seen: false, atMs: null, nameColor: null };
+    const t0 = Date.now();
+    window.__awayLatchTimer = setInterval(() => {
+      const p = document.getElementById("plaque-0");
+      if (p && p.classList.contains("away") && !window.__awayLatch.seen) {
+        // Grab the RENDERED name colour in the same tick, not just the class. v0.25 found the
+        // offline-red rule had been permanently dead CSS for several releases while the class
+        // was being applied perfectly - reading the class alone would not have caught it. (Safe
+        // to read immediately: .plaque only transitions box-shadow, never .nm's colour.)
+        const nm = p.querySelector(".nm");
+        window.__awayLatch = {
+          seen: true, atMs: Date.now() - t0,
+          nameColor: nm ? getComputedStyle(nm).color : null,
+        };
+      }
+    }, 100);
+  });
+
   // While frozen: ride the away ladder every time the host's seat comes up.
-  let sawNudgeLine = false, sawOffer = false, sawPauseClear = false, sawRearm = false, offeredTaps = 0, sawGreyPlate = false;
+  let sawNudgeLine = false, sawOffer = false, sawPauseClear = false, sawRearm = false, offeredTaps = 0;
   let pauseTested = false;
   while (Date.now() - freezeStart < FREEZE_MS) {
     const stuckOnHost = await g1.evaluate(() => window.G && !window.G.over && window.G.turn === 0);
@@ -285,11 +348,10 @@ async function main() {
         }
       }
     }
-    const grey = await g1.evaluate(() => { const p = document.getElementById("plaque-0"); return !!(p && p.classList.contains("away")); });
-    if (grey) sawGreyPlate = true;
     await sleep(300);
   }
   driving.guests = false; await guestDriver;
+  const awayLatch = await g1.evaluate(() => { clearInterval(window.__awayLatchTimer); return window.__awayLatch; });
   const seqAtThaw = await g1.evaluate(() => window.NET.appliedSeq);
 
   check(seqAtThaw > seqAtFreeze, `${KIND}: guests kept playing the whole ${Math.round(FREEZE_MS / 1000)}s host freeze (appliedSeq ${seqAtFreeze} -> ${seqAtThaw})`);
@@ -300,7 +362,23 @@ async function main() {
   check(sawPauseClear, `${KIND}: pausing the table clears the away ladder UI`);
   check(sawRearm, `${KIND}: resuming re-arms the ladder from zero (offer came back)`);
   check(offeredTaps >= 1, `${KIND}: a guest's one-tap "have a CPU play this turn" made the server play the frozen player's turn (taps=${offeredTaps})`);
-  check(sawGreyPlate, `${KIND}: the frozen player's name plate greyed out on the guests (passive presence)`);
+  /* 2026-07-26: two checks now, and the wording is fixed. "greyed out" was left over from the
+     v0.22 dim/grayscale treatment; since v0.25 the signal is the NAME TURNING RED, and since
+     v0.36 red is reserved exclusively for a player whose connection is genuinely gone. This is
+     the ONLY test anywhere that proves it fires for the ZOMBIE shape - a phone that stopped
+     answering while its socket still reads OPEN, which is what a backgrounded iPhone or a phone
+     that walked out of wifi range actually looks like from the server. A clean close (tab shut,
+     app quit) is covered by test_v025_ui_flows.js Scenario F.
+     THE SECOND CHECK IS THE POINT. Before 2026-07-26 the cloud server never sent the 'presence'
+     broadcast at all in this shape (its stale-socket sweep called ws.close(), which starts a
+     handshake a dead pipe never answers, so its onclose - where all the disconnect bookkeeping
+     lived - never ran), and this file's own server was 25-50s behind because it was watching
+     protocol-frame pongs that a sleeping phone keeps answering. Both now report in about 12-16s
+     off the same app-level clock. The 25s bar is that measured number plus real headroom; it is
+     here so the two servers can never silently drift apart on it again. */
+  check(awayLatch.seen && /255,\s*84,\s*73/.test(awayLatch.nameColor || ""),
+    `${KIND}: the frozen player's name plate turned RED on the guests - the zombie-socket shape, where the socket still reads OPEN (latched at +${awayLatch.atMs}ms, colour "${awayLatch.nameColor}")`);
+  check(awayLatch.seen && awayLatch.atMs < 25000, `${KIND}: and it happened promptly, not eventually - within 25s of the phone going silent (took ${awayLatch.atMs}ms)`);
   const seatStillHuman = await g1.evaluate(() => window.G.seats[0].type === "human");
   check(seatStillHuman, `${KIND}: the away seat STAYED human after server-played turns (never auto-converted)`);
 
@@ -328,9 +406,14 @@ async function main() {
   // the foreground - so convergence can only come from the resync-ack automation, never from a
   // later action papering over it. Window stays well under the servers' own dead-socket
   // teardown, so the zombie stays zombie.
+  // 2026-07-26: that teardown is now SOCKET_STALE_MS = 12s on both servers (it used to be
+  // 25-50s on the node one), so this cap came down from 15s to 9s to keep its safety margin.
+  // The loop normally breaks out after ~4s anyway once enough drift has built up; the cap only
+  // matters on a slow machine, and going past 12s here would kill the zombie socket and make
+  // the "socket still reported OPEN" check below fail for a reason that is not a bug.
   const zWindowStart = Date.now();
   let zg1Seq = preFreezeSeq;
-  while (Date.now() - zWindowStart < 15000) {
+  while (Date.now() - zWindowStart < 9000) {
     await tryDriveMove(g1, 1); await tryDriveMove(g2, 2);
     await g1.evaluate(() => {
       const b = [...document.querySelectorAll("#awayActions button")].find((x) => x.textContent.startsWith("Have a CPU"));

@@ -583,11 +583,30 @@ async function main() {
     await Promise.all([host, guest].map((p) => p.waitForFunction(() => window.G != null, { timeout: 10000 })));
 
     // Guest1 goes offline (socket dies without a deliberate leave - a dropped connection).
+    // Measured 2026-07-26 against a real local instance of both servers: the other player is told
+    // in about 3-6ms for a close like this one, so the 8s below is enormous headroom. The SLOW
+    // shape is a phone that stops answering without its socket ever closing (asleep, backgrounded,
+    // out of range) - that takes ~12-16s and is covered by test_freeze_recovery.js, not here.
     await guest.close();
     await host.waitForFunction(() => {
       const el = document.getElementById("plaque-1");
       return el && el.classList.contains("away");
     }, { timeout: 8000 });
+    /* ADDED 2026-07-26: wait for the plate to SETTLE before reading any colour off it.
+       .plaque carries `transition: box-shadow .3s` (§ STYLE), so when updatePresenceUI() strips
+       .here the green presence ring does not vanish, it FADES over 300ms. The class flips
+       instantly; the computed style does not. This suite used to read getComputedStyle about 4ms
+       after the class landed and catch the ring mid-fade, then fail the "no green ring" check
+       below on a value that was already on its way to `none`. Traced frame by frame on
+       2026-07-26: box-shadow alpha .533 at +1ms, .15 at +120ms, .004 at +255ms, exactly `none` at
+       +301ms - a textbook transition curve, not a stuck style.
+       So: the assertions below are about the SETTLED plate, which is what a person actually sees,
+       and this wait is what makes them mean that. It is bounded, so a ring that genuinely never
+       cleared still fails the check rather than hanging the suite. */
+    await host.waitForFunction(() => {
+      const el = document.getElementById("plaque-1");
+      return el && !/126, ?224, ?160/.test(getComputedStyle(el).boxShadow);
+    }, { timeout: 4000 });
     const plaqueColor = await host.evaluate(() => getComputedStyle(document.querySelector("#plaque-1 .nm")).color);
     check(/255, 84, 73|ff5449/i.test(plaqueColor.replace(/\s/g, "")) || plaqueColor === "rgb(255, 84, 73)",
       `F: the disconnected player's name plate renders in the red (#ff5449) color (got "${plaqueColor}")`);

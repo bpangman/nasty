@@ -123,9 +123,11 @@ function startStaticServer(httpPort, wsPort) {
 function wsConnect(port) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://localhost:${port}`);
-    // Echo the server's app-level pings like a real client does - the Deno server force-closes
-    // any socket that stays app-level silent past its staleness window (§ HEARTBEAT), which
-    // would otherwise kill this harness's long-lived host connection halfway through the test.
+    // Echo the server's app-level pings like a real client does - BOTH servers force-close any
+    // socket that stays app-level silent past its staleness window (§ HEARTBEAT), which would
+    // otherwise kill this harness's long-lived host connection halfway through the test.
+    // 2026-07-26: this used to be a Deno-only hazard; server.js adopted the same rule and the
+    // same 12s window that day, so any raw-WebSocket harness here needs this on either server.
     ws.on("message", (raw) => {
       try { const m = JSON.parse(raw.toString()); if (m.type === "ping") ws.send(JSON.stringify({ type: "pong", t: m.t })); } catch (e) { /* ignore */ }
     });

@@ -7068,9 +7068,9 @@ function hardResetConnection(){
    round-trip check. */
 /* v0.22 P4: tightened from 45s to 30s - cellular NAT gateways drop idle mappings in as little
    as ~30s, so 45s of silence meant the pipe could already be NAT-dead for 15s before this
-   watchdog even looked. With both servers now pinging at least every ~25s (see § HEARTBEAT in
-   server.js/server.ts) and the client-side keepalive below, 30s of TOTAL silence is
-   unambiguously a dead pipe, not a quiet one. */
+   watchdog even looked. With both servers now pinging often (see § HEARTBEAT in
+   server.js/server.ts - every 4s as of 2026-07-26, was ~25s here) and the client-side keepalive
+   below, 30s of TOTAL silence is unambiguously a dead pipe, not a quiet one. */
 const SILENCE_WATCHDOG_MS=30000;
 setInterval(()=>{
   if(!NET.online||!NET.wantConnection||!G||G.over)return;
@@ -8025,8 +8025,14 @@ function handleNetMessage(m){
       // this app-level echo is how the Deno server tells a half-dead client socket (one that
       // never replies) apart from a healthy-but-quiet one, and cleans the dead one up rather
       // than leaving a room thinking that seat is still connected. v0.22 P4: server.js now
-      // ALSO sends these (every ~25s, alongside its protocol-frame ping) so the Node server
-      // gets the same app-level proof-of-life signal - this echo serves both servers now.
+      // ALSO sends these, alongside its protocol-frame ping, so the Node server gets the same
+      // app-level proof-of-life signal - this echo serves both servers now.
+      // 2026-07-26: both servers now ping every 4s and BOTH decide a socket is dead off this
+      // echo alone (server.js used to decide off the protocol-frame pong, which a backgrounded
+      // iOS webview's networking process answers all by itself with the page's JS suspended -
+      // see § HEARTBEAT in either server file). So this one line is the whole reason the rest of
+      // the table finds out within about 12-16 seconds that this phone has gone away, instead of
+      // never. It is not optional and it is not merely a keepalive.
       try{ netSend({type:'pong',t:m.t}); }catch(e){}
       return;
     case 'stateCheck':

@@ -2468,23 +2468,107 @@ setInterval(() => {
  * ------------------------------------------------------------------------------------- */
 const HEARTBEAT_MS = 4000;
 const SOCKET_STALE_MS = HEARTBEAT_MS * 3;   // ~1 missed reply is tolerated, 2 in a row is not -
-                                             // proportionally similar margin to server.js's own
-                                             // 2-missed-30s-pings-before-terminate pattern.
+                                             // twin of server.js's identical constants, which
+                                             // were aligned to these on 2026-07-26 (see below).
+
+/* 2026-07-26 § THE DISCONNECT PATH - one function, two callers, and the reason it exists.
+ *
+ * THE BUG THIS FIXES (found by driving a real online game against a real local instance of this
+ * server with a TCP proxy that silently black-holes traffic while leaving the socket open -
+ * tests/freeze_proxy.js, the documented iOS/WKWebView zombie shape):
+ * every scrap of disconnect bookkeeping used to live inside `socket.onclose`. The stale-socket
+ * sweep below did the right thing - it noticed the silence at exactly SOCKET_STALE_MS and called
+ * ws.close() - but ws.close() only STARTS the WebSocket closing handshake. It sends a close frame
+ * and waits for one back. When the pipe is dead, that frame goes nowhere, nothing comes back, the
+ * socket parks in readyState 2 (CLOSING) forever, and `onclose` NEVER FIRES. Measured: the sweep
+ * re-fired every 4 seconds on the same stuck socket for the full 120 seconds of the probe, while
+ * p.connected stayed true, no 'presence' broadcast was ever sent, and the dropped player's name
+ * plate kept its green "they're here" glow on every other phone at the table, indefinitely.
+ * That is the exact opposite of what Blake asked for on 2026-07-24: "when online, the other
+ * human's names should only be highlighted in red when they're disconnected."
+ *
+ * Note WHICH shape was broken: a clean close (tab closed, app quit, Leave tapped) always worked
+ * and still does - measured at 5ms end to end. It was the shape where the phone stops answering
+ * but the socket is never torn down - backgrounded iOS webview, phone asleep, walked out of wifi
+ * range - that was invisible. That is the common family case, which is why it mattered.
+ *
+ * THE FIX: the sweep no longer waits for a handshake that is not coming. It force-closes the
+ * socket best-effort AND runs this cleanup itself, immediately. If `onclose` does eventually fire
+ * afterwards, the `stillCurrent` guard below sees the socket is no longer the registered one and
+ * returns - so this can never run twice for the same connection.
+ *
+ * Keep this in sync with server.js's own close handler + heartbeat (same constants, same order of
+ * operations) - the two servers are held at exact behavioural parity by standing rule. */
+function applyDisconnect(code: string, playerId: number, socket: WebSocket) {
+  (async () => {
+    // v0.10.3 fix (found via the reclaim wire-protocol test, same root cause as server.js's
+    // identical fix): a contested "reclaim" approval hands this playerId to a NEW socket and
+    // closes this old one (see "reclaimApprove" below) - the close handler can fire AFTER
+    // that handover, and without this guard would wrongly mark the (now different) live
+    // connection as disconnected, since both sockets shared the same playerId by design.
+    // Only apply a disconnect if THIS socket is still the one THIS isolate has locally
+    // registered for that player. (Known limitation, same shape as this file's documented
+    // BroadcastChannel caveat: if the takeover happened on a DIFFERENT isolate, this isolate's
+    // own localSockets map was never updated, so this guard can't see it - acceptable given
+    // the whole feature is local-only/undeployed pending the app being pinned to a single
+    // instance, same reasoning as § RELAY above.) 2026-07-26: this guard now doubles as the
+    // run-once latch between the two callers - whichever gets here first unregisters, the other
+    // one falls out right here.
+    const stillCurrent = localSockets.get(code)?.get(playerId) === socket;
+    if (!stillCurrent) return; // a takeover already replaced us locally - don't unregister IT
+    unregisterLocalSocket(code, playerId);
+    // v0.22 P0b: never hold the first deal for a phone that's gone - its overlays are moot.
+    releaseSeatGateSlot(code, playerId, "unseated player disconnected");
+    const r = await touchRoom(code, (meta) => {
+      const p = meta.players.find((pp) => pp.id === playerId);
+      if (!p) return false;
+      p.connected = false;
+      return {};
+    }).catch(() => ({ ok: false as const, reason: "error" }));
+    if (r.ok) {
+      // 2026-07-23: a disconnect can complete an open reunion gate too - twin of server.js's
+      // matching close-handler addition (see maybeResolveReunion()'s own comment).
+      await maybeResolveReunion(code);
+      broadcastRoom(code, { type: "presence", playerId, connected: false });
+      if (playerId === r.meta.hostPlayerId) broadcastRoom(code, { type: "hostStatus", connected: false });
+      // v0.16 item 5: twin of server.js's matching close-handler addition - covers a player
+      // who was connected when their turn started but backgrounds/drops mid-turn (nothing
+      // else mutates the game to re-enter driveTurnLoopCollect on its own in that case).
+      // Mutually exclusive with the turn-start check in maybeSendTurnPush()'s other call
+      // sites - never a double push for the same turn.
+      if (r.meta.started && r.meta.seatOwners) {
+        const E = getEngine(code, r.meta);
+        if (E) {
+          const G = E.getG();
+          if (G && !G.over && r.meta.seatOwners[G.turn] === playerId) {
+            maybeSendTurnPush(code, E, false).catch((e) => log("push check failed", code, (e as Error).message));
+          }
+        }
+      }
+    }
+  })();
+}
+
 setInterval(() => {
   const now = Date.now();
-  for (const socks of localSockets.values()) {
-    for (const ws of socks.values()) {
+  // 2026-07-26: collect first, act second. applyDisconnect() unregisters the socket
+  // synchronously, which mutates the very maps being walked here - doing it inline would skip
+  // entries. (Same reason server.js's twin builds a list before terminating.)
+  const stale: Array<{ code: string; playerId: number; ws: WebSocket }> = [];
+  for (const [code, socks] of localSockets) {
+    for (const [playerId, ws] of socks) {
       const lastSeen = socketLastSeen.get(ws) ?? now;
-      if (now - lastSeen > SOCKET_STALE_MS) {
-        // Half-dead: readyState may still read OPEN (this platform has no lower-level signal
-        // to check), but nothing — not even an app-level pong — has come back in a while.
-        // Force it closed; onclose (below) does the normal disconnect cleanup from there, and
-        // a real reconnect from this player just registers a fresh socket over it.
-        try { ws.close(); } catch (_e) { /* ignore */ }
-        continue;
-      }
+      if (now - lastSeen > SOCKET_STALE_MS) { stale.push({ code, playerId, ws }); continue; }
       send(ws, { type: "ping", t: now });
     }
+  }
+  for (const s of stale) {
+    // Half-dead: readyState may still read OPEN (this platform has no lower-level signal to
+    // check), but nothing - not even an app-level pong - has come back in a while. Ask for a
+    // close, then do the disconnect cleanup ourselves without waiting for the handshake to
+    // complete, because on a dead pipe it never will (see § THE DISCONNECT PATH above).
+    try { s.ws.close(); } catch (_e) { /* ignore */ }
+    applyDisconnect(s.code, s.playerId, s.ws);
   }
   // v0.10.3: a contested reclaim (see PendingReclaim above) the host never answered — tell the
   // requester instead of leaving them hanging forever.
@@ -2525,6 +2609,17 @@ const ROOM_TTL_REFRESH_MS = envInt("NASTY_ROOM_TTL_REFRESH_MS", 5 * 60 * 1000);
 const lastTtlRefresh = new Map<string, number>();
 type AwayState = { seat: number; since: number; nudgeSent: boolean; offerSent: boolean; announced: boolean; lastPushAt: number };
 const awayStates = new Map<string, AwayState>();
+/* "Looks away" and "disconnected" are DIFFERENT ideas and this file uses both on purpose. This
+   one is the softer of the two: it feeds the ladder's escalation, which only ever concerns the
+   seat whose turn it is. The HARD one - a socket that is actually gone - is what drives the
+   'presence' broadcast, and therefore the red name plate on everybody else's board. Do not wire
+   the plate to this function: "hasn't said anything for a minute" is not "has left the table",
+   and Blake asked for red to mean the second thing.
+   2026-07-26 footnote: at the shipped defaults the third line below no longer decides much.
+   AWAY_SILENT_MS is 60s while § HEARTBEAT tears a silent socket down after 12s, so a genuinely
+   silent phone trips `!p.connected` on the line above it long before this one. It is kept
+   because it still catches the in-between shapes and because the tests turn AWAY_SILENT_MS down
+   below the socket window, where it does the work. (Twin of server.js's identical note.) */
 function playerLooksAway(code: string, p: Player | undefined): boolean {
   if (!p) return true;
   if (!p.connected) return true;
@@ -3677,53 +3772,11 @@ function handleWsUpgrade(req: Request, ip: string): Response {
   };
 
   socket.onclose = () => {
-    (async () => {
-      if (!ctx) return;
-      const { code, playerId } = ctx;
-      // v0.10.3 fix (found via the reclaim wire-protocol test, same root cause as server.js's
-      // identical fix): a contested "reclaim" approval hands this playerId to a NEW socket and
-      // closes this old one (see "reclaimApprove" above) — this "close" handler can fire AFTER
-      // that handover, and without this guard would wrongly mark the (now different) live
-      // connection as disconnected, since both sockets shared the same playerId by design.
-      // Only apply a disconnect if THIS closing socket is still the one THIS isolate has
-      // locally registered for that player. (Known limitation, same shape as this file's
-      // documented BroadcastChannel caveat: if the takeover happened on a DIFFERENT isolate,
-      // this isolate's own localSockets map was never updated, so this guard can't see it —
-      // acceptable given the whole feature is local-only/undeployed pending the app being
-      // pinned to a single instance, same reasoning as § RELAY above.)
-      const stillCurrent = localSockets.get(code)?.get(playerId) === socket;
-      if (!stillCurrent) return; // a takeover already replaced us locally — don't unregister IT
-      unregisterLocalSocket(code, playerId);
-      // v0.22 P0b: never hold the first deal for a phone that's gone - its overlays are moot.
-      releaseSeatGateSlot(code, playerId, "unseated player disconnected");
-      const r = await touchRoom(code, (meta) => {
-        const p = meta.players.find((pp) => pp.id === playerId);
-        if (!p) return false;
-        p.connected = false;
-        return {};
-      }).catch(() => ({ ok: false as const, reason: "error" }));
-      if (r.ok) {
-        // 2026-07-23: a disconnect can complete an open reunion gate too - twin of server.js's
-        // matching close-handler addition (see maybeResolveReunion()'s own comment).
-        await maybeResolveReunion(code);
-        broadcastRoom(code, { type: "presence", playerId, connected: false });
-        if (playerId === r.meta.hostPlayerId) broadcastRoom(code, { type: "hostStatus", connected: false });
-        // v0.16 item 5: twin of server.js's matching close-handler addition - covers a player
-        // who was connected when their turn started but backgrounds/drops mid-turn (nothing
-        // else mutates the game to re-enter driveTurnLoopCollect on its own in that case).
-        // Mutually exclusive with the turn-start check in maybeSendTurnPush()'s other call
-        // sites - never a double push for the same turn.
-        if (r.meta.started && r.meta.seatOwners) {
-          const E = getEngine(code, r.meta);
-          if (E) {
-            const G = E.getG();
-            if (G && !G.over && r.meta.seatOwners[G.turn] === playerId) {
-              maybeSendTurnPush(code, E, false).catch((e) => log("push check failed", code, (e as Error).message));
-            }
-          }
-        }
-      }
-    })();
+    if (!ctx) return;
+    // 2026-07-26: the body used to live inline here. It moved out to applyDisconnect() (see §
+    // HEARTBEAT) so the stale-socket sweep can run the SAME cleanup for a socket whose closing
+    // handshake will never finish. Behaviour for a normal close is unchanged.
+    applyDisconnect(ctx.code, ctx.playerId, socket);
   };
 
   return response;
