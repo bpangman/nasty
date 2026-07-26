@@ -183,14 +183,29 @@ async function partC(browser) {
   console.log("\n=== Part C: the copy Blake approved, and no 'family' ===");
   const { ctx, page } = await openWelcome(browser, MATRIX[2]);
   const g = await page.evaluate(measure);
-  ok(g.copy.includes("Sign in and your wins, your takeouts and your bragging rights all stay yours - your record follows you to any phone. Or jump straight in."),
-    "C1 the new welcome note is there, verbatim");
+  /* v0.39 (2026-07-26): Blake asked for the login page to be "more exciting with exclamation
+     points!", so the exact sentence this used to pin is gone. The CONTRACT v0.38 cared about is
+     unchanged and still asserted - the opening line still promises that signing in keeps your record
+     yours - it just no longer pins one phrasing, the same treatment v0.38 itself gave the v0.36
+     assertion below it. New copy: "Race five tees home and send everybody else packing! Sign in and
+     your wins, your takeouts and your bragging rights all stay yours." Verbatim pinning of the v0.39
+     wording lives in test_ui_v039_2026_07_26.js part C, which is where it belongs. */
+  ok(/wins/i.test(g.copy) && /takeouts/i.test(g.copy) && /bragging rights/i.test(g.copy) && /stay yours/i.test(g.copy),
+    "C1 the welcome note still promises that signing in keeps your record yours");
   ok(g.copy.includes("Guests can play every single thing. They just do not appear on the leaderboard."),
     "C2 the new guest fine print is there, verbatim");
   ok(/Accounts are for ages 13 and up\. Anyone younger should continue as a guest\./.test(g.copy),
     "C3 the age sentence is untouched and still factual");
-  ok(/You will only be asked this once\. You can change it any time - tap ADMIN at the top of the game screen\./.test(g.copy),
-    "C4 the asked-once sentence is untouched");
+  /* v0.39 (2026-07-26): DELIBERATELY REPLACED, and this is the one assertion in this suite that had
+     to change rather than be loosened. Blake: "Can you have the sign in screen appear on every new
+     iteration of the app?" The screen is remembered per app version now, so "You will only be asked
+     this once" became false the moment that shipped and the sentence had to go. What still has to be
+     true - and is - is the second half: the choice can be changed any time from ADMIN. The new
+     sentence, and the fact that the old one is gone, are pinned in test_ui_v039_2026_07_26.js part C. */
+  ok(!/only be asked this once/i.test(g.copy),
+    "C4 the old asked-once sentence is gone - v0.39 shows this screen after every update, so it would be a lie");
+  ok(/see this again after every update/i.test(g.copy) && /change it any time - tap ADMIN at the top of the game screen\./.test(g.copy),
+    "C4b and the replacement says so plainly, keeping the ADMIN escape hatch word for word");
   ok(!/family/i.test(g.copy), "C5 the word 'family' appears nowhere on the screen");
   ok(!/[—–]/.test(g.copy), "C6 no em or en dashes anywhere in the copy");
   ok(!/leaderboard remembers you|works exactly the same/i.test(g.copy), "C7 the old flat wording is gone");

@@ -37,7 +37,7 @@
                     lockstep (server in /server, see HANDOFF.md "Online multiplayer")
     § ACCOUNT ..... the ADMIN button's panel: rules, sound, table speed, name, connection
     § ACCOUNT SIGN-IN ... Sign in with Apple (iPhone app only) + the one-time name claim
-    § WELCOME ..... the first-run sign-in screen, shown once ever (v0.36)
+    § WELCOME ..... the sign-in screen, shown once per app version (v0.36; per-version in v0.39)
     Autotest: open with #autotest (4p FFA all-CPU) or #autotest6 (6p teams) - fast-forwards a full game.
 
   v0.8 additions (pause, save/resume, lifecycle survival - see HANDOFF.md "v0.8"):
@@ -1742,7 +1742,6 @@ button{font:inherit;cursor:pointer}
    below - swipe up" hint - but the two CHOICES and the age line must be above the fold, because
    those are the things a person has to act on. Measured at 320x568 after this block. */
 @media (max-height:640px){
-  #welcomeOverlay .modalCard{padding:12px 14px}
   /* v0.38 (2026-07-26): DELIBERATELY UNCHANGED from v0.37, and that is a decision, not an
      oversight. The first cut of Blake's "more space beneath the badge" edit opened this branch up
      too (.sign -14 -> -2px, h3 6 -> 12px) and it measured badly: at 320x568 the last line of the
@@ -1762,9 +1761,45 @@ button{font:inherit;cursor:pointer}
   #welcomeOverlay .sign{transform:scale(.62);transform-origin:top center;margin:0 auto -14px}
   #welcomeOverlay h3{font-size:18px;margin:2px 0 6px}
   .welcomeNote{margin-top:4px}
-  .welcomeFine{margin-top:6px;font-size:12px}
-  .welcomeBtns{margin-top:10px;gap:8px}
+  /* v0.39: three pixels of fine-print gap, one pixel of button gap and two pixels of card padding
+     (6 -> 5, 8 -> 7, 12 -> 10) - the small change that makes the iPhone-app variant of this screen
+     land NO LOWER at 320x568 than it did in v0.38 despite carrying one more sentence. Tap targets
+     and the frozen badge/heading spacing are untouched; see the max-height:700px block below for
+     where the real room came from. */
+  #welcomeOverlay .modalCard{padding:10px 14px}
+  .welcomeFine{margin-top:5px}
+  .welcomeBtns{margin-top:10px;gap:7px}
   .welcomeBtns .btn{min-height:46px;font-size:15px}
+}
+/* v0.39 (2026-07-26) - HOW THE ONE NEW SENTENCE GOT PAID FOR, and a real bug fixed on the way.
+   Blake asked for a line under the Apple button saying that the same button creates an account the
+   first time and signs you back in after that (#welcomeAppleNote). On a short phone there is no
+   spare room for another paragraph, so instead of squeezing spacing (which v0.38 already
+   established is the wrong trade on this screen) this fixes something that was quietly broken:
+   THE FONT SIZES .welcomeNote AND .welcomeFine ASK FOR HAVE NEVER APPLIED. `.modalCard p` (§ STYLE)
+   sets 14.5px/1.55, and a selector with an element in it (0,1,1) beats a bare class (0,1,0) - so
+   every sentence on this screen has rendered at 14.5px since v0.36, including the 12px the
+   max-height:640px branch above has claimed since the day it was written. Re-stating the same
+   intended sizes with the overlay's id in front of them makes them win.
+   WHAT IT BUYS: three paragraphs above the age sentence drop from three lines to two, which more
+   than pays for the new one. At 320x568 the age sentence ends up well HIGHER than v0.38 had it on
+   both variants (website 522.7 -> 435.5, iPhone app 503.3 -> 458.0) even though the app variant now
+   carries an extra sentence, which also genuinely fixes the pre-existing "the age sentence sits
+   inside the swipe-up fade" nit that v0.37 and v0.38 both reported and neither could afford to fix.
+   The website variant of this card now fits at 320x568 with no scrolling at all for the first time
+   since it was built. Exact numbers for all five widths: HANDOFF.md's v0.39 section and
+   test_ui_v039_2026_07_26.js part D.
+   WHY 700px AND NOT 640px: 375x667 is the iPhone SE 2 and SE 3 - current phones, and the app's
+   welcome card genuinely scrolls at that height too (the swipe-up hint is on). 640px would have
+   left them out. Anything taller than 700px - which is every phone Blake's people actually use,
+   390 to 430 wide - keeps the 14.5px it has always had, so the screen he looked at and approved in
+   v0.38 is visually unchanged there.
+   Nothing v0.38 deliberately froze moves either: the badge scale, the badge margin and both heading
+   margins are untouched, so the two gaps test_ui_v038_2026_07_26.js pins at 320 stay byte-for-byte
+   v0.37's (they are margin gaps, not text metrics). */
+@media (max-height:700px){
+  #welcomeOverlay .welcomeNote{font-size:12.5px;line-height:1.5}
+  #welcomeOverlay .welcomeFine{font-size:12px;line-height:1.45}
 }
 .lbScroll{margin:6px 0 10px}
 .lbTable{width:100%;border-collapse:collapse;table-layout:fixed;font-variant-numeric:tabular-nums}
@@ -1893,7 +1928,10 @@ button{font:inherit;cursor:pointer}
        narrowest matrix width) that the SECOND line itself doesn't also wrap awkwardly - it
        doesn't, "Land on somebody… and send them packing." fits on one line at .tag's 15px/
        max-width:420px even inside a 320px-wide #menu (288px available after padding). -->
-  <p class="tag">Race your five golf tees around the board and home.<br>Land on somebody… and send them packing.</p>
+  <!-- v0.39 (2026-07-26, Blake: "make it more exciting with exclamation points!"): the second line
+       ends in an exclamation mark now. One mark, on the line that is actually the fun part - the
+       first line is the plain "here is how it works" sentence and stays plain. -->
+  <p class="tag">Race your five golf tees around the board and home.<br>Land on somebody… and send them packing!</p>
   <div class="panel">
     <!-- v0.17: up to TWO offline saved games (slots) plus a rejoinable online room can exist
          at once, so the single tile grew into up to three, newest first - each labeled with
@@ -1976,7 +2014,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.38</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.39</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -2081,7 +2119,7 @@ button{font:inherit;cursor:pointer}
 
 <!-- ================= OVERLAYS ================= -->
 <div id="passOverlay" class="overlay hidden">
-  <div class="sign"><b id="passName">-</b><small>your cards are ready</small></div>
+  <div class="sign"><b id="passName">-</b><small>your cards are ready!</small></div>
   <p>Pass the device - then tap anywhere to see your hand. No peeking, everyone else!</p>
 </div>
 
@@ -2119,7 +2157,7 @@ button{font:inherit;cursor:pointer}
     </ul>
     <h4>The nasty part</h4>
     <ul>
-      <li>Land exactly on an <b>opponent's tee</b> and it's <b>blasted back to base</b>.</li>
+      <li>Land exactly on an <b>opponent's tee</b> and it's <b>blasted back to base</b>!</li>
       <li>You can <b>never pass your own tee</b> - or your partner's, in teams - and you can <b>never land on your own tee</b>. Any play that would do either simply isn't allowed.</li>
       <li>Landing on your <b>partner's tee</b> is a last resort - it's only allowed when it's the ONLY play you have left, and then their tee goes back to base. Sorry, partner!</li>
     </ul>
@@ -2173,7 +2211,7 @@ button{font:inherit;cursor:pointer}
 <!-- Host: room created, waiting for guests -->
 <div id="roomOverlay" class="overlay hidden">
   <div class="modalCard">
-    <h3>Your room is open</h3>
+    <h3>Your room is open!</h3>
     <p>Tell everyone this code, or just text them the link - it fills in the code for them.</p>
     <div style="text-align:center;margin:14px 0">
       <div id="roomCode" style="font-family:'Arial Black',sans-serif;font-size:44px;letter-spacing:.16em;
@@ -2366,30 +2404,52 @@ button{font:inherit;cursor:pointer}
      wouldn't be on the leaderboard. This is the only time this would happen though (don't make
      them select guest every time) just let them know they can always change this by clicking the
      admin button."
-     ONCE, EVER. Whichever button they tap, the answer is written to localStorage AND mirrored
-     into IndexedDB (see rememberWelcomeChoice(), § WELCOME) so an iOS localStorage eviction -
-     which this app has a documented history of, see the IndexedDB mirror the offline saves use -
-     cannot make this screen come back and ask a second time.
+     ONCE PER VERSION as of v0.39 (2026-07-26) - it used to be once ever. Whichever button they
+     tap, the answer is written to localStorage AND mirrored into IndexedDB (see
+     rememberWelcomeChoice(), § WELCOME) so an iOS localStorage eviction - which this app has a
+     documented history of, see the IndexedDB mirror the offline saves use - cannot make this
+     screen come back inside the same version.
+       Blake, 2026-07-26: "Can you have the sign in screen appear on every new iteration of the
+       app? Whether it be TestFlight or an update that went through the App Store? Since it's
+       technically a new version of the app? That way I can also see this page every time in the
+       meantime as well."
+     So the stored answer now carries the version it was given under (#verTap's text, which Blake
+     bumps on every single release), and a version it does not recognise means "ask again". The
+     copy says so out loud - the old "You will only be asked this once" sentence would have become
+     a lie the moment this shipped.
      THE WEBSITE HAS NO APPLE BUTTON. accountsAvailableHere() is false in a plain browser, so
      #btnWelcomeApple is removed from the flow entirely and #welcomeWebNote takes its place. A
      dead button that does nothing would be worse than an honest sentence, and the guest path is
      always right there either way - nobody is ever blocked from playing.
+     #welcomeAppleNote (v0.39, Blake: "there should also be language that says like 'create an
+     account or sign in to an existing one via Apple' or something like that which acknowledges
+     you might already have an account") explains that the ONE button does both jobs. It is a
+     sentence beside the button rather than a longer button title on purpose: Apple's Human
+     Interface Guidelines fix the wording on a Sign in with Apple button, so the button keeps the
+     standard label and the explaining happens around it.
+     THE SIGNED-IN VARIANT (v0.39). Somebody who already has an account is not a new player, so
+     they are never asked to sign in a second time: the heading greets them back, the Apple button
+     and the guest button are replaced by one "Keep playing!" button, and the two lines that only
+     matter to a new player (guests/leaderboard and the 13+ line) are hidden. Switching to guest
+     or signing out lives in ADMIN, which the last line points at. See openWelcome(), § WELCOME.
      THE AGE LINE is deliberate and deliberately low-friction: one plain sentence, no birthday
      picker, no gate. Accounts are 13+; younger players continue as a guest and lose nothing but
      a row on the shared board. -->
 <div id="welcomeOverlay" class="overlay solid hidden">
   <div class="modalCard">
     <div class="sign"><b>NASTY</b></div>
-    <h3>Welcome to NASTY</h3>
-    <p class="welcomeNote">Sign in and your wins, your takeouts and your bragging rights all stay yours - your record follows you to any phone. Or jump straight in.</p>
+    <h3 id="welcomeTitle">Welcome to NASTY!</h3>
+    <p class="welcomeNote" id="welcomeNote">Race five tees home and send everybody else packing! Sign in and your wins, your takeouts and your bragging rights all stay yours.</p>
     <div class="welcomeBtns">
       <button class="btn primary" id="btnWelcomeApple">Sign in with Apple</button>
+      <button class="btn primary hidden" id="btnWelcomeContinue">Keep playing!</button>
       <button class="btn ghost" id="btnWelcomeGuest">Continue as a guest</button>
     </div>
+    <p class="welcomeFine" id="welcomeAppleNote">New here? It creates your account. Been here before? It signs you back in.</p>
     <p class="welcomeFine" id="welcomeWebNote">Signing in is coming soon on the website. In the iPhone app you can sign in with Apple.</p>
-    <p class="welcomeFine">Guests can play every single thing. They just do not appear on the leaderboard.</p>
-    <p class="welcomeFine">Accounts are for ages 13 and up. Anyone younger should continue as a guest.</p>
-    <p class="welcomeFine">You will only be asked this once. You can change it any time - tap ADMIN at the top of the game screen.</p>
+    <p class="welcomeFine" id="welcomeGuestNote">Guests can play every single thing. They just do not appear on the leaderboard.</p>
+    <p class="welcomeFine" id="welcomeAgeNote">Accounts are for ages 13 and up. Anyone younger should continue as a guest.</p>
+    <p class="welcomeFine" id="welcomeAgainNote">You will see this again after every update. You can change it any time - tap ADMIN at the top of the game screen.</p>
   </div>
 </div>
 
@@ -5627,7 +5687,7 @@ async function doDeal(){
     G.deck=deckArr; G.discard=[]; G.schedRound=0;
     G.dealer=newDealer; G.turn=(G.dealer+1)%G.n;
     positionDeck(G.dealer,true);                          // slide the deck over to the new dealer
-    toast(`Fresh shuffle - ${G.seats[G.dealer].name} deals`);
+    toast(`Fresh shuffle! ${G.seats[G.dealer].name} deals`);
     await wait(500);
   }
   const k=G.schedule[G.schedRound]; G.schedRound++;
@@ -7412,7 +7472,7 @@ function bootGameFromNetwork(action){
   updateConnIndicator();
   clearAwayUI();   // v0.22 P3: a fresh game can never inherit a stale away-ladder line
   sendPushToken();   // v0.16 item 5: in case permission was already granted from an earlier game this session - see § PUSH
-  toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts`,2600);
+  toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts us off!`,2600);
   // v0.25 item 1: the one-time rules popup shows in the LOBBY now (before seat selection -
   // see maybeShowOnlineRules(), § LOBBY READY), so by the time this boot runs every human
   // has already dismissed it before they could even ready up. Announce that this screen is
@@ -7628,7 +7688,7 @@ async function applyDealAction(action){
     G.deck=new Array(Math.max(0,action.deckCount)); G.discard=[]; G.schedRound=0;
     G.dealer=action.dealer; G.turn=action.turn;   // v0.15: authoritative, not re-derived - see applyServerAction()'s comment
     positionDeck(G.dealer,true);
-    toast(`Fresh shuffle - ${G.seats[G.dealer].name} deals`);
+    toast(`Fresh shuffle! ${G.seats[G.dealer].name} deals`);
     await wait(500);
     if(myGen!==NETGEN)return;
   }
@@ -8807,7 +8867,7 @@ function clearPendingOfflineStart(){
 // startGame() so it can be held behind the speed picker (see gateOnSpeedPicker() call below).
 function beginFirstDeal(){
   clearPendingOfflineStart();
-  toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts`,2600);
+  toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts us off!`,2600);
   runTurn();
 }
 function startGame(){
@@ -9440,7 +9500,7 @@ async function bindAccountName(){
     // A returning sign-in. The account's name is the one the board knows, so this phone adopts
     // it - the same "one name, everywhere" rule setChosenName() already follows.
     if(ACCT.gameName!==chosenName())setChosenName(ACCT.gameName);
-    toast('Signed in. You are '+ACCT.gameName+' on the leaderboard.');
+    toast("You're in! You are "+ACCT.gameName+' on the leaderboard.');
     return;
   }
   const want=cleanName(chosenName(),'');
@@ -9455,7 +9515,7 @@ async function bindAccountName(){
       CLAIM_PROBED=true;
       if(r.body.pendingClaim&&ACCT.claimWindow&&ACCT.claimWindow.open)
         ACCT_CLAIM=Object.assign({name:ACCT.gameName},r.body.pendingClaim);
-      toast('Signed in. You are '+ACCT.gameName+' on the leaderboard.');
+      toast("You're in! You are "+ACCT.gameName+' on the leaderboard.');
       return;
     }
     openAccountNameEdit('account',(r.body&&r.body.message)||'Pick the name you want on the leaderboard.');
@@ -9732,11 +9792,30 @@ updateAccountButton();
    them select guest every time) just let them know they can always change this by clicking the
    admin button."
 
-   THE ONE HARD REQUIREMENT IS "ONCE". Everything below exists to make that true even on a phone
-   that loses its localStorage, which iOS really does do - ITP can evict a site's localStorage
-   after enough days without a visit, and this app already carries a full IndexedDB mirror of the
-   offline saves for exactly that reason (see the "IndexedDB mirror" block, § SAVE). The answer is
-   written to BOTH stores, and the boot check reads both before deciding to ask.
+   v0.39 (2026-07-26, Blake): "Can you have the sign in screen appear on every new iteration of
+   the app? Whether it be TestFlight or an update that went through the App Store? Since it's
+   technically a new version of the app? That way I can also see this page every time in the
+   meantime as well."
+
+   SO THE REQUIREMENT IS NOW "ONCE PER VERSION", NOT "ONCE EVER". The stored answer carries the
+   app version it was given under, and the boot check only trusts an answer that was given under
+   THIS version. Inside a version nothing changed at all - answer once, never asked again, however
+   many times the app is opened. After any update the screen says hello again, exactly once.
+
+   WHERE THE VERSION COMES FROM: appVersion() reads the version line under the menu (#verTap, the
+   "v0.39" next to "Est. 1993"). That is deliberately the one string in this file Blake's ship
+   checklist bumps on every single release - website push, TestFlight build and App Store update
+   alike - so this can never silently stop changing the way a separate hand-maintained constant
+   could. If that element were ever missing, appVersion() returns 'unknown', which is stable, so
+   the worst case is the old v0.36 behaviour (asked once, then remembered) rather than a screen
+   that appears on every launch.
+
+   THE STORAGE IS STILL DOUBLE-WRITTEN, for the reason v0.36 wrote it that way: iOS really does
+   evict a site's localStorage (ITP), and this app already carries a full IndexedDB mirror of the
+   offline saves for exactly that reason (see the "IndexedDB mirror" block, § SAVE). The answer and
+   its version are written to BOTH stores, and the boot check reads both before deciding to ask.
+   A player who answered under an OLDER version is asked again - which is the whole feature - and a
+   player whose phone still remembers THIS version is not, even if localStorage was wiped.
 
    WHY THE BOOT CHECK IS ASYNC AND WHY IT IS BOUNDED. IndexedDB has no synchronous API, so the
    only way to consult the mirror is to wait for it. Waiting risks the opposite failure - a phone
@@ -9747,35 +9826,63 @@ updateAccountButton();
    painted underneath before this ever runs.
 
    WHO IS NEVER ASKED:
-     - anybody who has already answered, either store;
-     - anybody already signed in (a session token on this phone IS an answer - it is recorded on
-       the spot, so a v0.35 player who signed in yesterday is never asked);
+     - anybody who has already answered UNDER THIS VERSION, either store;
      - the #autotest harnesses, which drive straight into a game;
      - a launch that is already mid-flow: a deep-link join, a game in progress, or any other
        full-screen page already up. Those simply do not record an answer, so the screen appears on
        the next ordinary launch instead. That is the safe direction to be wrong in.
 
+   ALREADY SIGNED IN? v0.36 treated a session token as an answer and never showed the screen at
+   all. That was right when the screen only ever appeared once, and it is wrong now: Blake wants to
+   see this page after every update, and so does everybody else who already has an account. So a
+   signed-in player DOES see it after an update - but as a greeting, not as a sign-in form. The
+   heading welcomes them back, the Apple button and the guest button are replaced by a single
+   "Keep playing!" button, and the two lines that only mean something to a brand-new player (the
+   guest/leaderboard line and the 13+ line) are hidden. Asking somebody who is already signed in to
+   sign in again is a dead end dressed up as a choice. Switching to guest, or signing out, is in
+   ADMIN - which the last line on the screen points at, in both variants.
+
    ON THE WEBSITE there is no native Apple sheet, so the Apple button is REMOVED (not disabled)
    and an honest sentence takes its place. The guest button is always there; nobody is ever
    blocked from playing, on either platform. */
 const WELCOME_KEY='nasty-welcome-choice';
+// v0.39: the version the answer above was given under. Separate key, so an old phone carrying only
+// the v0.36 choice key reads as "answered, but under a version we cannot name" - which asks again,
+// once, which is exactly the behaviour Blake asked for on the update that ships this.
+const WELCOME_VER_KEY='nasty-welcome-ver';
 const WELCOME_IDB_KEY='welcome';
 let WELCOME_SHOWN=false;
+/* THE version string, read from the one place that is guaranteed to change every release: the
+   version line under the menu. Never throws, never returns empty. */
+function appVersion(){
+  try{ const el=$('verTap'); const v=el?String(el.textContent||'').trim():''; return v||'unknown'; }
+  catch(e){ return 'unknown'; }
+}
 function loadWelcomeChoice(){ try{ return localStorage.getItem(WELCOME_KEY)||''; }catch(e){ return ''; } }
-// Writes both stores. localStorage first and synchronously, because that is the copy the very
-// next boot reads; the IndexedDB mirror is best-effort and never awaited by a caller.
+function loadWelcomeVer(){ try{ return localStorage.getItem(WELCOME_VER_KEY)||''; }catch(e){ return ''; } }
+// Writes both stores, and stamps the version it was answered under (v0.39). localStorage first and
+// synchronously, because that is the copy the very next boot reads; the IndexedDB mirror is
+// best-effort and never awaited by a caller.
 function rememberWelcomeChoice(choice){
   const v=(choice==='account')?'account':'guest';
-  try{ localStorage.setItem(WELCOME_KEY,v); }catch(e){}
-  try{ idbPutSave({choice:v,ts:Date.now()},WELCOME_IDB_KEY); }catch(e){}
+  const ver=appVersion();
+  try{ localStorage.setItem(WELCOME_KEY,v); localStorage.setItem(WELCOME_VER_KEY,ver); }catch(e){}
+  try{ idbPutSave({choice:v,ver:ver,ts:Date.now()},WELCOME_IDB_KEY); }catch(e){}
 }
-// "Has this ever been answered?" - localStorage first (free), then the mirror, which also heals
-// localStorage on the way past so the question is answered synchronously from then on.
-async function welcomeAnswered(){
-  if(loadWelcomeChoice())return true;
+/* "Has this been answered under THIS version of the app?" (v0.39 - it used to be "ever"). Reads
+   localStorage first (free, synchronous), then the mirror, which also heals localStorage on the way
+   past so the question is answered synchronously from then on. An answer stamped with a different
+   version - or with no version at all, which is every phone updating from v0.38 or earlier - counts
+   as not answered, so the screen appears once and then stamps itself with the current version. */
+async function welcomeAnsweredThisVersion(){
+  const ver=appVersion();
+  if(loadWelcomeChoice()&&loadWelcomeVer()===ver)return true;
   let rec=null;
   try{ rec=await idbGetSave(WELCOME_IDB_KEY); }catch(e){ rec=null; }
-  if(rec&&rec.choice){ try{ localStorage.setItem(WELCOME_KEY,rec.choice); }catch(e){} return true; }
+  if(rec&&rec.choice&&rec.ver===ver){
+    try{ localStorage.setItem(WELCOME_KEY,rec.choice); localStorage.setItem(WELCOME_VER_KEY,rec.ver); }catch(e){}
+    return true;
+  }
   return false;
 }
 function closeWelcome(){
@@ -9802,14 +9909,43 @@ async function welcomeSignIn(){
   if(btn)btn.disabled=false;
   if(ACCT&&ACCT.uid)closeWelcome();
 }
+/* v0.39: the signed-in player's button. Nothing to decide and nothing to sign into - they already
+   have an account and it is already on this phone - so this only records that they have seen this
+   version's screen and gets out of the way. */
+function welcomeKeepPlaying(){
+  rememberWelcomeChoice('account');
+  closeWelcome();
+}
 $('btnWelcomeApple').onclick=()=>{ welcomeSignIn(); };
 $('btnWelcomeGuest').onclick=chooseGuest;
+$('btnWelcomeContinue').onclick=welcomeKeepPlaying;
+// v0.39: is this phone already signed in? Asked with loadAcctToken() rather than ACCT, on purpose -
+// ACCT is filled in by refreshAccount(), which is a network call that may not have answered yet (or
+// at all, on a phone with no signal). The stored session token is the synchronous, offline-safe
+// truth about "does this person have an account here".
+function welcomeIsSignedIn(){ return !!(loadAcctToken()&&accountsAvailableHere()); }
 function openWelcome(){
   const here=accountsAvailableHere();
+  const signedIn=welcomeIsSignedIn();
   // REMOVED, not merely disabled: a greyed-out "Sign in with Apple" on the website is still a
   // dead Apple button, and Blake's family reads a greyed button as "broken", not "not yet".
-  $('btnWelcomeApple').classList.toggle('hidden',!here);
-  $('welcomeWebNote').classList.toggle('hidden',here);
+  // v0.39: also removed for somebody who is ALREADY signed in - see the § WELCOME header comment.
+  $('btnWelcomeApple').classList.toggle('hidden',!here||signedIn);
+  $('btnWelcomeContinue').classList.toggle('hidden',!signedIn);
+  $('btnWelcomeGuest').classList.toggle('hidden',signedIn);
+  $('welcomeAppleNote').classList.toggle('hidden',!here||signedIn);
+  $('welcomeWebNote').classList.toggle('hidden',here||signedIn);
+  $('welcomeGuestNote').classList.toggle('hidden',signedIn);
+  $('welcomeAgeNote').classList.toggle('hidden',signedIn);
+  // The greeting. The name comes from the account when the server has answered, and from the name
+  // this phone plays under otherwise (bindAccountName() keeps those two the same) - and if there is
+  // somehow no name at all, the sentence simply does not use one.
+  const nm=(ACCT&&ACCT.gameName)||chosenName()||'';
+  $('welcomeTitle').textContent=signedIn?'Welcome back to NASTY!':'Welcome to NASTY!';
+  $('welcomeNote').textContent=signedIn
+    ?(nm?`You are signed in as ${nm}, and every win, takeout and bragging right is still yours. Fresh update - go and defend it!`
+        :'You are signed in, and every win, takeout and bragging right is still yours. Fresh update - go and defend it!')
+    :'Race five tees home and send everybody else packing! Sign in and your wins, your takeouts and your bragging rights all stay yours.';
   WELCOME_SHOWN=true;
   openOverlay('welcomeOverlay');
 }
@@ -9825,10 +9961,11 @@ function welcomeLaunchIsPlain(){
 async function maybeShowWelcome(){
   try{
     if(!welcomeLaunchIsPlain())return;
-    // Already signed in on this phone: that IS the answer, so record it and never ask.
-    if(loadAcctToken()&&accountsAvailableHere()){ rememberWelcomeChoice('account'); return; }
+    // v0.39: a signed-in phone no longer short-circuits out of here. It used to record 'account'
+    // and never show the screen; now it sees the signed-in variant once per version, same as
+    // everybody else. openWelcome() is what decides which variant that is.
     const answered=await Promise.race([
-      welcomeAnswered(),
+      welcomeAnsweredThisVersion(),
       new Promise(r=>setTimeout(()=>r(false),1500)),
     ]);
     if(answered)return;
@@ -9842,11 +9979,23 @@ async function maybeShowWelcome(){
 window.__welcome={
   shown:()=>{ const o=$('welcomeOverlay'); return !!o&&!o.classList.contains('hidden'); },
   choice:()=>loadWelcomeChoice(),
+  // v0.39: the version the stored answer was given under, and the version this build is. A suite
+  // proves "it comes back after an update" by making these two disagree - which is exactly what a
+  // real update does - rather than by calling anything test-only.
+  ver:()=>loadWelcomeVer(),
+  appVersion:()=>appVersion(),
+  signedIn:()=>welcomeIsSignedIn(),
   appleVisible:()=>!$('btnWelcomeApple').classList.contains('hidden'),
+  continueVisible:()=>!$('btnWelcomeContinue').classList.contains('hidden'),
+  guestVisible:()=>!$('btnWelcomeGuest').classList.contains('hidden'),
   webNoteVisible:()=>!$('welcomeWebNote').classList.contains('hidden'),
+  appleNoteVisible:()=>!$('welcomeAppleNote').classList.contains('hidden'),
   show:()=>openWelcome(),
   check:()=>maybeShowWelcome(),
-  reset:async()=>{ try{ localStorage.removeItem(WELCOME_KEY); }catch(e){} try{ await idbDeleteSave(WELCOME_IDB_KEY); }catch(e){} },
+  reset:async()=>{
+    try{ localStorage.removeItem(WELCOME_KEY); localStorage.removeItem(WELCOME_VER_KEY); }catch(e){}
+    try{ await idbDeleteSave(WELCOME_IDB_KEY); }catch(e){}
+  },
 };
 maybeShowWelcome();
 
@@ -10462,10 +10611,14 @@ function renderWinPopupContent(){
   const names=G.winners.map(w=>G.seats[w].name);
   const cols=G.winners.map(w=>G.seats[w].color.name);
   $('winTitle').textContent=names.join(' & ').toUpperCase();
-  $('winSub').textContent=G.teams?'win it together':'wins the game';
+  // v0.39 (2026-07-26, Blake: "make it more exciting with exclamation points!"). The win screen is
+  // the single biggest moment in the game, so this is where the marks belong: the badge line and
+  // the first half of the sentence under it. The "better luck next deal" half stays flat on purpose
+  // - it is talking to the people who just lost.
+  $('winSub').textContent=G.teams?'win it together!':'wins the whole thing!';
   $('winText').textContent=G.teams
-    ?`Team ${cols.join(' + ')} got all ten tees home. That's how it's done.`
-    :`All five ${cols[0]} tees are home. Everyone else: better luck next deal.`;
+    ?`Team ${cols.join(' + ')} got all ten tees home! That's how it's done.`
+    :`All five ${cols[0]} tees are home! Everyone else: better luck next deal.`;
   // v0.19: show the points this win just earned, opponent by opponent, right on the win
   // screen - see pointsBreakdown() above. Only humans earn leaderboard points, so this is
   // blank (nothing shown) unless a human seat is among the winners, e.g. an all-CPU autotest.
@@ -10931,7 +11084,7 @@ function resumeOfflineGame(slot){
   drawBoard(); buildTable(); fitBoard(); setTimeout(fitBoard,50);
   window.G=G; window.LAY=LAY;
   updatePauseUI();
-  toast('Welcome back - resuming your game',2200);
+  toast('Welcome back! Picking your game up right where you left it',2200);
   runTurn();
 }
 
