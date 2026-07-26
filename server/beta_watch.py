@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = 'ea9128e0-fe4c-47e6-b9b7-06e2dbe1fc84'
+BUILD_SUBMISSION_ID = 'b3712518-fee7-42a5-a6bb-b3e4ea740386'
 
 
 def current_build():
@@ -101,14 +101,11 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} reached the family</h1>
 <p>Apple approved the beta - the family can install the real app right now.</p>
-<p>Six things Blake asked for after playing the last build, plus one real fix:</p>
+<p>Three things Blake reported after playing the last build, all fixed:</p>
 <ul>
-<li><b>A welcome screen the first time you open it.</b> Sign in with Apple so the family leaderboard remembers you, or tap "Continue as a guest" and start playing. You only get asked once, ever. Guests do not appear on the family leaderboard, and the screen says so plainly. Accounts are for ages 13 and up; anyone younger should carry on as a guest.</li>
-<li><b>The round button with your initial is now a box that says ADMIN.</b> Same panel behind it, and that is where you change your mind about signing in, at any time.</li>
-<li><b>If you have been playing under a name for a while, you can claim it.</b> Sign in and the app will offer to move that record onto your account. It tells you exactly what it will move, asks you to confirm, and it can only be done once. Nothing is ever deleted: names nobody claims stay on the board as history.</li>
-<li><b>Online games read properly now.</b> Everybody else's name plate has a soft green glow while they are connected, and a name only turns red when that person has actually dropped off. Before this, other people's names were red for the whole game, which is why that never made sense.</li>
-<li><b>The menu buttons are all the same size,</b> and the game type button spells out "Free-for-All" instead of "FFA".</li>
-<li><b>Turn notifications.</b> This build carries the fix for push notifications never arriving on anybody's phone. If it asks about notifications, say yes.</li>
+<li><b>Accepting an invite while another game was open used to lose the lobby.</b> The online rules box would pop up, and after tapping through it there was no lobby and no list of open seats - the only way out was conceding. That is fixed. You always land on the seat list now, and if a local game is still on the go it is saved and put away for you instead of sitting underneath. There is also a proper Cancel on that screen, and the app now checks after every screen closes that you can still get somewhere.</li>
+<li><b>Joining a lobby that never starts no longer leaves a saved game behind.</b> Before, joining a room put a "Resume - online game" tile on your menu straight away, even if nobody ever started, and the only way to clear it was to concede. Now that tile only appears once a game has genuinely been dealt.</li>
+<li><b>The little tee buttons stay next to their peg.</b> On a busy board they used to fly halfway across it to avoid whatever was underneath. Now they only nudge a tiny amount, and only to get clear of another tee you can actually pick or another button, on both the 4 player and 6 player boards.</li>
 </ul>
 <h3>The link to text the family:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
