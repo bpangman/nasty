@@ -29,8 +29,10 @@
  *       name shape handled (punctuation-first like "J.B.", no letters at all, empty, lowercase,
  *       astral characters), and the letter updating the instant the name changes.
  *   C - the panel: opens, fits every width with nothing clipped, every row present and doing
- *       what it says (rules, sound, change name, fix my connection), and the three account rows
- *       visible but genuinely disabled with a plain-language note (accounts are NOT live).
+ *       what it says (rules, sound, change name, fix my connection), and - IN A BROWSER - the
+ *       three account rows visible but disabled behind a plain-language note. Sign in with Apple
+ *       shipped in v0.35 and is native only; its live behaviour has its own permanent suite,
+ *       test_accounts_stage2_signin_2026_07_25.js.
  *   D - PAUSE shows exactly ONE full-screen page, headed PAUSED, with the options on it; the
  *       plain "someone else paused" page still appears for everyone else, and comes back by
  *       itself when a page that was covering it closes.
@@ -41,8 +43,8 @@
  *       above equals the gap below within 2px, across the whole matrix, 4P and 6P, including
  *       with a long two-line message and in post-game review mode.
  *
- * Fully offline (file://). Nothing here contacts a server, and nothing here calls any /account/*
- * endpoint - accounts are dormant by design in this release.
+ * Fully offline (file://). Nothing here contacts a server: in a plain browser there is no native
+ * Sign in with Apple, so no /account/* call is ever made from these pages.
  *
  * Run: node test_ui_account_panel_2026_07_25.js
  */
@@ -366,14 +368,26 @@ async function partC(browser) {
   ok(rows.btnAcctName && /name/i.test(rows.btnAcctName.text), "the panel offers Change your name");
   ok(rows.btnAcctReset && rows.btnAcctReset.hidden, "offline, Fix my connection is hidden (there is no server to re-reach) - same gating it had in the pause sheet");
   ok(rows.btnAcctReset && !rows.btnAcctReset.danger && !/reset connection/i.test(rows.btnAcctReset.text), `Fix my connection is plain language and not styled as costly (got "${rows.btnAcctReset.text}") - the two assertions that used to live in test_ui_polish Part F`);
-  ok(rows.btnAcctSignIn && !rows.btnAcctSignIn.hidden && rows.btnAcctSignIn.disabled, "Sign in is VISIBLE but disabled (accounts are not live yet)");
-  ok(rows.btnAcctSignOut && !rows.btnAcctSignOut.hidden && rows.btnAcctSignOut.disabled, "Sign out is VISIBLE but disabled");
-  ok(rows.btnAcctDelete && !rows.btnAcctDelete.hidden && rows.btnAcctDelete.disabled, "Delete account is VISIBLE but disabled");
+  /* 2026-07-25 (v0.35) - UPDATED, not weakened. These three assertions used to mean "accounts do
+     not exist yet". Sign in with Apple shipped in v0.35, so what they mean NOW is the thing that
+     has to stay true forever: this is a plain browser, there is no native Sign in with Apple to
+     call, so the rows stay exactly where they are and stay disabled behind an honest sentence
+     rather than showing a dead Apple button. The live side of it has its own permanent suite,
+     test_accounts_stage2_signin_2026_07_25.js, which drives the real flow end to end. */
+  ok(rows.btnAcctSignIn && !rows.btnAcctSignIn.hidden && rows.btnAcctSignIn.disabled, "on the WEBSITE, Sign in is VISIBLE but disabled (no native Sign in with Apple here)");
+  ok(rows.btnAcctSignOut && !rows.btnAcctSignOut.hidden && rows.btnAcctSignOut.disabled, "on the WEBSITE, Sign out is VISIBLE but disabled");
+  ok(rows.btnAcctDelete && !rows.btnAcctDelete.hidden && rows.btnAcctDelete.disabled, "on the WEBSITE, Delete account is VISIBLE but disabled");
   ok(/coming soon/i.test(rows.note), `the panel says so in plain language ("${rows.note}")`);
+  ok(!/apple/i.test(rows.btnAcctSignIn.text), `no dead Apple button in a browser - the row just reads "${rows.btnAcctSignIn.text}"`);
 
-  // No /account/* call may exist anywhere in the app yet.
+  /* This used to be "no /account/* call may exist anywhere in the app". As of v0.35 exactly one
+     provider is wired up, so the assertion becomes the narrower thing that must hold: Apple is
+     live, and Google, Facebook, the email code, the one-time claim and the account-aware
+     /leaderboard/v2 are all still parked. */
   const src = fs.readFileSync(path.resolve(__dirname, "..", "..", "index.html"), "utf8");
-  ok(!/(fetch|XMLHttpRequest)[^\n]{0,120}\/account\//.test(src), "nothing in the client calls an /account/* endpoint (accounts are dormant this release)");
+  ok(/\/account\/apple/.test(src) && /\/account\/nonce/.test(src), "the client calls Apple's account endpoints (live since v0.35)");
+  ok(!/\/account\/(google|facebook|email)/.test(src) && !/\/account\/claim/.test(src) && !/\/leaderboard\/v2/.test(src),
+    "Google, Facebook, the email code, the name-claim window and /leaderboard/v2 are all still parked");
 
   // Sound really toggles, and persists.
   const sound = await page.evaluate(async () => {

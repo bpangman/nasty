@@ -1603,6 +1603,16 @@ button{font:inherit;cursor:pointer}
   display:grid;grid-template-columns:1fr;gap:8px}
 .acctSoon .acctRow:disabled{opacity:.45;cursor:default}
 .acctNote{font-size:12.5px;line-height:1.45;color:#a9d2b5;margin:2px 2px 0}
+/* v0.35: the inline "are you sure" for Delete account. Same shape and the same reason as the
+   name editor below it - a settings panel must never open a second full-screen page (see
+   § OVERLAY LAYER). The whole block clears the 44px tap floor, tick box included. */
+.acctConfirm{display:grid;grid-template-columns:1fr;gap:8px;margin-top:8px}
+.acctConfirm p{font-size:13px;line-height:1.5;color:#dcefe1;margin:0}
+.acctConfirm label{display:flex;align-items:center;gap:10px;min-height:44px;
+  font-size:13px;line-height:1.4;color:#dcefe1;cursor:pointer}
+.acctConfirm input[type=checkbox]{flex:0 0 auto;width:22px;height:22px;margin:0}
+.acctConfirmBtns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.acctConfirm .btn{min-height:44px;padding:11px 10px;font-size:15px}
 /* The inline "change your name" editor - it opens INSIDE this panel rather than as a second
    full-screen page, which is the whole point of the 2026-07-25 overlay-stacking fix (see
    § OVERLAY LAYER): two full-screen layers must never be visible at once, so a settings panel
@@ -1834,7 +1844,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.34</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.35</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -2213,13 +2223,15 @@ button{font:inherit;cursor:pointer}
        - Change your name -> edits the ONE name this device plays under (see setMyChosenName())
        - Fix my connection-> MOVED here from the pause sheet (Blake: it does not belong there).
                              Online-only, exactly as it was in the sheet.
-       - Sign in / Sign out / Delete account -> deliberately VISIBLE but DISABLED, see below.
-     Accounts: the server side exists but is dormant and unconfigured, so these three rows must
-     not pretend. They are real rows in their real final position with a plain-language note, so
-     (a) nobody taps a fake sign-in, and (b) the panel's layout will not shift the day accounts
-     actually land - the rows just stop being disabled. NOTHING in this panel calls any
-     /account/* endpoint, and no code here may be "helpfully" wired up to one later without the
-     accounts work actually being live. -->
+       - Sign in / Sign out / Delete account -> LIVE in the iPhone app as of v0.35; see
+                             § ACCOUNT SIGN-IN.
+     Accounts (v0.35): Sign in with Apple is real inside the iOS app. On the website the SAME
+     three rows sit in the SAME place and stay disabled, with a plain sentence saying signing in
+     is not there yet - Apple's website flow needs a domain-verification file Apple would not
+     hand over (deliberately parked, prelaunch/README.md item 2), and a dead Apple button would
+     be worse than an honest line of text. The rows never move, hide or reorder between the two
+     places, so the panel reads identically on a phone and in a browser. Guests are untouched:
+     nothing in this game is gated on signing in, here or anywhere else. -->
 <div id="accountOverlay" class="overlay hidden">
   <div class="modalCard">
     <div class="acctHead">
@@ -2257,6 +2269,18 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost acctRow" id="btnAcctSignIn" disabled>Sign in</button>
       <button class="btn ghost acctRow" id="btnAcctSignOut" disabled>Sign out</button>
       <button class="btn ghost acctRow" id="btnAcctDelete" disabled>Delete account</button>
+      <!-- Deleting is the only thing in this panel that cannot be undone, so it asks first, and
+           it asks INSIDE this panel rather than as a second full-screen page. The tick box is
+           what makes privacy.html's promise true: the account always goes; the row on the family
+           board goes too only if you say so. -->
+      <div class="acctConfirm hidden" id="acctDelConfirm">
+        <p id="acctDelText">Delete your account? Your Apple sign-in and every signed-in session go straight away, and this cannot be undone. You can keep playing without an account.</p>
+        <label><input type="checkbox" id="acctDelBoard"><span>Also take my name off the family leaderboard</span></label>
+        <div class="acctConfirmBtns">
+          <button class="btn danger" id="btnAcctDelYes">Delete account</button>
+          <button class="btn ghost" id="btnAcctDelNo">Keep my account</button>
+        </div>
+      </div>
       <div class="acctNote" id="acctSoonNote">Accounts are coming soon. Your name and your games are saved on this phone in the meantime.</div>
     </div>
     <div class="bigBtns"><button class="btn primary" id="btnAcctClose">Close</button></div>
@@ -8436,11 +8460,18 @@ $('btnRulesClose').onclick=()=>closeOverlay('rulesOverlay');
      - emoji or any astral character: Array.from() walks real code points, so a surrogate pair is
        never split in half.
 
-   ACCOUNTS ARE NOT LIVE. The server side exists but is dormant and unconfigured, so Sign in /
-   Sign out / Delete account are rendered in their real final position and DISABLED, with a plain
-   note saying so. Nothing in this section calls any /account/* endpoint, and nothing here should
-   be wired to one until that work is actually live. */
+   ACCOUNTS ARE LIVE IN THE iPHONE APP as of v0.35 - the whole of it is § ACCOUNT SIGN-IN, below.
+   In a plain browser there is no native Sign in with Apple to call, so the same three rows stay
+   in the same place and stay disabled behind a plain sentence. Nothing in the game is gated on
+   being signed in, in either place. */
 const ACCT_FALLBACK_BG='#3b6f52', ACCT_FALLBACK_INK='#f6efdd';
+/* The signed-in account, or null for a guest. Declared up here rather than down in
+   § ACCOUNT SIGN-IN where the rest of it lives, purely so renderAccountPanel() below can read it
+   with no temporal-dead-zone hazard if anything ever renders the panel during boot. */
+let ACCT=null;              // {token, uid, gameName, identities[], ...} once signed in
+let ACCT_BUSY=false;        // a sign-in or a delete is in flight - the rows go quiet meanwhile
+let ACCT_NOTICE='';         // one-shot plain-language line under the account rows
+let ACCT_NAME_MODE='local'; // which name the inline editor is editing: this phone's, or the account's
 // Which seat is "me" on this phone. -1 = we are not in a game (or online but not seated yet).
 function accountSeatIndex(){
   if(!G||!G.seats)return -1;
@@ -8513,9 +8544,10 @@ function renderAccountPanel(){
   updateAccountButton();
   const name=chosenName();
   const who=$('acctWhoName'); if(who&&who.textContent!==(name||'Player'))who.textContent=name||'Player';
-  const sub=$('acctWhoSub');
-  const subTxt=NET.online?'Playing online in this game':'Playing on this phone';
-  if(sub&&sub.textContent!==subTxt)sub.textContent=subTxt;
+  // v0.35: signed in, say so right here - this is the one line in the whole app that answers
+  // "am I signed in?", so it wins over the where-am-I-playing line. One implementation, in
+  // § ACCOUNT SIGN-IN, because signing in and out has to repaint it too.
+  renderAccountWho();
   const snd=$('btnAcctSound'); if(snd&&snd.textContent!==soundRowLabel())snd.textContent=soundRowLabel();
   // 2026-07-25: the table-speed row (moved here from the top bar). Online, only the host may
   // change it - so for everyone else the row says so in plain words on the row ITSELF and is
@@ -8528,6 +8560,8 @@ function renderAccountPanel(){
   // pause sheet it moved out of (there is no server to re-reach in an offline game).
   const rst=$('btnAcctReset');
   if(rst)rst.classList.toggle('hidden',!(NET.online&&G));
+  renderAccountRows();
+  closeAcctDeleteConfirm();
   closeAccountNameEdit();
 }
 function openAccountPanel(){
@@ -8535,7 +8569,7 @@ function openAccountPanel(){
   openOverlay('accountOverlay');
 }
 $('btnAccount').onclick=openAccountPanel;
-$('btnAcctClose').onclick=()=>closeOverlay('accountOverlay');
+$('btnAcctClose').onclick=()=>{ ACCT_NOTICE=''; closeOverlay('accountOverlay'); };
 // The rules panel is the SAME #rulesOverlay the menu's "How to play" opens - one panel, two
 // doors. backTo hands this panel back when the rules are closed, so a player who came here to
 // check a rule lands back where they were instead of on the board.
@@ -8578,28 +8612,53 @@ function setChosenName(name){
   return true;
 }
 function closeAccountNameEdit(){
+  ACCT_NAME_MODE='local';
   const box=$('acctNameEdit');
   if(box&&!box.classList.contains('hidden'))box.classList.add('hidden');
   const w=$('acctNameWarn'); if(w&&w.textContent)w.textContent='';
   const row=$('btnAcctName');
   if(row&&row.classList.contains('hidden'))row.classList.remove('hidden');
 }
-$('btnAcctName').onclick=()=>{
+/* One editor, two modes:
+     'local'   - signed out. Exactly what this row has always done: rename this phone's player.
+     'account' - signed in. The same box, but Save writes the name to the ACCOUNT, because the
+                 leaderboard row belongs to the account and one name has to mean one thing. */
+function openAccountNameEdit(mode,msg){
   const box=$('acctNameEdit'), inp=$('acctNameInput');
   if(!box||!inp)return;
-  inp.value=chosenName();
+  ACCT_NAME_MODE=(mode==='account')?'account':'local';
+  inp.value=(ACCT_NAME_MODE==='account'&&ACCT&&ACCT.gameName)?ACCT.gameName:chosenName();
+  const w=$('acctNameWarn'); if(w)w.textContent=msg||'';
   if(box.classList.contains('hidden'))box.classList.remove('hidden');
   $('btnAcctName').classList.add('hidden');
   try{ inp.focus(); inp.select(); }catch(e){}
-};
+}
+$('btnAcctName').onclick=()=>openAccountNameEdit((ACCT&&ACCT.uid)?'account':'local','');
 $('btnAcctNameCancel').onclick=closeAccountNameEdit;
-$('btnAcctNameSave').onclick=()=>{
+$('btnAcctNameSave').onclick=async ()=>{
   const inp=$('acctNameInput'), warn=$('acctNameWarn');
   const raw=(inp.value||'').slice(0,NAME_MAX).trim();
   if(!raw){ warn.textContent='Type a name first.'; return; }
   // Same two rules the setup screen and the join screen already enforce - one implementation
   // (§ NAMES), so the account panel can never be a back door around them.
   if(isBadName(raw)){ warn.textContent='Pick a nicer name.'; return; }
+  if(ACCT_NAME_MODE==='account'&&ACCT&&ACCT.token){
+    // Account names belong to the SERVER: it enforces "first claim wins" and the 30-day rename
+    // cooldown, and it answers in plain English. Whatever it says goes straight onto the warning
+    // line rather than being reworded here.
+    warn.textContent='Saving...';
+    const r=await accountFetch('/account/name',{auth:ACCT.token,name:raw});
+    if(r.status!==200||!r.body||!r.body.gameName){
+      warn.textContent=(r.body&&r.body.message)||"That name couldn't be saved. Try another one.";
+      return;
+    }
+    ACCT.gameName=r.body.gameName;
+    setChosenName(r.body.gameName);   // one name everywhere: the board, the setup screen, the circle
+    closeAccountNameEdit();
+    renderAccountPanel();
+    toast('You are '+ACCT.gameName+' on the family board.');
+    return;
+  }
   setChosenName(raw);
   closeAccountNameEdit();
   renderAccountPanel();
@@ -8621,13 +8680,229 @@ $('btnAcctMenu').onclick=()=>{
   closeOverlay('accountOverlay');
   leaveFinishedGameToMenu();
 };
-// The three dormant rows. They are disabled in the markup; these handlers exist ONLY so a tap
-// on a disabled-looking row still explains itself if a browser ever delivers the click, and
-// they must never call the server - accounts are not live yet.
-['btnAcctSignIn','btnAcctSignOut','btnAcctDelete'].forEach(id=>{
-  const b=$(id);
-  if(b)b.onclick=()=>toast('Accounts are coming soon.');
-});
+/* ======================== § ACCOUNT SIGN-IN (v0.35, 2026-07-25) ========================
+   Sign in with Apple, in the iPhone app, entirely optional.
+
+   WHAT IT IS FOR, in one sentence: the family leaderboard is keyed on a typed name, so two
+   relatives who both type "Blake" share a row, and a new phone starts from nothing. Signing in
+   ties the row to a person instead. That is the whole feature. NOTHING in the game is gated on
+   it - every mode, online and off, works signed out, forever.
+
+   WHERE IT WORKS. The native Apple sheet is a small local Capacitor plugin that only exists
+   inside the iOS app (app/ios/App/App/AppleSignInPlugin.swift). accountsAvailableHere() is
+   literally "is that plugin here", so a plain browser - the website included - falls through to
+   the disabled rows and an honest sentence. The website's own Apple flow additionally needs a
+   domain-verification file Apple would not hand over yet, and is deliberately parked.
+
+   THE NONCE, because it is the one subtle part. The SERVER mints it (GET /account/nonce), keeps
+   it single-use for ten minutes and deletes it the moment it is presented. We hand that exact
+   string to Apple, Apple echoes it back inside the signed identity token, and the server then
+   requires token.nonce === the nonce it issued. Nothing is hashed on this side: hashing is what
+   you do when the party checking the nonce did not mint it, and ours did. The same reasoning is
+   written out at the top of AppleSignInPlugin.swift - change one and you must change both.
+
+   WHAT THIS DELIBERATELY DOES NOT DO:
+     - No email is requested from Apple, so none is ever sent, stored or disclosed. privacy.html
+       says exactly that, and the App Store privacy labels match.
+     - No claim prompt. The one-time "is this old history yours?" window is CLOSED in production,
+       so the server never offers one; a pendingClaim is ignored here rather than half built.
+     - No `acct` field on host/join. The account-only leaderboard switch is off, online
+       attribution is unchanged, and the websocket wire is byte-identical to v0.34.
+     - PROTOCOL_VERSION is untouched. Every call below is plain HTTP that an older server answers
+       with a 404, which this code treats exactly like "not available - stay a guest". */
+const ACCT_TOKEN_KEY='nasty-account';
+// The native plugin, or null. Deliberately NOT gated on IS_APP: "is the plugin there" is the
+// real question, and asking it this way keeps the whole flow drivable from a browser test.
+function appleSignInPlugin(){ return (CAP&&CAP.Plugins&&CAP.Plugins.AppleSignIn)||null; }
+function accountsAvailableHere(){ return !!appleSignInPlugin(); }
+function loadAcctToken(){ try{ return localStorage.getItem(ACCT_TOKEN_KEY)||''; }catch(e){ return ''; } }
+function saveAcctToken(t){ try{ if(t)localStorage.setItem(ACCT_TOKEN_KEY,t); else localStorage.removeItem(ACCT_TOKEN_KEY); }catch(e){} }
+/* One door to the account API. The session token travels in the JSON BODY as `auth`, never in a
+   URL and never in a header - that is the server's own rule, and it keeps tokens out of logs and
+   Referer headers. Every failure comes back as a plain {status, body} instead of throwing, so no
+   caller can leave the panel stuck mid-tap. */
+async function accountFetch(path,body){
+  let wsUrl;
+  try{ wsUrl=await resolveWsUrl(); }catch(e){ return {status:0,body:{}}; }
+  const o={cache:'no-store'};
+  if(body!==undefined){ o.method='POST'; o.headers={'content-type':'application/json'}; o.body=JSON.stringify(body); }
+  let r;
+  try{ r=await fetch(wsToHttp(wsUrl)+path,o); }
+  catch(e){ return {status:0,body:{}}; }
+  let j=null;
+  try{ j=await r.json(); }catch(e){}
+  return {status:r.status,body:j||{}};
+}
+/* Are we still signed in? Asked once at boot. A 401 is the ONLY answer that signs you out - a
+   dead network, a 503 or a 404 from an older server leaves the stored token exactly where it is,
+   because "the server is having a moment" must never look like "you have been logged out". */
+async function refreshAccount(){
+  const t=loadAcctToken();
+  if(!t||!accountsAvailableHere()){ ACCT=null; return null; }
+  const r=await accountFetch('/account/me',{auth:t});
+  if(r.status===200&&r.body&&r.body.uid)ACCT=Object.assign({token:t},r.body);
+  else if(r.status===401){ ACCT=null; saveAcctToken(''); }
+  return ACCT;
+}
+/* The first sign-in binds the name this phone is ALREADY playing under, so nobody retypes a name
+   they picked months ago. The server's FIRST name-set is free (no 30-day cooldown), which is
+   exactly what makes attempting it automatically safe. If that name is taken, blocked or blank,
+   the inline editor opens pre-filled with the server's own sentence on it. */
+async function bindAccountName(){
+  if(!ACCT||!ACCT.token)return;
+  if(ACCT.gameName){
+    // A returning sign-in. The account's name is the one the board knows, so this phone adopts
+    // it - the same "one name, everywhere" rule setChosenName() already follows.
+    if(ACCT.gameName!==chosenName())setChosenName(ACCT.gameName);
+    toast('Signed in. You are '+ACCT.gameName+' on the family board.');
+    return;
+  }
+  const want=cleanName(chosenName(),'');
+  if(want&&!isBadName(want)){
+    const r=await accountFetch('/account/name',{auth:ACCT.token,name:want});
+    // r.body.pendingClaim is ignored on purpose - see the section header.
+    if(r.status===200&&r.body&&r.body.gameName){
+      ACCT.gameName=r.body.gameName;
+      toast('Signed in. You are '+ACCT.gameName+' on the family board.');
+      return;
+    }
+    openAccountNameEdit('account',(r.body&&r.body.message)||'Pick the name you want on the family board.');
+    return;
+  }
+  openAccountNameEdit('account','Pick the name you want on the family board.');
+}
+async function accountSignIn(){
+  const plugin=appleSignInPlugin();
+  if(!plugin||ACCT_BUSY||(ACCT&&ACCT.uid))return;
+  ACCT_BUSY=true; ACCT_NOTICE=''; renderAccountRows();
+  try{
+    const n=await accountFetch('/account/nonce');
+    if(n.status!==200||!n.body||!n.body.nonce){
+      toast("Signing in isn't available right now. You can keep playing without it.");
+      return;
+    }
+    let res=null;
+    try{ res=await plugin.authorize({nonce:n.body.nonce}); }
+    catch(e){
+      // A cancel is not an error - they closed Apple's own sheet, so say nothing at all.
+      const why=String((e&&(e.code||e.message))||'');
+      if(!/cancel/i.test(why))toast("Apple couldn't finish that sign-in. Please try again.");
+      return;
+    }
+    if(!res||!res.identityToken){ toast("Apple couldn't finish that sign-in. Please try again."); return; }
+    const r=await accountFetch('/account/apple',{identityToken:res.identityToken,nonce:n.body.nonce,platform:'ios'});
+    if(r.status!==200||!r.body||!r.body.sessionToken){
+      toast((r.body&&r.body.message)||"That sign-in couldn't be finished. Please try again.");
+      return;
+    }
+    ACCT=Object.assign({token:r.body.sessionToken},r.body);
+    saveAcctToken(r.body.sessionToken);
+    await bindAccountName();
+  } finally {
+    ACCT_BUSY=false;
+    updateAccountButton();
+    renderAccountRows();   // NOT renderAccountPanel() - that would shut the name editor
+  }
+}
+/* Signing out is local first, told to the server second: the token leaves this phone before the
+   server hears about it, so a flaky connection can never leave somebody stuck signed in. A
+   signed-out player is exactly a guest - saved games, this device's own stats and every room
+   rejoin credential are untouched. */
+async function accountSignOut(){
+  const t=ACCT&&ACCT.token;
+  ACCT=null; ACCT_NOTICE='';
+  saveAcctToken('');
+  renderAccountRows(); updateAccountButton();
+  toast('Signed out. Everything on this phone works exactly the same.');
+  if(t)await accountFetch('/account/signout',{auth:t});
+}
+function openAcctDeleteConfirm(){
+  const box=$('acctDelConfirm');
+  if(!box)return;
+  const cb=$('acctDelBoard'); if(cb)cb.checked=false;
+  box.classList.remove('hidden');
+}
+function closeAcctDeleteConfirm(){
+  const box=$('acctDelConfirm');
+  if(box&&!box.classList.contains('hidden'))box.classList.add('hidden');
+}
+async function accountDelete(eraseBoard){
+  if(!ACCT||!ACCT.token||ACCT_BUSY)return;
+  const t=ACCT.token;
+  ACCT_BUSY=true; renderAccountRows();
+  const r=await accountFetch('/account/delete',{auth:t,eraseBoard:!!eraseBoard});
+  ACCT_BUSY=false;
+  // A 401 means the session was already gone, which is the same end state as a delete - anything
+  // else that is not a 200 leaves the account alone and says so.
+  if(r.status!==200&&r.status!==401){
+    renderAccountRows();
+    toast((r.body&&r.body.message)||"That couldn't be finished right now. Please try again.");
+    return;
+  }
+  ACCT=null;
+  saveAcctToken('');
+  closeAcctDeleteConfirm();
+  // Apple keeps its own list of the apps you have used Sign in with Apple on, and only the person
+  // holding the phone can clear it. Say so plainly rather than leaving it as a surprise.
+  ACCT_NOTICE='Your account is deleted. To take NASTY off Apple, open Settings, tap your name, then Sign in with Apple.';
+  renderAccountRows(); updateAccountButton();
+  toast(eraseBoard?'Account deleted, and your name is off the board.':'Account deleted. Your name stays on the board as history.');
+}
+/* The one line in the app that answers "am I signed in?". Signing in or out repaints it, and so
+   does opening the panel, so it can never lag behind the rows underneath it. */
+function accountSubtitle(){
+  if(ACCT&&ACCT.uid)return 'Signed in with Apple';
+  return NET.online?'Playing online in this game':'Playing on this phone';
+}
+function renderAccountWho(){
+  const sub=$('acctWhoSub'), txt=accountSubtitle();
+  if(sub&&sub.textContent!==txt)sub.textContent=txt;
+}
+/* The three rows. They NEVER move, hide or reorder - signed in, signed out, phone or website -
+   so the panel reads the same everywhere and nothing jumps under a thumb. */
+function renderAccountRows(){
+  renderAccountWho();
+  const si=$('btnAcctSignIn'), so=$('btnAcctSignOut'), del=$('btnAcctDelete'), note=$('acctSoonNote');
+  if(!si||!so||!del||!note)return;
+  const here=accountsAvailableHere(), on=!!(ACCT&&ACCT.uid);
+  const siTxt=here?'Sign in with Apple':'Sign in';
+  if(si.textContent!==siTxt)si.textContent=siTxt;
+  si.disabled=!here||on||ACCT_BUSY;
+  so.disabled=!on||ACCT_BUSY;
+  del.disabled=!on||ACCT_BUSY;
+  if(!on)closeAcctDeleteConfirm();
+  let txt;
+  if(ACCT_NOTICE)txt=ACCT_NOTICE;
+  else if(!here)txt='Signing in is coming soon on the website. In the iPhone app you can sign in with Apple - either way the game plays exactly the same.';
+  else if(on)txt='Signed in with Apple'+(ACCT.gameName?(' as '+ACCT.gameName):'')+'. That only keeps your place on the family leaderboard yours - nothing else changes.';
+  else txt='Signing in is optional. It keeps your place on the family leaderboard yours on any phone. Everything works without it.';
+  if(note.textContent!==txt)note.textContent=txt;
+}
+$('btnAcctSignIn').onclick=()=>{ if(accountsAvailableHere())accountSignIn(); };
+$('btnAcctSignOut').onclick=()=>{ accountSignOut(); };
+$('btnAcctDelete').onclick=()=>{ if(ACCT&&ACCT.uid)openAcctDeleteConfirm(); };
+$('btnAcctDelNo').onclick=closeAcctDeleteConfirm;
+$('btnAcctDelYes').onclick=()=>{ const cb=$('acctDelBoard'); accountDelete(!!(cb&&cb.checked)); };
+/* Test hook, in the same spirit as window.G and window.getNetGen. Sign in with Apple is native
+   only, so a browser test can never reach these rows on its own; this lets the offline UI suite
+   drive them through their REAL render path. It sets local state and re-renders - it cannot mint
+   a session, cannot sign anybody in, and never touches the network. */
+window.__acct={
+  state:()=>ACCT?{uid:ACCT.uid,gameName:ACCT.gameName}:null,
+  setSignedIn:(a)=>{ ACCT=a?Object.assign({token:'test-session',uid:'test-uid'},a):null; ACCT_NOTICE=''; renderAccountRows(); return window.__acct.state(); },
+  rows:()=>{
+    const g=id=>{ const b=$(id); return b?{text:b.textContent.trim(),disabled:!!b.disabled,hidden:b.classList.contains('hidden')}:null; };
+    return {signIn:g('btnAcctSignIn'),signOut:g('btnAcctSignOut'),del:g('btnAcctDelete'),
+            note:$('acctSoonNote').textContent,available:accountsAvailableHere(),
+            confirmOpen:!$('acctDelConfirm').classList.contains('hidden')};
+  },
+};
+// Boot: if this phone is carrying a session, ask the server whether it is still good. This never
+// blocks anything - a guest and a signed-in player take the identical path to the menu.
+if(accountsAvailableHere()&&loadAcctToken()){
+  refreshAccount().then(()=>{ try{ renderAccountRows(); updateAccountButton(); }catch(e){} }).catch(()=>{});
+}
+renderAccountRows();
 updateAccountButton();
 /* sendInvite: shared by the online room's invite button (btnRoomText) and the reunion lobby's
    "Nudge" button - real invites only ever happen from inside the host lobby flow, once a room
