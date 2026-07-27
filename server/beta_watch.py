@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = 'e090cb53-b3af-4e04-aa1d-ff980773d2cc'
+BUILD_SUBMISSION_ID = '72e5ff81-f81c-4cf0-b290-4a6d127b80f3'
 
 
 def current_build():
@@ -101,13 +101,14 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
+<p>This one is mostly about the computer players.</p>
 <p>What is in this one:</p>
 <ul>
-<li><b>The sign in screen comes back after every update.</b> You asked for this one: it used to show up on somebody's very first launch and never again. Now it appears once after each new version of the app, whether that arrives through TestFlight or the App Store, and then stays quiet for the rest of that version no matter how many times the app is opened.</li>
-<li><b>It says out loud that one button does both jobs.</b> Right under the Apple button: "New here? It creates your account. Been here before? It signs you back in." The button itself still says Sign in with Apple, because Apple does not allow that button to be worded any other way.</li>
-<li><b>If you are already signed in, it just says hello.</b> "Welcome back to NASTY!" and a Keep playing button, instead of asking somebody with an account to sign in a second time. Switching to guest, or signing out, is still in ADMIN.</li>
-<li><b>More excitement, in the right places.</b> The sign in page, the win screen, a takeout, the first deal, picking a saved game back up. Everything that costs you something - conceding a game, deleting an account, leaving a game - still asks in the same plain words it always did. That was deliberate.</li>
-<li><b>A small fix on the way past:</b> on smaller phones the writing on that screen was rendering bigger than it was supposed to and pushing the last lines under the fade at the bottom. It fits properly now.</li>
+<li><b>The Nasty computers got a lot smarter, and this time it is a real jump.</b> You were right about them. They could always see their whole hand, but they never planned the ORDER they played it in - they just grabbed whatever looked best that second. Now they think the whole hand through before the first card goes down: clear the peg with the 8 first, THEN bring the King out. Measured over thousands of games: two people who play well together used to beat two Nasty computers about 53 games in 100, and now it is about 44. Last time this number moved by one point. This time it moved by nine.</li>
+<li><b>They are still at the mercy of the cards.</b> That was the part you asked for and it has not changed. When the deal runs against them they still lose, and they still cannot see your cards, your partner's cards, or the deck. We re-ran the whole cheating detector suite on the new brain and it passed everything.</li>
+<li><b>Solo got tougher too.</b> Nasty is harder on your own now as well, not just in teams. You said to update solo as well, so we did.</li>
+<li><b>Groundwork for the leaderboard.</b> When you are signed in, your results now travel with your account. Nothing about the shared board changes in this build - it still counts everyone exactly the way it does today. This is the piece that has to be on everybody's phone BEFORE the board is switched over to accounts, and getting that order wrong is what cost us some scores earlier. So: install this one, play a bit, and the switch gets flipped after that.</li>
+<li><b>Two small ones you spotted.</b> The NASTY badge on the sign in screen is properly centred now and no longer hangs over the edge of its box. And the message bar and the Skip button stay put instead of dropping down every time your hand runs out of cards and jumping back up when you get new ones.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -122,7 +123,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - the sign in screen now says hello after every update', body], check=True)
+                    f'NASTY: build {BUILD} is live - the Nasty computers plan their whole hand now', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
