@@ -1007,6 +1007,186 @@ function createEngine(){
     // tuning preference. If a future session is cutting things, this is the cheapest thing to cut.
     return mine-(cnt?(theirs/cnt)*(G.teams?TEAM_OPP_W:1):0);
   }
+  /* ==============================================================================================
+     § AI HAND-BLOCK PLANNING  (v0.40, 2026-07-26)  -  Nasty ("hard") tier ONLY
+     ==============================================================================================
+     WHAT THIS FIXES, AND WHY THE PREVIOUS DESCRIPTION OF THE AI WAS WRONG.
+
+     v0.38's teamwork layer helped a little (a coordinated pair went from winning about 53 games in
+     100 to about 52) and its own notes concluded that the ceiling was "a real search... a project,
+     not a tuning pass". Half of that was right and half of it sent the next session the wrong way.
+     Blake's correction is the one that mattered: the AI could ALWAYS see its whole hand.
+     legalMoves(seat) enumerates every card in G.hands[seat] and chooseAI() scores every single
+     resulting move. Nothing was ever hidden from it. Describing it as a "one move at a time player"
+     was simply inaccurate.
+
+     The real gap sat one level deeper: THE AI NEVER PLANNED THE ORDER OF THE CARDS IT WAS HOLDING.
+     Nasty deals in blocks (SCHEDULES = {4:[5,4,4], 6:[4,4]}), so a seat KNOWS every card it will
+     play over its next few turns. Measured over 11,525 Nasty decisions in 4P teams, 84% of them are
+     made holding 2 or more known cards (1 card 16%, 2 cards 21%, 3 cards 24%, 4 cards 28%, 5 cards
+     10%). A good player holding a King and an 8 thinks "clear my peg with the 8 FIRST, then bring
+     the King out". The shipped AI picked whatever looked best this instant and worked the rest of
+     the block out later - and inside its own lookahead rollout, its own future turns were played by
+     the cheap fixed 1-ply rolloutPolicy(), i.e. "what happens if I keep playing on autopilot",
+     never "what is the best ORDER for these four cards".
+
+     Two mechanisms below close that gap. Both live inside chooseAI()'s existing P.ply2 branch, so
+     Easy and Tricky (ply2:false - the branch never runs for them) are byte-for-byte identical in
+     every mode, which the strength and difficulty suites both re-prove rather than assume.
+
+     -----------------------------------------------------------------------------------------------
+     (a) THE HAND-BLOCK PLAN TERM  - handPlanValue(), weight PLAN_W
+     -----------------------------------------------------------------------------------------------
+     After scoring a candidate move the normal 1-ply way, apply it to a minimal throwaway copy of the
+     game and then GREEDILY PLAY OUT THE SEAT'S REMAINING KNOWN CARDS with the opponents frozen,
+     discounting each later own-turn by PLAN_GAMMA:
+
+         total(m) = 1-ply score(m) + PLAN_W * sum_t PLAN_GAMMA^t * score(best move at my own turn t)
+
+     "Opponents frozen" is an honest modelling choice, not a shortcut. Their replies depend on cards
+     nobody at the table can see, so simulating them would mean either peeking (banned) or guessing;
+     their STANDING threats are already priced per move by dangerAt() inside scoreMove(), and the
+     0.7-per-turn discount deliberately shrinks any claim about a future the opponents will partly
+     invalidate anyway.
+
+     What it buys, concretely: the AI stops burning an enter card (A/K) on a marginal move when the
+     rest of the block needs it; it sequences "clear the peg, THEN enter"; it stops stranding the 3;
+     and it notices when a candidate leaves the rest of its hand unplayable, because then the playout
+     ends early, the term collapses, and that candidate sinks.
+
+     It is DETERMINISTIC - same own hand plus same public board gives the same value every time, with
+     zero sampling noise. That is exactly why it can carry weight 0.6 when the noisy rollout can only
+     carry 0.05.
+
+     FAIRNESS BY CONSTRUCTION, not by anonymisation: planClone() copies the public board plus the
+     acting seat's OWN cards and gives every other seat an EMPTY hand and an EMPTY deck. This term
+     cannot use hidden information because it never touches it, not even in anonymised form.
+
+     -----------------------------------------------------------------------------------------------
+     (b) SHARED-DETERMINIZATION ROLLOUTS  - DET_K imagined worlds, COMMON RANDOM NUMBERS
+     -----------------------------------------------------------------------------------------------
+     READ THIS BEFORE YOU "OPTIMIZE" IT. v0.38 tried "average 3 or 6 rollouts instead of 1" and
+     measured no gain, and wrote that down as a dead end. That conclusion is true as stated and
+     MISLEADING, and the difference is the whole trick:
+
+       * INDEPENDENT rollouts give every candidate its own private imagined world. Averaging a few of
+         them barely touches the BETWEEN-CANDIDATE variance, which is the variance that actually
+         corrupts the argmax - candidate A can still win simply because it was dealt a luckier
+         imaginary future than candidate B.
+       * SHARED rollouts judge every candidate in the SAME DET_K imagined worlds. World k uses the
+         same RNG seed for every candidate, so all of them face the identical imagined deal of the
+         hidden cards and the identical imagined trajectory. This is the classic common-random-numbers
+         variance reduction: the noise is now COMMON to all candidates and largely cancels in the
+         comparison, which is the only thing the argmax cares about.
+
+     So: do NOT change this loop to draw fresh randomness per candidate. That is the version that
+     was already measured and does nothing. K=2 measured as strong as K=4 and K=8 (40.5% / 40.8% /
+     41.2% for the reference pair), so the cheap one ships. LOOKAHEAD_W stays at 0.05: raising it to
+     0.10 or 0.15 was re-tried on top of the DENOISED signal and was still no better, so v0.38's
+     finding about that weight survives.
+
+     The K seeds are drawn once per decision from the engine's own RNG stream, so a decision remains
+     a deterministic function of (position, RNG seed) exactly as before - which is what keeps
+     server/tests/test_ai_teams_fairness.js's reseed-and-compare test able to grip this code.
+
+     -----------------------------------------------------------------------------------------------
+     MEASURED IN THIS REPO against the shipped v0.39 engine (paired: same decks, same reference pair
+     - the CRP policy copied verbatim from server/tests/test_ai_teams_strength.js - both engine builds
+     in one process, McNemar on the paired per-game outcomes; the methodology v0.38 established, at
+     the sample sizes v0.38 learned the hard way to insist on). "Ref win" is the coordinated reference
+     pair's win rate, so LOWER means the AI is stronger:
+
+       4P teams, N=3000 : 52.7% -> 43.6%   (McNemar z=7.98, p < 1e-14; 731 vs 456 discordant)
+       6P teams, N=1000 : 40.3% -> 33.8%   (z=3.14, p=0.0017; 247 vs 182 discordant)
+       4P FFA, Nasty seats' share against Tricky, N=600: 75.0% -> 79.2%.
+       4P teams AND 4P FFA, Tricky pair vs Easy pair, N=400 each: 348/400 and 288/400 on BOTH
+         builds, 0 discordant games either way. Structural proof that only the Nasty (P.ply2) path
+         moved and that Easy and Tricky are move-for-move v0.39.
+
+     From the research session that designed this (same methodology, prototype build): the component
+     split at 4P (N=1500 each) was plan term alone 47.0% (z=4.46) and shared worlds alone 48.4%
+     (z=3.68) - they overlap but still stack; and against CRPP, a reference pair given this SAME
+     planning ability so the benchmark is not left artificially dumber than the AI, 59.3% -> 49.3%
+     (z=6.22).
+
+     Cost, measured on the repo build in those same runs: avg 0.486ms / p99 2.29ms per decision at 4P
+     (404,228 sampled) and 0.704ms / 3.77ms at 6P (411,957 sampled), against the ~50ms budget the
+     phones and the cloud server share. Roughly 2x the shipped cost; the plan term is nearly free and
+     the second rollout world is most of the increase.
+
+     TUNING WARNING, same as v0.38's: N>=1500, paired decks, McNemar, or do not touch these numbers.
+     Nothing here is a knife-edge fit (plan weight 0.4-1.0 all landed within 1.5 points of each
+     other, gamma 0.5-0.8 likewise), so there is no reason to fiddle.
+     ============================================================================================== */
+  const PLAN_W=0.6;          // weight on the whole discounted remaining-block value
+  const PLAN_GAMMA=0.7;      // discount per own future turn - shrinks claims about a distant future
+  const PLAN_MAX_TURNS=8;    // safety guard; a real block is at most 5 cards, this can never bind
+  const DET_K=2;             // shared imagined worlds per decision (see (b) above). 1 = shipped v0.39
+  /* ---------------------------------------------------------------------------------------------
+     THE FREE-FOR-ALL SWITCH  -  flip this ONE constant to false and solo play reverts exactly.
+
+     v0.38 deliberately froze free-for-all and only touched teams. This change does NOT: it makes
+     Nasty stronger in solo/free-for-all games too (75.0% -> 79.2% against Tricky, N=600 paired).
+     That was raised with Blake before it shipped and his answer was "Update solo as well", so it is
+     ON deliberately. The switch stays because a behaviour this visible should be one line to undo:
+     set HARD_PLANNING_IN_FFA to false and, in a non-teams game, the hard tier drops back to
+     planV=0 and K=1, which is byte-for-byte the v0.39 code path (no plan term, one private rollout
+     world, no extra draws from the RNG stream). Teams play is unaffected either way. Nothing else
+     needs to change, and the engines just need regenerating (cd server && npm run build-engine).
+     --------------------------------------------------------------------------------------------- */
+  const HARD_PLANNING_IN_FFA=true;
+  /* mulberry32, the same tiny PRNG the harnesses use. Used ONLY to build the DET_K shared imagined
+     worlds: Math.random is temporarily pointed at one of these seeded streams so that world k is
+     literally the same imagined world for every candidate (see (b) above). Seeded from the engine's
+     own RNG stream, restored in a finally block, never used for anything a real game depends on. */
+  function sharedWorldRng(a){
+    return function(){
+      a|=0;a=(a+0x6D2B79F5)|0;
+      let t=Math.imul(a^(a>>>15),1|a);
+      t=(t+Math.imul(t^(t>>>7),61|t))^t;
+      return ((t^(t>>>14))>>>0)/4294967296;
+    };
+  }
+  /* planClone: the MINIMAL throwaway state the hand-block planner needs. It deliberately does NOT
+     use cloneG(). cloneG() exists to ANONYMISE hidden information so a rollout can imagine the whole
+     table's future; the planner never imagines anybody else's turn at all, so it should not be
+     handed their cards even in anonymised form. Every other seat gets an EMPTY hand and the deck is
+     EMPTY, so only public state plus the acting seat's OWN cards survive into the clone. That is
+     fairness by construction - there is nothing hidden in here to leak. server/tests/
+     test_ai_teams_fairness.js part A pins this exact own-hand-only copy idiom so it cannot quietly
+     grow into something that reads more. */
+  function planClone(seat){
+    return {n:G.n,teams:G.teams,seats:G.seats,
+      pieces:G.pieces.map(a=>a.map(p=>({state:p.state,steps:p.steps}))),
+      hands:G.hands.map((h,s)=>s===seat?h.slice():[]),
+      deck:[],discard:[],schedule:G.schedule,schedRound:G.schedRound,dealer:G.dealer,
+      turn:G.turn,passStreak:0,over:G.over,winners:G.winners.slice(),
+      bowedOut:G.bowedOut.slice(),dealSeq:0,actionSeq:0,paused:false,gameId:G.gameId};
+  }
+  /* handPlanValue: call with G already pointed at a planClone() on which the candidate move has been
+     applied. Plays out the seat's REMAINING known cards greedily, opponents frozen, scoring each own
+     turn with the SAME scorer the real decision uses (scoreMove + strat*strategyBonus +
+     team*teamworkBonus) so the plan is judged by the AI's own idea of a good move, not a second
+     simplified one that could drift out of agreement with it. Returns the discounted total. If the
+     block runs dry early - no legal move left, or the seat wins - the loop stops and the term is
+     small, which is exactly the signal wanted: a candidate that walls its own remaining cards off
+     should look worse than one that keeps them playable. */
+  function handPlanValue(seat,P){
+    let v=0,f=PLAN_GAMMA,guard=0;
+    while(G.hands[seat].length>0&&!G.over&&guard++<PLAN_MAX_TURNS){
+      const mv=legalMoves(seat);
+      if(!mv.length)break;                        // stuck: the rest of the block is dead cards
+      let best=null,bs=-1e9;
+      for(const m of mv){
+        const sc=scoreMove(seat,m)+P.strat*strategyBonus(m,P)+P.team*teamworkBonus(m,P);
+        if(sc>bs){bs=sc;best=m;}
+      }
+      v+=f*bs;
+      f*=PLAN_GAMMA;
+      applyMove(seat,best);                       // real engine mutation, on the throwaway clone only
+    }
+    return v;
+  }
   function chooseAI(seat,moves){
     const P=AI_TIERS[G.seats[seat].diff]||AI_TIERS.medium;
     // v0.23.1: no safe-filter needed - legalMoves() itself already excludes partner-landings
@@ -1030,11 +1210,54 @@ function createEngine(){
     // now, no cutoff, no bias.
     if(P.ply2&&pool.length>1){
       const realG=G;
+      // v0.40 (2026-07-26): see § AI HAND-BLOCK PLANNING above for the full mechanism and the
+      // measured numbers. Two additions to the shipped v0.39 loop, both Nasty-only (P.ply2):
+      //   (a) planV - the deterministic hand-block plan term, on a planClone() that holds nothing
+      //       but the public board and this seat's own cards.
+      //   (b) K shared imagined worlds instead of one private one per candidate. The seeds are drawn
+      //       ONCE, here, before the candidate loop - that is the entire point. Every candidate is
+      //       then judged in the SAME worlds (common random numbers), so the rollout noise is shared
+      //       and cancels in the comparison. Drawing them inside the loop instead would recreate the
+      //       independent-rollout version that v0.38 measured and correctly rejected.
+      // HARD_PLANNING_IN_FFA=false makes both of these teams-only, restoring v0.39 solo play exactly.
+      const planning=(G.teams||HARD_PLANNING_IN_FFA);
+      const K=planning?Math.max(1,DET_K):1;
+      const seeds=[];
+      if(K>1)for(let k=0;k<K;k++)seeds.push((Math.random()*0x7fffffff)|0);
       for(const entry of scored){
-        G=cloneG(seat);
-        applyMove(seat,entry.m);   // real engine mutation, on the throwaway clone only
-        entry.s2=G.over?entry.s+LOOKAHEAD_WIN_BONUS:entry.s+LOOKAHEAD_W*rolloutValue(seat);
-        G=realG;
+        // (a) hand-block plan term: deterministic, opponents frozen, own hand + public board only
+        let planV=0;
+        if(planning&&PLAN_W){
+          G=planClone(seat);
+          applyMove(seat,entry.m);
+          if(!G.over)planV=PLAN_W*handPlanValue(seat,P);
+          G=realG;
+        }
+        // (b) rollout term - the shipped single-world path when K=1, the shared-world average when K>1
+        if(K===1){
+          G=cloneG(seat);
+          applyMove(seat,entry.m);   // real engine mutation, on the throwaway clone only
+          entry.s2=G.over?entry.s+LOOKAHEAD_WIN_BONUS:entry.s+planV+LOOKAHEAD_W*rolloutValue(seat);
+          G=realG;
+        }else{
+          let roll=0,won=false;
+          const realRandom=Math.random;
+          // Math.random is repointed at a seeded stream so that world k is the SAME imagined world
+          // for every candidate. It is restored in the finally below - chooseAI is a plain
+          // synchronous function with no await anywhere in it, so nothing else can observe the swap,
+          // and the finally means even a throw inside the rollout cannot leave it swapped.
+          try{
+            for(let k=0;k<K;k++){
+              Math.random=sharedWorldRng(seeds[k]);
+              G=cloneG(seat);
+              applyMove(seat,entry.m);
+              if(G.over){won=true;G=realG;break;}   // an outright win needs no rollout at all
+              roll+=rolloutValue(seat);
+              G=realG;
+            }
+          }finally{ Math.random=realRandom; G=realG; }
+          entry.s2=won?entry.s+LOOKAHEAD_WIN_BONUS:entry.s+planV+LOOKAHEAD_W*(roll/K);
+        }
       }
     }
     let best=null,bs=-1e9;

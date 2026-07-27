@@ -186,7 +186,7 @@ const LOG_TTL_MS = STARTED_ROOM_TTL_MS + 24 * 60 * 60 * 1000; // backstop: alway
 // deploy ever needs true cross-isolate correctness here, this would need to move into KV the
 // same way rooms did. The common, uncontested case (the named seat is already disconnected)
 // needs no cross-isolate coordination at all — it's a normal touchRoom mutation.
-type PendingReclaim = { code: string; targetPlayerId: number; socket: WebSocket; expires: number };
+type PendingReclaim = { code: string; targetPlayerId: number; socket: WebSocket; accountId: string | null; expires: number };
 const pendingReclaims = new Map<string, PendingReclaim>();
 const RECLAIM_TIMEOUT_MS = 30 * 1000;
 
@@ -614,7 +614,12 @@ async function handleSoloResult(req: Request, ip: string): Promise<Response> {
     credited = sanitized.map((s) => s.clean);
   }
   log("solo result recorded", gameId, credited.join(","));
-  return json(200, { ok: true, epoch });
+  /* v0.40 (2026-07-26): the reply now SAYS what it did. Until now this was a bare
+     {ok:true,epoch}, so a client could not tell the difference between "recorded" and "accepted
+     and silently dropped because the account-only switch is on and you did not send `auth`" -
+     which is exactly the failure that lost a run of real games. Both keys are additive; an older
+     client simply ignores them, so no protocol bump. Twin of server.js's. */
+  return json(200, { ok: true, epoch, accountsOnly: accountsOnlyBoard(), credited });
 }
 
 /* =======================================================================================
@@ -3054,10 +3059,21 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           await pruneUnmigratableRoom(code);
           return;
         }
+        /* v0.40 (2026-07-26) § ACCOUNTS - UPGRADE ONLY, and the "only" is the whole design.
+           `acct` was captured once at the front door, which left one real hole: somebody who
+           joined as a guest, signed in DURING the game, and then reconnected still had a null
+           accountId and lost their result under the account-only switch. A rejoin may therefore
+           now FILL a missing accountId - and nothing else. It can never overwrite one that is
+           already set and it can never clear one, so an expired or missing session on a
+           reconnect still cannot cost anybody their stats, which was the original reason rejoin
+           did not touch identity at all. Resolved BEFORE touchRoom() because the mutator it takes
+           is synchronous. Twin of server.js's. */
+        const rejoinAcct = await resolveAcctField(msg);
         const r = await touchRoom(code, (meta) => {
           const p = meta.players.find((pp) => pp.id === playerId);
           if (!p) return false;
           p.connected = true;
+          if (p.accountId == null && rejoinAcct) p.accountId = rejoinAcct;
           return {};
         });
         if (!r.ok) {
@@ -3129,17 +3145,26 @@ function handleWsUpgrade(req: Request, ip: string): Response {
             return;
           }
           const reqId = newToken();
-          pendingReclaims.set(reqId, { code, targetPlayerId: targetPre.id, socket, expires: Date.now() + RECLAIM_TIMEOUT_MS });
+          // v0.40: the contested branch resolves the challenger's identity NOW, while their
+          // `acct` field is in hand, and carries it to reclaimApprove below - the host's approval
+          // message obviously cannot carry the challenger's session token.
+          pendingReclaims.set(reqId, { code, targetPlayerId: targetPre.id, socket, accountId: await resolveAcctField(msg), expires: Date.now() + RECLAIM_TIMEOUT_MS });
           sendToPlayer(code, hostP.id, { type: "reclaimRequest", reqId, name: targetPre.name });
           send(socket, { type: "reclaimPending", message: `${targetPre.name} looks like they're already connected - asking the host to confirm.` });
           log("reclaim contested, asked host", code, targetPre.id, "ip=" + ip);
           return;
         }
+        /* v0.40 (2026-07-26) § ACCOUNTS: reclaim is "a DIFFERENT device is taking this seat by
+           name", so unlike rejoin it re-asserts identity OUTRIGHT, including to null. Leaving the
+           previous occupant's accountId in place would credit their account for a game somebody
+           else finished, which is worse than crediting nobody. Twin of server.js's. */
+        const reclaimAcct = await resolveAcctField(msg);
         const r = await touchRoom(code, (meta) => {
           const p = meta.players.find((pp) => pp.id === targetPre.id);
           if (!p || p.connected) return false; // lost the race since the pre-check above
           p.token = newToken();
           p.connected = true;
+          p.accountId = reclaimAcct;
           return { playerId: p.id, token: p.token };
         });
         if (!r.ok) { send(socket, { type: "reclaimError", message: "Try again - that seat just changed state." }); return; }
@@ -3171,6 +3196,7 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           if (!p) return false;
           p.token = newToken();
           p.connected = true;
+          p.accountId = pending.accountId || null;   // v0.40: see the reclaim case above
           return { playerId: p.id, token: p.token };
         });
         if (!r.ok) { send(pending.socket, { type: "reclaimError", message: "That seat is gone now." }); return; }

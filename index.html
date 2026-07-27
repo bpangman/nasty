@@ -1257,7 +1257,32 @@ button{font:inherit;cursor:pointer}
 #handBar{flex:none;min-height:128px;padding:4px 10px calc(10px + env(safe-area-inset-bottom));
   display:flex;flex-direction:column;align-items:center;gap:6px}
 #handInfo{font-size:14.5px;font-weight:700;color:#ffe9a8;min-height:18px;text-align:center}
-#handRow{display:flex;align-items:flex-end;justify-content:center;gap:7px;flex-wrap:nowrap}
+/* v0.40 (2026-07-26, Blake): "can you make the word bubble ingame and the skip button stay where
+   they are? Sometimes they move down when my cards are gone and then they move back up when my
+   cards are back. Just leave them where they are as if my cards are always there."
+
+   REPRODUCED FIRST, in a real solo game driven through commitMove(), before anything was changed
+   (shipped v0.39, message bubble / Skip top edge, with cards vs with the row empty):
+     390x844   616.3px -> 648.0px   (drops 31.7px, springs back on the next deal)
+     430x932   695.3px -> 736.0px   (drops 40.7px)
+     320x568   no movement (there the 128px #handBar floor is taller than the hand anyway)
+   It happens whenever #handRow is empty: playing the last card of a block, bowing out with no
+   legal move, and again in the beat between a deal and the hand being rendered.
+
+   WHY: #handBar has no fixed height. --handH is its MEASURED height (updateToastOffset(),
+   § RENDER/ANIM) and #toasts, #btnSkip and #awayActions are all pinned off that variable, so the
+   bar shrinking to its 128px floor when the row empties drags all three down with it.
+
+   THE FIX is one line: reserve a full hand's worth of height in the ROW itself, so the bar is the
+   same height whether it is holding five cards or none. A card is `width:clamp(46px,16vw,76px)`
+   with `aspect-ratio:64/90`, so a card's height is that same clamp scaled by 90/64 - the row's
+   floor is written as exactly that expression, which means it stays correct if the card clamp is
+   ever retuned, and it is right on the very first deal because it is pure CSS and measures nothing.
+   Deliberately NOT done by measuring a full hand once and remembering it: that is wrong before the
+   first hand exists, which is precisely when the game is being laid out.
+   updateToastOffset() is untouched and still runs - it now simply measures a constant. */
+#handRow{display:flex;align-items:flex-end;justify-content:center;gap:7px;flex-wrap:nowrap;
+  min-height:calc(clamp(46px,16vw,76px) * 90 / 64)}
 #handRow .card{transition:transform .15s;cursor:pointer}
 #handRow .card.playable:hover{transform:translateY(-8px)}
 #handRow .card.selCard{transform:translateY(-14px);box-shadow:0 0 0 3px var(--gold),0 10px 20px rgba(0,0,0,.4);z-index:5}
@@ -1726,7 +1751,52 @@ button{font:inherit;cursor:pointer}
    375, 390, 393 and 430 wide with safe-area insets - see server/tests/test_ui_v038_2026_07_26.js,
    which measures the two gaps and asserts the card still fits without scrolling at 390+ and that
    the two choices plus the age line stay above the fold at 320x568. */
-#welcomeOverlay .sign{margin:0 auto 26px}
+/* v0.40 (2026-07-26, Blake): "make the login page so that the nasty badge is centered and doesn't
+   flow over the box all the text is within." Both halves of that were real, and MEASURED before
+   anything was changed (Playwright, real safe-area insets, shipped v0.39):
+
+     width  badge past the card's PADDING box   past the card's BORDER edge   centre offset
+     320    30.2px over on the right            (inside)                      10.8px right
+     375    27.5px                              5.5px over                    13.5px right
+     390    23.8px                              1.8px over                    11.7px right
+     393    20.8px                              (inside)                      10.2px right
+     430    (inside)                            (inside)                       8.3px LEFT
+
+   TWO causes, and neither was the tilt:
+   1. NOT CENTRED AT ALL. `.modalCard` on this screen computes to `text-align:left` (every sentence
+      on it is left-aligned prose), and the base `.sign` is an INLINE-BLOCK. `margin:0 auto` does
+      nothing horizontally to an inline-block, so the badge was simply sitting at the card's
+      content-left edge. It only ever LOOKED roughly centred because it was so wide that it filled
+      the card - which is also cause 2. At 430, where it finally fits, the same bug shows up as the
+      badge sitting 8px LEFT of centre.
+   2. TOO WIDE TO FIT. The base badge is sized off the viewport (`font-size:clamp(38px,14.4vw,56px)`
+      with 30px side padding), which at 375-393 is wider than this card's content box, so it hung
+      out over the right-hand side. The `-2deg` tilt and the soft shadow then pushed the visible
+      halo a little further still.
+
+   THE FIX, scoped to `#welcomeOverlay .sign` so no other badge in the app moves (the menu logo, the
+   NASTY! takeout stamp and the five confirm badges all keep their own sizes, verified by computed
+   style in the suite, not just by reading the cascade):
+     * `display:block; width:fit-content; margin-inline:auto` - a block box with auto side margins
+       IS centred, unlike an inline-block. `box-sizing:border-box; max-width:100%` is a hard stop so
+       it can never push the card wider even if a future font metric changes.
+     * its own smaller clamps, sized so the whole border box plus the rotated bounding box plus the
+       3px outline sits inside the card's content box with real margin at all five widths. The tilt
+       is KEPT - Blake likes it and it is part of the look.
+     * a trimmed shadow (28px blur -> 20px) so the soft halo fits in that margin too, not just the
+       lettering. Same trick `.confirmCard .sign` already uses.
+     * `text-indent:.07em` on the lettering: `letter-spacing:.14em` puts a trailing gap AFTER the
+       final Y, so a box that is mathematically centred renders its five letters half a gap to the
+       LEFT. Indenting by half the gap cancels it, which is what makes the badge look centred rather
+       than merely measure centred.
+   Measured after, all five widths: centre offset <= 0.1px and at least 18px of clear margin on
+   each side. See test_ui_v040_2026_07_26.js part A. */
+#welcomeOverlay .sign{display:block;box-sizing:border-box;width:fit-content;max-width:100%;
+  margin:0 auto 26px;
+  padding:clamp(6px,2.2vw,9px) clamp(11px,3.4vw,16px) clamp(5px,1.9vw,8px);
+  border-width:clamp(3px,.9vw,4px);outline-width:3px;
+  box-shadow:0 8px 20px rgba(0,0,0,.45), inset 0 2px 0 rgba(255,255,255,.25)}
+#welcomeOverlay .sign b{font-size:clamp(28px,12.6vw,50px);text-indent:.07em}
 #welcomeOverlay h3{margin:2px 0 20px}
 .welcomeBtns{display:grid;grid-template-columns:1fr;gap:10px;margin-top:14px}
 .welcomeBtns .btn{width:100%;min-height:48px;font-size:16px}
@@ -1758,7 +1828,24 @@ button{font:inherit;cursor:pointer}
      byte v0.37's. See test_ui_v038_2026_07_26.js part B, which pins them rather than trusting it.
      (The age line already sat inside the hint fade in v0.37 - a real, pre-existing 320x568 nit,
      reported in HANDOFF.md rather than silently "fixed" by squeezing this screen further.) */
-  #welcomeOverlay .sign{transform:scale(.62);transform-origin:top center;margin:0 auto -14px}
+  /* v0.40 (2026-07-26): the `transform:scale(.62)` that used to live here is GONE, and that is the
+     one thing in this branch that changed. It was a workaround for a badge that was too big for the
+     card - it shrank what you SEE without shrinking the laid-out box, which is exactly why the badge
+     could not be centred here either (an over-wide layout box makes `margin:auto` collapse to zero;
+     see the long note on #welcomeOverlay .sign above). It also threw the tilt away, because a
+     `transform` declaration replaces the base rule's `rotate(-2deg)` outright. Now the badge is
+     genuinely small at this size instead of being drawn small, so it centres, it keeps its tilt like
+     every other screen, and it costs LESS vertical room than the scaled version did, not more.
+     The numbers this branch has to respect, and does. The badge's laid-out height (44px) plus its
+     bottom margin (20px, which COLLAPSES with the heading's own 2px top margin, so 20 is the whole
+     gap and not 22) is 64px against the 63.5px the scaled version consumed, so the age sentence
+     lands at 435.0px (website) / 456.5px (app) - at or above the v0.39 positions of 435.5 / 458.0,
+     never lower, so it stays clear of the 64px swipe-up fade. The VISUAL gap under the badge
+     measures 17.3px against the 17.4px v0.37/v0.38/v0.39 rendered here, i.e. the same screen, and
+     test_ui_v038's A1 still pins it. The lettering renders at 28px against the 28.6px effective
+     size the 46px-at-62% version drew, so it is the same size to the eye as well. */
+  #welcomeOverlay .sign{margin:0 auto 20px;padding:6px 11px 4px;border-width:3px}
+  #welcomeOverlay .sign b{font-size:28px}
   #welcomeOverlay h3{font-size:18px;margin:2px 0 6px}
   .welcomeNote{margin-top:4px}
   /* v0.39: three pixels of fine-print gap, one pixel of button gap and two pixels of card padding
@@ -1868,7 +1955,9 @@ button{font:inherit;cursor:pointer}
   #topbar .iconBtn{height:36px;min-height:36px}
   #handBar{min-height:0;padding-top:2px;padding-bottom:calc(4px + env(safe-area-inset-bottom));gap:3px}
   #handInfo{font-size:12px;min-height:14px}
-  #handRow{gap:4px}
+  /* v0.40: the same reserved-row-height rule as the portrait one above, re-stated against THIS
+     branch's smaller card clamp so the bubble and Skip hold still in landscape too. */
+  #handRow{gap:4px;min-height:calc(clamp(34px,9vh,56px) * 90 / 64)}
   .card{width:clamp(34px,9vh,56px)}
 }
 
@@ -2014,7 +2103,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.39</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.40</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -2447,7 +2536,7 @@ button{font:inherit;cursor:pointer}
     </div>
     <p class="welcomeFine" id="welcomeAppleNote">New here? It creates your account. Been here before? It signs you back in.</p>
     <p class="welcomeFine" id="welcomeWebNote">Signing in is coming soon on the website. In the iPhone app you can sign in with Apple.</p>
-    <p class="welcomeFine" id="welcomeGuestNote">Guests can play every single thing. They just do not appear on the leaderboard.</p>
+    <p class="welcomeFine" id="welcomeGuestNote">Guests can play every game mode - they just do not appear on the leaderboard.</p>
     <p class="welcomeFine" id="welcomeAgeNote">Accounts are for ages 13 and up. Anyone younger should continue as a guest.</p>
     <p class="welcomeFine" id="welcomeAgainNote">You will see this again after every update. You can change it any time - tap ADMIN at the top of the game screen.</p>
   </div>
@@ -4511,6 +4600,186 @@ function rolloutValue(seat){      // call with G already pointed at the hypothet
   // tuning preference. If a future session is cutting things, this is the cheapest thing to cut.
   return mine-(cnt?(theirs/cnt)*(G.teams?TEAM_OPP_W:1):0);
 }
+/* ==============================================================================================
+   § AI HAND-BLOCK PLANNING  (v0.40, 2026-07-26)  -  Nasty ("hard") tier ONLY
+   ==============================================================================================
+   WHAT THIS FIXES, AND WHY THE PREVIOUS DESCRIPTION OF THE AI WAS WRONG.
+
+   v0.38's teamwork layer helped a little (a coordinated pair went from winning about 53 games in
+   100 to about 52) and its own notes concluded that the ceiling was "a real search... a project,
+   not a tuning pass". Half of that was right and half of it sent the next session the wrong way.
+   Blake's correction is the one that mattered: the AI could ALWAYS see its whole hand.
+   legalMoves(seat) enumerates every card in G.hands[seat] and chooseAI() scores every single
+   resulting move. Nothing was ever hidden from it. Describing it as a "one move at a time player"
+   was simply inaccurate.
+
+   The real gap sat one level deeper: THE AI NEVER PLANNED THE ORDER OF THE CARDS IT WAS HOLDING.
+   Nasty deals in blocks (SCHEDULES = {4:[5,4,4], 6:[4,4]}), so a seat KNOWS every card it will
+   play over its next few turns. Measured over 11,525 Nasty decisions in 4P teams, 84% of them are
+   made holding 2 or more known cards (1 card 16%, 2 cards 21%, 3 cards 24%, 4 cards 28%, 5 cards
+   10%). A good player holding a King and an 8 thinks "clear my peg with the 8 FIRST, then bring
+   the King out". The shipped AI picked whatever looked best this instant and worked the rest of
+   the block out later - and inside its own lookahead rollout, its own future turns were played by
+   the cheap fixed 1-ply rolloutPolicy(), i.e. "what happens if I keep playing on autopilot",
+   never "what is the best ORDER for these four cards".
+
+   Two mechanisms below close that gap. Both live inside chooseAI()'s existing P.ply2 branch, so
+   Easy and Tricky (ply2:false - the branch never runs for them) are byte-for-byte identical in
+   every mode, which the strength and difficulty suites both re-prove rather than assume.
+
+   -----------------------------------------------------------------------------------------------
+   (a) THE HAND-BLOCK PLAN TERM  - handPlanValue(), weight PLAN_W
+   -----------------------------------------------------------------------------------------------
+   After scoring a candidate move the normal 1-ply way, apply it to a minimal throwaway copy of the
+   game and then GREEDILY PLAY OUT THE SEAT'S REMAINING KNOWN CARDS with the opponents frozen,
+   discounting each later own-turn by PLAN_GAMMA:
+
+       total(m) = 1-ply score(m) + PLAN_W * sum_t PLAN_GAMMA^t * score(best move at my own turn t)
+
+   "Opponents frozen" is an honest modelling choice, not a shortcut. Their replies depend on cards
+   nobody at the table can see, so simulating them would mean either peeking (banned) or guessing;
+   their STANDING threats are already priced per move by dangerAt() inside scoreMove(), and the
+   0.7-per-turn discount deliberately shrinks any claim about a future the opponents will partly
+   invalidate anyway.
+
+   What it buys, concretely: the AI stops burning an enter card (A/K) on a marginal move when the
+   rest of the block needs it; it sequences "clear the peg, THEN enter"; it stops stranding the 3;
+   and it notices when a candidate leaves the rest of its hand unplayable, because then the playout
+   ends early, the term collapses, and that candidate sinks.
+
+   It is DETERMINISTIC - same own hand plus same public board gives the same value every time, with
+   zero sampling noise. That is exactly why it can carry weight 0.6 when the noisy rollout can only
+   carry 0.05.
+
+   FAIRNESS BY CONSTRUCTION, not by anonymisation: planClone() copies the public board plus the
+   acting seat's OWN cards and gives every other seat an EMPTY hand and an EMPTY deck. This term
+   cannot use hidden information because it never touches it, not even in anonymised form.
+
+   -----------------------------------------------------------------------------------------------
+   (b) SHARED-DETERMINIZATION ROLLOUTS  - DET_K imagined worlds, COMMON RANDOM NUMBERS
+   -----------------------------------------------------------------------------------------------
+   READ THIS BEFORE YOU "OPTIMIZE" IT. v0.38 tried "average 3 or 6 rollouts instead of 1" and
+   measured no gain, and wrote that down as a dead end. That conclusion is true as stated and
+   MISLEADING, and the difference is the whole trick:
+
+     * INDEPENDENT rollouts give every candidate its own private imagined world. Averaging a few of
+       them barely touches the BETWEEN-CANDIDATE variance, which is the variance that actually
+       corrupts the argmax - candidate A can still win simply because it was dealt a luckier
+       imaginary future than candidate B.
+     * SHARED rollouts judge every candidate in the SAME DET_K imagined worlds. World k uses the
+       same RNG seed for every candidate, so all of them face the identical imagined deal of the
+       hidden cards and the identical imagined trajectory. This is the classic common-random-numbers
+       variance reduction: the noise is now COMMON to all candidates and largely cancels in the
+       comparison, which is the only thing the argmax cares about.
+
+   So: do NOT change this loop to draw fresh randomness per candidate. That is the version that
+   was already measured and does nothing. K=2 measured as strong as K=4 and K=8 (40.5% / 40.8% /
+   41.2% for the reference pair), so the cheap one ships. LOOKAHEAD_W stays at 0.05: raising it to
+   0.10 or 0.15 was re-tried on top of the DENOISED signal and was still no better, so v0.38's
+   finding about that weight survives.
+
+   The K seeds are drawn once per decision from the engine's own RNG stream, so a decision remains
+   a deterministic function of (position, RNG seed) exactly as before - which is what keeps
+   server/tests/test_ai_teams_fairness.js's reseed-and-compare test able to grip this code.
+
+   -----------------------------------------------------------------------------------------------
+   MEASURED IN THIS REPO against the shipped v0.39 engine (paired: same decks, same reference pair
+   - the CRP policy copied verbatim from server/tests/test_ai_teams_strength.js - both engine builds
+   in one process, McNemar on the paired per-game outcomes; the methodology v0.38 established, at
+   the sample sizes v0.38 learned the hard way to insist on). "Ref win" is the coordinated reference
+   pair's win rate, so LOWER means the AI is stronger:
+
+     4P teams, N=3000 : 52.7% -> 43.6%   (McNemar z=7.98, p < 1e-14; 731 vs 456 discordant)
+     6P teams, N=1000 : 40.3% -> 33.8%   (z=3.14, p=0.0017; 247 vs 182 discordant)
+     4P FFA, Nasty seats' share against Tricky, N=600: 75.0% -> 79.2%.
+     4P teams AND 4P FFA, Tricky pair vs Easy pair, N=400 each: 348/400 and 288/400 on BOTH
+       builds, 0 discordant games either way. Structural proof that only the Nasty (P.ply2) path
+       moved and that Easy and Tricky are move-for-move v0.39.
+
+   From the research session that designed this (same methodology, prototype build): the component
+   split at 4P (N=1500 each) was plan term alone 47.0% (z=4.46) and shared worlds alone 48.4%
+   (z=3.68) - they overlap but still stack; and against CRPP, a reference pair given this SAME
+   planning ability so the benchmark is not left artificially dumber than the AI, 59.3% -> 49.3%
+   (z=6.22).
+
+   Cost, measured on the repo build in those same runs: avg 0.486ms / p99 2.29ms per decision at 4P
+   (404,228 sampled) and 0.704ms / 3.77ms at 6P (411,957 sampled), against the ~50ms budget the
+   phones and the cloud server share. Roughly 2x the shipped cost; the plan term is nearly free and
+   the second rollout world is most of the increase.
+
+   TUNING WARNING, same as v0.38's: N>=1500, paired decks, McNemar, or do not touch these numbers.
+   Nothing here is a knife-edge fit (plan weight 0.4-1.0 all landed within 1.5 points of each
+   other, gamma 0.5-0.8 likewise), so there is no reason to fiddle.
+   ============================================================================================== */
+const PLAN_W=0.6;          // weight on the whole discounted remaining-block value
+const PLAN_GAMMA=0.7;      // discount per own future turn - shrinks claims about a distant future
+const PLAN_MAX_TURNS=8;    // safety guard; a real block is at most 5 cards, this can never bind
+const DET_K=2;             // shared imagined worlds per decision (see (b) above). 1 = shipped v0.39
+/* ---------------------------------------------------------------------------------------------
+   THE FREE-FOR-ALL SWITCH  -  flip this ONE constant to false and solo play reverts exactly.
+
+   v0.38 deliberately froze free-for-all and only touched teams. This change does NOT: it makes
+   Nasty stronger in solo/free-for-all games too (75.0% -> 79.2% against Tricky, N=600 paired).
+   That was raised with Blake before it shipped and his answer was "Update solo as well", so it is
+   ON deliberately. The switch stays because a behaviour this visible should be one line to undo:
+   set HARD_PLANNING_IN_FFA to false and, in a non-teams game, the hard tier drops back to
+   planV=0 and K=1, which is byte-for-byte the v0.39 code path (no plan term, one private rollout
+   world, no extra draws from the RNG stream). Teams play is unaffected either way. Nothing else
+   needs to change, and the engines just need regenerating (cd server && npm run build-engine).
+   --------------------------------------------------------------------------------------------- */
+const HARD_PLANNING_IN_FFA=true;
+/* mulberry32, the same tiny PRNG the harnesses use. Used ONLY to build the DET_K shared imagined
+   worlds: Math.random is temporarily pointed at one of these seeded streams so that world k is
+   literally the same imagined world for every candidate (see (b) above). Seeded from the engine's
+   own RNG stream, restored in a finally block, never used for anything a real game depends on. */
+function sharedWorldRng(a){
+  return function(){
+    a|=0;a=(a+0x6D2B79F5)|0;
+    let t=Math.imul(a^(a>>>15),1|a);
+    t=(t+Math.imul(t^(t>>>7),61|t))^t;
+    return ((t^(t>>>14))>>>0)/4294967296;
+  };
+}
+/* planClone: the MINIMAL throwaway state the hand-block planner needs. It deliberately does NOT
+   use cloneG(). cloneG() exists to ANONYMISE hidden information so a rollout can imagine the whole
+   table's future; the planner never imagines anybody else's turn at all, so it should not be
+   handed their cards even in anonymised form. Every other seat gets an EMPTY hand and the deck is
+   EMPTY, so only public state plus the acting seat's OWN cards survive into the clone. That is
+   fairness by construction - there is nothing hidden in here to leak. server/tests/
+   test_ai_teams_fairness.js part A pins this exact own-hand-only copy idiom so it cannot quietly
+   grow into something that reads more. */
+function planClone(seat){
+  return {n:G.n,teams:G.teams,seats:G.seats,
+    pieces:G.pieces.map(a=>a.map(p=>({state:p.state,steps:p.steps}))),
+    hands:G.hands.map((h,s)=>s===seat?h.slice():[]),
+    deck:[],discard:[],schedule:G.schedule,schedRound:G.schedRound,dealer:G.dealer,
+    turn:G.turn,passStreak:0,over:G.over,winners:G.winners.slice(),
+    bowedOut:G.bowedOut.slice(),dealSeq:0,actionSeq:0,paused:false,gameId:G.gameId};
+}
+/* handPlanValue: call with G already pointed at a planClone() on which the candidate move has been
+   applied. Plays out the seat's REMAINING known cards greedily, opponents frozen, scoring each own
+   turn with the SAME scorer the real decision uses (scoreMove + strat*strategyBonus +
+   team*teamworkBonus) so the plan is judged by the AI's own idea of a good move, not a second
+   simplified one that could drift out of agreement with it. Returns the discounted total. If the
+   block runs dry early - no legal move left, or the seat wins - the loop stops and the term is
+   small, which is exactly the signal wanted: a candidate that walls its own remaining cards off
+   should look worse than one that keeps them playable. */
+function handPlanValue(seat,P){
+  let v=0,f=PLAN_GAMMA,guard=0;
+  while(G.hands[seat].length>0&&!G.over&&guard++<PLAN_MAX_TURNS){
+    const mv=legalMoves(seat);
+    if(!mv.length)break;                        // stuck: the rest of the block is dead cards
+    let best=null,bs=-1e9;
+    for(const m of mv){
+      const sc=scoreMove(seat,m)+P.strat*strategyBonus(m,P)+P.team*teamworkBonus(m,P);
+      if(sc>bs){bs=sc;best=m;}
+    }
+    v+=f*bs;
+    f*=PLAN_GAMMA;
+    applyMove(seat,best);                       // real engine mutation, on the throwaway clone only
+  }
+  return v;
+}
 function chooseAI(seat,moves){
   const P=AI_TIERS[G.seats[seat].diff]||AI_TIERS.medium;
   // v0.23.1: no safe-filter needed - legalMoves() itself already excludes partner-landings
@@ -4534,11 +4803,54 @@ function chooseAI(seat,moves){
   // now, no cutoff, no bias.
   if(P.ply2&&pool.length>1){
     const realG=G;
+    // v0.40 (2026-07-26): see § AI HAND-BLOCK PLANNING above for the full mechanism and the
+    // measured numbers. Two additions to the shipped v0.39 loop, both Nasty-only (P.ply2):
+    //   (a) planV - the deterministic hand-block plan term, on a planClone() that holds nothing
+    //       but the public board and this seat's own cards.
+    //   (b) K shared imagined worlds instead of one private one per candidate. The seeds are drawn
+    //       ONCE, here, before the candidate loop - that is the entire point. Every candidate is
+    //       then judged in the SAME worlds (common random numbers), so the rollout noise is shared
+    //       and cancels in the comparison. Drawing them inside the loop instead would recreate the
+    //       independent-rollout version that v0.38 measured and correctly rejected.
+    // HARD_PLANNING_IN_FFA=false makes both of these teams-only, restoring v0.39 solo play exactly.
+    const planning=(G.teams||HARD_PLANNING_IN_FFA);
+    const K=planning?Math.max(1,DET_K):1;
+    const seeds=[];
+    if(K>1)for(let k=0;k<K;k++)seeds.push((Math.random()*0x7fffffff)|0);
     for(const entry of scored){
-      G=cloneG(seat);
-      applyMove(seat,entry.m);   // real engine mutation, on the throwaway clone only
-      entry.s2=G.over?entry.s+LOOKAHEAD_WIN_BONUS:entry.s+LOOKAHEAD_W*rolloutValue(seat);
-      G=realG;
+      // (a) hand-block plan term: deterministic, opponents frozen, own hand + public board only
+      let planV=0;
+      if(planning&&PLAN_W){
+        G=planClone(seat);
+        applyMove(seat,entry.m);
+        if(!G.over)planV=PLAN_W*handPlanValue(seat,P);
+        G=realG;
+      }
+      // (b) rollout term - the shipped single-world path when K=1, the shared-world average when K>1
+      if(K===1){
+        G=cloneG(seat);
+        applyMove(seat,entry.m);   // real engine mutation, on the throwaway clone only
+        entry.s2=G.over?entry.s+LOOKAHEAD_WIN_BONUS:entry.s+planV+LOOKAHEAD_W*rolloutValue(seat);
+        G=realG;
+      }else{
+        let roll=0,won=false;
+        const realRandom=Math.random;
+        // Math.random is repointed at a seeded stream so that world k is the SAME imagined world
+        // for every candidate. It is restored in the finally below - chooseAI is a plain
+        // synchronous function with no await anywhere in it, so nothing else can observe the swap,
+        // and the finally means even a throw inside the rollout cannot leave it swapped.
+        try{
+          for(let k=0;k<K;k++){
+            Math.random=sharedWorldRng(seeds[k]);
+            G=cloneG(seat);
+            applyMove(seat,entry.m);
+            if(G.over){won=true;G=realG;break;}   // an outright win needs no rollout at all
+            roll+=rolloutValue(seat);
+            G=realG;
+          }
+        }finally{ Math.random=realRandom; G=realG; }
+        entry.s2=won?entry.s+LOOKAHEAD_WIN_BONUS:entry.s+planV+LOOKAHEAD_W*(roll/K);
+      }
     }
   }
   let best=null,bs=-1e9;
@@ -5735,7 +6047,7 @@ async function handleTurnLoopError(e){
     if(now-lastImpossibleStateResyncAt<2000)return;
     lastImpossibleStateResyncAt=now;
     if(NET.ws&&NET.ws.readyState===1)
-      netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token,protocolVersion:PROTOCOL_VERSION});
+      netSend(Object.assign({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token,protocolVersion:PROTOCOL_VERSION},acctField()));
     else scheduleReconnect();
   }else if(G&&!G.over){
     // 2026-07-25 (item S of the UI polish batch): the old text was "try Menu -> Resume, or
@@ -7027,7 +7339,7 @@ function gDigest(){
 function checkStateDigest(afterSeq,digest){
   if(!G)return;
   if(NET.appliedSeq===afterSeq){
-    if(gDigest()!==digest)netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token,protocolVersion:PROTOCOL_VERSION});
+    if(gDigest()!==digest)netSend(Object.assign({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token,protocolVersion:PROTOCOL_VERSION},acctField()));
     NET.pendingStateCheck=null;
   }else if(NET.appliedSeq<afterSeq){
     NET.pendingStateCheck={afterSeq,digest};
@@ -7181,7 +7493,7 @@ function scheduleReconnect(){
   updateConnIndicator();
   setTimeout(()=>{
     connectWs().then(()=>{
-      netSend({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token,protocolVersion:PROTOCOL_VERSION});
+      netSend(Object.assign({type:'rejoin',code:NET.code,playerId:NET.playerId,token:NET.token,protocolVersion:PROTOCOL_VERSION},acctField()));
     }).catch(()=>{ NET.reconnecting=false; scheduleReconnect(); });
   // v0.22 P4: small jitter (±15%) so several family phones dropped by the same network blip
   // don't all retry in lockstep - the standard reconnect-backoff recommendation, one line.
@@ -8170,7 +8482,7 @@ function handleNetMessage(m){
       // "reclaim"/"reclaimed" below and server.js/server.ts's matching `reason:"started"`).
       if(m.reason==='started'&&JOIN.code&&JOIN.name){
         $('joinErr').textContent='That game already started - trying to get you back into your seat…';
-        netSend({type:'reclaim',code:JOIN.code,name:JOIN.name,protocolVersion:PROTOCOL_VERSION});
+        netSend(Object.assign({type:'reclaim',code:JOIN.code,name:JOIN.name,protocolVersion:PROTOCOL_VERSION},acctField()));
         return;
       }
       $('joinErr').textContent=m.message;
@@ -8448,7 +8760,9 @@ function hostCreateRoom(tableSpeed){
   const myName=(seats.find(s=>s.type==='human')||{}).name||'Host';
   NET.wantConnection=true;
   connectWs().then(()=>{
-    netSend({type:'host',protocolVersion:PROTOCOL_VERSION,name:myName,n:CFG.n,teams:CFG.teams,seats,speed:tableSpeed});
+    // v0.40: `acct` (see acctField()) - the session token, sent only when signed in. The server
+    // resolves it once, here at the front door, and stores the uid on this room's player record.
+    netSend(Object.assign({type:'host',protocolVersion:PROTOCOL_VERSION,name:myName,n:CFG.n,teams:CFG.teams,seats,speed:tableSpeed},acctField()));
   }).catch(err=>{ $('onlineErr').textContent=err.message; NET.wantConnection=false; });
 }
 // v0.14: host seat choice + rename (Blake: "won't let me select my slot/player and doesn't
@@ -8637,7 +8951,7 @@ function joinSubmitName(){
   // and the account circle in step with it rather than letting the two drift apart.
   try{ setChosenName(name); }catch(e){}
   NET.wantConnection=true;
-  connectWs().then(()=>{ netSend({type:'join',protocolVersion:PROTOCOL_VERSION,code:JOIN.code,name}); })
+  connectWs().then(()=>{ netSend(Object.assign({type:'join',protocolVersion:PROTOCOL_VERSION,code:JOIN.code,name},acctField())); })
     .catch(err=>{ $('joinErr').textContent=err.message; NET.wantConnection=false; });
 }
 function advanceJoinToSeatStep(){
@@ -9210,6 +9524,26 @@ const ACCT_FALLBACK_BG='#3b6f52', ACCT_FALLBACK_INK='#f6efdd';
 /* The signed-in account, or null for a guest. Declared up here rather than down in
    § ACCOUNT SIGN-IN where the rest of it lives, purely so renderAccountPanel() below can read it
    with no temporal-dead-zone hazard if anything ever renders the panel during boot. */
+/* v0.40 (2026-07-26) - ACCOUNT IDENTITY ON THE WIRE. THE BUG THIS FIXES, PLAINLY.
+   The server has had account attribution since 2026-07-25: with
+   NASTY_LEADERBOARD_ACCOUNTS_ONLY on, an ONLINE result is credited to whatever `accountId` the
+   room stored for that seat (captured once at the front door from an optional `acct` field on
+   host/join), and a SOLO result is credited only when POST /solo-result carries an `auth`
+   session token whose account owns the submitted name. THE CLIENT HAS NEVER SENT EITHER FIELD.
+   So for the whole time the switch was on, every result from every player - signed in or not -
+   was silently dropped: /solo-result still answered 200, so no phone ever retried, and those
+   games are gone. The switch has been turned back off; these two functions are what has to
+   exist before it can ever be turned back on.
+   acctToken() is the ONE place that decides what goes on the wire, so there is one answer to
+   "is this device signed in right now" and it cannot drift between call sites. It returns "" for
+   a guest, and acctField() then omits the key entirely rather than sending an empty string - a
+   guest's host/join/rejoin/reclaim message stays byte-identical to what v0.39 sent, which is
+   what keeps "guests keep working exactly as now" true by construction rather than by testing.
+   The token is the same short-lived session token the account routes already use; the server
+   resolves it and stores only the resulting uid, and an unresolvable token is ignored rather
+   than being an error, because a sign-in problem must never stop somebody joining a game. */
+function acctToken(){ return (ACCT&&typeof ACCT.token==='string'&&ACCT.token)?ACCT.token:''; }
+function acctField(){ const t=acctToken(); return t?{acct:t}:{}; }
 let ACCT=null;              // {token, uid, gameName, identities[], ...} once signed in
 let ACCT_BUSY=false;        // a sign-in or a delete is in flight - the rows go quiet meanwhile
 let ACCT_NOTICE='';         // one-shot plain-language line under the account rows
@@ -10271,16 +10605,63 @@ function queueSoloResult(gameId,entries,epoch){
   q.push({gameId,entries,epoch,ts:Date.now()});
   saveSoloQueue(q);
 }
+/* v0.40 (2026-07-26) - THE SOLO HALF OF THE ATTRIBUTION FIX, and the part that made the loss
+   invisible. POST /solo-result has accepted an optional `auth` session token since 2026-07-25;
+   with NASTY_LEADERBOARD_ACCOUNTS_ONLY on, that token is the ONLY way a solo/pass-and-play result
+   can reach the shared board. The client never sent it, and the server answers 200 either way, so
+   every solo result was accepted, dropped, and never retried. Two changes:
+
+   1. `auth` now rides along whenever this device is signed in (acctToken(), § ACCOUNT SIGN-IN).
+      Omitted entirely for a guest, so a guest's request body is byte-identical to v0.39's.
+   2. The reply is now READ rather than discarded. The server tells us `accountsOnly` (is the
+      switch on) and `credited` (which names actually landed). If the switch is on and nothing
+      was credited, that is recorded locally - see noteUncredited() - instead of vanishing.
+
+   WHY THE TOKEN IS NOT STORED IN THE OFFLINE QUEUE. A queued result is retried later, possibly
+   days later, and this reads the session that is live AT RETRY TIME. That means no copy of a
+   session token is ever written into a second storage key, an expired token is never replayed,
+   and signing out genuinely makes the queued result a guest result. The alternative - freezing a
+   token into the queue - would keep a credential on disk for days to buy an edge case nobody has
+   asked for. Stated plainly because it IS a behaviour: play solo signed in, go offline, sign out,
+   come back online, and that queued game posts as a guest.
+
+   THE NAME RULE, ALSO STATED RATHER THAN PAPERED OVER. The server credits an entry only when the
+   submitted name folds to the ACCOUNT's own game name (leaderboardNameKey(clean) ===
+   me.account.nameFolded). A signed-in player who plays under a different name on this phone is
+   therefore NOT credited, and with the switch on that result does not reach the board at all.
+   That is the server's existing rule and this fix does not change it; it just stops it being
+   silent. In practice signing in sets this phone's name to the account's game name (see
+   afterSignIn()), so the two match unless somebody deliberately renames afterwards. */
+const LB_UNCREDITED_KEY='nasty-lb-uncredited';
+/* Deliberately NOT a retry: the server has already marked this gameId seen, so retrying could
+   only ever be answered `duplicate`. This is a local record and a console line, capped at the
+   last 20, so a future session (or Blake asking "why is my win not on the board") has something
+   factual to read instead of a shrug. It is exposed on window for the attribution suite. */
+function noteUncredited(gameId,entries,why){
+  try{
+    const q=JSON.parse(localStorage.getItem(LB_UNCREDITED_KEY)||'[]');
+    q.push({gameId,why,names:(entries||[]).map(e=>e&&e.name).filter(Boolean),ts:Date.now()});
+    localStorage.setItem(LB_UNCREDITED_KEY,JSON.stringify(q.slice(-20)));
+  }catch(e){}
+  try{ console.log('[nasty] leaderboard did not credit this result:',why,gameId); }catch(e){}
+}
+window.__lbUncredited=()=>{ try{ return JSON.parse(localStorage.getItem(LB_UNCREDITED_KEY)||'[]'); }catch(e){ return []; } };
 async function submitSoloResult(gameId,entries,epoch){
   const wsUrl=await resolveWsUrl();
+  const body={gameId,entries,epoch};
+  const t=acctToken();
+  if(t)body.auth=t;              // signed in: the server needs this to credit the account
   const r=await fetch(wsToHttp(wsUrl)+'/solo-result',{
     method:'POST',headers:{'content-type':'application/json'},
-    body:JSON.stringify({gameId,entries,epoch}),
+    body:JSON.stringify(body),
   });
   let j=null; try{ j=await r.json(); }catch(e){}
   if(j&&Number.isFinite(j.epoch))adoptEpoch(j.epoch);
   if(r.status===409)return;   // stale epoch - server already rejected it for good, nothing to retry
   if(!r.ok)throw new Error('solo-result submit failed: '+r.status);
+  // Older servers answer without these two keys; then there is nothing to say and we say nothing.
+  if(j&&j.accountsOnly&&Array.isArray(j.credited)&&j.credited.length===0&&!j.duplicate)
+    noteUncredited(gameId,entries,t?'signed in, but the shared board credited nothing (name may not match the account name)':'not signed in - the shared board is accounts only right now');
 }
 async function submitOrQueueSoloResult(gameId,entries,epoch){
   try{ await submitSoloResult(gameId,entries,epoch); }

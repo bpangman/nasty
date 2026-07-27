@@ -333,7 +333,12 @@ async function partC(browser) {
     "C7 the ADMIN escape hatch is still spelled out, word for word");
   ok(/Accounts are for ages 13 and up\. Anyone younger should continue as a guest\./.test(g.visibleText),
     "C8 the age sentence is untouched, factual and unexcited - no exclamation mark on a policy line");
-  ok(/Guests can play every single thing\. They just do not appear on the leaderboard\./.test(g.visibleText),
+  // v0.40 (2026-07-26): Blake reworded this line to "Guests can play every game mode - they just do
+  // not appear on the leaderboard." The point of C9 was never the phrasing, it was that the line is
+  // FACTUAL and carries no exclamation mark, so it now asserts that contract instead. The v0.40
+  // wording is pinned verbatim in test_ui_v040_2026_07_26.js part B.
+  ok(/guests can play/i.test(g.visibleText) && /do not appear on the leaderboard\./.test(g.visibleText)
+    && !/Guests can play[^.!]*!/.test(g.visibleText),
     "C9 the guest/leaderboard consequence is stated plainly, also unexcited");
   ok(!/family/i.test(g.allText), "C10 the word 'family' appears nowhere on the screen");
   ok(!/[—–]/.test(g.allText), "C11 no em or en dashes anywhere in the copy");
@@ -351,7 +356,7 @@ async function partC(browser) {
   const wst = await web.page.evaluate(() => ({ apple: window.__welcome.appleVisible(), note: window.__welcome.appleNoteVisible(), web: window.__welcome.webNoteVisible() }));
   ok(wst.apple === false && wst.note === false && wst.web === true,
     "C13 on the website there is no Apple button, so the sentence about it is hidden too and the honest 'coming soon' note shows (v0.36 behaviour kept)");
-  ok(/Guests can play every single thing/.test(wg.visibleText) && /ages 13 and up/.test(wg.visibleText),
+  ok(/Guests can play every game mode/.test(wg.visibleText) && /ages 13 and up/.test(wg.visibleText),
     "C14 the website variant still carries the guest and age sentences");
   ok(!/family/i.test(wg.allText) && !/[—–]/.test(wg.allText), "C15 website variant: no family, no dashes");
   await web.ctx.close();
@@ -439,7 +444,8 @@ function partE() {
     ["the claim-your-name warning", /This cannot be undone\. You can only do this once, for one name, and the offer goes away for good afterwards\./],
     ["the claim-your-name question", /<b id="acctClaimTitle">Is this you\?<\/b>/],
     ["the age line", /Accounts are for ages 13 and up\. Anyone younger should continue as a guest\./],
-    ["the guest/leaderboard line", /Guests can play every single thing\. They just do not appear on the leaderboard\./],
+    // v0.40: reworded by Blake, still flat and factual - see part B of the v0.40 suite.
+    ["the guest/leaderboard line", /Guests can play every game mode - they just do not appear on the leaderboard\./],
     ["the leaderboard points rules", /Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a person - people only, CPUs never show up here\./],
     ["the leaderboard KO rules", /Ratio = KOs per KO'd \(Perfect = never been KO'd yet\) - people only, CPUs never show up here\./],
     ["the signed-out message", /Signed out\. Everything on this phone works exactly the same\./],

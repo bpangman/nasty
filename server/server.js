@@ -835,7 +835,12 @@ async function handleSoloResult(req, res) {
     credited = sanitized.map((s) => s.clean);
   }
   log("solo result recorded", gameId, credited.join(","));
-  sendJson(res, 200, { ok: true, epoch: leaderboardEpoch });
+  /* v0.40 (2026-07-26): the reply now SAYS what it did. Until now this was a bare
+     {ok:true,epoch}, so a client could not tell the difference between "recorded" and "accepted
+     and silently dropped because the account-only switch is on and you did not send `auth`" -
+     which is exactly the failure that lost a run of real games. Both keys are additive; an older
+     client simply ignores them, so no protocol bump. Twin of server.ts's. */
+  sendJson(res, 200, { ok: true, epoch: leaderboardEpoch, accountsOnly: accountsOnlyBoard(), credited });
 }
 
 /* =======================================================================================
@@ -3362,6 +3367,15 @@ wss.on("connection", (ws, req) => {
           return;
         }
         p.connected = true; p.ws = ws;
+        /* v0.40 (2026-07-26) § ACCOUNTS - UPGRADE ONLY, and the "only" is the whole design.
+           `acct` was captured once at the front door, which left one real hole: somebody who
+           joined as a guest, signed in DURING the game, and then reconnected still had a null
+           accountId and lost their result under the account-only switch. A rejoin may therefore
+           now FILL a missing accountId - and nothing else. It can never overwrite one that is
+           already set and it can never clear one, so an expired or missing session on a
+           reconnect still cannot cost anybody their stats, which was the original reason rejoin
+           did not touch identity at all. Twin of server.ts's. */
+        if (p.accountId == null) { const up = resolveAcctField(msg); if (up) p.accountId = up; }
         identify(room, playerId);
         touch(room);
         const isHost = playerId === room.hostPlayerId;
@@ -3421,7 +3435,10 @@ wss.on("connection", (ws, req) => {
             return;
           }
           const reqId = newToken();
-          pendingReclaims.set(reqId, { code, targetPlayerId: target.id, ws, expires: Date.now() + RECLAIM_TIMEOUT_MS });
+          // v0.40: the contested branch resolves the challenger's identity NOW, while their
+        // `acct` field is in hand, and carries it to reclaimApprove below - the host's approval
+        // message obviously cannot carry the challenger's session token.
+        pendingReclaims.set(reqId, { code, targetPlayerId: target.id, ws, accountId: resolveAcctField(msg), expires: Date.now() + RECLAIM_TIMEOUT_MS });
           send(hostP.ws, { type: "reclaimRequest", reqId, name: target.name });
           send(ws, { type: "reclaimPending", message: `${target.name} looks like they're already connected - asking the host to confirm.` });
           log("reclaim contested, asked host", code, target.id, "ip="+ip);
@@ -3429,6 +3446,11 @@ wss.on("connection", (ws, req) => {
         }
         target.token = newToken();
         target.ws = ws; target.connected = true;
+        /* v0.40 (2026-07-26) § ACCOUNTS: reclaim is "a DIFFERENT device is taking this seat by
+           name", so unlike rejoin it re-asserts identity OUTRIGHT, including to null. Leaving the
+           previous occupant's accountId in place would credit their account for a game somebody
+           else finished, which is worse than crediting nobody. Twin of server.ts's. */
+        target.accountId = resolveAcctField(msg);
         identify(room, target.id);
         touch(room);
         const isHost = target.id === room.hostPlayerId;
@@ -3451,6 +3473,7 @@ wss.on("connection", (ws, req) => {
         const oldWs = target.ws;
         target.token = newToken();
         target.ws = pending.ws; target.connected = true;
+        target.accountId = pending.accountId || null;   // v0.40: see the reclaim case above
         if (pending.ws.identify) pending.ws.identify(room, target.id);
         touch(room);
         if (oldWs && oldWs !== pending.ws) { try { send(oldWs, { type: "kicked", message: "Someone else took over your seat." }); oldWs.terminate(); } catch (e) {} }

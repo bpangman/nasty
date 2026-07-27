@@ -156,7 +156,8 @@ async function partA(browser) {
   // everything a player reads, so the exact sentence this pinned is gone. The CONTRACT is
   // unchanged and still asserted - the screen must still tell a guest, in plain words, that they
   // will not be on the leaderboard - it just no longer pins one phrasing. New copy: "Guests can
-  // play every single thing. They just do not appear on the leaderboard."
+  // play every game mode - they just do not appear on the leaderboard." (reworded again in v0.40;
+  // this assertion is phrasing-independent on purpose and did not need touching either time.)
   ok(/guests/i.test(copy) && /do not appear on the leaderboard/i.test(copy),
     "A3 it still says plainly that guests are not on the leaderboard");
   ok(!/family/i.test(copy), "A3b the word family appears nowhere on the first-run screen (Blake, 2026-07-26)");

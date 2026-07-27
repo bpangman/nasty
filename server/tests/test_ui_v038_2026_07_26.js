@@ -192,8 +192,14 @@ async function partC(browser) {
      wording lives in test_ui_v039_2026_07_26.js part C, which is where it belongs. */
   ok(/wins/i.test(g.copy) && /takeouts/i.test(g.copy) && /bragging rights/i.test(g.copy) && /stay yours/i.test(g.copy),
     "C1 the welcome note still promises that signing in keeps your record yours");
-  ok(g.copy.includes("Guests can play every single thing. They just do not appear on the leaderboard."),
-    "C2 the new guest fine print is there, verbatim");
+  /* v0.40 (2026-07-26): DELIBERATELY REPLACED. Blake reworded this one line - "Guests can play
+     every game mode - they just do not appear on the leaderboard." - so the v0.38 phrasing this
+     pinned no longer exists. Same treatment C1 got in v0.39 and this suite gave the v0.36
+     assertion before that: keep the CONTRACT (a guest is told plainly they will not be on the
+     leaderboard) and stop pinning one sentence here. Verbatim pinning of the v0.40 wording lives in
+     test_ui_v040_2026_07_26.js part B, where it belongs. */
+  ok(/guests can play/i.test(g.copy) && /do not appear on the leaderboard/i.test(g.copy),
+    "C2 the guest fine print still says plainly that a guest is not on the leaderboard");
   ok(/Accounts are for ages 13 and up\. Anyone younger should continue as a guest\./.test(g.copy),
     "C3 the age sentence is untouched and still factual");
   /* v0.39 (2026-07-26): DELIBERATELY REPLACED, and this is the one assertion in this suite that had

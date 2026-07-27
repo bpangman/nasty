@@ -41,6 +41,15 @@
 //
 // PART C is a positive control: a deliberately PEEKING policy is run through the same harness and
 // must FAIL the invariant. Without that, a test that passes proves nothing about its own power.
+//
+// v0.40 (2026-07-26) EXTENDED THE GUARD AGAIN. The Nasty tier gained a hand-block planner
+// (planClone()/handPlanValue()) and shared-determinization rollouts. The planner is the stricter
+// of the two by design - it is handed the public board and the acting seat's OWN cards and
+// literally nothing else - and the shared worlds still go through cloneG(). PART A now pins
+// planClone()'s exact own-hand-only copy idiom, its empty deck, and the fact that the shared
+// worlds are seeded from the engine's own RNG stream (which is precisely what keeps PART B's
+// reseed-and-compare able to detect a change). PART B and PART C are unchanged and now exercise
+// the new code path on every "hard" position they visit.
 // ==============================================================================================
 const path = require("path");
 const fs = require("fs");
@@ -117,6 +126,30 @@ function partA() {
     "cloneG() canonicalises the hidden pool with a sort before shuffling it - the property PART B relies on");
   check(/for\(let i=pool\.length-1;i>0;i--\)/.test(cloneGBody),
     "cloneG() still reshuffles the hidden pool (the v0.21 fairness fix is intact)");
+
+  // ---- v0.40 (2026-07-26): the hand-block planner ------------------------------------------
+  // planClone() is the second - and much stricter - throwaway state in § AI. cloneG() ANONYMISES
+  // hidden cards so a rollout can imagine the whole table's future; planClone() does not imagine
+  // anybody else's turn at all, so it is handed nothing hidden in the first place: every other
+  // seat gets an EMPTY hand and the deck is EMPTY. That is fairness by construction rather than by
+  // anonymisation, and it is only true as long as the copy stays written exactly this way, so the
+  // exact idiom is pinned here. Note it is checked against the COMMENT-STRIPPED code, so a comment
+  // describing the idiom cannot satisfy it. (It also passes the blunt scan above on its own merits:
+  // `G.hands.map(...)` is not a `G.hands[...]` card read, and there is no G.deck read in it.)
+  check(/G\.hands\.map\(\(h,s\)=>s===seat\?h\.slice\(\):\[\]\)/.test(code),
+    "planClone() copies ONLY the acting seat's own hand - every other seat gets an empty hand");
+  check(/deck:\[\]/.test(code),
+    "planClone() gives the planner an EMPTY deck - it can never look at an undealt card");
+  // The shared-determinization rollout repoints Math.random at a seeded stream so every candidate
+  // is judged in the same imagined worlds (see § AI HAND-BLOCK PLANNING in index.html). The seeds
+  // come from the engine's own RNG stream, which is what keeps PART B's "reseed Math.random
+  // identically, expect the identical decision" grip on this code. If a future session ever seeds
+  // those worlds from something that is NOT the engine RNG (a clock, a counter, crypto), PART B
+  // silently stops proving anything - so the seed source is pinned too.
+  check(/seeds\.push\(\(Math\.random\(\)\*0x7fffffff\)\|0\)/.test(code),
+    "the shared imagined worlds are seeded from the engine's own RNG stream (what PART B's reseed relies on)");
+  check(/Math\.random=realRandom/.test(code),
+    "the real Math.random is restored after the shared-world rollouts (in a finally block)");
 }
 
 // ==============================================================================================
