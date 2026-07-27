@@ -37,13 +37,41 @@
     § ANIM ........ card flights, tee hops, NASTY blast, dealing, confetti
     § TURNS ....... async turn loop (humans + CPUs) - network-aware (see § NET) but the
                     offline path is untouched
-    § UI .......... hand, card/piece selection, modals, menu
+    § UI .......... hand, card/piece selection, modals, menu. v0.42: the offline setup screen
+                    no longer creates pass-and-play games - it only picks each seat's CPU
+                    difficulty. WHICH seat is human is chosen in a new seat-picker popup
+                    (openOfflineSeatPicker()) shown when "Start game" is tapped. Old saves with
+                    2+ human seats still resume and play exactly as before - only the UI that
+                    CREATES a new local game changed.
     § NET ......... online multiplayer: WS client, host/join lobby UI, deterministic
-                    lockstep (server in /server, see HANDOFF.md "Online multiplayer")
-    § ACCOUNT ..... the ADMIN button's panel: rules, sound, table speed, name, connection
-    § ACCOUNT SIGN-IN ... Sign in with Apple (iPhone app only) + the one-time name claim
-    § WELCOME ..... the sign-in screen, shown once per app version (v0.36; per-version in v0.39)
+                    lockstep (server in /server, see HANDOFF.md "Online multiplayer").
+                    v0.42: ACCOUNTS-ONLY - no guest join anymore. requireAccountThen() gates
+                    every entry point (Host, Join, a ?join=CODE link, a Universal Link) on
+                    being signed in first; a signed-out tap opens § WELCOME's sign-in screen
+                    and resumes the original action (ONLINE_PENDING) once it completes. The
+                    join flow's old "type your name" step is gone - the name on the wire is
+                    always ACCT.gameName.
+    § ACCOUNT ..... the ADMIN button's panel: rules, sound, table speed, name, connection.
+                    v0.42: chosenName() is now "signed in -> the account's name; guest -> the
+                    seat's own stock name" - guests no longer have a persistent nickname, so
+                    "Change your name" is disabled for them with a plain sentence.
+    § ACCOUNT SIGN-IN ... Sign in with Apple (iPhone app only). v0.42: a BRAND-NEW account is
+                    blocked on a mandatory nickname right here - bindAccountName() opens a
+                    full-screen prompt (openNicknameGate()) that cannot be skipped or dismissed
+                    and loops on the server's own message until POST /account/name returns 200.
+                    A RETURNING sign-in (the account already has a gameName) is unchanged -
+                    silently adopts it, no prompt. Also: the one-time name claim.
+    § WELCOME ..... the sign-in screen, shown once per app version (v0.36; per-version in v0.39).
+                    v0.42: also reused (via requireAccountThen(), § NET) as the "sign in before
+                    you can play online" gate for anyone who isn't signed in yet.
+    § COMING SOON . v0.43: the public website's "coming soon" screen. Gated on
+                    NASTY_WEBSITE_GATE_ENABLED (§ CAPACITOR, near IS_APP) - true shows this
+                    INSTEAD of #menu/#game on the web (the app is unaffected, IS_APP always
+                    bypasses it); #autotest/#autotest6 and ?preview=1 also always bypass it. The
+                    QR on this screen is a LOUD, DATED PLACEHOLDER (§ CAPACITOR) - do not ship a
+                    real launch without replacing it, see that comment and HANDOFF.md "v0.43".
     Autotest: open with #autotest (4p FFA all-CPU) or #autotest6 (6p teams) - fast-forwards a full game.
+    Preview the real site while the gate is up: append ?preview=1 to the URL (v0.43).
 
   v0.8 additions (pause, save/resume, lifecycle survival - see HANDOFF.md "v0.8"):
     - Pause: G.paused + pauseGate()/setPaused() in § TURNS, gates the top of runTurn() only
@@ -346,6 +374,29 @@
       relay, server/cloud/server.ts + server.js twin) serves the apple-app-site-association
       file plus a GET /join/:CODE redirect page for anyone without the app - see § CAPACITOR
       for the client-side appUrlOpen/getLaunchUrl routing into the existing join flow.
+
+  (v0.15 through v0.41 are documented in HANDOFF.md, not here - this running log stopped being
+  kept in-file once the section-by-section header comments took over that job.)
+
+  v0.42 (2026-07-27 - names/seats pass, three linked changes, see HANDOFF.md for the full
+  readout):
+    - Nicknames are created at account creation, not adopted from whatever the phone happened
+      to be using: a brand-new Sign in with Apple is now blocked on a mandatory nickname prompt
+      (bindAccountName()/openNicknameGate(), § ACCOUNT SIGN-IN) that cannot be skipped and loops
+      on the server's own message until it is accepted. A returning sign-in is unchanged.
+    - Pass-and-play is gone as a way to CREATE a local game - one human seat per phone, the
+      rest are CPUs. The setup screen (§ MENU) no longer has a per-seat name box or a Human/CPU
+      dropdown, only each seat's CPU difficulty; tapping "Start game" opens a new seat-picker
+      popup built from the same .lobbySeat look the online lobby uses (openOfflineSeatPicker()).
+      Old saves with 2+ human seats still resume and play exactly as before - the engine and
+      the pass-the-phone overlay were not touched, only the screen that creates a NEW game.
+    - Online is accounts-only - no guests. requireAccountThen() (§ NET) gates Host, Join, and
+      every ?join=CODE/Universal Link invite on being signed in first (which now includes
+      picking a nickname, per the first item above); the join flow's old "type your name" step
+      is gone, since the name on the wire is always the account's.
+    - chosenName() (§ ACCOUNT) is reworked for the new source of truth: signed in -> the
+      account's name; guest -> the stock name of whichever seat they are sitting in. Guests no
+      longer have a persistent nickname anywhere in the app.
 -->
 </head>
 <body>
@@ -618,16 +669,17 @@ button{font:inherit;cursor:pointer}
 }
 .seatRow .dot{width:var(--seatDot);height:var(--seatDot);border-radius:50%;flex:none;
   border:2px solid rgba(255,255,255,.6);box-sizing:border-box}
-/* v0.24: .nameWrap wraps the name input so a pencil glyph can sit inside it - Blake's ask was
-   to make it obvious the name is tappable/editable (nothing signaled it before). pointer-events:
-   none on the glyph so taps still land on the input underneath it. */
-.seatRow .nameWrap{position:relative;flex:1 1 0;min-width:0}
-.seatRow .nameWrap input{width:100%;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.18);
-  border-bottom:1px solid rgba(244,197,66,.55);border-radius:8px;color:var(--cream);
+/* 2026-07-27 (Blake): local play is one human seat now, chosen in a popup when "Start game" is
+   tapped (openOfflineSeatPicker(), § MENU) - this row is READ-ONLY (dot + stock name +
+   difficulty), not a tappable name box anymore. The whole v0.24 "make it obvious the name is
+   editable" affordance (the pencil glyph, the one-time "Tap a name to change it" hint) went
+   away with it, since there is nothing left here to edit. .seatName keeps the exact sizing
+   budget .nameWrap measured (flex:1 1 0, min-width:0, same font-size var) so the
+   four-controls-on-one-line math in the comment above is untouched by dropping to three. */
+.seatRow .seatName{flex:1 1 0;min-width:0;display:flex;align-items:center;
   padding:8px var(--seatNamePadR) 8px var(--seatNamePadL);font-size:var(--seatNameFS);
-  min-height:44px;box-sizing:border-box}
-.seatRow .nameWrap .editPencil{position:absolute;right:4px;top:50%;transform:translateY(-50%);
-  font-size:11px;opacity:.7;pointer-events:none}
+  color:var(--cream);font-weight:600;min-height:44px;box-sizing:border-box;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .seatRow select{appearance:none;-webkit-appearance:none;
   background-color:rgba(0,0,0,.35);
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%23f4ecd8' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -635,7 +687,6 @@ button{font:inherit;cursor:pointer}
   border:1px solid rgba(255,255,255,.18);border-radius:8px;color:var(--cream);
   padding:8px var(--seatSelPadR) 8px var(--seatSelPadL);font-size:var(--seatSelFS);
   min-height:44px;flex:0 0 auto;min-width:0;text-overflow:ellipsis}
-#nameHint{font-size:12.5px;color:#9ec7aa;min-height:16px;margin:0 2px 4px;text-align:center}
 .bigBtns{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:18px}
 /* v0.26 item 2: the HOST speed picker only (#hostSpeedOverlay's #hostSpeedBtns) - a real 2x2
    grid instead of .bigBtns' generic flex-wrap column, per Blake's ask. Deliberately NOT
@@ -1906,6 +1957,29 @@ button{font:inherit;cursor:pointer}
   #welcomeOverlay .welcomeNote{font-size:12.5px;line-height:1.5}
   #welcomeOverlay .welcomeFine{font-size:12px;line-height:1.45}
 }
+
+/* ---------- Coming soon (v0.43, 2026-07-27 - see § CAPACITOR/§ COMING SOON for the gate) ----------
+   Blake: "cover the website in a coming soon badge for now." This is its OWN full screen, same
+   shape as #menu (fixed, felt background inherited from body, the same .sign badge and .tag
+   styling #menu already uses) rather than an overlay stacked on anything - the menu/game are
+   never rendered while this is up (see the boot sequence at the bottom of this file), so no
+   design token is invented here, only reused. */
+#comingSoon{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;text-align:center;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  padding:calc(26px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom))}
+#comingSoon .csNote{margin:2px auto 0;max-width:340px;color:#a9d2b5;font-size:13px;line-height:1.55}
+/* The QR sits on its own cream card (var(--cream), the same off-white the road sign's lettering
+   and every card face in this app already use) rather than straight on the dark felt - a QR
+   scanner needs real light/dark contrast in the code itself, and the felt-green background does
+   not give the SVG's near-black modules enough of it up close. */
+#comingSoon .csQrCard{margin-top:24px;background:var(--cream);border-radius:16px;padding:14px;
+  width:132px;height:132px;box-shadow:0 10px 28px rgba(0,0,0,.4),inset 0 2px 0 rgba(255,255,255,.4);
+  display:flex;align-items:center;justify-content:center}
+#comingSoon .csQrCard img{width:100%;height:100%;display:block}
+#comingSoon .csQrLabel{margin-top:10px;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:#9ec7aa}
+#comingSoon .csLinks{margin-top:34px;font-size:13px;color:#7fa88c}
+#comingSoon .csLinks a{color:#a9d2b5;text-decoration:underline;text-underline-offset:3px}
+#comingSoon .csLinks span{margin:0 10px;opacity:.6}
 .lbScroll{margin:6px 0 10px}
 .lbTable{width:100%;border-collapse:collapse;table-layout:fixed;font-variant-numeric:tabular-nums}
 .lbTable th,.lbTable td{box-sizing:border-box;padding:6px 3px;font-size:clamp(10.5px,3.1vw,13.5px);
@@ -2110,8 +2184,6 @@ button{font:inherit;cursor:pointer}
     </div>
     <div id="teamNote"></div>
     <div id="seatList"></div>
-    <div id="nameHint"></div>
-    <div id="nameWarn" style="font-size:12.5px;color:#ff9a9a;min-height:16px;margin:2px 2px 0"></div>
     <div class="bigBtns">
       <button class="btn primary" id="btnStart">Start game</button>
       <button class="btn ghost" id="btnOnline">Online play</button>
@@ -2121,7 +2193,25 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.41</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.43</span> &nbsp;·&nbsp; Est. 1993</div>
+</div>
+
+<!-- ================= COMING SOON (v0.43, 2026-07-27) =================
+     Shown instead of #menu/#game on the public website while NASTY_WEBSITE_GATE_ENABLED is on
+     (see § CAPACITOR, top of the script below, for the flag and the three things that always
+     bypass it: the iOS app, #autotest/#autotest6, and Blake's own ?preview=1). renderComingSoon()
+     (§ COMING SOON, near § ADMIN) fills in #csQrImg and unhides this div; nothing else on this
+     screen needs JS. Starts hidden (class="hidden") because #menu itself starts visible by
+     default in the markup - the boot sequence (bottom of this file) is what decides which of the
+     two actually gets shown, hiding #menu in favor of this one when the gate is up. -->
+<div id="comingSoon" class="hidden">
+  <div class="sign"><b>NASTY</b></div>
+  <div class="estTop">Est. 1993</div>
+  <p class="tag">The Nasty app is coming soon to the App Store.</p>
+  <p class="csNote">Online play happens right in the iPhone app. Got a game invite link? Open it on your iPhone with the Nasty app once it's live.</p>
+  <div class="csQrCard"><img id="csQrImg" alt="QR code for the App Store listing"></div>
+  <div class="csQrLabel">Scan for the App Store</div>
+  <div class="csLinks"><a href="privacy.html">Privacy</a><span>&middot;</span><a href="support.html">Support</a></div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -2339,25 +2429,21 @@ button{font:inherit;cursor:pointer}
   </div>
 </div>
 
-<!-- Join: enter code + name, then wait for host -->
+<!-- Join: enter code, then wait for host. 2026-07-27 (Blake, change 3): the old "type your
+     name" step (#joinNameStep) is gone - online is accounts-only now, so the name on the wire
+     is always ACCT.gameName (set once, at account creation - see § ACCOUNT SIGN-IN). Continue
+     goes straight from the code to the seat step; see joinWithCode(), § NET. -->
 <div id="joinOverlay" class="overlay hidden">
   <div class="modalCard">
     <h3>Join a game</h3>
     <div id="joinCodeStep">
       <p>Enter the 4-letter room code your host sent you.</p>
-      <p style="font-size:13px;color:#9ec7aa">Had a game going? Enter its 4-letter code and your name - if your seat's still open, you'll be back in.</p>
+      <p style="font-size:13px;color:#9ec7aa">Had a game going? Enter its 4-letter code - if your seat's still open, you'll be back in.</p>
       <div class="optRow"><label>Room code</label>
         <input id="joinCodeInput" maxlength="4" style="text-transform:uppercase;font-size:20px;letter-spacing:.14em;
           width:110px;text-align:center;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.2);
           border-radius:8px;color:var(--cream);padding:8px"></div>
       <div class="bigBtns"><button class="btn primary" id="btnJoinCodeNext">Continue</button></div>
-    </div>
-    <div id="joinNameStep" class="hidden">
-      <p>What should we call you? (10 characters max)</p>
-      <div class="optRow"><label>Your name</label>
-        <input id="joinNameInput" maxlength="10" style="font-size:16px;width:160px;background:rgba(0,0,0,.25);
-          border:1px solid rgba(255,255,255,.2);border-radius:8px;color:var(--cream);padding:8px"></div>
-      <div class="bigBtns"><button class="btn primary" id="btnJoinNameNext">Continue</button></div>
     </div>
     <div id="joinSeatStep" class="hidden">
       <p>Pick an open seat.</p>
@@ -2405,6 +2491,48 @@ button{font:inherit;cursor:pointer}
       <li>Need to leave for good? Hand your seat to a CPU (under Pause).</li>
     </ul>
     <div class="bigBtns"><button class="btn primary" id="btnOnlineRulesOk">Got it, let's play</button></div>
+  </div>
+</div>
+
+<!-- 2026-07-27 (Blake): "get rid of the pass-and-play functionality for now. Only 1 human
+     player per phone, the rest are CPUs, unless they're playing online." Tapping "Start game"
+     on the setup screen opens THIS popup first (openOfflineSeatPicker(), § MENU) instead of
+     dealing straight away - the setup screen behind it no longer has any way to say WHICH seat
+     is human, only what CPU tier each seat should play at. Deliberately built from the SAME
+     .lobbySeat row markup/CSS the online lobby uses (renderJoinSeatStep()/renderRoomScreen(),
+     § NET) so it reads as the same kind of screen a player has already seen there, not a second,
+     different-looking control. Order of gates on Start: THIS popup, then the existing one-time
+     speed picker below, then the deal - see startGame()'s comment. -->
+<div id="offlineSeatOverlay" class="overlay hidden">
+  <div class="modalCard">
+    <h3>Pick your seat</h3>
+    <p>Everyone else at the table plays as a CPU. Tap a color to sit there.</p>
+    <div id="offlineSeatModeNote" style="font-size:13px;color:#cfe8d6;margin:2px 2px 4px"></div>
+    <div id="offlineSeatTeamNote" style="font-size:13px;color:#ffe9a8;margin:0 2px 8px;min-height:16px"></div>
+    <div id="offlineSeatList"></div>
+    <div class="bigBtns">
+      <button class="btn primary" id="btnOfflineSeatStart">Start game</button>
+      <button class="btn ghost" id="btnOfflineSeatCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- 2026-07-27 (Blake, change 1 of the same session): a BRAND-NEW Sign in with Apple account
+     has no nickname yet, and this app has no other way to know what to put on the leaderboard -
+     so this page is a genuine gate, not a dismissable dialog. No Cancel/Close button anywhere on
+     it: bindAccountName() (§ ACCOUNT SIGN-IN) opens it the moment a fresh account is confirmed
+     and only closes it once POST /account/name comes back 200 - see submitNicknameGate(). A
+     RETURNING sign-in (the account already has a name) never sees this at all. -->
+<div id="nicknameGateOverlay" class="overlay solid hidden">
+  <div class="modalCard">
+    <h3>Pick your leaderboard name</h3>
+    <p>This is the name everyone will see for you - on the table and on the leaderboard. You can change it later (Admin -&gt; Change your name), up to once every 30 days.</p>
+    <div class="optRow"><label>Your name</label>
+      <input id="nickGateInput" maxlength="10" aria-label="Your name" autocomplete="off" autocapitalize="words"
+        style="font-size:16px;width:160px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.2);
+        border-radius:8px;color:var(--cream);padding:8px"></div>
+    <div id="nickGateWarn" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
+    <div class="bigBtns"><button class="btn primary" id="btnNickGateSave">Save and play</button></div>
   </div>
 </div>
 
@@ -2554,7 +2682,9 @@ button{font:inherit;cursor:pointer}
     </div>
     <p class="welcomeFine" id="welcomeAppleNote">New here? It creates your account. Been here before? It signs you back in.</p>
     <p class="welcomeFine" id="welcomeWebNote">Signing in is coming soon on the website. In the iPhone app you can sign in with Apple.</p>
-    <p class="welcomeFine" id="welcomeGuestNote">Guests can play every game mode - they just do not appear on the leaderboard.</p>
+    <!-- 2026-07-27 (v0.42, change 3): online is accounts-only now, so this line can no longer
+         promise "every game mode" - a guest can still play offline, just not online. -->
+    <p class="welcomeFine" id="welcomeGuestNote">Guests can play offline against CPUs - they just do not appear on the leaderboard, and online play needs an account.</p>
     <p class="welcomeFine" id="welcomeAgeNote">Accounts are for ages 13 and up. Anyone younger should continue as a guest.</p>
     <p class="welcomeFine" id="welcomeAgainNote">You will see this again after every update. You can change it any time - tap ADMIN at the top of the game screen.</p>
   </div>
@@ -2623,7 +2753,11 @@ button{font:inherit;cursor:pointer}
            behind this full-screen panel) and the row is disabled for them. See
            $('btnAcctSpeed') and speedRowLabel(), § MENU. -->
       <button class="btn ghost acctRow" id="btnAcctSpeed">Table speed: Normal</button>
-      <button class="btn ghost acctRow" id="btnAcctName">Change your name</button>
+      <!-- 2026-07-27 (v0.42): a GUEST has no name to change anymore - chosenName() (§ ACCOUNT)
+           gives guests only their seat's stock name, never a nickname - so this row is disabled
+           for them with the <small> line saying why, instead of opening an editor that would
+           have nothing real to save. See renderAccountRows(). -->
+      <button class="btn ghost acctRow" id="btnAcctName">Change your name<small></small></button>
       <button class="btn ghost acctRow hidden" id="btnAcctReset">Fix my connection<small>Reconnects this phone to the online game</small></button>
       <!-- 2026-07-25 (the top-row rebuild): once the game is OVER the top row's left slot shows
            RESULTS, so the way back to the menu lives here (and on the win popup's own "Back to
@@ -2845,6 +2979,48 @@ button{font:inherit;cursor:pointer}
    path it always has. See HANDOFF.md "iOS app" for the full rundown. */
 const CAP=window.Capacitor;
 const IS_APP=!!(CAP&&CAP.isNativePlatform&&CAP.isNativePlatform());
+/* ============================= v0.43 website coming-soon gate (2026-07-27) ============================
+   Blake, verbatim: "Can we just cover the website in a coming soon badge for now and make it so
+   you can't play online... but still make sure the web version is following the latest updates
+   with the app just in case I want to turn it on down the line."
+
+   THE ON/OFF SWITCH. This one boolean is the whole gate - flip it back to false and the website
+   goes back to being the real, playable game exactly as it was before this change, nothing else
+   in this file has to move. Every future app update still lands in this same index.html either
+   way (this flag only decides what a plain browser is shown at BOOT - see the very bottom of this
+   file); the game/engine/online code is never deleted or forked, only skipped over on the web
+   while this is true.
+   When ON, a plain browser (IS_APP false) sees the coming-soon screen (renderComingSoon(), § COMING
+   SOON near § ADMIN) INSTEAD of the menu - #menu/#game are never rendered at all, so there is
+   nothing half-built sitting behind it (see the boot sequence for exactly how). THREE things always
+   bypass this flag, all deliberate, all checked at the boot sequence:
+     - the iOS app (IS_APP true) - this only ever gates the WEBSITE, the app is untouched;
+     - #autotest / #autotest6 - the headless soak tests (see HANDOFF.md "How to test"). They run
+       via file:// in a headless browser where IS_APP is false, and they are the only regression
+       test this project has, so they must never see this screen;
+     - ?preview=1 in the URL - Blake's own escape hatch to see/test the real site while the gate
+       stays up for everyone else (documented in HANDOFF.md "v0.43"). */
+const NASTY_WEBSITE_GATE_ENABLED=true;
+/* !!! PLACEHOLDER - REPLACE BEFORE GOING LIVE !!! (added 2026-07-27, v0.43)
+   The Nasty App Store listing does not exist yet. Until it does, the QR code on the coming-soon
+   screen - and the URL it encodes - point at a URL that is deliberately NOT a real destination, so
+   nobody can tap/scan through to something broken by accident.
+   WHEN THE REAL APP STORE LISTING IS LIVE, a future session must:
+     1. Get the real "https://apps.apple.com/app/id..." link from App Store Connect.
+     2. Regenerate the QR as a small SVG pointed at that real link (this session used
+        `pip3 install qrcode`, then qrcode.image.svg.SvgPathImage with a hand-added cream
+        background rect recolored to the app's --ink token - see HANDOFF.md's dated v0.43 entry
+        for the exact recipe/commands used, so it can be repeated instead of reinvented), base64
+        it, and swap PLACEHOLDER_APPSTORE_QR_DATAURI below for the new string.
+     3. Swap PLACEHOLDER_APPSTORE_URL below for the real link too - nothing reads this constant at
+        runtime yet (it exists so the intended destination is written down in plain text next to
+        the QR that encodes it, not just buried in a base64 blob), but keep it truthful.
+     4. Check this off in HANDOFF.md's prelaunch list too - it is noted there as well.
+   THIS EXACT PLACEHOLDER WAS VERIFIED to decode back to the URL below with `zbarimg` before it was
+   embedded (see HANDOFF.md's v0.43 entry, "Testing") - a future swap should be verified the same
+   way, not just assumed to have encoded correctly. */
+const PLACEHOLDER_APPSTORE_URL='https://nastyboardgame.com/coming-soon-placeholder';
+const PLACEHOLDER_APPSTORE_QR_DATAURI='data:image/svg+xml;base64,PHN2ZyB2ZXJzaW9uPSIxLjEiIHZpZXdCb3g9IjAgMCA0MSA0MSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iNDEiIGhlaWdodD0iNDEiIGZpbGw9IiNmYmY3ZWUiLz48cGF0aCBkPSJNNCw0SDVWNUg0ek01LDRINlY1SDV6TTYsNEg3VjVINnpNNyw0SDhWNUg3ek04LDRIOVY1SDh6TTksNEgxMFY1SDl6TTEwLDRIMTFWNUgxMHpNMTIsNEgxM1Y1SDEyek0xNSw0SDE2VjVIMTV6TTE3LDRIMThWNUgxN3pNMjAsNEgyMVY1SDIwek0yMSw0SDIyVjVIMjF6TTIyLDRIMjNWNUgyMnpNMjMsNEgyNFY1SDIzek0yNCw0SDI1VjVIMjR6TTI3LDRIMjhWNUgyN3pNMzAsNEgzMVY1SDMwek0zMSw0SDMyVjVIMzF6TTMyLDRIMzNWNUgzMnpNMzMsNEgzNFY1SDMzek0zNCw0SDM1VjVIMzR6TTM1LDRIMzZWNUgzNXpNMzYsNEgzN1Y1SDM2ek00LDVINVY2SDR6TTEwLDVIMTFWNkgxMHpNMTIsNUgxM1Y2SDEyek0xMyw1SDE0VjZIMTN6TTE0LDVIMTVWNkgxNHpNMTYsNUgxN1Y2SDE2ek0xNyw1SDE4VjZIMTd6TTIwLDVIMjFWNkgyMHpNMjIsNUgyM1Y2SDIyek0yNyw1SDI4VjZIMjd6TTI4LDVIMjlWNkgyOHpNMzAsNUgzMVY2SDMwek0zNiw1SDM3VjZIMzZ6TTQsNkg1VjdINHpNNiw2SDdWN0g2ek03LDZIOFY3SDd6TTgsNkg5VjdIOHpNMTAsNkgxMVY3SDEwek0xMyw2SDE0VjdIMTN6TTE0LDZIMTVWN0gxNHpNMTUsNkgxNlY3SDE1ek0xNiw2SDE3VjdIMTZ6TTE5LDZIMjBWN0gxOXpNMjEsNkgyMlY3SDIxek0yMyw2SDI0VjdIMjN6TTI0LDZIMjVWN0gyNHpNMjYsNkgyN1Y3SDI2ek0zMCw2SDMxVjdIMzB6TTMyLDZIMzNWN0gzMnpNMzMsNkgzNFY3SDMzek0zNCw2SDM1VjdIMzR6TTM2LDZIMzdWN0gzNnpNNCw3SDVWOEg0ek02LDdIN1Y4SDZ6TTcsN0g4VjhIN3pNOCw3SDlWOEg4ek0xMCw3SDExVjhIMTB6TTEyLDdIMTNWOEgxMnpNMTMsN0gxNFY4SDEzek0xNSw3SDE2VjhIMTV6TTE4LDdIMTlWOEgxOHpNMjAsN0gyMVY4SDIwek0yMyw3SDI0VjhIMjN6TTI0LDdIMjVWOEgyNHpNMjYsN0gyN1Y4SDI2ek0yNyw3SDI4VjhIMjd6TTI4LDdIMjlWOEgyOHpNMzAsN0gzMVY4SDMwek0zMiw3SDMzVjhIMzJ6TTMzLDdIMzRWOEgzM3pNMzQsN0gzNVY4SDM0ek0zNiw3SDM3VjhIMzZ6TTQsOEg1VjlINHpNNiw4SDdWOUg2ek03LDhIOFY5SDd6TTgsOEg5VjlIOHpNMTAsOEgxMVY5SDEwek0xNiw4SDE3VjlIMTZ6TTE3LDhIMThWOUgxN3pNMTgsOEgxOVY5SDE4ek0yMSw4SDIyVjlIMjF6TTI0LDhIMjVWOUgyNHpNMjgsOEgyOVY5SDI4ek0zMCw4SDMxVjlIMzB6TTMyLDhIMzNWOUgzMnpNMzMsOEgzNFY5SDMzek0zNCw4SDM1VjlIMzR6TTM2LDhIMzdWOUgzNnpNNCw5SDVWMTBINHpNMTAsOUgxMVYxMEgxMHpNMTQsOUgxNVYxMEgxNHpNMTUsOUgxNlYxMEgxNXpNMTcsOUgxOFYxMEgxN3pNMTgsOUgxOVYxMEgxOHpNMjIsOUgyM1YxMEgyMnpNMjMsOUgyNFYxMEgyM3pNMjQsOUgyNVYxMEgyNHpNMjUsOUgyNlYxMEgyNXpNMjYsOUgyN1YxMEgyNnpNMjgsOUgyOVYxMEgyOHpNMzAsOUgzMVYxMEgzMHpNMzYsOUgzN1YxMEgzNnpNNCwxMEg1VjExSDR6TTUsMTBINlYxMUg1ek02LDEwSDdWMTFINnpNNywxMEg4VjExSDd6TTgsMTBIOVYxMUg4ek05LDEwSDEwVjExSDl6TTEwLDEwSDExVjExSDEwek0xMiwxMEgxM1YxMUgxMnpNMTQsMTBIMTVWMTFIMTR6TTE2LDEwSDE3VjExSDE2ek0xOCwxMEgxOVYxMUgxOHpNMjAsMTBIMjFWMTFIMjB6TTIyLDEwSDIzVjExSDIyek0yNCwxMEgyNVYxMUgyNHpNMjYsMTBIMjdWMTFIMjZ6TTI4LDEwSDI5VjExSDI4ek0zMCwxMEgzMVYxMUgzMHpNMzEsMTBIMzJWMTFIMzF6TTMyLDEwSDMzVjExSDMyek0zMywxMEgzNFYxMUgzM3pNMzQsMTBIMzVWMTFIMzR6TTM1LDEwSDM2VjExSDM1ek0zNiwxMEgzN1YxMUgzNnpNMTIsMTFIMTNWMTJIMTJ6TTEzLDExSDE0VjEySDEzek0xNCwxMUgxNVYxMkgxNHpNMTYsMTFIMTdWMTJIMTZ6TTIxLDExSDIyVjEySDIxek0yMiwxMUgyM1YxMkgyMnpNMjQsMTFIMjVWMTJIMjR6TTI3LDExSDI4VjEySDI3ek0yOCwxMUgyOVYxMkgyOHpNNCwxMkg1VjEzSDR6TTYsMTJIN1YxM0g2ek03LDEySDhWMTNIN3pNOSwxMkgxMFYxM0g5ek0xMCwxMkgxMVYxM0gxMHpNMTEsMTJIMTJWMTNIMTF6TTEzLDEySDE0VjEzSDEzek0xNCwxMkgxNVYxM0gxNHpNMTgsMTJIMTlWMTNIMTh6TTIwLDEySDIxVjEzSDIwek0yMSwxMkgyMlYxM0gyMXpNMjMsMTJIMjRWMTNIMjN6TTI1LDEySDI2VjEzSDI1ek0yOCwxMkgyOVYxM0gyOHpNMzAsMTJIMzFWMTNIMzB6TTMzLDEySDM0VjEzSDMzek0zNSwxMkgzNlYxM0gzNXpNMzYsMTJIMzdWMTNIMzZ6TTQsMTNINVYxNEg0ek02LDEzSDdWMTRINnpNMTEsMTNIMTJWMTRIMTF6TTEyLDEzSDEzVjE0SDEyek0xMywxM0gxNFYxNEgxM3pNMTQsMTNIMTVWMTRIMTR6TTE2LDEzSDE3VjE0SDE2ek0yMCwxM0gyMVYxNEgyMHpNMjIsMTNIMjNWMTRIMjJ6TTIzLDEzSDI0VjE0SDIzek0yNCwxM0gyNVYxNEgyNHpNMjcsMTNIMjhWMTRIMjd6TTMwLDEzSDMxVjE0SDMwek0zMSwxM0gzMlYxNEgzMXpNMzMsMTNIMzRWMTRIMzN6TTM0LDEzSDM1VjE0SDM0ek0zNiwxM0gzN1YxNEgzNnpNNCwxNEg1VjE1SDR6TTcsMTRIOFYxNUg3ek04LDE0SDlWMTVIOHpNMTAsMTRIMTFWMTVIMTB6TTEyLDE0SDEzVjE1SDEyek0xMywxNEgxNFYxNUgxM3pNMTgsMTRIMTlWMTVIMTh6TTIwLDE0SDIxVjE1SDIwek0yMSwxNEgyMlYxNUgyMXpNMjUsMTRIMjZWMTVIMjV6TTI2LDE0SDI3VjE1SDI2ek0yNywxNEgyOFYxNUgyN3pNMjksMTRIMzBWMTVIMjl6TTMxLDE0SDMyVjE1SDMxek0zMiwxNEgzM1YxNUgzMnpNMzMsMTRIMzRWMTVIMzN6TTM2LDE0SDM3VjE1SDM2ek03LDE1SDhWMTZIN3pNOSwxNUgxMFYxNkg5ek0xMywxNUgxNFYxNkgxM3pNMTcsMTVIMThWMTZIMTd6TTE4LDE1SDE5VjE2SDE4ek0xOSwxNUgyMFYxNkgxOXpNMjAsMTVIMjFWMTZIMjB6TTIyLDE1SDIzVjE2SDIyek0yMywxNUgyNFYxNkgyM3pNMjgsMTVIMjlWMTZIMjh6TTMxLDE1SDMyVjE2SDMxek0zMywxNUgzNFYxNkgzM3pNMzYsMTVIMzdWMTZIMzZ6TTksMTZIMTBWMTdIOXpNMTAsMTZIMTFWMTdIMTB6TTEyLDE2SDEzVjE3SDEyek0xNSwxNkgxNlYxN0gxNXpNMTYsMTZIMTdWMTdIMTZ6TTE5LDE2SDIwVjE3SDE5ek0yMiwxNkgyM1YxN0gyMnpNMjYsMTZIMjdWMTdIMjZ6TTI4LDE2SDI5VjE3SDI4ek0yOSwxNkgzMFYxN0gyOXpNMzEsMTZIMzJWMTdIMzF6TTMyLDE2SDMzVjE3SDMyek0zMywxNkgzNFYxN0gzM3pNMzUsMTZIMzZWMTdIMzV6TTQsMTdINVYxOEg0ek02LDE3SDdWMThINnpNMTEsMTdIMTJWMThIMTF6TTEyLDE3SDEzVjE4SDEyek0xMywxN0gxNFYxOEgxM3pNMTUsMTdIMTZWMThIMTV6TTE2LDE3SDE3VjE4SDE2ek0yMCwxN0gyMVYxOEgyMHpNMjIsMTdIMjNWMThIMjJ6TTI1LDE3SDI2VjE4SDI1ek0yOCwxN0gyOVYxOEgyOHpNMjksMTdIMzBWMThIMjl6TTM0LDE3SDM1VjE4SDM0ek0zNSwxN0gzNlYxOEgzNXpNNSwxOEg2VjE5SDV6TTgsMThIOVYxOUg4ek0xMCwxOEgxMVYxOUgxMHpNMTEsMThIMTJWMTlIMTF6TTE0LDE4SDE1VjE5SDE0ek0xNywxOEgxOFYxOUgxN3pNMTksMThIMjBWMTlIMTl6TTIwLDE4SDIxVjE5SDIwek0yMSwxOEgyMlYxOUgyMXpNMjIsMThIMjNWMTlIMjJ6TTI1LDE4SDI2VjE5SDI1ek0yOCwxOEgyOVYxOUgyOHpNMzAsMThIMzFWMTlIMzB6TTMzLDE4SDM0VjE5SDMzek00LDE5SDVWMjBINHpNNSwxOUg2VjIwSDV6TTYsMTlIN1YyMEg2ek04LDE5SDlWMjBIOHpNOSwxOUgxMFYyMEg5ek0xMSwxOUgxMlYyMEgxMXpNMTIsMTlIMTNWMjBIMTJ6TTE0LDE5SDE1VjIwSDE0ek0xNSwxOUgxNlYyMEgxNXpNMTYsMTlIMTdWMjBIMTZ6TTE3LDE5SDE4VjIwSDE3ek0yMCwxOUgyMVYyMEgyMHpNMjIsMTlIMjNWMjBIMjJ6TTIzLDE5SDI0VjIwSDIzek0yNCwxOUgyNVYyMEgyNHpNMjUsMTlIMjZWMjBIMjV6TTI2LDE5SDI3VjIwSDI2ek0yNywxOUgyOFYyMEgyN3pNMjgsMTlIMjlWMjBIMjh6TTI5LDE5SDMwVjIwSDI5ek0zMCwxOUgzMVYyMEgzMHpNMzIsMTlIMzNWMjBIMzJ6TTMzLDE5SDM0VjIwSDMzek0zNCwxOUgzNVYyMEgzNHpNNSwyMEg2VjIxSDV6TTcsMjBIOFYyMUg3ek0xMCwyMEgxMVYyMUgxMHpNMTEsMjBIMTJWMjFIMTF6TTEzLDIwSDE0VjIxSDEzek0xNCwyMEgxNVYyMUgxNHpNMTYsMjBIMTdWMjFIMTZ6TTE3LDIwSDE4VjIxSDE3ek0xOCwyMEgxOVYyMUgxOHpNMTksMjBIMjBWMjFIMTl6TTIyLDIwSDIzVjIxSDIyek0yMywyMEgyNFYyMUgyM3pNMjQsMjBIMjVWMjFIMjR6TTI1LDIwSDI2VjIxSDI1ek0yNiwyMEgyN1YyMUgyNnpNMjcsMjBIMjhWMjFIMjd6TTI4LDIwSDI5VjIxSDI4ek0yOSwyMEgzMFYyMUgyOXpNMzAsMjBIMzFWMjFIMzB6TTMyLDIwSDMzVjIxSDMyek0zNCwyMEgzNVYyMUgzNHpNNiwyMUg3VjIySDZ6TTcsMjFIOFYyMkg3ek05LDIxSDEwVjIySDl6TTExLDIxSDEyVjIySDExek0xMywyMUgxNFYyMkgxM3pNMTQsMjFIMTVWMjJIMTR6TTE1LDIxSDE2VjIySDE1ek0xOSwyMUgyMFYyMkgxOXpNMjEsMjFIMjJWMjJIMjF6TTI0LDIxSDI1VjIySDI0ek0yNSwyMUgyNlYyMkgyNXpNMjYsMjFIMjdWMjJIMjZ6TTI3LDIxSDI4VjIySDI3ek0yOCwyMUgyOVYyMkgyOHpNMjksMjFIMzBWMjJIMjl6TTMwLDIxSDMxVjIySDMwek0zMiwyMUgzM1YyMkgzMnpNMzMsMjFIMzRWMjJIMzN6TTM1LDIxSDM2VjIySDM1ek0zNiwyMUgzN1YyMkgzNnpNNCwyMkg1VjIzSDR6TTUsMjJINlYyM0g1ek04LDIySDlWMjNIOHpNOSwyMkgxMFYyM0g5ek0xMCwyMkgxMVYyM0gxMHpNMTMsMjJIMTRWMjNIMTN6TTE0LDIySDE1VjIzSDE0ek0xNiwyMkgxN1YyM0gxNnpNMTksMjJIMjBWMjNIMTl6TTIwLDIySDIxVjIzSDIwek0yMSwyMkgyMlYyM0gyMXpNMjQsMjJIMjVWMjNIMjR6TTI1LDIySDI2VjIzSDI1ek0yNiwyMkgyN1YyM0gyNnpNMzEsMjJIMzJWMjNIMzF6TTMyLDIySDMzVjIzSDMyek0zNCwyMkgzNVYyM0gzNHpNMzUsMjJIMzZWMjNIMzV6TTUsMjNINlYyNEg1ek03LDIzSDhWMjRIN3pNMTEsMjNIMTJWMjRIMTF6TTEyLDIzSDEzVjI0SDEyek0xNiwyM0gxN1YyNEgxNnpNMTgsMjNIMTlWMjRIMTh6TTE5LDIzSDIwVjI0SDE5ek0yMCwyM0gyMVYyNEgyMHpNMjMsMjNIMjRWMjRIMjN6TTMwLDIzSDMxVjI0SDMwek0zMiwyM0gzM1YyNEgzMnpNNCwyNEg1VjI1SDR6TTUsMjRINlYyNUg1ek02LDI0SDdWMjVINnpNOSwyNEgxMFYyNUg5ek0xMCwyNEgxMVYyNUgxMHpNMTEsMjRIMTJWMjVIMTF6TTEyLDI0SDEzVjI1SDEyek0xNSwyNEgxNlYyNUgxNXpNMTYsMjRIMTdWMjVIMTZ6TTE4LDI0SDE5VjI1SDE4ek0xOSwyNEgyMFYyNUgxOXpNMjIsMjRIMjNWMjVIMjJ6TTIzLDI0SDI0VjI1SDIzek0yNSwyNEgyNlYyNUgyNXpNMzMsMjRIMzRWMjVIMzN6TTM0LDI0SDM1VjI1SDM0ek0zNiwyNEgzN1YyNUgzNnpNNCwyNUg1VjI2SDR6TTUsMjVINlYyNkg1ek02LDI1SDdWMjZINnpNNywyNUg4VjI2SDd6TTgsMjVIOVYyNkg4ek0xMSwyNUgxMlYyNkgxMXpNMTcsMjVIMThWMjZIMTd6TTE5LDI1SDIwVjI2SDE5ek0yMiwyNUgyM1YyNkgyMnpNMjUsMjVIMjZWMjZIMjV6TTI3LDI1SDI4VjI2SDI3ek0zMCwyNUgzMVYyNkgzMHpNMzQsMjVIMzVWMjZIMzR6TTM2LDI1SDM3VjI2SDM2ek02LDI2SDdWMjdINnpNOCwyNkg5VjI3SDh6TTksMjZIMTBWMjdIOXpNMTAsMjZIMTFWMjdIMTB6TTEyLDI2SDEzVjI3SDEyek0xMywyNkgxNFYyN0gxM3pNMTcsMjZIMThWMjdIMTd6TTIwLDI2SDIxVjI3SDIwek0yNCwyNkgyNVYyN0gyNHpNMjcsMjZIMjhWMjdIMjd6TTI4LDI2SDI5VjI3SDI4ek0yOSwyNkgzMFYyN0gyOXpNMzEsMjZIMzJWMjdIMzF6TTMyLDI2SDMzVjI3SDMyek0zNCwyNkgzNVYyN0gzNHpNMzUsMjZIMzZWMjdIMzV6TTM2LDI2SDM3VjI3SDM2ek01LDI3SDZWMjhINXpNNywyN0g4VjI4SDd6TTExLDI3SDEyVjI4SDExek0xMywyN0gxNFYyOEgxM3pNMTQsMjdIMTVWMjhIMTR6TTE3LDI3SDE4VjI4SDE3ek0xOCwyN0gxOVYyOEgxOHpNMjAsMjdIMjFWMjhIMjB6TTIyLDI3SDIzVjI4SDIyek0yOSwyN0gzMFYyOEgyOXpNMzAsMjdIMzFWMjhIMzB6TTMxLDI3SDMyVjI4SDMxek0zMywyN0gzNFYyOEgzM3pNMzUsMjdIMzZWMjhIMzV6TTM2LDI3SDM3VjI4SDM2ek00LDI4SDVWMjlINHpNOCwyOEg5VjI5SDh6TTksMjhIMTBWMjlIOXpNMTAsMjhIMTFWMjlIMTB6TTExLDI4SDEyVjI5SDExek0xMywyOEgxNFYyOUgxM3pNMTQsMjhIMTVWMjlIMTR6TTE2LDI4SDE3VjI5SDE2ek0xOCwyOEgxOVYyOUgxOHpNMTksMjhIMjBWMjlIMTl6TTIxLDI4SDIyVjI5SDIxek0yNiwyOEgyN1YyOUgyNnpNMjgsMjhIMjlWMjlIMjh6TTI5LDI4SDMwVjI5SDI5ek0zMCwyOEgzMVYyOUgzMHpNMzEsMjhIMzJWMjlIMzF6TTMyLDI4SDMzVjI5SDMyek0xMiwyOUgxM1YzMEgxMnpNMTQsMjlIMTVWMzBIMTR6TTE1LDI5SDE2VjMwSDE1ek0xNiwyOUgxN1YzMEgxNnpNMTgsMjlIMTlWMzBIMTh6TTE5LDI5SDIwVjMwSDE5ek0yMSwyOUgyMlYzMEgyMXpNMjMsMjlIMjRWMzBIMjN6TTI2LDI5SDI3VjMwSDI2ek0yOCwyOUgyOVYzMEgyOHpNMzIsMjlIMzNWMzBIMzJ6TTMzLDI5SDM0VjMwSDMzek00LDMwSDVWMzFINHpNNSwzMEg2VjMxSDV6TTYsMzBIN1YzMUg2ek03LDMwSDhWMzFIN3pNOCwzMEg5VjMxSDh6TTksMzBIMTBWMzFIOXpNMTAsMzBIMTFWMzFIMTB6TTEyLDMwSDEzVjMxSDEyek0xNSwzMEgxNlYzMUgxNXpNMTYsMzBIMTdWMzFIMTZ6TTE3LDMwSDE4VjMxSDE3ek0xOCwzMEgxOVYzMUgxOHpNMjMsMzBIMjRWMzFIMjN6TTI3LDMwSDI4VjMxSDI3ek0yOCwzMEgyOVYzMUgyOHpNMzAsMzBIMzFWMzFIMzB6TTMyLDMwSDMzVjMxSDMyek00LDMxSDVWMzJINHpNMTAsMzFIMTFWMzJIMTB6TTEyLDMxSDEzVjMySDEyek0xMywzMUgxNFYzMkgxM3pNMTYsMzFIMTdWMzJIMTZ6TTE3LDMxSDE4VjMySDE3ek0xOCwzMUgxOVYzMkgxOHpNMTksMzFIMjBWMzJIMTl6TTIwLDMxSDIxVjMySDIwek0yNCwzMUgyNVYzMkgyNHpNMjUsMzFIMjZWMzJIMjV6TTI3LDMxSDI4VjMySDI3ek0yOCwzMUgyOVYzMkgyOHpNMzIsMzFIMzNWMzJIMzJ6TTMzLDMxSDM0VjMySDMzek0zNCwzMUgzNVYzMkgzNHpNMzUsMzFIMzZWMzJIMzV6TTQsMzJINVYzM0g0ek02LDMySDdWMzNINnpNNywzMkg4VjMzSDd6TTgsMzJIOVYzM0g4ek0xMCwzMkgxMVYzM0gxMHpNMTMsMzJIMTRWMzNIMTN6TTE1LDMySDE2VjMzSDE1ek0xNywzMkgxOFYzM0gxN3pNMTksMzJIMjBWMzNIMTl6TTIxLDMySDIyVjMzSDIxek0yNSwzMkgyNlYzM0gyNXpNMjYsMzJIMjdWMzNIMjZ6TTI3LDMySDI4VjMzSDI3ek0yOCwzMkgyOVYzM0gyOHpNMjksMzJIMzBWMzNIMjl6TTMwLDMySDMxVjMzSDMwek0zMSwzMkgzMlYzM0gzMXpNMzIsMzJIMzNWMzNIMzJ6TTM0LDMySDM1VjMzSDM0ek00LDMzSDVWMzRINHpNNiwzM0g3VjM0SDZ6TTcsMzNIOFYzNEg3ek04LDMzSDlWMzRIOHpNMTAsMzNIMTFWMzRIMTB6TTEyLDMzSDEzVjM0SDEyek0xNCwzM0gxNVYzNEgxNHpNMTYsMzNIMTdWMzRIMTZ6TTIxLDMzSDIyVjM0SDIxek0yMiwzM0gyM1YzNEgyMnpNMjQsMzNIMjVWMzRIMjR6TTI2LDMzSDI3VjM0SDI2ek0yNywzM0gyOFYzNEgyN3pNMzEsMzNIMzJWMzRIMzF6TTMzLDMzSDM0VjM0SDMzek0zNCwzM0gzNVYzNEgzNHpNMzYsMzNIMzdWMzRIMzZ6TTQsMzRINVYzNUg0ek02LDM0SDdWMzVINnpNNywzNEg4VjM1SDd6TTgsMzRIOVYzNUg4ek0xMCwzNEgxMVYzNUgxMHpNMTIsMzRIMTNWMzVIMTJ6TTEzLDM0SDE0VjM1SDEzek0xNiwzNEgxN1YzNUgxNnpNMTcsMzRIMThWMzVIMTd6TTE4LDM0SDE5VjM1SDE4ek0yMSwzNEgyMlYzNUgyMXpNMjQsMzRIMjVWMzVIMjR6TTI4LDM0SDI5VjM1SDI4ek0zMCwzNEgzMVYzNUgzMHpNMzEsMzRIMzJWMzVIMzF6TTMzLDM0SDM0VjM1SDMzek00LDM1SDVWMzZINHpNMTAsMzVIMTFWMzZIMTB6TTEzLDM1SDE0VjM2SDEzek0xNSwzNUgxNlYzNkgxNXpNMTcsMzVIMThWMzZIMTd6TTE4LDM1SDE5VjM2SDE4ek0xOSwzNUgyMFYzNkgxOXpNMjAsMzVIMjFWMzZIMjB6TTIxLDM1SDIyVjM2SDIxek0yMiwzNUgyM1YzNkgyMnpNMjcsMzVIMjhWMzZIMjd6TTI4LDM1SDI5VjM2SDI4ek0yOSwzNUgzMFYzNkgyOXpNMzEsMzVIMzJWMzZIMzF6TTMyLDM1SDMzVjM2SDMyek0zNiwzNUgzN1YzNkgzNnpNNCwzNkg1VjM3SDR6TTUsMzZINlYzN0g1ek02LDM2SDdWMzdINnpNNywzNkg4VjM3SDd6TTgsMzZIOVYzN0g4ek05LDM2SDEwVjM3SDl6TTEwLDM2SDExVjM3SDEwek0xMiwzNkgxM1YzN0gxMnpNMTQsMzZIMTVWMzdIMTR6TTE1LDM2SDE2VjM3SDE1ek0xOCwzNkgxOVYzN0gxOHpNMTksMzZIMjBWMzdIMTl6TTIwLDM2SDIxVjM3SDIwek0yMSwzNkgyMlYzN0gyMXpNMjIsMzZIMjNWMzdIMjJ6TTIzLDM2SDI0VjM3SDIzek0yNSwzNkgyNlYzN0gyNXpNMjcsMzZIMjhWMzdIMjd6TTI5LDM2SDMwVjM3SDI5ek0zMiwzNkgzM1YzN0gzMnpNMzQsMzZIMzVWMzdIMzR6IiBpZD0icXItcGF0aCIgZmlsbD0iIzJiMjExOCIgZmlsbC1vcGFjaXR5PSIxIiBmaWxsLXJ1bGU9Im5vbnplcm8iIHN0cm9rZT0ibm9uZSIvPjwvc3ZnPg==';
 const PUBLIC_URL='https://nastyboardgame.com/';   // canonical link to put in invites when
   // running in-app - location.href there is capacitor://localhost/... or a local file URL,
   // not something a friend could ever open, so always point invites at the real website.
@@ -3221,7 +3397,13 @@ function closeOverlay(x){
    It answers one question - "can the player still get somewhere from here?" - and fixes it two
    ways, cheapest first:
      1. Nothing at all is visible (no overlay, no board, no menu). Show the menu. There is no
-        legitimate state in this app that looks like that.
+        legitimate state in this app that looks like that - EXCEPT ONE, added v0.43: the
+        coming-soon gate screen (#comingSoon, § COMING SOON) is deliberately "no menu, no game, no
+        overlay" on the public website, and is not a dead end - it has its own two links and QR.
+        Skip straight out before either branch runs whenever that screen is the one actually up,
+        or this watchdog would silently force the real menu back open behind Blake's back on every
+        single animation frame - exactly the kind of "half-booted game showing through" the gate
+        was written to prevent, just caused by different code.
      2. This device is in an online room whose game has NOT started (NET.started, § NET) and no
         full-screen page is up. The lobby is the only place that state has anything to say, so
         put it back: the host's room screen if we are hosting, the join/seat screen otherwise.
@@ -3234,6 +3416,11 @@ function ensureScreenReachable(){
   try{
     const menu=$('menu'), game=$('game');
     if(!menu||!game)return;
+    // v0.43: see the header comment above - #comingSoon is a legitimate third "nothing else is
+    // up" state, checked by its own visibility (not the SHOW_COMING_SOON flag) so this stays
+    // correct even if ?preview=1 later flips someone back to the real menu mid-session.
+    const comingSoon=$('comingSoon');
+    if(comingSoon&&!comingSoon.classList.contains('hidden'))return;
     const anyOverlay=visibleModalOverlays().length>0;
     const menuUp=!menu.classList.contains('hidden');
     const gameUp=!game.classList.contains('hidden');
@@ -9040,7 +9227,12 @@ function hostCreateRoom(tableSpeed){
   $('onlineErr').textContent='';
   const cols=CFG.n===4?COLORS4:COLORS6;
   const seats=CFG.seatMeta[CFG.n].map((s,i)=>({name:s.name||cols[i].name,type:s.type,diff:s.diff}));
-  const myName=(seats.find(s=>s.type==='human')||{}).name||'Host';
+  // 2026-07-27 (v0.42, Blake change 3): online is accounts-only now, so the host's own name is
+  // always the ACCOUNT's name - never a setup-screen seat name, which doesn't even have a
+  // meaningful "the human one" anymore (see the seat-picker popup, § MENU). requireAccountThen()
+  // (below) guarantees we are signed in with a gameName by the time this ever runs; the 'Host'
+  // fallback only matters in the split-second before that first response ever lands.
+  const myName=(ACCT&&ACCT.gameName)||'Host';
   NET.wantConnection=true;
   connectWs().then(()=>{
     // v0.40: `acct` (see acctField()) - the session token, sent only when signed in. The server
@@ -9129,9 +9321,10 @@ function renderRoomScreen(){
         :'Tap to sit here';
       row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(s.name)}</span><span class="st">${statusTxt}</span>`;
       if(mine){
-        // v0.24: pencil glyph added for the same "obviously editable" consistency as the
-        // offline seat list's .editPencil (§ STYLE/MENU) - the text label already made this
-        // discoverable pre-v0.24, this just matches the visual language.
+        // v0.24: a "Rename" button, discoverable on its own text label. (It used to also be
+        // described as matching the offline setup screen's own tappable-name pencil glyph - that
+        // glyph is gone as of v0.42, the offline seat list is read-only now - but this host-room
+        // Rename control is untouched: an ONLINE host can still rename their own seat live.)
         const btn=document.createElement('button'); btn.textContent='Rename';
         btn.onclick=e=>{e.stopPropagation(); ROOM_EDIT_NAME={draft:s.name}; renderRoomScreen();};
         row.appendChild(btn);
@@ -9192,6 +9385,11 @@ let JOIN={code:'',name:''};
 // resolves before this device can reach a live online table (see gateOnSpeedPicker(), § UTIL).
 // A no-op if the choice was already made, so this never double-prompts after $('btnOnline')'s
 // own gate already resolved it for the manual "Play online" -> "Join a game" path.
+// 2026-07-27 (v0.42, Blake change 3): also the ONE place every join path is gated on being
+// signed in - requireAccountThen() (§ NET, below) wraps the whole rest of this function, so a
+// signed-out tap on ANY join path (button, ?join=CODE link, Universal Link) goes through sign-in
+// first, with the room code preserved, and lands right back here once that's done. See
+// requireAccountThen()'s own comment for why the pending code survives the detour.
 // 2026-07-23 fix (Blake's item 1, second half): `skipSpeedGate` - when this screen is reached
 // as a RECOVERY fallback for an existing room (tryJoinOrRejoin()'s last resort after several
 // failed reconnect attempts, see its comment), the one-time "how fast do you want to play"
@@ -9203,42 +9401,38 @@ let JOIN={code:'',name:''};
 // see § NET). A genuinely NEW join (the plain "Join a game" button, or a ?join=CODE link this
 // device has never opened before) still shows it exactly as before.
 function openJoinOverlay(prefillCode,skipSpeedGate){
-  const go=()=>{
-    resetNetUiFlow();
-    $('joinErr').textContent='';
-    $('joinCodeStep').classList.remove('hidden');
-    $('joinNameStep').classList.add('hidden');
-    $('joinSeatStep').classList.add('hidden');
-    $('joinCodeInput').value=prefillCode||'';
-    // 2026-07-25 (§ ACCOUNT): one name, everywhere. The join screen now starts on the same name
-    // the setup screen and the account panel show, instead of an empty box every time.
-    try{ const ni=$('joinNameInput'); if(ni&&!ni.value)ni.value=chosenName(); }catch(e){}
-    openOverlay('joinOverlay');
-    if(prefillCode&&prefillCode.length===4)advanceJoinToNameStep();
-  };
-  if(skipSpeedGate)go(); else gateOnSpeedPicker(go);
+  requireAccountThen(()=>{
+    const go=()=>{
+      resetNetUiFlow();
+      $('joinErr').textContent='';
+      $('joinCodeStep').classList.remove('hidden');
+      $('joinSeatStep').classList.add('hidden');
+      $('joinCodeInput').value=prefillCode||'';
+      openOverlay('joinOverlay');
+      if(prefillCode&&prefillCode.length===4)joinWithCode();
+    };
+    if(skipSpeedGate)go(); else gateOnSpeedPicker(go);
+  });
 }
-function advanceJoinToNameStep(){
+/* 2026-07-27 (v0.42, Blake change 3): replaces the old two-step code-then-name flow
+   (advanceJoinToNameStep()/joinSubmitName(), both gone - see #joinOverlay's markup comment).
+   "The nickname just auto-populates when a person joins with their account" - JOIN.name is
+   always ACCT.gameName; requireAccountThen() (§ NET) already guarantees one exists by the time
+   this runs, from anywhere a join can start. */
+function joinWithCode(){
   const code=$('joinCodeInput').value.trim().toUpperCase();
   if(code.length!==4){ $('joinErr').textContent='Enter the 4-letter code your host sent you.'; return; }
   JOIN.code=code; $('joinErr').textContent='';
-  $('joinCodeStep').classList.add('hidden');
-  $('joinNameStep').classList.remove('hidden');
-}
-function joinSubmitName(){
-  const name=cleanName($('joinNameInput').value,'');
-  if(!name){ $('joinErr').textContent='Enter your name.'; return; }
-  if(isBadName(name)){ $('joinErr').textContent='Pick a nicer name.'; return; }
-  JOIN.name=name; $('joinErr').textContent='';
-  // 2026-07-25 (§ ACCOUNT): joining under a name IS choosing that name - keep the setup screen
-  // and the account circle in step with it rather than letting the two drift apart.
-  try{ setChosenName(name); }catch(e){}
+  const name=ACCT&&ACCT.gameName;
+  if(!name){ $('joinErr').textContent='Sign in first to join an online game.'; return; }   // defensive - should be unreachable
+  JOIN.name=name;
   NET.wantConnection=true;
   connectWs().then(()=>{ netSend(Object.assign({type:'join',protocolVersion:PROTOCOL_VERSION,code:JOIN.code,name},acctField())); })
     .catch(err=>{ $('joinErr').textContent=err.message; NET.wantConnection=false; });
 }
 function advanceJoinToSeatStep(){
-  $('joinNameStep').classList.add('hidden');
+  // v0.42: used to also hide #joinNameStep - that step (and the div) is gone, see joinWithCode().
+  $('joinCodeStep').classList.add('hidden');
   $('joinSeatStep').classList.remove('hidden');
   renderJoinSeatStep();
   // v0.25 item 1: the one-time online rules explanation comes BEFORE seat selection now -
@@ -9335,8 +9529,12 @@ $('btnJoinReady').onclick=()=>{
 };
 
 /* ============================= § NAMES (limits + decency, v0.9 item 9) =============================
-   Shared by the setup screen, the online join flow, and (duplicated, since the server is a
-   separate plain-Node file with no shared module) server.js - see its own copy + comment.
+   Shared by the nickname gate (§ ACCOUNT SIGN-IN), the account panel's "Change your name" editor
+   (§ ACCOUNT), and (duplicated, since the server is a separate plain-Node file with no shared
+   module) server.js - see its own copy + comment. 2026-07-27 (v0.42): the online join flow no
+   longer collects a typed name at all - a joiner's name is always their account's - and the
+   offline setup screen never collected one either (see the seat-picker popup, § MENU), so this
+   is purely account-name validation now, not a general "any name box in the app" helper.
    Modest on purpose (Blake's ask: "don't over-engineer") - a short blocklist of common
    English profanity/slurs, matched as a substring after a cheap leetspeak normalization, plus
    a flat 10-character limit. Never used to punish silently: callers show a friendly message
@@ -9359,12 +9557,9 @@ function cleanName(raw,fallback){
   const s=String(raw||'').trim().slice(0,NAME_MAX);
   return s||fallback||'';
 }
-// v0.24 (Blake: nothing signals the seat list names can be tapped/renamed): a one-time hint
-// line under the seat list, same "show once ever per device" pattern as the speed picker's
-// speedChoiceMade()/markSpeedChosen() above. Cleared the first time anyone actually edits a
-// name (see renderMenu()'s inp.oninput) so it never nags a player who's already found it.
-function renameHintSeen(){ try{ return !!localStorage.getItem('nasty-rename-hint-seen'); }catch(e){ return true; } }
-function markRenameHintSeen(){ try{ localStorage.setItem('nasty-rename-hint-seen','1'); }catch(e){} }
+// 2026-07-27 (v0.42): renameHintSeen()/markRenameHintSeen() - the v0.24 one-time "Tap a name to
+// change it" hint - are GONE. The offline seat list is read-only now (see § MENU's seat-picker
+// popup comment), so there is nothing left on that screen to hint at.
 
 /* ============================= § MENU / BOOT ============================= */
 // v0.9 item 9: new stock/default names (Ginny, Geri, J.B., Jim for the first four seats).
@@ -9390,7 +9585,29 @@ function seatDefaults(n){
 }
 if(!CFG.seatMeta[4])CFG.seatMeta[4]=seatDefaults(4);
 if(!CFG.seatMeta[6])CFG.seatMeta[6]=seatDefaults(6);
+// 2026-07-27 (v0.42): pass-and-play is gone as a way to CREATE a game - fold any leftover 2+
+// "human"-typed seats a pre-update 'nasty-setup' record might carry (from the old per-seat
+// Human/CPU dropdown) back down to exactly one, once, here at load. Nothing after this point
+// ever sets more than one seat's type to 'human' again - the seat popup (commitOfflineSeatPick(),
+// below) is the only thing that writes `type` from here on, and it always writes exactly one.
+// This only tidies CFG (what a NEW local game or a freshly-hosted online room starts from) - it
+// never touches a live G or a saved game, so an old pass-and-play SAVE still has its real 2+
+// human seats and still resumes/plays exactly as it always did.
+[4,6].forEach(n=>{
+  const meta=CFG.seatMeta[n];
+  if(!meta)return;
+  let seenHuman=false;
+  meta.forEach(s=>{ if(s.type==='human'){ if(seenHuman)s.type='cpu'; else seenHuman=true; } });
+});
 function saveCfg(){localStorage.setItem('nasty-setup',JSON.stringify(CFG));}
+/* 2026-07-27 (Blake, change 2): "get rid of the pass-and-play functionality for now. Only 1
+   human player per phone, the rest are CPUs, unless they're playing online." This row is READ-
+   ONLY now - dot, the seat's stock name (DEFAULT_NAMES, never customized here), and its CPU
+   difficulty. It no longer says or decides which seat is human at all - that happens in the
+   seat-picker popup shown when "Start game" is tapped (openOfflineSeatPicker(), right below),
+   which is also the only place CFG.seatMeta[n][i].type ever gets written again. Removed for
+   good: the per-seat name input + pencil + "Tap a name to change it" hint, and the Human/CPU
+   dropdown - see the CSS/HTML comments at .seatRow .seatName and #seatList for the same story. */
 function renderMenu(){
   $('p4').classList.toggle('on',CFG.n===4);
   $('p6').classList.toggle('on',CFG.n===6);
@@ -9403,39 +9620,16 @@ function renderMenu(){
     $('teamNote').textContent='Partners sit across: '+pairs.join('  ·  ');
   }else $('teamNote').textContent='';
   const list=$('seatList'); list.innerHTML='';
-  // v0.24: one-time hint that seat names are tappable/editable - see renameHintSeen() above.
-  $('nameHint').textContent=renameHintSeen()?'':'Tap a name to change it';
   CFG.seatMeta[CFG.n].forEach((s,i)=>{
     const r=document.createElement('div'); r.className='seatRow';
-    // v0.24: name input wrapped in .nameWrap with a pencil glyph (Blake: nothing signals these
-    // are editable) - see .seatRow .nameWrap CSS, § STYLE.
     r.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span>
-      <span class="nameWrap"><input value="${esc(s.name)}" maxlength="${NAME_MAX}" aria-label="player name, tap to edit"><span class="editPencil">✏️</span></span>
-      <select class="typeSel"><option value="human"${s.type==='human'?' selected':''}>Human</option>
-        <option value="cpu"${s.type==='cpu'?' selected':''}>CPU</option></select>
-      <select class="diffSel" ${s.type==='human'?'style="visibility:hidden"':''}>
+      <span class="seatName">${esc(DEFAULT_NAMES[CFG.n][i]||cols[i].name)}</span>
+      <select class="diffSel">
         <option value="easy"${s.diff==='easy'?' selected':''}>Easy</option>
         <option value="medium"${s.diff==='medium'?' selected':''}>Tricky</option>
         <option value="hard"${s.diff==='hard'?' selected':''}>Nasty</option></select>`;
-    const[inp,ts,ds]=[r.querySelector('input'),r.querySelector('.typeSel'),r.querySelector('.diffSel')];
-    // v0.9 item 9: 10-char cap (maxlength above covers typing; this also covers paste) +
-    // a modest profanity block - a bad name is silently rejected back to the last good
-    // value with a friendly inline note, never saved/sent.
-    inp.oninput=()=>{
-      // v0.24: first real edit anywhere retires the one-time hint line for good.
-      if(!renameHintSeen()){ markRenameHintSeen(); $('nameHint').textContent=''; }
-      const val=inp.value.slice(0,NAME_MAX);
-      if(isBadName(val)){
-        $('nameWarn').textContent='Pick a nicer name.';
-        inp.value=s.name;
-        return;
-      }
-      $('nameWarn').textContent='';
-      inp.value=val;
-      s.name=cleanName(val,cols[i].name);
-      saveCfg();
-    };
-    ts.onchange=()=>{s.type=ts.value;ds.style.visibility=s.type==='human'?'hidden':'visible';saveCfg();};
+    const ds=r.querySelector('.diffSel');
+    // v0.9 item 9's difficulty picker, unchanged - this is the one control this row still has.
     ds.onchange=()=>{s.diff=ds.value;saveCfg();};
     list.appendChild(r);
   });
@@ -9467,12 +9661,26 @@ function beginFirstDeal(){
   toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts us off!`,2600);
   runTurn();
 }
+// 2026-07-27 (v0.42): order of gates on Start is seat popup (openOfflineSeatPicker(), which
+// calls commitOfflineSeatPick() then this same startOfflineGameGate(startGame) chain) FIRST,
+// then the save-slot gate right below, then gateOnSpeedPicker() at the bottom of startGame()
+// itself, then the deal (beginFirstDeal()). #autotest/#autotest6 call startGame() directly
+// (see autotest(), bottom of file) and never touch any of this - see that function's own
+// comment for why the seat popup in particular must never intercept them.
 function startGame(){
   // offline/local play - guaranteed untouched by any network state, even leftover state
   // from a cancelled online setup.
   NET.online=false; NET.isHost=false; NET.wantConnection=false; updateConnIndicator();
   const cols=CFG.n===4?COLORS4:COLORS6;
-  const seats=CFG.seatMeta[CFG.n].map((s,i)=>({name:s.name||cols[i].name,type:s.type,diff:s.diff,color:cols[i]}));
+  const seats=CFG.seatMeta[CFG.n].map((s,i)=>{
+    let name=s.name||cols[i].name;
+    // v0.42: the human seat's name is always the LIVE account name if signed in, never a
+    // possibly-stale copy baked into CFG.seatMeta - covers "Play again" and a reload that
+    // resumes mid-speed-picker (loadPendingOfflineStart(), below), neither of which goes back
+    // through the seat popup that would otherwise refresh it.
+    if(s.type==='human'&&ACCT&&ACCT.uid&&ACCT.gameName)name=ACCT.gameName;
+    return {name,type:s.type,diff:s.diff,color:cols[i]};
+  });
   // v0.12: solo vs-CPU always rotates to put you at the bottom; pass-and-play (2+ human
   // seats) and autotest (0 human seats, see below) deliberately do NOT rotate - see
   // computeViewSeat()'s comment, § LAYOUT.
@@ -9546,7 +9754,75 @@ function chooseReplaceSlot(k){
 $('btnReplaceSlot1').onclick=()=>chooseReplaceSlot(1);
 $('btnReplaceSlot2').onclick=()=>chooseReplaceSlot(2);
 $('btnReplaceCancel').onclick=()=>{ $('slotReplaceOverlay').classList.add('hidden'); { const cc=$('slotReplaceOverlay').querySelector('.confirmCard'); if(cc) cc.style.transform=''; } PENDING_SLOT_ACTION=null; };
-$('btnStart').onclick=()=>startOfflineGameGate(startGame);
+/* ======================== offline seat picker (2026-07-27, Blake change 2) ========================
+   "get rid of the pass-and-play functionality for now. Only 1 human player per phone, the rest
+   are CPUs, unless they're playing online." Tapping "Start game" opens this popup instead of
+   dealing straight away - see #offlineSeatOverlay's markup comment for the full story. Built
+   from the SAME .lobbySeat row look the online lobby uses (renderJoinSeatStep()/renderRoomScreen(),
+   § NET), on purpose - Blake specifically wants it to read as the same kind of screen.
+   OFFLINE_SEAT_IDX is the seat currently picked, sticky across repeated opens (Cancel then
+   Start again) within one visit to the menu - clamped back to 0 if it's ever out of range (a
+   fresh page load, or the player count changed). It always holds a valid index, which is what
+   makes "must not be possible to start with no seat picked" true by construction. */
+let OFFLINE_SEAT_IDX=0;
+// The name shown for seat i RIGHT NOW: the account's own name if this is the picked seat and
+// this device is signed in (Blake, verbatim: "if this device is SIGNED IN, that row's name
+// immediately becomes the account nickname, and the seat the player previously had reverts to
+// its stock name") - otherwise always the seat's stock DEFAULT_NAMES entry, which is also what
+// a signed-OUT (guest) pick keeps on any seat, forever - guests cannot have a nickname.
+function offlineSeatDisplayName(i){
+  const cols=CFG.n===4?COLORS4:COLORS6;
+  const names=DEFAULT_NAMES[CFG.n]||[];
+  if(i===OFFLINE_SEAT_IDX&&ACCT&&ACCT.uid&&ACCT.gameName)return ACCT.gameName;
+  return names[i]||cols[i].name;
+}
+// Same "Partners sit across: X + Y" wording renderMenu()'s own teamNote uses (Blake: "show the
+// pairing note so they know who they will be partnered with") - built from the LIVE per-seat
+// display name above, so the picked seat's row shows the account name here too when signed in.
+function offlineSeatPairingText(){
+  if(!CFG.teams)return '';
+  const pairs=[];
+  for(let i=0;i<CFG.n/2;i++)pairs.push(offlineSeatDisplayName(i)+' + '+offlineSeatDisplayName(i+CFG.n/2));
+  return 'Partners sit across: '+pairs.join('  ·  ');
+}
+function renderOfflineSeatPicker(){
+  if(OFFLINE_SEAT_IDX<0||OFFLINE_SEAT_IDX>=CFG.n)OFFLINE_SEAT_IDX=0;
+  const cols=CFG.n===4?COLORS4:COLORS6;
+  $('offlineSeatModeNote').textContent=`${CFG.n} players · ${CFG.teams?'Teams':'Free-for-All'}`;
+  $('offlineSeatTeamNote').textContent=offlineSeatPairingText();
+  const list=$('offlineSeatList'); list.innerHTML='';
+  for(let i=0;i<CFG.n;i++){
+    const mine=i===OFFLINE_SEAT_IDX;
+    const row=document.createElement('div');
+    row.className='lobbySeat'+(mine?' mine':' open');
+    row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(offlineSeatDisplayName(i))}</span><span class="st">${mine?'You':'CPU'}</span>`;
+    row.onclick=()=>{ OFFLINE_SEAT_IDX=i; renderOfflineSeatPicker(); };
+    list.appendChild(row);
+  }
+}
+function openOfflineSeatPicker(){
+  renderOfflineSeatPicker();
+  openOverlay('offlineSeatOverlay');
+}
+// Confirm: bakes the pick into CFG.seatMeta - the picked seat becomes 'human' (named per
+// offlineSeatDisplayName's same rule), every other seat becomes 'cpu' with its stock name - then
+// runs the exact same save-slot gate + startGame() the "Start game" button always ran.
+function commitOfflineSeatPick(){
+  const cols=CFG.n===4?COLORS4:COLORS6;
+  const names=DEFAULT_NAMES[CFG.n]||[];
+  CFG.seatMeta[CFG.n].forEach((s,i)=>{
+    if(i===OFFLINE_SEAT_IDX){ s.type='human'; s.name=offlineSeatDisplayName(i); }
+    else{ s.type='cpu'; s.name=names[i]||cols[i].name; }
+  });
+  saveCfg();
+}
+$('btnOfflineSeatCancel').onclick=()=>closeOverlay('offlineSeatOverlay');
+$('btnOfflineSeatStart').onclick=()=>{
+  closeOverlay('offlineSeatOverlay');
+  commitOfflineSeatPick();
+  startOfflineGameGate(startGame);
+};
+$('btnStart').onclick=()=>openOfflineSeatPicker();
 $('btnAgain').onclick=()=>{$('winOverlay').classList.add('hidden');
   if(NET.online)leaveOnlineToMenu(); else{clearOfflineSave();startGame();}};
 // 2026-07-25 (Blake's post-game review request, item 4): this handler is now the ONE shared
@@ -9838,16 +10114,24 @@ function accountSeatIndex(){
   const i=G.seats.findIndex(s=>s&&s.type==='human');
   return i;
 }
-// The one name this phone plays under. In a game the live seat name wins (that is what the rest
-// of the table sees me as); otherwise the setup screen's own first human seat, which is exactly
-// the value hostCreateRoom() sends as the host name and the online join screen pre-fills.
+/* 2026-07-27 (v0.42) - reworked for the new source of truth (Blake's names/seats pass):
+     signed in  -> the ACCOUNT's own name, always. Online is accounts-only now and an offline
+                   human seat is always given the account name at start (see
+                   commitOfflineSeatPick(), § MENU), so this is provably the same name the live
+                   seat carries whenever one exists - it just never needs to ask.
+     guest      -> the STOCK name (DEFAULT_NAMES) of whichever seat they are sitting in
+                   (accountSeatIndex() - the first human seat offline, same as always, so an old
+                   pass-and-play SAVE with 2+ human seats still resolves to "whoever's holding
+                   the phone" exactly as before), or the first seat's stock name before any game
+                   exists. Guests no longer have a persistent nickname anywhere in the app - see
+                   the seat-picker popup's comment, § MENU, and the Admin panel's "Change your
+                   name" row, which is disabled for exactly this reason. */
 function chosenName(){
+  if(ACCT&&ACCT.uid&&ACCT.gameName)return ACCT.gameName;
+  const n=(G?G.n:CFG.n), cols=n===6?COLORS6:COLORS4, names=DEFAULT_NAMES[n]||[];
   const i=accountSeatIndex();
-  if(i>=0&&G.seats[i]&&G.seats[i].name)return G.seats[i].name;
-  const meta=(CFG.seatMeta&&CFG.seatMeta[CFG.n])||[];
-  const h=meta.find(s=>s&&s.type==='human');
-  if(h&&h.name)return h.name;
-  return (meta[0]&&meta[0].name)||'';
+  if(i>=0)return names[i]||(cols[i]&&cols[i].name)||'';
+  return names[0]||(cols[0]&&cols[0].name)||'';
 }
 // First letter (or digit) of a name, uppercased. Never returns an empty string - see the edge
 // cases in this section's header comment.
@@ -9944,24 +10228,22 @@ $('btnAcctSound').onclick=()=>{
   renderAccountPanel();
 };
 /* Change your name. Opens INSIDE this panel (never a second full-screen page - see
-   § OVERLAY LAYER) and writes the one value the setup screen and the online join screen both
-   use, so "your name" means one thing everywhere in the app.
-   Offline, a game in progress is renamed live too - the plaque text and the circle both change
-   immediately. Online, the table's seat names are the server's to hand out (this batch is
-   client-only and touches no server file), so the new name is what you will play under from your
-   next game onward - and the panel says exactly that rather than pretending. */
+   § OVERLAY LAYER). 2026-07-27 (v0.42): reworked for the new source of truth - this now ONLY
+   ever pushes an ACCOUNT name change (the only kind of name change left in the app; see
+   chosenName()'s header comment - a guest has no name to set here at all, and the Admin panel
+   disables this row for them) into whatever is on screen right now:
+     - offline, a game in progress is renamed live - the plaque text and the account circle
+       both change immediately;
+     - online, the table's seat names are the server's to hand out - nothing here touches a live
+       online seat - but there is nothing left to separately "remember for next time" either:
+       hostCreateRoom()/joinWithCode() (§ NET) always read ACCT.gameName straight from the
+       account, which the caller (btnAcctNameSave, below) already updated before this runs.
+   It no longer touches CFG.seatMeta at all - the offline setup screen has nothing left that
+   shows a custom name (every seat displays its stock DEFAULT_NAMES name now - see
+   renderMenu()/the seat-picker popup, § MENU), so there is nothing there left to keep in sync. */
 function setChosenName(name){
   const clean=cleanName(name,'');
   if(!clean)return false;
-  // Both table sizes, so switching between 4 and 6 players never resurrects an old name.
-  [4,6].forEach(n=>{
-    const meta=CFG.seatMeta[n];
-    if(!meta)return;
-    const idx=meta.findIndex(s=>s&&s.type==='human');
-    if(idx>=0)meta[idx].name=clean;
-    else if(meta[0])meta[0].name=clean;
-  });
-  saveCfg();
   const i=accountSeatIndex();
   if(i>=0&&!NET.online&&G&&G.seats[i]){
     G.seats[i].name=clean;
@@ -9970,7 +10252,6 @@ function setChosenName(name){
     try{ positionPlaques(); }catch(e){}
     try{ scheduleSaveOffline(); }catch(e){}
   }
-  try{ renderMenu(); }catch(e){}   // the setup screen behind the game shows the new name too
   updateAccountButton();
   return true;
 }
@@ -9982,10 +10263,12 @@ function closeAccountNameEdit(){
   const row=$('btnAcctName');
   if(row&&row.classList.contains('hidden'))row.classList.remove('hidden');
 }
-/* One editor, two modes:
-     'local'   - signed out. Exactly what this row has always done: rename this phone's player.
-     'account' - signed in. The same box, but Save writes the name to the ACCOUNT, because the
-                 leaderboard row belongs to the account and one name has to mean one thing. */
+/* 2026-07-27 (v0.42): 'local' mode (renaming a signed-out guest's own player) is retired along
+   with the whole idea of a guest nickname - see chosenName()'s header comment. It is left in
+   place here, dormant, rather than ripped out: `mode` still defaults to 'local' if ever called
+   with anything else, so a stray future call fails SAFE (opens a box that edits nothing real)
+   rather than throwing. The only live caller is the button below, and it is now guarded so this
+   only ever opens in 'account' mode - a signed-out tap does nothing (the row is disabled). */
 function openAccountNameEdit(mode,msg){
   const box=$('acctNameEdit'), inp=$('acctNameInput');
   if(!box||!inp)return;
@@ -9996,7 +10279,10 @@ function openAccountNameEdit(mode,msg){
   $('btnAcctName').classList.add('hidden');
   try{ inp.focus(); inp.select(); }catch(e){}
 }
-$('btnAcctName').onclick=()=>openAccountNameEdit((ACCT&&ACCT.uid)?'account':'local','');
+// v0.42: a guest has no name to change (see chosenName()'s header comment) - renderAccountRows()
+// disables this row and says so; this guard is belt-and-suspenders against the row's own
+// `disabled` attribute rather than the only thing stopping a signed-out edit from opening.
+$('btnAcctName').onclick=()=>{ if(ACCT&&ACCT.uid)openAccountNameEdit('account',''); };
 $('btnAcctNameCancel').onclick=closeAccountNameEdit;
 $('btnAcctNameSave').onclick=async ()=>{
   const inp=$('acctNameInput'), warn=$('acctNameWarn');
@@ -10048,8 +10334,13 @@ $('btnAcctMenu').onclick=()=>{
 
    WHAT IT IS FOR, in one sentence: the family leaderboard is keyed on a typed name, so two
    relatives who both type "Blake" share a row, and a new phone starts from nothing. Signing in
-   ties the row to a person instead. That is the whole feature. NOTHING in the game is gated on
-   it - every mode, online and off, works signed out, forever.
+   ties the row to a person instead.
+   2026-07-27 (v0.42) UPDATE: OFFLINE play is still never gated on this - solo/local-vs-CPU works
+   signed out, forever, exactly as always. ONLINE play now IS gated on it (Blake: "let's make
+   online mode an account only feature as well, so no guests") - see requireAccountThen(), § NET.
+   A brand-new account additionally can't finish signing in at all without picking a nickname
+   first - see bindAccountName()/openNicknameGate(), right below - so "signed in" now always
+   implies "has a gameName" by construction; nothing downstream has to check for one separately.
 
    WHERE IT WORKS. The native Apple sheet is a small local Capacitor plugin that only exists
    inside the iOS app (app/ios/App/App/AppleSignInPlugin.swift). accountsAvailableHere() is
@@ -10107,10 +10398,16 @@ async function refreshAccount(){
   else if(r.status===401){ ACCT=null; saveAcctToken(''); }
   return ACCT;
 }
-/* The first sign-in binds the name this phone is ALREADY playing under, so nobody retypes a name
-   they picked months ago. The server's FIRST name-set is free (no 30-day cooldown), which is
-   exactly what makes attempting it automatically safe. If that name is taken, blocked or blank,
-   the inline editor opens pre-filled with the server's own sentence on it. */
+/* 2026-07-27 (v0.42, Blake change 1): "the nickname is created at account creation." A RETURNING
+   sign-in (the account already has a gameName) is untouched from before - this phone silently
+   adopts it, no prompt, ever. A BRAND-NEW account has no gameName, and now gets a BLOCKING
+   full-screen nickname prompt instead of the old "quietly try whatever name the phone happens to
+   be using, and only ask if that fails" behaviour - see openNicknameGate()/submitNicknameGate(),
+   right below, for the loop that cannot be skipped or dismissed until POST /account/name returns
+   200. bindAccountName() itself now just decides WHICH of those two things happens and returns a
+   promise that resolves once the account genuinely has a name either way - accountSignIn() awaits
+   it, which is what makes "continue automatically into whatever the player was doing" (§ NET's
+   requireAccountThen()/ONLINE_PENDING) work for free: nothing downstream runs until a name exists. */
 async function bindAccountName(){
   if(!ACCT||!ACCT.token)return;
   if(ACCT.gameName){
@@ -10120,26 +10417,69 @@ async function bindAccountName(){
     toast("You're in! You are "+ACCT.gameName+' on the leaderboard.');
     return;
   }
-  const want=cleanName(chosenName(),'');
-  if(want&&!isBadName(want)){
-    const r=await accountFetch('/account/name',{auth:ACCT.token,name:want});
-    if(r.status===200&&r.body&&r.body.gameName){
-      ACCT.gameName=r.body.gameName;
-      // v0.36 item 3: this ONE call is also how the claim gets discovered on a first sign-in -
-      // the server reports any history sitting under this name right here, so there is no second
-      // request to make. CLAIM_PROBED is set so the later probe does not repeat it.
-      if(r.body.claimWindow)ACCT.claimWindow=r.body.claimWindow;
-      CLAIM_PROBED=true;
-      if(r.body.pendingClaim&&ACCT.claimWindow&&ACCT.claimWindow.open)
-        ACCT_CLAIM=Object.assign({name:ACCT.gameName},r.body.pendingClaim);
-      toast("You're in! You are "+ACCT.gameName+' on the leaderboard.');
-      return;
-    }
-    openAccountNameEdit('account',(r.body&&r.body.message)||'Pick the name you want on the leaderboard.');
+  return new Promise(resolve=>{
+    NICK_GATE_RESOLVE=resolve;
+    openNicknameGate();
+  });
+}
+// The account currently mid-gate, if any - see openNicknameGate()/submitNicknameGate(). A plain
+// module-level var (not a return value passed around) because the overlay's own Save button, not
+// a function argument, is what eventually resolves the promise bindAccountName() is holding open.
+let NICK_GATE_RESOLVE=null;
+/* The blocking nickname prompt itself. No Cancel/Close anywhere on #nicknameGateOverlay's markup
+   (see its HTML comment) - this is a genuine gate, not a dismissable dialog, because the app has
+   no other way to know what to put on the leaderboard for a brand-new account. Prefilled with
+   whatever name this phone already happens to be using (chosenName() - a guest's current stock
+   seat name, almost always) purely as a convenient starting point; the player still has to tap
+   Save, and can change it to anything before doing so. */
+function openNicknameGate(){
+  const inp=$('nickGateInput'), warn=$('nickGateWarn');
+  if(inp)inp.value=cleanName(chosenName(),'');
+  if(warn)warn.textContent='';
+  openOverlay('nicknameGateOverlay');
+  try{ inp.focus(); inp.select(); }catch(e){}
+}
+/* Reuses the exact same NAME_MAX cap, cleanName()/isBadName() checks, and server call every other
+   name box in the app uses (§ NAMES) - this is not a second implementation. Loops in place on any
+   rejection (blank, blocked locally, or the SERVER'S OWN message - taken, blocked, etc., surfaced
+   verbatim on the warning line) until POST /account/name genuinely returns 200; only then does the
+   gate close and the pending sign-in (bindAccountName()'s caller) continue. */
+async function submitNicknameGate(){
+  const inp=$('nickGateInput'), warn=$('nickGateWarn'), btn=$('btnNickGateSave');
+  if(!inp||!warn||!btn)return;
+  const raw=(inp.value||'').slice(0,NAME_MAX).trim();
+  if(!raw){ warn.textContent='Type a name to continue.'; return; }
+  if(isBadName(raw)){ warn.textContent='Pick a nicer name.'; return; }
+  if(!ACCT||!ACCT.token){ warn.textContent='Signed out - please sign in again.'; return; }
+  btn.disabled=true; warn.textContent='Saving...';
+  const r=await accountFetch('/account/name',{auth:ACCT.token,name:raw});
+  btn.disabled=false;
+  if(r.status!==200||!r.body||!r.body.gameName){
+    warn.textContent=(r.body&&r.body.message)||"That name couldn't be saved. Try another one.";
     return;
   }
-  openAccountNameEdit('account','Pick the name you want on the leaderboard.');
+  ACCT.gameName=r.body.gameName;
+  // v0.36 item 3: this ONE call is also how the claim gets discovered on a first sign-in - the
+  // server reports any history sitting under this name right here, so there is no second request
+  // to make. CLAIM_PROBED is set so the later probe does not repeat it. Unchanged from before this
+  // batch - just moved from the old auto-try into this explicit Save.
+  if(r.body.claimWindow)ACCT.claimWindow=r.body.claimWindow;
+  CLAIM_PROBED=true;
+  if(r.body.pendingClaim&&ACCT.claimWindow&&ACCT.claimWindow.open)
+    ACCT_CLAIM=Object.assign({name:ACCT.gameName},r.body.pendingClaim);
+  setChosenName(ACCT.gameName);
+  closeOverlay('nicknameGateOverlay');
+  toast("You're in! You are "+ACCT.gameName+' on the leaderboard.');
+  const resolve=NICK_GATE_RESOLVE; NICK_GATE_RESOLVE=null;
+  if(resolve)resolve();
+  // v0.42: resume an online action that was waiting specifically on THIS gate - the defensive
+  // "signed in but no name yet" branch of requireAccountThen() (§ NET), not a fresh sign-in
+  // (which resumes through welcomeSignIn() instead, and would have left this null already).
+  const cont=ONLINE_PENDING; ONLINE_PENDING=null;
+  if(cont)cont();
 }
+$('btnNickGateSave').onclick=()=>{ submitNicknameGate(); };
+$('nickGateInput').addEventListener('keydown',e=>{ if(e.key==='Enter')submitNicknameGate(); });
 async function accountSignIn(){
   const plugin=appleSignInPlugin();
   if(!plugin||ACCT_BUSY||(ACCT&&ACCT.uid))return;
@@ -10238,7 +10578,7 @@ function renderAccountWho(){
   const sub=$('acctWhoSub'), txt=accountSubtitle();
   if(sub&&sub.textContent!==txt)sub.textContent=txt;
 }
-/* The three rows. They NEVER move, hide or reorder - signed in, signed out, phone or website -
+/* The three sign-in rows NEVER move, hide or reorder - signed in, signed out, phone or website -
    so the panel reads the same everywhere and nothing jumps under a thumb. */
 function renderAccountRows(){
   renderAccountWho();
@@ -10253,10 +10593,23 @@ function renderAccountRows(){
   if(!on)closeAcctDeleteConfirm();
   let txt;
   if(ACCT_NOTICE)txt=ACCT_NOTICE;
-  else if(!here)txt='Signing in is coming soon on the website. In the iPhone app you can sign in with Apple - either way the game plays exactly the same.';
+  // 2026-07-27 (v0.42): online is accounts-only now, so a website visitor (no Apple plugin here)
+  // genuinely cannot play online yet - this line used to promise "either way the game plays
+  // exactly the same," which stopped being true the moment that shipped.
+  else if(!here)txt='Signing in is coming soon on the website. In the iPhone app you can sign in with Apple. Offline play works the same either way; online play needs an account, so it is not available here yet.';
   else if(on)txt='Signed in with Apple'+(ACCT.gameName?(' as '+ACCT.gameName):'')+'. That only keeps your place on the leaderboard yours - nothing else changes.';
-  else txt='Signing in is optional. It keeps your place on the leaderboard yours on any phone. Everything works without it.';
+  else txt='Signing in is optional. It keeps your place on the leaderboard yours on any phone, and it is required to play online. Offline play works without it.';
   if(note.textContent!==txt)note.textContent=txt;
+  // 2026-07-27 (v0.42): a GUEST has no name to change anymore - chosenName() gives them only
+  // their seat's stock name, never a nickname - so this row is disabled with a plain sentence
+  // instead of opening an editor that would have nothing real to save. See btnAcctName's
+  // header comment for why the click handler is guarded the same way, belt-and-suspenders.
+  const nameRow=$('btnAcctName');
+  if(nameRow){
+    nameRow.disabled=!on;
+    const small=nameRow.querySelector('small');
+    if(small)small.textContent=on?'':"Sign in to have a name - guests play under their seat's stock name.";
+  }
   // v0.36 item 3: signing in or out has to repaint the claim block too, or a signed-out panel
   // could be left showing an offer that belongs to nobody.
   renderAccountClaim();
@@ -10511,6 +10864,11 @@ function closeWelcome(){
    right over the seat rows on the menu, which is a poor first thing to see on a first launch. */
 function chooseGuest(){
   rememberWelcomeChoice('guest');
+  // 2026-07-27 (v0.42): if this screen was reached via requireAccountThen() (§ NET - a
+  // signed-out tap on "Online play" or a join link), choosing to stay a guest means "no thanks"
+  // to that action, not "do it anyway" - online has no guest path anymore. Drop it for good
+  // rather than letting it fire on some later, unrelated sign-in.
+  ONLINE_PENDING=null;
   closeWelcome();
 }
 /* The Apple button. accountSignIn() records the choice itself the moment a session exists, so
@@ -10524,7 +10882,13 @@ async function welcomeSignIn(){
   try{ await accountSignIn(); }
   catch(e){}
   if(btn)btn.disabled=false;
-  if(ACCT&&ACCT.uid)closeWelcome();
+  if(ACCT&&ACCT.uid){
+    closeWelcome();
+    // 2026-07-27 (v0.42): resume whatever online action (Host/Join/an invite link) sent this
+    // player through sign-in first, code preserved and all - see requireAccountThen(), § NET.
+    const cont=ONLINE_PENDING; ONLINE_PENDING=null;
+    if(cont)cont();
+  }
 }
 /* v0.39: the signed-in player's button. Nothing to decide and nothing to sign into - they already
    have an account and it is already on this phone - so this only records that they have seen this
@@ -10633,13 +10997,58 @@ function sendInvite(link){
   }
   location.href=`sms:&body=${encodeURIComponent(text)}`;
 }
+/* ======================== online is accounts-only (2026-07-27, v0.42, Blake change 3) ========
+   "Let's make online mode an account only feature as well. So no guests." requireAccountThen(cont)
+   is the ONE gate every online entry point runs through before anything else - $('btnOnline')
+   below (Host, and Join via the online entry modal) and openJoinOverlay() (§ NET, above - which
+   every join path funnels through: the manual button, a ?join=CODE web link, and an iOS
+   Universal Link, per its own long-standing comment).
+   Three cases:
+     - accountsAvailableHere() is false (a plain browser, no Apple plugin - the website today) -
+       online is not offered at all. Say so in one sentence and go nowhere, rather than opening a
+       flow that can only fail. (This DOES mean online multiplayer is iPhone-app-only until the
+       website's own Sign in with Apple ships - see § ACCOUNT SIGN-IN's header comment for why
+       that flow is deliberately parked for now.)
+     - already signed in WITH a name - run `cont` immediately, exactly like before this change
+       existed.
+     - signed in but somehow without a name yet - defensive only: every fresh sign-in as of
+       change 1 cannot finish without picking one, so this should be unreachable going forward,
+       but an account that signed in under an OLDER build could have backed out of the (then-
+       dismissable) inline name editor and be sitting on a token with no gameName. Route through
+       the SAME blocking nickname gate a brand-new sign-in uses (openNicknameGate(), § ACCOUNT
+       SIGN-IN) rather than ever letting a nameless account onto the wire - see
+       submitNicknameGate()'s own ONLINE_PENDING resume for the other half of this.
+     - signed out but able to sign in - reuse the real first-run sign-in screen (openWelcome(),
+       § WELCOME) rather than build a second one, so creating a nickname (§ ACCOUNT SIGN-IN,
+       change 1 of this same session) happens before ever seeing a seat. `cont` is remembered in
+       ONLINE_PENDING and resumed automatically - room code and all - the moment sign-in
+       completes (see welcomeSignIn(), § WELCOME); choosing "Continue as a guest" instead drops it
+       for good (chooseGuest(), § WELCOME) rather than firing it later against the player's wish. */
+let ONLINE_PENDING=null;   // the online action waiting on a sign-in (or a nickname), or null
+function requireAccountThen(cont){
+  if(!accountsAvailableHere()){
+    toast('Online play needs an account. Sign in with Apple in the iPhone app to play online.');
+    return;
+  }
+  if(ACCT&&ACCT.uid){
+    if(ACCT.gameName){ cont(); return; }
+    ONLINE_PENDING=cont;
+    openNicknameGate();
+    return;
+  }
+  ONLINE_PENDING=cont;
+  openWelcome();
+}
 /* ---- Online: entry point + host/join button wiring ---- */
 // v0.19.2: gate the speed picker HERE, before the online entry overlay even opens - hosting
 // only ever reaches the lobby through this button, so this covers Host completely; Join is
 // covered by openJoinOverlay()'s own gate (manual button AND deep-link joins both funnel
 // there). See gateOnSpeedPicker(), § UTIL, and HANDOFF.md v0.19.2 for why online can't hold a
 // live table client-side the way offline holds the deal.
-$('btnOnline').onclick=()=>{ $('onlineErr').textContent=''; gateOnSpeedPicker(()=>openOverlay('onlineOverlay')); };
+$('btnOnline').onclick=()=>{
+  $('onlineErr').textContent='';
+  requireAccountThen(()=>gateOnSpeedPicker(()=>openOverlay('onlineOverlay')));
+};
 $('btnOnlineClose').onclick=()=>$('onlineOverlay').classList.add('hidden');
 // v0.11 item 3: confirmed hosting/joining DOES claim the same local save slot - saveLastRoom()
 // overwrites the single 'nasty-last-room' localStorage record the instant a room is created or
@@ -10649,8 +11058,9 @@ $('btnHostGame').onclick=()=>{ $('onlineOverlay').classList.add('hidden');
   confirmOverwriteThenRun(openHostSpeedOverlay); };   // v0.25 item 2: speed first, then the room
 $('btnJoinGame').onclick=()=>{ $('onlineOverlay').classList.add('hidden');
   confirmOverwriteThenRun(()=>{ const qs=new URLSearchParams(location.search); openJoinOverlay(qs.get('join')); }); };
-$('btnJoinCodeNext').onclick=advanceJoinToNameStep;
-$('btnJoinNameNext').onclick=joinSubmitName;
+// v0.42: openJoinOverlay() itself now goes straight from the code to the seat step (its own
+// requireAccountThen() gate guarantees a signed-in name) - see joinWithCode(), § NET.
+$('btnJoinCodeNext').onclick=joinWithCode;
 /* 2026-07-26 (v0.37 item 1, the safety net): Cancel on the join screen used to do nothing but
    hide the card. That was fine on the code/name steps (nothing has happened yet), but on the
    SEAT step this device is already IN the room - so hiding the card left the player online,
@@ -11881,6 +12291,23 @@ addEventListener('pagehide',flushPendingOfflineSave);   // v0.10.3: belt-and-sus
 // be a while if the app's just sitting open on the main menu.
 addEventListener('online',drainSoloQueue);
 
+/* ============================= § COMING SOON (v0.43, 2026-07-27) =============================
+   The whole screen shown INSTEAD of #menu/#game on the public website while
+   NASTY_WEBSITE_GATE_ENABLED is on - see § CAPACITOR (top of this script) for the flag itself,
+   the placeholder QR/URL constants, and the three things that bypass this entirely (the iOS
+   app, #autotest/#autotest6, ?preview=1). Called exactly once, from the boot sequence at the very
+   bottom of this file, and ONLY on the branch that decided not to render the menu at all - so
+   there is no "boot the game, then cover it" step, no half-started network connection, and no
+   animation/timer left running behind this screen to ever misfire. */
+function renderComingSoon(){
+  // #menu starts visible in the markup (no "hidden" class) - this is the one place that hides it
+  // when the gate is up, so nothing sits, even invisibly, behind the coming-soon card.
+  $('menu').classList.add('hidden');
+  const img=$('csQrImg');
+  if(img)img.src=PLACEHOLDER_APPSTORE_QR_DATAURI;
+  $('comingSoon').classList.remove('hidden');
+}
+
 /* ============================= § ADMIN (god mode, v0.9 item 9) =============================
    Blake's own admin tool - tap the version number 7 times on the main menu to reveal it. The
    token is entered once and remembered on that device (localStorage). All admin actions are
@@ -12012,6 +12439,21 @@ registerPushIfGranted();   // v0.25 item 3: refresh the APNs device token on EVE
 // (no-op on the website / when permission was never granted) - see § PUSH for the field
 // failure this fixes; the token lands via onPushRegistered() -> sendPushToken() and is then
 // (re)sent to the server on every online connect/rejoin.
+/* v0.43 website coming-soon gate (see § CAPACITOR for NASTY_WEBSITE_GATE_ENABLED and the full
+   reasoning). AUTOTEST_HASH uses the same loose indexOf() check the rest of this file already
+   uses for #autotest/#autotest6 (e.g. syncOfflineSaveFromIdb's caller, updateMenuResumeButtons)
+   rather than an exact match, so it can never accidentally miss one of the two test hashes.
+   PREVIEW_MODE is Blake's own escape hatch (?preview=1, documented in HANDOFF.md "v0.43") to see
+   the real site while the gate stays up for everyone else - it is also what this project's own UI
+   tests use to reach the real menu on the website without needing to fake being the app. When
+   SHOW_COMING_SOON is true, #menu/#game are never rendered or booted at all (see the else branch
+   below) - renderComingSoon() is the ONLY thing that runs. */
+const AUTOTEST_HASH=location.hash.indexOf('autotest')>=0;
+const PREVIEW_MODE=new URLSearchParams(location.search).get('preview')==='1';
+const SHOW_COMING_SOON=NASTY_WEBSITE_GATE_ENABLED&&!IS_APP&&!AUTOTEST_HASH&&!PREVIEW_MODE;
+if(SHOW_COMING_SOON){
+  renderComingSoon();
+}else{
 renderMenu();
 syncOfflineSaveFromIdb();   // v0.10.3: async self-heal - see "IndexedDB mirror" above. Runs
 // after the synchronous first paint below; re-renders the resume tiles if it finds
@@ -12069,6 +12511,7 @@ else{
     // § REJOIN LOBBY). No more surprise landings of any kind.
     updateMenuResumeButtons();
   }
+}
 }
 // v0.14: Universal Links, cold-start case - the app was launched (from cold, or from being
 // fully suspended) BY a tap on https://play.nastyboardgame.com/join/CODE. The native shell
