@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '72e5ff81-f81c-4cf0-b290-4a6d127b80f3'
+BUILD_SUBMISSION_ID = '1e7464d0-4ce6-4959-b479-94a614c4e7ed'
 
 
 def current_build():
@@ -101,14 +101,13 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p>This one is mostly about the computer players.</p>
+<p>This one is about where your card lands when you play it.</p>
 <p>What is in this one:</p>
 <ul>
-<li><b>The Nasty computers got a lot smarter, and this time it is a real jump.</b> You were right about them. They could always see their whole hand, but they never planned the ORDER they played it in - they just grabbed whatever looked best that second. Now they think the whole hand through before the first card goes down: clear the peg with the 8 first, THEN bring the King out. Measured over thousands of games: two people who play well together used to beat two Nasty computers about 53 games in 100, and now it is about 44. Last time this number moved by one point. This time it moved by nine.</li>
-<li><b>They are still at the mercy of the cards.</b> That was the part you asked for and it has not changed. When the deal runs against them they still lose, and they still cannot see your cards, your partner's cards, or the deck. We re-ran the whole cheating detector suite on the new brain and it passed everything.</li>
-<li><b>Solo got tougher too.</b> Nasty is harder on your own now as well, not just in teams. You said to update solo as well, so we did.</li>
-<li><b>Groundwork for the leaderboard.</b> When you are signed in, your results now travel with your account. Nothing about the shared board changes in this build - it still counts everyone exactly the way it does today. This is the piece that has to be on everybody's phone BEFORE the board is switched over to accounts, and getting that order wrong is what cost us some scores earlier. So: install this one, play a bit, and the switch gets flipped after that.</li>
-<li><b>Two small ones you spotted.</b> The NASTY badge on the sign in screen is properly centred now and no longer hangs over the edge of its box. And the message bar and the Skip button stay put instead of dropping down every time your hand runs out of cards and jumping back up when you get new ones.</li>
+<li><b>Played cards no longer sit on the holes.</b> You asked for this twice - the cards should be laid in the blank space between the pillars, and yellow's card in a 4 player game always sort of touched the holes. It really did. We measured it before changing anything: on 45 of the 50 seat and screen size combinations we checked, the played card was sitting on a hole. Now every seat's card lands in genuinely open wood, on the 4 player board and the 6 player board, on every phone size, clear of the holes, clear of the deck and clear of the name plates. Nothing touches anything.</li>
+<li><b>The little name under a played card is gone, on purpose.</b> On a phone it was drawing about 4 pixels tall, so nobody could read it, and it was nearly three times wider than the card itself - which is exactly what kept shoving the card onto the holes. The card now has a coloured edge in that player's own colour instead. You can see that at any size, and it is the same colour language the tees and the name plates already use. If you want a name back on a played card, say so and it goes ON the card rather than under it.</li>
+<li><b>The stale message from the last game is fixed in the app too.</b> If somebody tapped a name after a game to peek at their leftover cards, the little "tap again to hide" line used to hang around into the next game and the one after that. That got fixed on the website a couple of days ago but the app had not caught up yet. It has now.</li>
+<li><b>The app and the website are back on the same version.</b> They were both calling themselves v0.40 while being two different apps. They are both v0.41 now, which also means you get the sign in screen once on this update, the way it is supposed to work.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -123,7 +122,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - the Nasty computers plan their whole hand now', body], check=True)
+                    f'NASTY: build {BUILD} is live - played cards are off the holes now', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
