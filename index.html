@@ -25,6 +25,11 @@
     STYLE ......... all CSS (felt table, wood board, tees, cards, animations)
     § UTIL ........ helpers, RNG, sound synth (WebAudio)
     § LAYOUT ...... board geometry builder (52-hole loop for 4p, 78 for 6p)
+                    NOTE (v0.41): where each seat's PLAYED CARD lands is decided by
+                    refineDiscardPockets()/makeLayout(), which sit just AFTER the engine-extract
+                    END marker on purpose - buildLayout() is copied verbatim into the two server
+                    engines, so nothing about card placement may live inside it. Every LAY= in
+                    this file calls makeLayout(), never buildLayout() directly.
     § STATE ....... game state G, deck, deal schedules
     § ENGINE ...... legal-move generation + move application (THE RULES LIVE HERE)
     § AI .......... CPU players (easy / tricky / nasty)
@@ -1250,8 +1255,21 @@ button{font:inherit;cursor:pointer}
    and leaves the chip looking like the same small dark pill it always was. */
 #deckCount{position:absolute;left:50%;top:100%;transform:translate(-50%,4px);font-size:12.5px;color:#f6efd8;
   background:rgba(0,0,0,.72);padding:2px 9px;border-radius:99px;white-space:nowrap}
-.dLabel{position:absolute;left:50%;top:100%;transform:translate(-50%,4px);font-size:12.5px;color:#ffe9a8;
-  background:rgba(0,0,0,.35);padding:2px 9px;border-radius:99px;white-space:nowrap}
+/* v0.41 (2026-07-26): the played card wears its OWNER'S COLOUR instead of a name caption.
+   What used to be here: a `.dLabel` pill hanging 4px under the card reading "<name> · <rank>".
+   Two measured reasons it is gone, both written out at length in refineDiscardPockets()'s block
+   comment (just past the engine-extract END marker). Short version: (1) at a phone's board scale
+   its 12.5 board-px text rendered about
+   4.5px tall, which nobody can read; (2) at the app's own 10-character name limit the pill was
+   175 board px wide, nearly 3x a 6P card, and an exhaustive search of the whole board proved
+   there is nowhere on a 6-player board that a card plus that caption clears every hole - it was
+   the single thing making Blake's ask impossible. The colour frame below says the same thing
+   ("this is Yellow's card") in the language this board already speaks everywhere else - the
+   tees, the start rings, the safe-row lanes, the name plates - and reads at any size.
+   --dcol is set per play by showDiscard() (§ RENDER); the fallback keeps a card visible even if
+   a future caller forgets to set it. DISC_RING (beside refineDiscardPockets) reserves this ring's 3px in the
+   placement maths, so the frame can never be the thing that touches a hole. */
+.dFace .card{box-shadow:0 0 0 3px var(--dcol,#8a6a38),0 4px 10px rgba(0,0,0,.45)}
 
 /* ---------- Hand bar ---------- */
 #handBar{flex:none;min-height:128px;padding:4px 10px calc(10px + env(safe-area-inset-bottom));
@@ -2103,7 +2121,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.40</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.41</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= GAME ================= -->
@@ -3594,10 +3612,10 @@ const sNo=()=>tone(180,.18,'triangle',.055,0,-30);
 /* ===== NASTY ENGINE EXTRACT: BEGIN =====
    v0.15 (server-authoritative rebuild): everything from here to "ENGINE EXTRACT: END" below
    is mechanically extracted verbatim by server/build-engine.js into server/engine.js (Node,
-   CommonJS) and server/cloud/engine.js (Deno, ESM) — the SAME rules code the client runs is
+   CommonJS) and server/cloud/engine.js (Deno, ESM) - the SAME rules code the client runs is
    what the server runs, so there is exactly one authored copy of the rules. These markers are
    part of the authored source: if this span ever moves, the markers must move with it. See
-   HANDOFF.md's "v0.15" section for the full extraction mechanism and regeneration step — this
+   HANDOFF.md's "v0.15" section for the full extraction mechanism and regeneration step - this
    is the single easiest thing for a future session to forget: edit the engine here, forget to
    run `npm run build-engine` in server/, and the server silently runs stale rules. A checked-in
    test (server/test-engine-sync.js) fails loudly if the generated files ever drift from this
@@ -4861,6 +4879,260 @@ function chooseAI(seat,moves){
   return best;
 }
 /* ===== NASTY ENGINE EXTRACT: END ===== */
+/* ================= v0.41 (2026-07-26): WHERE A PLAYED CARD LANDS =================
+   Blake, twice:
+     "During gameplay, always have the cards be laid in the blank space between pillars on the
+      board (not covering any holes) this should work on 4 person and 6 person games."
+     "when the yellow player in 4 person mode puts their card down it always sorta touches the
+      holes on the board. Move this slightly up."
+
+   WHAT IT USED TO DO (and why it could never have worked): every seat's played-card pocket was
+   a FIXED sideways nudge from that seat's deck pocket -
+
+       const perp={x:-u.y,y:u.x};
+       discardPockets.push({x:dx+perp.x*discOff, y:dy+perp.y*discOff, ...});
+
+   - and nothing in that line has ever looked at where a single hole is. Whether a given seat's
+   card happened to land clear was pure luck of the geometry, which is exactly why it was clear
+   for some seats and plainly on the holes for others. MEASURED on the real rendered page before
+   this change (real DOM rects for the card, real SVG circles for the holes, worst-case caption,
+   five phone widths from 320x568 to 430x932): 45 of the 50 seat/width combinations had the
+   played card or its caption sitting ON a hole, and the CARD ITSELF came as close as 0.1
+   rendered px to a hole on 6P and 4.6px on 4P. "Sorta touches the holes" was literally true.
+
+   WHAT IT DOES NOW: the fixed nudge above is only the STARTING GUESS. refineDiscardPockets()
+   walks outward from that guess in 3-board-px rings and takes the NEAREST position that gives
+   the whole rendered card real daylight on every side, so a card moves the smallest distance
+   that actually solves the problem - Blake asked for a slight move, not a relocation. What that
+   works out to: 36 to 87 board px on a 4P board (about 13 to 33 rendered px on a phone), and 105
+   to 150 on the much more crowded 6P board.
+
+   WHAT COUNTS AS "OPEN WOOD" - every one of these, no exceptions:
+     - every hole on the board (loop, safe row, base), at its full PAINTED size, not just the
+       bare hole: a start hole wears a coloured ring out to holeR+10.75, a safe-row hole out to
+       holeR+10, a base hole out to holeR+5.5 (see drawBoard(), § RENDER, for those strokes),
+       plus the coloured safe-row LANE that runs between each seat's five home holes;
+     - every seat's deck pocket AND the little card-count pill under it (the deck slides to
+       whoever is dealing, so a pocket that is empty right now is occupied next hand);
+     - every name plate, as a ROTATED box on its own chamfer, not a fat upright bounding box;
+     - the wood itself - all four corners of the card have to be inside the real octagon.
+   On top of all of that the card wants DISC_TARGET board px of daylight, so "clear" means a gap
+   you can see rather than a hairline miss. MEASURED AFTER (same probe, same 50 combinations):
+   nothing overlaps anything anywhere, and the nearest hole is 5.8 to 16.6 rendered px away on
+   4P and 2.3 to 4.7 on 6P.
+
+   HOW THIS STAYS OUT OF THE TEE-SELECTION BADGES' WAY (v0.37): it cannot fight them, by
+   construction. Since v0.37 a badge only ever moves to avoid ANOTHER BADGE - covering ordinary
+   board art is explicitly allowed - and it may never move more than MAX_BADGE_SHIFT (3 x holeR)
+   from its own peg. So nothing this function does can push a badge anywhere, and a badge can
+   never wander out here looking for room. They also do not stack visually: badges are z-index 26
+   and sit ABOVE the played card, so on the rare turn where a badge floats over a played card the
+   thing you are being asked to tap is the thing on top.
+
+   WHY THE CAPTION UNDER THE CARD HAD TO GO (the honest part): the old `.dLabel` pill was a
+   single unwrapped line of "<name> · <rank><suit>", which for the app's own 10-character name
+   limit measured 175 board px wide - nearly 3x the 60 board px of a 6P card. A full search of
+   the whole board proved there is NO position anywhere on a 6P board where a card plus a
+   175-wide caption clears every hole; even allowing the caption to sit on the bare hole discs it
+   only fit 180 to 304 board px away from its owner, in somebody else's corner. It was also
+   unreadable where Blake actually plays: 12.5 board px at a phone's board scale renders at about
+   4.5px tall. So the pill is gone and the played card now wears its OWNER'S COLOUR as a frame
+   instead (see `.dFace .card` in § STYLE and showDiscard() in § RENDER) - the same colour
+   language the tees, the start rings, the safe-row lanes and the name plates already use,
+   legible at any size, and it costs the layout nothing but its own 3px ring. This one is a
+   judgement call and it is written down as one: it removes a piece of text nobody asked to have
+   removed, and it is here because the measurements above say the alternative is a card that
+   cannot be placed. If Blake wants a name back on a played card, the honest way is to put it ON
+   the card, not under it.
+   ================================================================================ */
+/* HOW MUCH DAYLIGHT, AND HOW FAR THE CARD MAY GO TO GET IT. Two numbers, and they pull against
+   each other, so they were both settled by measuring the real board rather than by taste:
+     DISC_TARGET - the gap we are aiming for between the card's own edge and the PAINTED edge of
+       the nearest thing (hole ring, lane, deck, plate). 20 board px is about 5.5 rendered px on
+       the narrowest phone in the matrix and about 8 on the widest - a gap you can actually see,
+       which is the whole point of the complaint. The search takes the FIRST position that
+       reaches it, so nothing moves further than it has to.
+     DISC_BUDGET - the furthest a card may ever be moved from the spot it has always used. 150
+       board px is a bit over one hole step and keeps every card inside its owner's own corner of
+       the board, beside their base and their name plate. If a seat cannot reach DISC_TARGET
+       inside the budget, it takes the roomiest spot in the budget instead of wandering off to
+       find a perfect one somewhere that is nobody's idea of "your card" - a real case on the
+       crowded 6P board, see the measured table in HANDOFF.md's v0.41 section. */
+const DISC_TARGET=20;       // board px of daylight we aim for on every side of a played card
+const DISC_BUDGET=150;      // board px: the furthest a played card may ever be moved
+const DISC_RING=3;          // the owner-colour frame drawn around a played card (see § STYLE)
+const DISC_STEP=3;          // search granularity, board px - fine enough that the move is minimal
+/* Takes a finished layout and REWRITES its discardPockets in place, then hands the same object
+   back so call sites can wrap buildLayout() in it. It deliberately lives out here, past the
+   engine-extract END marker a few lines above, and buildLayout() itself is byte-for-byte
+   untouched by v0.41: everything between the two extract markers is copied verbatim into
+   server/engine.js and server/cloud/engine.js by server/build-engine.js, so a single changed
+   COMMENT in there would force both engines to be regenerated and both servers redeployed - for
+   a change about where a card sits on a screen, which no server has ever had an opinion about.
+   `node server/test-engine-sync.js` is what proves that stayed true. */
+function refineDiscardPockets(L){
+  const n=L.n, loop=L.loop, home=L.home, base=L.base, plaqueAnchor=L.plaque, deckPockets=L.deckPockets;
+  const discIdeal=L.discardPockets, discardPockets=[];
+  const cardW=discIdeal[0].w, cardH=discIdeal[0].h;
+  const hr=L.holeR;
+  /* --- the obstacle list, in board space. Circles {x,y,r}; capsules {ax,ay,bx,by,r};
+         axis-aligned boxes {l,t,r,b}; oriented boxes {cx,cy,hw,hh,rot}. Every radius/edge is the
+         PAINTED edge of the thing (drawBoard(), § RENDER, is the authority on those strokes) -
+         the clearance we want is added later, by the search, so that "how much daylight" is one
+         number in one place instead of being baked into thirty radii. --- */
+  const circles=[],capsules=[],boxes=[],obbs=[];
+  loop.forEach(h=>circles.push({x:h.x,y:h.y,r:hr+(h.start!=null?10.75:0)}));
+  for(let s=0;s<n;s++){
+    home[s].forEach(h=>circles.push({x:h.x,y:h.y,r:hr+10}));
+    // the coloured lane painted down the middle of the five safe holes (drawBoard(), § RENDER):
+    // stroke-width holeR*2+16 at its widest (Yellow's underlay), so half-width holeR+8.
+    capsules.push({ax:home[s][0].x,ay:home[s][0].y,bx:home[s][4].x,by:home[s][4].y,r:hr+8});
+    base[s].forEach(h=>circles.push({x:h.x,y:h.y,r:hr+5.5}));
+    // the deck, wherever the deal happens to be: the card box plus the count pill under it.
+    const d=deckPockets[s];
+    boxes.push({l:d.x-d.w/2,t:d.y-d.h/2,r:d.x+d.w/2,b:d.y+d.h/2+4+19});
+    /* the name plate. positionPlaques() (§ RENDER) measures and nudges the real element at
+       runtime, so this is a deliberately generous stand-in for it, and it is an ORIENTED box
+       because the plates lie along the board's diagonal chamfers - the upright bounding box of a
+       294x57 plate rotated 45 degrees is 248x248, which would wall off a whole corner of open
+       wood for no reason. Half-extents: measured worst case (a 10-character name, every viewport
+       from 320x568 to 1440x900) is 294x57 board px, so half-extents 147 x 28.5. On top of that
+       positionPlaques()'s screen-edge correction can pull a plate up to 64 (4P) / 42 (6P) board
+       px off this anchor, and it only ever pulls it back TOWARD the middle of the board (that is
+       what the correction is for - a plate hanging off the edge of the screen). So the reachable
+       set is the anchor box swept inward by that much, which is modelled here as the same box
+       with its centre moved half the drift inward and its half-extents grown by half the drift.
+       WHERE A PLATE CAN ACTUALLY GET TO, measured (10-character names, seven viewports from
+       320x568 to 1440x900, real getBoundingClientRect()s decomposed against each plate's own
+       anchor): 4P drifts up to 63 board px INWARD and 42 sideways along the chamfer; 6P up to 36
+       inward, 15 outward (that one is PLAQUE_SLIDE[6] doing its job) and 21 sideways. The
+       numbers below are those, rounded up. Everything the plate can reach is therefore the
+       anchor box swept over a little rectangle of offsets, and that sweep is expanded in the
+       PLATE'S OWN AXES rather than in x/y - a 6P plate is 294 long and 57 deep, so growing it
+       correctly costs its shallow axis a lot and its long axis almost nothing. Doing this
+       properly instead of just inflating all four sides by the biggest drift is worth a lot and
+       was measured: the crude version walls off so much of each corner that a 6P card cannot
+       find more than 8 board px of daylight anywhere near its owner, against ~19 with this one,
+       and the real plates still clear the settled cards by 23 rendered px or more everywhere. */
+    const PLQ_IN=n===4?70:42, PLQ_OUT=n===4?5:18, PLQ_SIDE=n===4?48:25;
+    const pa=plaqueAnchor[s], pd=Math.hypot(pa.x-500,pa.y-500)||1, rot=(pa.rot||0)*Math.PI/180;
+    const rx=(pa.x-500)/pd, ry=(pa.y-500)/pd;          // this plate's own outward direction
+    const tx=-ry, ty=rx;                               // and along its chamfer
+    const cOff=(PLQ_OUT-PLQ_IN)/2;                     // where the middle of that little rectangle sits
+    const hR=(PLQ_OUT+PLQ_IN)/2, hT=PLQ_SIDE;          // and how big it is
+    const cs=Math.cos(rot), sn=Math.sin(rot);
+    const grow=(ax,ay)=>hR*Math.abs(ax*rx+ay*ry)+hT*Math.abs(ax*tx+ay*ty);
+    obbs.push({cx:pa.x+rx*cOff, cy:pa.y+ry*cOff,
+               hw:147+grow(cs,sn), hh:28.5+grow(-sn,cs), rot});
+  }
+  /* --- geometry helpers. Each one returns the GAP in board px between the card's box and that
+         obstacle: positive = daylight, 0 or less = touching or overlapping. --- */
+  const nearest=(R,x,y)=>({x:Math.max(R.l,Math.min(x,R.r)),y:Math.max(R.t,Math.min(y,R.b))});
+  const gapCircle=(R,c)=>{const p=nearest(R,c.x,c.y);return Math.hypot(c.x-p.x,c.y-p.y)-c.r;};
+  // exact distance from a point to a segment
+  const ptSeg=(px,py,ax,ay,bx,by)=>{
+    const vx=bx-ax,vy=by-ay,L=vx*vx+vy*vy;
+    let t=L?((px-ax)*vx+(py-ay)*vy)/L:0; t=Math.max(0,Math.min(1,t));
+    return Math.hypot(px-(ax+t*vx),py-(ay+t*vy));
+  };
+  /* exact distance from an axis-aligned box to a segment: 0 if they cross or an end is inside,
+     otherwise the smallest of (each box corner to the segment) and (each segment end to the box).
+     That pair is enough for two convex shapes - whichever way round they sit, the closest pair
+     always involves a vertex of one of them. */
+  const segDist=(R,ax,ay,bx,by)=>{
+    const inside=(x,y)=>x>=R.l&&x<=R.r&&y>=R.t&&y<=R.b;
+    if(inside(ax,ay)||inside(bx,by))return 0;
+    let best=Infinity;
+    for(const [x,y] of [[R.l,R.t],[R.r,R.t],[R.r,R.b],[R.l,R.b]])
+      best=Math.min(best,ptSeg(x,y,ax,ay,bx,by));
+    for(const [x,y] of [[ax,ay],[bx,by]]){
+      const q=nearest(R,x,y); best=Math.min(best,Math.hypot(x-q.x,y-q.y));
+    }
+    return best;
+  };
+  const gapBox=(R,B)=>{                       // gap between two axis-aligned boxes
+    const dx=Math.max(B.l-R.r,R.l-B.r), dy=Math.max(B.t-R.b,R.t-B.b);
+    if(dx>=0&&dy>=0)return Math.hypot(dx,dy);
+    return Math.max(dx,dy);                   // one axis already overlaps: negative = overlap depth
+  };
+  /* gap between the card's box and a ROTATED box, by the separating-axis theorem: on each of the
+     four candidate axes, project both boxes and see how far apart they are; the largest of those
+     four numbers is the gap (and is negative when they overlap). This is exact when the closest
+     features are a face and a vertex, which is every case that matters here, and it is never an
+     over-estimate, so it can only ever be conservative. */
+  const gapObb=(R,O)=>{
+    const c=Math.cos(O.rot),s2=Math.sin(O.rot);
+    const rhw=(R.r-R.l)/2,rhh=(R.b-R.t)/2,rcx=(R.l+R.r)/2,rcy=(R.t+R.b)/2;
+    const dx=rcx-O.cx,dy=rcy-O.cy;
+    const axisGap=(ax,ay)=>Math.abs(dx*ax+dy*ay)
+      -(rhw*Math.abs(ax)+rhh*Math.abs(ay))
+      -(O.hw*Math.abs(c*ax+s2*ay)+O.hh*Math.abs(-s2*ax+c*ay));
+    return Math.max(axisGap(1,0),axisGap(0,1),axisGap(c,s2),axisGap(-s2,c));
+  };
+  const woodGap=(x,y)=>{                       // how far this corner is from falling off the wood
+    const dx=x-500,dy=y-500;
+    return octRimR(Math.atan2(dy,dx))-Math.hypot(dx,dy);
+  };
+  const halfW=cardW/2+DISC_RING, halfH=cardH/2+DISC_RING;
+  // The single number the search optimises: the smallest gap between this card (frame included)
+  // and ANYTHING it must not touch. Bigger is better; anything <= 0 is a card sitting on the art.
+  const daylight=(cx,cy)=>{
+    const R={l:cx-halfW,t:cy-halfH,r:cx+halfW,b:cy+halfH};
+    let g=Infinity;
+    for(const c of circles){ const d=gapCircle(R,c); if(d<g){g=d; if(g<=0)return g;} }
+    for(const k of capsules){ const d=segDist(R,k.ax,k.ay,k.bx,k.by)-k.r; if(d<g){g=d; if(g<=0)return g;} }
+    for(const b of boxes){ const d=gapBox(R,b); if(d<g){g=d; if(g<=0)return g;} }
+    for(const o of obbs){ const d=gapObb(R,o); if(d<g){g=d; if(g<=0)return g;} }
+    for(const [x,y] of [[R.l,R.t],[R.r,R.t],[R.l,R.b],[R.r,R.b]]){
+      const d=woodGap(x,y); if(d<g){g=d; if(g<=0)return g;}
+    }
+    return g;
+  };
+  /* --- the search: rings outward from the historical position, in DISC_STEP board-px steps, out
+         to DISC_BUDGET. It stops at the FIRST position with DISC_TARGET board px of daylight, so
+         a card never moves further than it has to (4P needs 21 to 66 board px; 6P, which is a far
+         more crowded board, needs 84 to 132). If nothing in the budget reaches the target it
+         keeps the roomiest position it saw instead - staying near your own base beats a perfect
+         gap in somebody else's corner.
+         Within a ring the angles are tried starting OUTWARD (away from the board centre, i.e.
+         toward this seat's own base and name plate) and alternating either side of it, so when
+         two spots tie the card ends up further from the traffic and nearer its owner - which is
+         also the direction of Blake's "move this slightly up". Deterministic: the same board
+         always produces the same pockets, on every device and in every test run. --- */
+  for(let s=0;s<n;s++){
+    const ideal=discIdeal[s];
+    const outward=Math.atan2(ideal.y-500,ideal.x-500);
+    /* Every candidate this seat is allowed to use, nearest first. One list, walked twice: once
+       to find out how much daylight this board can actually give this seat, and once to take the
+       NEAREST position that delivers it. Doing it in that order is what stops a card drifting an
+       extra 45 board px away in exchange for half a pixel of extra gap. */
+    const cands=[{x:ideal.x,y:ideal.y,moved:0}];
+    for(let rad=DISC_STEP;rad<=DISC_BUDGET;rad+=DISC_STEP){
+      const steps=Math.max(24,Math.round(rad*1.2));      // ~3 board px of arc between candidates
+      for(let i=0;i<=steps/2;i++){
+        for(const sign of (i===0?[1]:[1,-1])){
+          const th=outward+sign*(2*Math.PI*i)/steps;
+          cands.push({x:ideal.x+rad*Math.cos(th),y:ideal.y+rad*Math.sin(th),moved:rad});
+        }
+      }
+    }
+    let reach=-Infinity;
+    for(const c of cands){ c.gap=daylight(c.x,c.y); if(c.gap>reach)reach=c.gap; if(reach>=DISC_TARGET)break; }
+    const goal=Math.min(DISC_TARGET,reach)-1e-6;
+    let best=cands[0];
+    for(const c of cands){ if(c.gap===undefined)c.gap=daylight(c.x,c.y); if(c.gap>=goal){best=c;break;} }
+    // `moved` and `gap` are carried onto the pocket purely so the permanent regression suite can
+    // read the settled placement off the real rendered board (see buildTable(), § RENDER, which
+    // writes them onto the element as data-moved / data-gap). Nothing draws from them.
+    discardPockets.push({x:best.x,y:best.y,w:cardW,h:cardH,moved:best.moved,gap:best.gap});
+  }
+  L.discardPockets=discardPockets;
+  return L;
+}
+// The one way the app is allowed to build a layout, so a played card can never be positioned by
+// the raw pre-v0.41 rule by accident. Every `LAY=` in this file goes through here: a fresh game,
+// a resumed one, a game booted from the network, and a deal action rebuilding the board.
+function makeLayout(n,viewSeat){ return refineDiscardPockets(buildLayout(n,viewSeat)); }
 
 /* ============================= § RENDER ============================= */
 const SVG='http://www.w3.org/2000/svg';
@@ -4987,7 +5259,14 @@ function buildTable(){
     const d=document.createElement('div'),p=LAY.discardPockets[s];
     d.className='tableCard discardCard'; d.id=`discard-${s}`;
     d.style.left=p.x+'px'; d.style.top=p.y+'px'; d.style.width=p.w+'px'; d.style.height=p.h+'px';
-    d.innerHTML=`<div class="dFace"></div><div class="dLabel hidden"></div>`;
+    // v0.41: the owner's colour, set once here so the frame is right even before the first play,
+    // and `data-moved` = how far refineDiscardPockets() had to nudge this pocket off the holes
+    // (board px). Both display-inert; data-moved exists purely so the permanent regression suite
+    // can read the settled placement off real rendered output instead of re-deriving it.
+    d.style.setProperty('--dcol',G.seats[s].color.c);
+    d.dataset.moved=(p.moved==null?-1:p.moved).toFixed(1);
+    d.dataset.gap=(p.gap==null?-1:p.gap).toFixed(1);
+    d.innerHTML=`<div class="dFace"></div>`;
     dl.appendChild(d);
   }
   syncAll();
@@ -5062,8 +5341,12 @@ function showDiscard(seat,card){
   fadeAllDiscards();   // exactly one "last played" card visible at a time, see the comment above
   const d=$(`discard-${seat}`);
   d.querySelector('.dFace').innerHTML=cardHTML(card);
-  const lb=d.querySelector('.dLabel'); lb.classList.remove('hidden');
-  lb.textContent=`${G.seats[seat].name} · ${card.r}${card.s}`;
+  // v0.41: the name caption under the card is gone (see .dFace .card in § STYLE and
+  // refineDiscardPockets(), just past the engine-extract END marker, for the measurements behind
+  // that). Whose card it is now comes from the frame colour, re-set here as well as at build
+  // time, so a rebuilt board, a reconnect or a seat colour change can never leave a card wearing
+  // the wrong player's colour.
+  d.style.setProperty('--dcol',G.seats[seat].color.c);
   d.classList.add('show');
 }
 // Clears every seat's played-card visual - called at the START of a fresh deal (doDeal()/
@@ -7747,7 +8030,7 @@ function bootGameFromNetwork(action){
   CUR_MOVES=[]; CUR_SEAT=-1; SEL=null;
   const cols=action.n===4?COLORS4:COLORS6;
   const seats=action.seats.map((s,i)=>({name:s.name,type:s.type,diff:s.diff,color:cols[i]}));
-  LAY=buildLayout(action.n,computeViewSeat(action.n,seats));
+  LAY=makeLayout(action.n,computeViewSeat(action.n,seats));
   newGame({n:action.n,teams:action.teams,seats},{deck:action.deck,dealer:action.dealer});
   NET.tableSpeed=action.tableSpeed||1;
   // 2026-07-23 fix (Blake's items 3+4) - THE REAL ROOT CAUSE of "I was on fast but my friend
@@ -7824,7 +8107,7 @@ function bootGameFromSnapshot(snapshotG,paused,tableSpeed,appliedSeq){
   // see checkStateDigest()'s comment for why this matters.
   NET.appliedSeq=typeof appliedSeq==='number'?appliedSeq:-1;
   NET.pendingStateCheck=null;   // v0.20: a fresh snapshot makes any older pending digest moot
-  LAY=buildLayout(G.n,computeViewSeat(G.n,G.seats));
+  LAY=makeLayout(G.n,computeViewSeat(G.n,G.seats));
   saveLastRoom(NET.code,true);
   resetNetUiFlow();
   $('menu').classList.add('hidden');
@@ -9193,7 +9476,7 @@ function startGame(){
   // v0.12: solo vs-CPU always rotates to put you at the bottom; pass-and-play (2+ human
   // seats) and autotest (0 human seats, see below) deliberately do NOT rotate - see
   // computeViewSeat()'s comment, § LAYOUT.
-  LAY=buildLayout(CFG.n,computeViewSeat(CFG.n,seats));
+  LAY=makeLayout(CFG.n,computeViewSeat(CFG.n,seats));
   newGame({n:CFG.n,teams:CFG.teams,seats});
   $('menu').classList.add('hidden');
   $('game').classList.remove('hidden');
@@ -11467,7 +11750,7 @@ function resumeOfflineGame(slot){
   // v0.12: NET.online must be false BEFORE this call (moved the online-teardown line above up
   // a few lines for this) so computeViewSeat() can't mistake a resumed OFFLINE save for an
   // online game off stale NET state - see computeViewSeat()'s comment, § LAYOUT.
-  LAY=buildLayout(G.n,computeViewSeat(G.n,G.seats));
+  LAY=makeLayout(G.n,computeViewSeat(G.n,G.seats));
   $('menu').classList.add('hidden');
   $('game').classList.remove('hidden');
   $('winOverlay').classList.add('hidden');
