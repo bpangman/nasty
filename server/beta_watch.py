@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '1e7464d0-4ce6-4959-b479-94a614c4e7ed'
+BUILD_SUBMISSION_ID = '17c5b103-f6a1-4157-94fa-505319af29b3'
 
 
 def current_build():
@@ -101,13 +101,12 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p>This one is about where your card lands when you play it.</p>
+<p>This one is about the setup screen.</p>
 <p>What is in this one:</p>
 <ul>
-<li><b>Played cards no longer sit on the holes.</b> You asked for this twice - the cards should be laid in the blank space between the pillars, and yellow's card in a 4 player game always sort of touched the holes. It really did. We measured it before changing anything: on 45 of the 50 seat and screen size combinations we checked, the played card was sitting on a hole. Now every seat's card lands in genuinely open wood, on the 4 player board and the 6 player board, on every phone size, clear of the holes, clear of the deck and clear of the name plates. Nothing touches anything.</li>
-<li><b>The little name under a played card is gone, on purpose.</b> On a phone it was drawing about 4 pixels tall, so nobody could read it, and it was nearly three times wider than the card itself - which is exactly what kept shoving the card onto the holes. The card now has a coloured edge in that player's own colour instead. You can see that at any size, and it is the same colour language the tees and the name plates already use. If you want a name back on a played card, say so and it goes ON the card rather than under it.</li>
-<li><b>The stale message from the last game is fixed in the app too.</b> If somebody tapped a name after a game to peek at their leftover cards, the little "tap again to hide" line used to hang around into the next game and the one after that. That got fixed on the website a couple of days ago but the app had not caught up yet. It has now.</li>
-<li><b>The app and the website are back on the same version.</b> They were both calling themselves v0.40 while being two different apps. They are both v0.41 now, which also means you get the sign in screen once on this update, the way it is supposed to work.</li>
+<li><b>Picking bots moved.</b> There used to be a whole row on the setup screen just for choosing each computer opponent's difficulty. That row is gone now. Instead, when you tap "Pick your seat," every bot sitting at the table has its own easy, medium, or hard picker right there next to its name, so you choose your own seat and set up the bots in the same spot, in one step.</li>
+<li><b>The menu got a new card up top with you on it.</b> If you are signed in, it shows your color, your name, and your real record, games, wins, and points, and tapping it takes you straight to the family leaderboard. If you have not signed in yet, it gently invites you to instead.</li>
+<li><b>A "what's new in this update" row and a rotating tip.</b> The row you are reading about right now also lives right in the app, and the menu shows a different quick tip about the game each time you open it.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -122,7 +121,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - played cards are off the holes now', body], check=True)
+                    f'NASTY: build {BUILD} is live - CPU picks moved into the seat popup', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
