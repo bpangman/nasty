@@ -11044,6 +11044,17 @@ let REVEAL_SEAT=-1;
 function resetPostGameReviewState(){
   REVEAL_SEAT=-1;
   updateTopbarForGameOver(false);
+  // Clearing the flag is not enough - it has to clear the DOM the reveal wrote.
+  // #handInfo is a permanently-empty spacer during live play (turn prompts moved
+  // to the update bubble in v0.13.3, see the note at renderHandFor()), so
+  // renderPostGameReveal() is the ONLY thing that ever writes to it. Nothing in a
+  // fresh game overwrites it, so without this a message like "Dana's cards - tap
+  // again to hide" survived the reset and sat there through every later game
+  // (Blake, 2026-07-26: still visible in a brand new 6 player game). Same for the
+  // revealed card fan and the highlighted plaque.
+  const info=$('handInfo'); if(info)info.textContent='';
+  const row=$('handRow'); if(row)row.innerHTML='';
+  document.querySelectorAll('.plaque.revealed').forEach(el=>el.classList.remove('revealed'));
 }
 // Item 4 - the ONE shared "leave a finished game, for free" implementation - reused by the win
 // popup's own "Back to menu" button AND the account panel's post-game "Back to the menu" row
