@@ -38,11 +38,19 @@
     § TURNS ....... async turn loop (humans + CPUs) - network-aware (see § NET) but the
                     offline path is untouched
     § UI .......... hand, card/piece selection, modals, menu. v0.42: the offline setup screen
-                    no longer creates pass-and-play games - it only picks each seat's CPU
-                    difficulty. WHICH seat is human is chosen in a new seat-picker popup
-                    (openOfflineSeatPicker()) shown when "Start game" is tapped. Old saves with
-                    2+ human seats still resume and play exactly as before - only the UI that
-                    CREATES a new local game changed.
+                    no longer creates pass-and-play games. WHICH seat is human is chosen in a
+                    seat-picker popup (openOfflineSeatPicker()) shown when "Start game" is
+                    tapped. Old saves with 2+ human seats still resume and play exactly as
+                    before - only the UI that CREATES a new local game changed.
+                    v0.44: each CPU's DIFFICULTY moved into that same seat popup too (every seat
+                    that isn't the one you're sitting in gets a live difficulty <select>) - the
+                    setup screen's own per-seat row (and #seatList) is gone entirely, nothing
+                    left there decides who's human OR how hard the CPUs play. In its place the
+                    setup screen grew three new things (Blake: "add some more stuff to the menu
+                    page... think of stuff that should be there"): a "you" card (renderYouCard() -
+                    your real record if signed in, a sign-in nudge if not), a "What's new" row
+                    (WHATS_NEW/openWhatsNew()), and a rotating rules-based tip line (MENU_TIPS/
+                    pickMenuTip()) - all three defined right after the seat popup, § MENU.
     § NET ......... online multiplayer: WS client, host/join lobby UI, deterministic
                     lockstep (server in /server, see HANDOFF.md "Online multiplayer").
                     v0.42: ACCOUNTS-ONLY - no guest join anymore. requireAccountThen() gates
@@ -579,8 +587,9 @@ button{font:inherit;cursor:pointer}
   padding:8px 10px;border-radius:10px;font-weight:700;font-size:13px;min-height:44px;
   flex:0 1 auto;min-width:0;line-height:1.2}
 .seg.on{background:var(--gold);border-color:var(--gold);color:#3a2c05}
-/* Same narrow-phone budget idea as .seatRow below: at 359px and under the label sheds a point of
-   size and most of its letter-spacing and the buttons tighten. 375 and up never see this block.
+/* The same "tighten a couple of pixels, and only under 360px" idea used in a few other spots in
+   this file: at 359px and under the label sheds a point of size and most of its letter-spacing
+   and the buttons tighten. 375 and up never see this block.
    HISTORY (kept because it explains the shape of these rules): the longest button label used to
    be "Everyone for themselves", which needed 166.6px against 164.8px of column at 320, so that
    one button carried its text on two lines and came out 46.8px tall instead of 44. Blake renamed
@@ -617,76 +626,55 @@ button{font:inherit;cursor:pointer}
    the help. */
 @media (max-width:399px){ .savedTile .t2{font-size:12px} }
 #teamNote{font-size:13px;color:#ffe9a8;margin:2px 2px 8px;min-height:18px}
-/* 2026-07-25 - Blake's setup-screen feedback, his item 1. READ THIS BEFORE CHANGING THE FOUR
-   RULES BELOW, and read it together with the .optRow note above (his item 2).
+/* 2026-07-27 (v0.44): .seatRow/#seatList's whole CSS block (the read-only per-seat row v0.42
+   left behind just to hold a difficulty dropdown - dot, stock name, <select>, sized by four
+   --seat* custom properties with their own 359px-and-under override) lived here from v0.24
+   through v0.43. It is GONE, not just unused - the row it styled no longer exists in the markup
+   (see the #menu HTML comment where #seatList used to sit). Difficulty now lives entirely in
+   the seat-picker popup's own .lobbySeat rows (openOfflineSeatPicker(), § MENU), which already
+   had everything they needed: .lobbySeat select, right below, was ALREADY styled for exactly
+   this (built for the online host lobby's CPU picker) - so the popup needed zero new CSS of its
+   own. If you are hunting for where a seat row's sizing math went, it did not move - it was
+   deleted along with the last thing that used it.
 
-   History, so nobody flips this back a third time:
-     - Up to v0.30 the seat row was one line, but .nameWrap had min-width:60px. At 320 the name
-       box really did collapse to 60px, and the input's own padding (10 left + 26 right for the
-       pencil) ate 36 of it, leaving 24px of ACTUAL visible text - every default name truncated
-       mid-word ("Ton", "Do"), and a full 10-character name still clipped at 390.
-     - v0.31 item J fixed the truncation by letting .seatRow WRAP: dot + name on line one, the
-       two dropdowns underneath. That made the row 112px tall at every width and left the
-       difficulty dropdown hanging on a second line by itself.
-     - Blake saw that on his phone and rejected it: "make the slot to input names (even for the
-       CPU's) slightly smaller so the CPU/Human designation and difficulty level all fit on 1
-       row. This should all be symmetrical, but the current design doesn't work."
-
-   So: nowrap, one line per seat, and the row is sized so all four controls genuinely fit
-   WITHOUT bringing the old 24px truncation back. Four rules make that work:
-     1. The two dropdowns are flex:0 0 auto - they size to their own widest option and never
-        shrink. Because every seat row has the identical option lists in the identical font,
-        every row's dropdowns come out the identical width, so the columns line up straight
-        down the list. That is what Blake means by "symmetrical", and it is a consequence of
-        the sizing rule rather than a pile of hand-tuned pixel widths that could drift apart.
-     2. A human seat hides its difficulty dropdown with visibility:hidden (see renderSeats,
-        § MENU) - NOT display:none - so the hidden control still holds its column open and a
-        human row lines up exactly with a CPU row. Do not "tidy" that into display:none.
-     3. .nameWrap is the ONLY flexible child (flex:1 1 0, min-width:0), so it takes whatever is
-        left over and is identical on every row of a given screen. It shrinks instead of the row
-        overflowing, which is why nothing can ever poke out of the panel.
-     4. The dropdowns are appearance:none with our own small chevron drawn as a background
-        image. The native control reserves about 24px of arrow furniture on its own; the
-        chevron needs about 11. Those ~13px per dropdown, x2, are most of what buys the name
-        box back its readable width on a narrow phone.
-   The four --seat* custom properties below are the whole size budget in one place, with a
-   single narrow-phone override for 359px and under. Measured result (visible text inside the
-   name box, i.e. width minus its own padding): 65px at 320, 93px at 375, 108px at 390/393,
-   148px at 430 - versus the 24px that caused the original bug. A full 10-character name fits
-   uncut at every one of those widths. */
-.seatRow{display:flex;flex-wrap:nowrap;gap:var(--seatGap);align-items:center;background:rgba(255,255,255,.06);
-  border-radius:12px;padding:8px var(--seatPadX);margin:8px 0;
-  --seatGap:6px;--seatPadX:10px;--seatDot:20px;
-  --seatSelFS:13px;--seatSelPadL:6px;--seatSelPadR:14px;
-  --seatNameFS:14px;--seatNamePadL:8px;--seatNamePadR:18px}
-/* 320x568 (iPhone SE 1st gen / 5s) is the one screen where the default budget above does not
-   leave the name box a usable amount of text. Everything tightens by a couple of pixels here
-   and only here - 375 and up are untouched by this block. */
-@media (max-width:359px){
-  .seatRow{--seatGap:4px;--seatPadX:6px;--seatDot:18px;
-    --seatSelFS:12px;--seatSelPadL:5px;--seatSelPadR:12px;
-    --seatNameFS:12.5px;--seatNamePadL:6px;--seatNamePadR:16px}
-}
-.seatRow .dot{width:var(--seatDot);height:var(--seatDot);border-radius:50%;flex:none;
-  border:2px solid rgba(255,255,255,.6);box-sizing:border-box}
-/* 2026-07-27 (Blake): local play is one human seat now, chosen in a popup when "Start game" is
-   tapped (openOfflineSeatPicker(), § MENU) - this row is READ-ONLY (dot + stock name +
-   difficulty), not a tappable name box anymore. The whole v0.24 "make it obvious the name is
-   editable" affordance (the pencil glyph, the one-time "Tap a name to change it" hint) went
-   away with it, since there is nothing left here to edit. .seatName keeps the exact sizing
-   budget .nameWrap measured (flex:1 1 0, min-width:0, same font-size var) so the
-   four-controls-on-one-line math in the comment above is untouched by dropping to three. */
-.seatRow .seatName{flex:1 1 0;min-width:0;display:flex;align-items:center;
-  padding:8px var(--seatNamePadR) 8px var(--seatNamePadL);font-size:var(--seatNameFS);
-  color:var(--cream);font-weight:600;min-height:44px;box-sizing:border-box;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.seatRow select{appearance:none;-webkit-appearance:none;
-  background-color:rgba(0,0,0,.35);
-  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%23f4ecd8' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat:no-repeat;background-position:right 3px center;
-  border:1px solid rgba(255,255,255,.18);border-radius:8px;color:var(--cream);
-  padding:8px var(--seatSelPadR) 8px var(--seatSelPadL);font-size:var(--seatSelFS);
-  min-height:44px;flex:0 0 auto;min-width:0;text-overflow:ellipsis}
+   What's below instead, all new in this same v0.44 pass (Blake: "add some more stuff to the
+   menu page... think of stuff that should be there and add it"): the "you" card, the "what's
+   new" row, and the rotating tip line that now fills the exact spot #seatList used to occupy
+   inside .panel (see that div's own HTML comment for why). */
+.youCard{max-width:520px;margin:0 auto 12px;background:rgba(9,32,20,.55);
+  border:1px solid rgba(255,255,255,.14);border-radius:16px;padding:14px 16px;
+  text-align:left;backdrop-filter:blur(6px)}
+/* Signed in: the whole card is one tap target straight through to the leaderboard (renderYouCard()
+   wires #youCardTap to the SAME openLeaderboardOverlay() the "Leaderboard" button calls - one
+   implementation, two doors, same convention the rules panel already follows). .youAvatar reuses
+   the account panel's own circle look (.acctAvatar, § STYLE above) rather than a second copy -
+   same --acctBg/--acctInk custom properties, same accountColors()/accountInitial() helpers. */
+.youCardRow{display:flex;gap:12px;align-items:center;cursor:pointer;min-height:44px}
+.youWho{min-width:0;flex:1}
+.youWho b{display:block;font-size:16px;color:var(--cream);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.youStats{font-size:13px;color:#dcefe1;margin-top:2px;line-height:1.4}
+/* Knockouts only ever show up here when the real number is nonzero - see myCombinedRecord(),
+   § MENU - so this line is simply absent for a brand-new account, never a fake "0 dealt". */
+.youKo{font-size:12px;color:#e0c86a;margin-top:2px}
+/* The one number in this card that needs the network. Starts empty and STAYS empty (not a
+   spinner, not an error) unless/until fetchGlobalLeaderboard() actually answers - see
+   renderYouCard()'s header comment, § MENU, for why that is a deliberate silence, not a bug. */
+.youRank{font-size:12.5px;color:var(--gold);font-weight:700;margin-top:4px;min-height:15px}
+.youCardGuest{text-align:center}
+.youNudge{font-size:13.5px;color:#cfe8d6;line-height:1.5;margin-bottom:10px}
+/* A slim, single-line tappable row - deliberately NOT a full .savedTile-style card, so it reads
+   as a lightweight "check this later" affordance, not a third stat panel competing with the you
+   card above it. */
+.whatsNewRow{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;
+  max-width:520px;margin:0 auto 12px;background:transparent;
+  border:1px solid rgba(255,255,255,.22);border-radius:12px;color:var(--cream);
+  font-size:13.5px;font-weight:700;padding:9px 14px;min-height:44px}
+.whatsNewRow:active{background:rgba(255,255,255,.08)}
+.whatsNewDot{width:8px;height:8px;border-radius:50%;background:var(--gold);flex:none}
+/* Plain italic text, no background, no border - reads as a caption, never as a control, so
+   nobody goes hunting for a tap target that isn't there. */
+.tipLine{font-size:12.5px;color:#a9d2b5;font-style:italic;line-height:1.4;text-align:center;
+  margin:10px 2px 2px;min-height:32px}
 .bigBtns{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:18px}
 /* v0.26 item 2: the HOST speed picker only (#hostSpeedOverlay's #hostSpeedBtns) - a real 2x2
    grid instead of .bigBtns' generic flex-wrap column, per Blake's ask. Deliberately NOT
@@ -947,12 +935,14 @@ button{font:inherit;cursor:pointer}
 .lobbySeat.open:active{background:rgba(255,255,255,.16)}
 /* 2026-07-24 (Blake's follow-up: "give me the option to set the cpu difficulty when playing
    an online game") - the host's own room screen (renderRoomScreen) gets a real <select> per
-   CPU seat, same three-tier Easy/Tricky/Nasty choice + look as the offline setup screen's own
-   .diffSel (§ MENU) - deliberately matched, not reinvented, so it reads as the same control
-   Blake already knows from starting an offline game. Guests never see this element at all
+   CPU seat, three-tier Easy/Tricky/Nasty choice. 2026-07-27 (v0.44): the offline seat-picker
+   popup (openOfflineSeatPicker(), § MENU) grew the exact same kind of <select>, for the exact
+   same reason - deliberately matched, not reinvented, so both places a CPU's difficulty is
+   actually settable use one look. Guests never see this element at all in the ONLINE lobby
    (renderJoinSeatStep shows the chosen tier as plain text instead, see .lobbySeat .diffLabel
-   below) - only the host's own screen ever creates a <select> here, and the server itself
-   still refuses any non-host's setSeat regardless (defense in depth, not the only guard). */
+   below) - only the host's own online screen, or the offline popup (there is no "guest" offline),
+   ever creates a <select> here; the server itself still refuses any non-host's setSeat
+   regardless (defense in depth, not the only guard). */
 .lobbySeat select{background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.18);
   border-radius:8px;color:var(--cream);padding:6px 6px;font-size:12.5px;min-height:44px}
 /* Read-only twin for the guest seat screen - same three-tier wording, no control to tap. */
@@ -2113,6 +2103,25 @@ button{font:inherit;cursor:pointer}
        ends in an exclamation mark now. One mark, on the line that is actually the fun part - the
        first line is the plain "here is how it works" sentence and stays plain. -->
   <p class="tag">Race your five golf tees around the board and home.<br>Land on somebody… and send them packing!</p>
+  <!-- 2026-07-27 (v0.44, Blake: "add some more stuff to the menu page though to fill it out.
+       Think of stuff that should be there and add it!") - THE most important addition, per
+       Blake's own priority order. Filled in entirely by renderYouCard() (§ MENU) - never
+       hand-edited past this empty shell. Signed in: your avatar, name, and your REAL record
+       read straight off this device's own local nasty-stats (loadStats()) - see that function's
+       header comment for exactly which keys feed which number, and why a rank needs the network
+       and everything else does not. Signed out (guest): a plain nudge that signing in is what
+       puts you on the family leaderboard, since v0.42 made online play and the leaderboard both
+       accounts-only - this card is now the main place a guest learns that. -->
+  <div class="youCard" id="youCard"></div>
+  <!-- 2026-07-27 (v0.44, same ask): "What's new" - the family gets frequent TestFlight builds
+       and has no idea what changed. One tappable row, one short plain-language list per version
+       (WHATS_NEW, § MENU) - written for Blake's relatives, not a changelog. The dot shows once
+       per version until tapped (openWhatsNew() marks it seen), then quietly stops showing -
+       never removed outright, so it is still there to check later if nobody's tapped it yet. -->
+  <button class="whatsNewRow" id="whatsNewRow" type="button">
+    <span>What's new in this update</span>
+    <span class="whatsNewDot hidden" id="whatsNewDot" aria-hidden="true"></span>
+  </button>
   <div class="panel">
     <!-- v0.17: up to TWO offline saved games (slots) plus a rejoinable online room can exist
          at once, so the single tile grew into up to three, newest first - each labeled with
@@ -2183,7 +2192,15 @@ button{font:inherit;cursor:pointer}
       <div class="segs"><button class="seg" id="mFFA">Free-for-All</button><button class="seg" id="mTeams">Teams</button></div>
     </div>
     <div id="teamNote"></div>
-    <div id="seatList"></div>
+    <!-- 2026-07-27 (v0.44): this slot used to be #seatList - the per-seat read-only row (dot,
+         stock name, difficulty dropdown) v0.42 left behind purely to set each CPU's difficulty.
+         That control moved into the seat-picker popup itself (openOfflineSeatPicker(), right
+         below "Start game" - see its own markup comment), where it belongs, since that is now
+         the ONE screen that knows which seats are even CPUs. Rather than leave the panel with a
+         gap where that row used to be, Blake's own "fill it out" ask (same batch) put a rotating
+         playing tip here instead - see pickMenuTip()/MENU_TIPS, § MENU. Plain italic text, no
+         control, so it can never be mistaken for something tappable. -->
+    <div class="tipLine" id="tipLine"></div>
     <div class="bigBtns">
       <button class="btn primary" id="btnStart">Start game</button>
       <button class="btn ghost" id="btnOnline">Online play</button>
@@ -2193,7 +2210,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.43</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.44</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -2497,16 +2514,22 @@ button{font:inherit;cursor:pointer}
 <!-- 2026-07-27 (Blake): "get rid of the pass-and-play functionality for now. Only 1 human
      player per phone, the rest are CPUs, unless they're playing online." Tapping "Start game"
      on the setup screen opens THIS popup first (openOfflineSeatPicker(), § MENU) instead of
-     dealing straight away - the setup screen behind it no longer has any way to say WHICH seat
-     is human, only what CPU tier each seat should play at. Deliberately built from the SAME
-     .lobbySeat row markup/CSS the online lobby uses (renderJoinSeatStep()/renderRoomScreen(),
-     § NET) so it reads as the same kind of screen a player has already seen there, not a second,
-     different-looking control. Order of gates on Start: THIS popup, then the existing one-time
-     speed picker below, then the deal - see startGame()'s comment. -->
+     dealing straight away. Deliberately built from the SAME .lobbySeat row markup/CSS the
+     online lobby uses (renderJoinSeatStep()/renderRoomScreen(), § NET) so it reads as the same
+     kind of screen a player has already seen there, not a second, different-looking control.
+     2026-07-27 (v0.44, same-day follow-up): "you still have them there to decide the CPU
+     difficulty... right there" - the setup screen behind this popup no longer has ANY way to
+     say which seat is human OR what CPU tier a seat plays at; both live here now, together -
+     see the seat list's own per-row comment, § MENU, for how the difficulty picker works.
+     Order of gates on Start: THIS popup, then the existing one-time speed picker below, then
+     the deal - see startGame()'s comment. -->
 <div id="offlineSeatOverlay" class="overlay hidden">
   <div class="modalCard">
     <h3>Pick your seat</h3>
-    <p>Everyone else at the table plays as a CPU. Tap a color to sit there.</p>
+    <!-- 2026-07-27 (v0.44, Blake: "you still have them there to decide the CPU difficulty. This
+         should be done where you select your player, and pick the difficulty for each CPU right
+         then and there.") - so this sentence now says both things this screen does. -->
+    <p>Everyone else at the table plays as a CPU - tap a color to sit there, and set each CPU's difficulty right here.</p>
     <div id="offlineSeatModeNote" style="font-size:13px;color:#cfe8d6;margin:2px 2px 4px"></div>
     <div id="offlineSeatTeamNote" style="font-size:13px;color:#ffe9a8;margin:0 2px 8px;min-height:16px"></div>
     <div id="offlineSeatList"></div>
@@ -2514,6 +2537,18 @@ button{font:inherit;cursor:pointer}
       <button class="btn primary" id="btnOfflineSeatStart">Start game</button>
       <button class="btn ghost" id="btnOfflineSeatCancel">Cancel</button>
     </div>
+  </div>
+</div>
+
+<!-- 2026-07-27 (v0.44, Blake: "add some more stuff to the menu... what's new"): opened by
+     #whatsNewRow (§ MENU). #whatsNewBody is filled in by openWhatsNew() from WHATS_NEW, the one
+     source of truth for this version's plain-language release notes - see that array's own
+     comment, § MENU, for how to add the next version's entry. -->
+<div id="whatsNewOverlay" class="overlay hidden">
+  <div class="modalCard">
+    <h3>What's new</h3>
+    <ul id="whatsNewBody" style="font-size:14.5px;line-height:1.6;padding-left:20px;margin:6px 0 0"></ul>
+    <div class="bigBtns"><button class="btn primary" id="btnWhatsNewClose">Got it</button></div>
   </div>
 </div>
 
@@ -9344,9 +9379,10 @@ function renderRoomScreen(){
         // "open" seat (claiming a seat always sets type='human' - see claimSeat/setSeat on the
         // server - so a type==='cpu' seat is never `mine`), which is why this lives in the
         // SAME open-only branch as that toggle rather than needing a new branch. Same three
-        // real tiers/labels as the offline setup screen's .diffSel and the reunion lobby's
-        // "hand this seat to a CPU" picker (easy/medium/hard -> Easy/Tricky/Nasty, see
-        // DIFF_LABEL, § UI/HUD) - matched exactly, not reinvented. Sends the existing host-only
+        // real tiers/labels as the offline seat popup's own CPU picker (v0.44,
+        // openOfflineSeatPicker(), § MENU) and the reunion lobby's "hand this seat to a CPU"
+        // picker (easy/medium/hard -> Easy/Tricky/Nasty, see DIFF_LABEL, § UI/HUD) - matched
+        // exactly, not reinvented. Sends the existing host-only
         // setSeat message with a {diff} patch - already fully wired server-side (validated
         // against the same three tiers, see server.js/server.ts's setSeat case) - this was
         // purely a missing lobby control, not a protocol gap; PROTOCOL_VERSION does NOT bump
@@ -9600,14 +9636,16 @@ if(!CFG.seatMeta[6])CFG.seatMeta[6]=seatDefaults(6);
   meta.forEach(s=>{ if(s.type==='human'){ if(seenHuman)s.type='cpu'; else seenHuman=true; } });
 });
 function saveCfg(){localStorage.setItem('nasty-setup',JSON.stringify(CFG));}
-/* 2026-07-27 (Blake, change 2): "get rid of the pass-and-play functionality for now. Only 1
-   human player per phone, the rest are CPUs, unless they're playing online." This row is READ-
-   ONLY now - dot, the seat's stock name (DEFAULT_NAMES, never customized here), and its CPU
-   difficulty. It no longer says or decides which seat is human at all - that happens in the
-   seat-picker popup shown when "Start game" is tapped (openOfflineSeatPicker(), right below),
-   which is also the only place CFG.seatMeta[n][i].type ever gets written again. Removed for
-   good: the per-seat name input + pencil + "Tap a name to change it" hint, and the Human/CPU
-   dropdown - see the CSS/HTML comments at .seatRow .seatName and #seatList for the same story. */
+/* 2026-07-27 (v0.44, Blake: "you still have them there to decide the CPU difficulty. This
+   should be done where you select your player, and pick the difficulty for each CPU right then
+   and there.") - the per-seat row this function used to render (dot, stock name, difficulty
+   dropdown - all that was left of it after v0.42 removed the name box and Human/CPU dropdown)
+   is GONE. Difficulty now lives entirely in the seat-picker popup (renderOfflineSeatPicker(),
+   right below) - every seat that ISN'T the one you're sitting in gets a real difficulty
+   <select> right there, since every one of those seats is a CPU by construction (offline local
+   play is always exactly one human seat - see the v0.42 comment on commitOfflineSeatPick()).
+   This function no longer touches CFG.seatMeta[n][i].type OR .diff at all - it only reads
+   CFG.n/CFG.teams to paint the Players/Game type toggles and the team-pairing note. */
 function renderMenu(){
   $('p4').classList.toggle('on',CFG.n===4);
   $('p6').classList.toggle('on',CFG.n===6);
@@ -9619,20 +9657,11 @@ function renderMenu(){
     for(let i=0;i<CFG.n/2;i++)pairs.push(`${cols[i].name} + ${cols[i+CFG.n/2].name}`);
     $('teamNote').textContent='Partners sit across: '+pairs.join('  ·  ');
   }else $('teamNote').textContent='';
-  const list=$('seatList'); list.innerHTML='';
-  CFG.seatMeta[CFG.n].forEach((s,i)=>{
-    const r=document.createElement('div'); r.className='seatRow';
-    r.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span>
-      <span class="seatName">${esc(DEFAULT_NAMES[CFG.n][i]||cols[i].name)}</span>
-      <select class="diffSel">
-        <option value="easy"${s.diff==='easy'?' selected':''}>Easy</option>
-        <option value="medium"${s.diff==='medium'?' selected':''}>Tricky</option>
-        <option value="hard"${s.diff==='hard'?' selected':''}>Nasty</option></select>`;
-    const ds=r.querySelector('.diffSel');
-    // v0.9 item 9's difficulty picker, unchanged - this is the one control this row still has.
-    ds.onchange=()=>{s.diff=ds.value;saveCfg();};
-    list.appendChild(r);
-  });
+  // 2026-07-27 (v0.44, Blake's "fill the menu out" ask): refresh the you card and the tip line
+  // every time this screen repaints, so switching Players/Game type never leaves either one
+  // stale. See renderYouCard()/pickMenuTip(), just below.
+  renderYouCard();
+  $('tipLine').textContent=pickMenuTip();
 }
 $('p4').onclick=()=>{CFG.n=4;saveCfg();renderMenu();};
 $('p6').onclick=()=>{CFG.n=6;saveCfg();renderMenu();};
@@ -9763,7 +9792,23 @@ $('btnReplaceCancel').onclick=()=>{ $('slotReplaceOverlay').classList.add('hidde
    OFFLINE_SEAT_IDX is the seat currently picked, sticky across repeated opens (Cancel then
    Start again) within one visit to the menu - clamped back to 0 if it's ever out of range (a
    fresh page load, or the player count changed). It always holds a valid index, which is what
-   makes "must not be possible to start with no seat picked" true by construction. */
+   makes "must not be possible to start with no seat picked" true by construction.
+
+   2026-07-27 (v0.44, same-day follow-up, Blake: "you still have them there to decide the CPU
+   difficulty. This should be done where you select your player, and pick the difficulty for
+   each CPU right then and there.") - the setup screen's old per-seat difficulty dropdown
+   (§ MENU's old renderMenu() seat row, now deleted - see the CSS comment where #seatList used
+   to sit) moved IN HERE. Every seat that is not OFFLINE_SEAT_IDX gets a real difficulty
+   <select>, built exactly like the online host lobby's own CPU picker (renderRoomScreen(),
+   § NET) - same three tiers, same look (.lobbySeat select already had the CSS for this; no new
+   rule was needed). The seat you're sitting in never gets one (you aren't a CPU), and because
+   renderOfflineSeatPicker() rebuilds the whole list from scratch on every call, moving your pick
+   to a different seat makes the seat you left GAIN a difficulty control and the seat you took
+   LOSE one, live - for free, the same "re-derive everything from OFFLINE_SEAT_IDX on every
+   render" reasoning offlineSeatDisplayName() already uses for names, applied to one more thing.
+   Each select writes straight into CFG.seatMeta[CFG.n][i].diff and saveCfg()s immediately on
+   change - it does not wait for "Start game" - so a difficulty choice is remembered even if the
+   popup is later cancelled, exactly like the old menu row always was. */
 let OFFLINE_SEAT_IDX=0;
 // The name shown for seat i RIGHT NOW: the account's own name if this is the picked seat and
 // this device is signed in (Blake, verbatim: "if this device is SIGNED IN, that row's name
@@ -9788,6 +9833,7 @@ function offlineSeatPairingText(){
 function renderOfflineSeatPicker(){
   if(OFFLINE_SEAT_IDX<0||OFFLINE_SEAT_IDX>=CFG.n)OFFLINE_SEAT_IDX=0;
   const cols=CFG.n===4?COLORS4:COLORS6;
+  const meta=CFG.seatMeta[CFG.n];
   $('offlineSeatModeNote').textContent=`${CFG.n} players · ${CFG.teams?'Teams':'Free-for-All'}`;
   $('offlineSeatTeamNote').textContent=offlineSeatPairingText();
   const list=$('offlineSeatList'); list.innerHTML='';
@@ -9797,6 +9843,26 @@ function renderOfflineSeatPicker(){
     row.className='lobbySeat'+(mine?' mine':' open');
     row.innerHTML=`<span class="dot" style="background:${cols[i].c}"></span><span class="nm">${esc(offlineSeatDisplayName(i))}</span><span class="st">${mine?'You':'CPU'}</span>`;
     row.onclick=()=>{ OFFLINE_SEAT_IDX=i; renderOfflineSeatPicker(); };
+    if(!mine){
+      // v0.44: every seat that isn't yours is a CPU by construction (see this block's header
+      // comment) - give it a real difficulty picker, same three tiers/look as the online host
+      // lobby's own CPU <select>. stopPropagation so tapping the dropdown never ALSO re-picks
+      // the seat underneath it (the row itself is a click target for switching seats).
+      const sel=document.createElement('select'); sel.setAttribute('aria-label','CPU difficulty');
+      sel.addEventListener('click',ev=>ev.stopPropagation());
+      const cur=(meta[i]&&meta[i].diff)||'medium';
+      // DIFF_LABEL (§ UI/HUD) is the one place the three tier names/mapping live - reused here,
+      // not reinvented, same as everywhere else in the app that shows a difficulty tier.
+      ['easy','medium','hard'].forEach(val=>{
+        const o=document.createElement('option'); o.value=val; o.textContent=DIFF_LABEL[val];
+        if(cur===val)o.selected=true;
+        sel.appendChild(o);
+      });
+      // Writes straight into CFG.seatMeta and saves immediately - see this block's header
+      // comment for why that must not wait for "Start game".
+      sel.onchange=()=>{ if(meta[i]){ meta[i].diff=sel.value; saveCfg(); } };
+      row.appendChild(sel);
+    }
     list.appendChild(row);
   }
 }
@@ -9823,6 +9889,183 @@ $('btnOfflineSeatStart').onclick=()=>{
   startOfflineGameGate(startGame);
 };
 $('btnStart').onclick=()=>openOfflineSeatPicker();
+
+/* ======================== § MENU: the "you" card (v0.44) ========================
+   Blake's coordinator follow-up, same session: "add some more stuff to the menu page though to
+   fill it out. Think of stuff that should be there and add it!" - this is item 1 of the three he
+   asked for, and by his own priority order the most important one.
+
+   Signed in: your avatar (reusing accountColors()/accountInitial(), § ACCOUNT), your account
+   name, and your REAL record - read straight off loadStats() (§ ~LEADERBOARD, this device's own
+   local "nasty-stats"), keyed by ACCT.gameName exactly the way recordWin()/buildResultEntries()
+   already write it. Nothing here is invented: myCombinedRecord() below only ever reads the
+   hg4s/hw4s/hg6s/hw6s/hg4t/hw4t/hg6t/hw6t/hptsS/hptsT/hkoDealt/hkoTaken keys those functions
+   already write, and if there is no row at all yet for this name, the card says so in words
+   ("No games recorded yet") rather than showing a fabricated 0/0/0. Knockouts (hkoDealt/
+   hkoTaken) only ever appear when at least one is genuinely nonzero - same "don't show a stat
+   nobody's touched" rule renderLbKo()'s own `active` filter already follows.
+   The rank line ("3rd on the family board") is the ONE number that needs the network, so it is
+   fetched the same "show what we already know instantly, upgrade if the server answers" way the
+   leaderboard overlay itself works (fetchGlobalLeaderboard()/mergeQueuedIntoGlobal(), defined
+   further down this file) - ranked by COMBINED solo+teams points (rankAmong()), since "how am I
+   doing" is one question, not two tabs. If the fetch fails, is slow, or this device is offline,
+   the rank line is simply never written - there is no spinner and nothing that can look stuck,
+   because every OTHER number on the card is already showing, synchronously, with nothing left
+   to wait on. Tapping the card (once it has a real record) opens the leaderboard - see
+   openLeaderboardOverlay(), shared with the "Leaderboard" button itself.
+
+   Signed OUT (guest): no record at all - a guest has no persistent name to keep one under (see
+   chosenName()'s own header comment, § ACCOUNT) - just a plain sentence that signing in is what
+   puts you on the family leaderboard, since v0.42 made online play AND the leaderboard both
+   accounts-only. The "Sign in with Apple" button only appears where accountsAvailableHere() is
+   true (the iPhone app) - same "a dead button reads as broken, not as not-yet" reasoning
+   openWelcome() already follows for this exact button; the plain website (no Apple plugin) shows
+   the sentence with no button under it at all. */
+// Solo + Teams summed together - "how am I doing", not a mode-specific slice of it. `has` is
+// false only when this name has never appeared in `st` at all (no row exists yet).
+function myCombinedRecord(st,name){
+  const row=(st&&st[name])||null;
+  const v=k=>(row&&row[k])||0;
+  return {
+    games:v('hg4s')+v('hg6s')+v('hg4t')+v('hg6t'),
+    wins:v('hw4s')+v('hw6s')+v('hw4t')+v('hw6t'),
+    pts:v('hptsS')+v('hptsT'),
+    koDealt:v('hkoDealt'),
+    koTaken:v('hkoTaken'),
+    has:!!row,
+  };
+}
+// Same pts-desc/wins-desc/games-asc tie-break renderLb() itself sorts by, just applied to the
+// COMBINED total above instead of one tab's keys - only players with at least one game count,
+// same as renderLb()'s own `active` filter. Returns null (never a fabricated "last place") if
+// this name isn't found among them at all.
+function rankAmong(st,name){
+  const names=Object.keys(st||{}).filter(n=>myCombinedRecord(st,n).games>0);
+  if(!names.length)return null;
+  names.sort((a,b)=>{
+    const ra=myCombinedRecord(st,a), rb=myCombinedRecord(st,b);
+    return rb.pts-ra.pts||rb.wins-ra.wins||ra.games-rb.games;
+  });
+  const i=names.indexOf(name);
+  return i>=0?i+1:null;
+}
+function ordinal(n){
+  const rem100=n%100;
+  if(rem100>=11&&rem100<=13)return n+'th';
+  switch(n%10){ case 1:return n+'st'; case 2:return n+'nd'; case 3:return n+'rd'; default:return n+'th'; }
+}
+// The guest nudge's button calls this directly (same underlying accountSignIn() the Admin
+// panel's own "Sign in" row uses, § ACCOUNT SIGN-IN) rather than opening the full welcome
+// screen - the card already says exactly what signing in is for, so a second explanation screen
+// would be redundant. Re-paints the card the moment sign-in resolves either way (success or the
+// player backing out of Apple's own sheet).
+async function youCardSignIn(){
+  if(!accountsAvailableHere()||ACCT_BUSY)return;
+  await accountSignIn();
+  renderYouCard();
+}
+function renderYouCard(){
+  const box=$('youCard'); if(!box)return;
+  if(ACCT&&ACCT.uid&&ACCT.gameName){
+    const name=ACCT.gameName;
+    const letter=accountInitial(name), colors=accountColors();
+    const st=loadStats();
+    const rec=myCombinedRecord(st,name);
+    const statsTxt=rec.has
+      ?`${rec.games} game${rec.games===1?'':'s'} · ${rec.wins} win${rec.wins===1?'':'s'} · ${rec.pts} point${rec.pts===1?'':'s'}`
+      :'No games recorded yet - play your first one!';
+    const koTxt=(rec.koDealt||rec.koTaken)
+      ?`<div class="youKo">${rec.koDealt} knockout${rec.koDealt===1?'':'s'} dealt · ${rec.koTaken} taken</div>`:'';
+    box.innerHTML=`<div class="youCardRow" id="youCardTap" role="button" tabindex="0" aria-label="Open the leaderboard">
+        <div class="acctAvatar" style="--acctBg:${colors.bg};--acctInk:${colors.ink}">${esc(letter)}</div>
+        <div class="youWho"><b>${esc(name)}</b><div class="youStats">${statsTxt}</div>${koTxt}<div class="youRank" id="youRank"></div></div>
+      </div>`;
+    const tap=$('youCardTap');
+    if(tap)tap.onclick=openLeaderboardOverlay;
+    // The rank needs the network - everything above is already showing, synchronously, real
+    // numbers with nothing waiting on it. Only bother asking at all if there's a real record to
+    // rank in the first place.
+    if(rec.has){
+      fetchGlobalLeaderboard().then(g=>{
+        if(!g)return;   // unreachable - leave the rank out silently, exactly per the ask
+        const merged=mergeQueuedIntoGlobal(g,loadSoloQueue());
+        const rank=rankAmong(merged,name);
+        const rankEl=$('youRank');
+        if(rankEl&&rank)rankEl.textContent=ordinal(rank)+' on the family board';
+      });
+    }
+  }else{
+    box.innerHTML=`<div class="youCardGuest">
+        <div class="youNudge">Sign in to get on the family leaderboard - your wins, points and knockouts, tracked across every phone.</div>
+        ${accountsAvailableHere()?'<button class="btn primary" id="youCardSignIn" type="button">Sign in with Apple</button>':''}
+      </div>`;
+    const b=$('youCardSignIn');
+    if(b)b.onclick=youCardSignIn;
+  }
+}
+
+/* ======================== § MENU: What's new (v0.44) ========================
+   Item 2 of Blake's "fill the menu out" ask: "the family gets frequent TestFlight builds and
+   has no idea what changed." WHATS_NEW is the one source of truth for this - plain-language,
+   written for Blake's relatives (no function names, no version-history housekeeping), newest
+   entry first. Only the newest entry is ever actually shown (openWhatsNew() always reads
+   WHATS_NEW[0]) - the array form exists so the NEXT version just prepends one more {ver,items}
+   entry here rather than a future session inventing a new place to put it. */
+const WHATS_NEW=[
+  {ver:'0.44',items:[
+    "Picking who's playing and setting each computer opponent's difficulty now happen together, right when you tap Start game.",
+    "New: a stats card on the main menu shows your wins, games and points at a glance - and how you rank on the family leaderboard.",
+    "New: a quick playing tip shows up on the menu, a different one each time.",
+  ]},
+];
+const WHATS_NEW_SEEN_KEY='nasty-whatsnew-seen';
+function whatsNewSeenVer(){ try{ return localStorage.getItem(WHATS_NEW_SEEN_KEY)||''; }catch(e){ return ''; } }
+function markWhatsNewSeen(){ try{ localStorage.setItem(WHATS_NEW_SEEN_KEY,WHATS_NEW[0].ver); }catch(e){} }
+// The dot shows once per version until tapped - never removed outright (Blake might still want
+// to check it days later), it just quietly stops asking for attention.
+function renderWhatsNewRow(){
+  const dot=$('whatsNewDot'); if(!dot)return;
+  dot.classList.toggle('hidden',whatsNewSeenVer()===WHATS_NEW[0].ver);
+}
+function openWhatsNew(){
+  const body=$('whatsNewBody');
+  if(body)body.innerHTML=WHATS_NEW[0].items.map(t=>`<li>${esc(t)}</li>`).join('');
+  markWhatsNewSeen();
+  renderWhatsNewRow();
+  openOverlay('whatsNewOverlay');
+}
+$('whatsNewRow').onclick=openWhatsNew;
+$('btnWhatsNewClose').onclick=()=>closeOverlay('whatsNewOverlay');
+renderWhatsNewRow();   // paint the dot's initial state at boot, before the menu is even shown
+
+/* ======================== § MENU: rotating tip line (v0.44) ========================
+   Item 3 of the same ask: "one short line of genuinely useful play advice or a rule reminder,
+   different each time the menu is shown." Every line below is a real rule straight out of
+   RULES.md, not invented strategy - see that file for the rulings each one paraphrases.
+   LAST_TIP_IDX just keeps the SAME tip from showing twice in a row; picked fresh every time
+   pickMenuTip() is called (renderMenu(), and updateMenuResumeButtons() below, between them
+   covering every "the menu is (re)shown" moment). */
+const MENU_TIPS=[
+  "A tee that's snug (pushed all the way home) is safe forever - nothing can touch it there.",
+  "You can never land on your own tee, and you can never pass it either - plan your moves around your own tees.",
+  "Jack trades places with ANY other tee on the main track - yours, a partner's, or an opponent's.",
+  "A Queen played from your own starting block lands right on the next player's start - and kicks them out!",
+  "A 3 moves one of your tees 3 holes backward - it can never go behind your own starting block.",
+  "No legal move on your very first turn of a hand? You're out for the rest of that hand, so make that shot count.",
+  "In Teams, landing on your partner's tee only happens when it's your only possible play - and it sends them back to base.",
+  "A King or Ace is the only way to bring a tee out of your base and onto your starting block.",
+  "Land exactly on an opponent's tee and it's blasted back to base - that's the nasty part!",
+  "Your home row is exact count only - if your card is too big for the distance left, that tee can't use it.",
+];
+let LAST_TIP_IDX=-1;
+function pickMenuTip(){
+  if(MENU_TIPS.length<2)return MENU_TIPS[0]||'';
+  let i;
+  do{ i=Math.floor(Math.random()*MENU_TIPS.length); }while(i===LAST_TIP_IDX);
+  LAST_TIP_IDX=i;
+  return MENU_TIPS[i];
+}
+
 $('btnAgain').onclick=()=>{$('winOverlay').classList.add('hidden');
   if(NET.online)leaveOnlineToMenu(); else{clearOfflineSave();startGame();}};
 // 2026-07-25 (Blake's post-game review request, item 4): this handler is now the ONE shared
@@ -10470,6 +10713,7 @@ async function submitNicknameGate(){
   setChosenName(ACCT.gameName);
   closeOverlay('nicknameGateOverlay');
   toast("You're in! You are "+ACCT.gameName+' on the leaderboard.');
+  renderYouCard();   // v0.44: a brand-new nickname just landed - the menu's you card should show it the moment it's back on screen
   const resolve=NICK_GATE_RESOLVE; NICK_GATE_RESOLVE=null;
   if(resolve)resolve();
   // v0.42: resume an online action that was waiting specifically on THIS gate - the defensive
@@ -10519,6 +10763,7 @@ async function accountSignIn(){
     ACCT_BUSY=false;
     updateAccountButton();
     renderAccountRows();   // NOT renderAccountPanel() - that would shut the name editor
+    renderYouCard();   // v0.44: the menu's you card is signed-in-vs-guest state - keep it in step
   }
 }
 /* Signing out is local first, told to the server second: the token leaves this phone before the
@@ -10532,6 +10777,7 @@ async function accountSignOut(){
   ACCT_CLAIM=null; ACCT_CLAIM_STEP='offer'; CLAIM_PROBED=false;
   saveAcctToken('');
   renderAccountRows(); updateAccountButton();
+  renderYouCard();   // v0.44: back to the guest nudge, the moment the menu is on screen again
   toast('Signed out. Everything on this phone works exactly the same.');
   if(t)await accountFetch('/account/signout',{auth:t});
 }
@@ -10566,6 +10812,7 @@ async function accountDelete(eraseBoard){
   // holding the phone can clear it. Say so plainly rather than leaving it as a surprise.
   ACCT_NOTICE='Your account is deleted. To take NASTY off Apple, open Settings, tap your name, then Sign in with Apple.';
   renderAccountRows(); updateAccountButton();
+  renderYouCard();   // v0.44: same reasoning as accountSignOut() - back to the guest nudge
   toast(eraseBoard?'Account deleted, and your name is off the board.':'Account deleted. Your name stays on the board as history.');
 }
 /* The one line in the app that answers "am I signed in?". Signing in or out repaints it, and so
@@ -11396,7 +11643,8 @@ async function fetchGlobalLeaderboard(){
    should still show up for me right now"). The moment a queued item successfully drains, it's
    removed from the queue (see drainSoloQueue()) and stops being added here - so it's counted
    exactly once throughout, never twice. Local-only fallback (the full `nasty-stats` cache)
-   is used ONLY when the global fetch genuinely fails/is unreachable - see $('btnLb').onclick. */
+   is used ONLY when the global fetch genuinely fails/is unreachable - see
+   openLeaderboardOverlay() (v0.44: pulled out of $('btnLb').onclick itself, same body). */
 function mergeQueuedIntoGlobal(global,queue){
   const out={};
   for(const n of Object.keys(global))out[n]=Object.assign({},global[n]);
@@ -11550,7 +11798,11 @@ function setLbTab(tab){
 $('lbTabSolo').onclick=()=>setLbTab('solo');
 $('lbTabTeams').onclick=()=>setLbTab('teams');
 $('lbTabKo').onclick=()=>setLbTab('ko');
-$('btnLb').onclick=()=>{
+// 2026-07-27 (v0.44): pulled out of $('btnLb').onclick's own arrow function, byte-for-byte
+// unchanged, so the new "you" card's tap-through (renderYouCard(), § MENU) can open the exact
+// same leaderboard screen the button always has - one implementation, two doors, same
+// convention the rules panel (#btnRules/the account panel's own rules row) already follows.
+function openLeaderboardOverlay(){
   openOverlay('lbOverlay');
   lbTab='solo';   // v0.21: Solo is always the tab shown when the leaderboard is (re)opened
   $('lbTabSolo').classList.add('on'); $('lbTabTeams').classList.remove('on'); $('lbTabKo').classList.remove('on');
@@ -11564,7 +11816,8 @@ $('btnLb').onclick=()=>{
     // genuinely failed (offline, unreachable server).
     if(g)renderLb(mergeQueuedIntoGlobal(g,loadSoloQueue()));
   });
-};
+}
+$('btnLb').onclick=openLeaderboardOverlay;
 $('btnLbClose').onclick=()=>$('lbOverlay').classList.add('hidden');
 // 2026-07-25: the MUTE button left the top bar with RULES - the sound toggle is a row in the
 // account panel now and says which way round it is in words ("Sound: on" / "Sound: off")
@@ -11989,6 +12242,15 @@ function updateMenuResumeButtons(){
     $(content).classList.remove('hidden');
     $(confirm).classList.add('hidden');
   });
+  // 2026-07-27 (v0.44): this function is already called at every single "the menu is back on
+  // screen" moment in the app (boot, leaving a game, leaving an online room, a finished game's
+  // "Back to menu") - piggybacking the you card/What's new dot/tip line refresh here, rather
+  // than hunting down and editing every one of those call sites separately, is what makes
+  // "never stale after a sign-in/sign-out that happened mid-game" true by construction instead
+  // of by remembering to. All three are cheap and guarded - safe to call any time.
+  renderYouCard();
+  renderWhatsNewRow();
+  const tip=$('tipLine'); if(tip)tip.textContent=pickMenuTip();
 }
 // v0.18.1: trash-can delete, 2-tap confirm. showDeleteConfirm swaps ONE tile's content for the
 // "Delete this saved game?" panel (closing any other tile's confirm first - only one at a time);
