@@ -56,6 +56,11 @@
                     so nothing is lost; see renderYouCard()'s header comment for the guest-card
                     decision. The tip line now carries a small "TIP" label (#tipLabel) so it reads
                     as a labelled hint, not a stray sentence.
+                    v0.46: the "What's new" row is GONE (Blake: TestFlight already shows release
+                    notes on update, so it was redundant) - WHATS_NEW/openWhatsNew()/#whatsNewRow
+                    and everything that tracked whether it had been seen are deleted, not hidden.
+                    The you card and the tip line are unaffected and now sit a little closer
+                    together where the row used to be between them.
     § NET ......... online multiplayer: WS client, host/join lobby UI, deterministic
                     lockstep (server in /server, see HANDOFF.md "Online multiplayer").
                     v0.42: ACCOUNTS-ONLY - no guest join anymore. requireAccountThen() gates
@@ -79,21 +84,43 @@
                     literal word "Guest", always). The seat-name logic it used to do lives on,
                     unchanged in behavior, as the new mySeatName() - see both functions' header
                     comments for the full split and HANDOFF.md "v0.45" for the call-site audit.
+                    v0.46 BUG FIX: a SECOND, different bug behind Blake's "welcome screen says
+                    signed in, menu asks me to sign in again" report - see isSignedIn()/
+                    isAccountReady() right next to `let ACCT` for the two consolidated predicates,
+                    and the boot-time refreshAccount() comment in § ACCOUNT SIGN-IN for the actual
+                    root cause (a missed repaint, not a wrong check). The Admin panel now also
+                    shows the 13+ age line (#acctAgeNote) next to the Sign in row, guest-only -
+                    relocated here from the deleted first-run welcome screen, see § WELCOME.
     § ACCOUNT SIGN-IN ... Sign in with Apple (iPhone app only). v0.42: a BRAND-NEW account is
                     blocked on a mandatory nickname right here - bindAccountName() opens a
                     full-screen prompt (openNicknameGate()) that cannot be skipped or dismissed
                     and loops on the server's own message until POST /account/name returns 200.
                     A RETURNING sign-in (the account already has a gameName) is unchanged -
                     silently adopts it, no prompt. Also: the one-time name claim.
-    § WELCOME ..... the sign-in screen, shown once per app version (v0.36; per-version in v0.39).
-                    v0.42: also reused (via requireAccountThen(), § NET) as the "sign in before
-                    you can play online" gate for anyone who isn't signed in yet.
-                    v0.45 BUG FIX: openWelcome()'s "welcome back" greeting used to fall back to
-                    chosenName() when ACCT.gameName hadn't loaded yet (a real network race - the
-                    session token says signed in, refreshAccount() just hasn't answered) - with the
-                    OLD chosenName(), that could print "You are signed in as Ginny" for somebody who
-                    genuinely is signed in. No fallback anymore; a no-name greeting already existed
-                    for exactly this case.
+                    v0.46 BUG FIX (the real root cause of Blake's report): the boot-time
+                    refreshAccount() call, right after loadAcctToken()/accountsAvailableHere() are
+                    both defined, used to repaint ONLY the Admin panel's own rows once the network
+                    answered - never the menu's you card (§ MENU) - so a genuinely signed-in phone
+                    could sit on the guest nudge indefinitely if nothing else happened to trigger a
+                    repaint first. Now calls renderYouCard() too, and ACCT_BOOT_CHECKING (defined
+                    next to `let ACCT`) makes the you card say "Checking your account..." instead
+                    of the guest nudge for the brief window before that answer is known, on a phone
+                    that IS carrying a stored session. See that boot block's own long comment for
+                    the full story.
+    § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
+                    screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
+                    "just get rid of the first page... just say that I'm currently playing as a
+                    guest until I sign in" (the you card, § MENU, is that place now). ALL of the
+                    once-per-version bookkeeping (WELCOME_KEY/WELCOME_VER_KEY/WELCOME_IDB_KEY,
+                    appVersion(), rememberWelcomeChoice(), welcomeAnsweredThisVersion(),
+                    welcomeLaunchIsPlain(), maybeShowWelcome(), the signed-in "welcome back"
+                    greeting variant, window.__welcome) is deleted, not hidden - the app boots
+                    straight to #menu now, always. This overlay (#welcomeOverlay) lives on for
+                    exactly one job: requireAccountThen() (§ NET) still opens it as the "sign in
+                    before you can play online" gate for a signed-out player - see openWelcome()'s
+                    own header comment for why the copy was reworded to match that (its only
+                    remaining) context. The 13+ age disclosure stays here too, next to the Sign in
+                    button, alongside its new second home in the Admin panel (§ ACCOUNT).
     § COMING SOON . v0.43: the public website's "coming soon" screen. Gated on
                     NASTY_WEBSITE_GATE_ENABLED (§ CAPACITOR, near IS_APP) - true shows this
                     INSTEAD of #menu/#game on the web (the app is unaffected, IS_APP always
@@ -664,9 +691,11 @@ button{font:inherit;cursor:pointer}
    deleted along with the last thing that used it.
 
    What's below instead, all new in this same v0.44 pass (Blake: "add some more stuff to the
-   menu page... think of stuff that should be there and add it"): the "you" card, the "what's
-   new" row, and the rotating tip line that now fills the exact spot #seatList used to occupy
-   inside .panel (see that div's own HTML comment for why). */
+   menu page... think of stuff that should be there and add it"): the "you" card and the rotating
+   tip line that now fills the exact spot #seatList used to occupy inside .panel (see that div's
+   own HTML comment for why). A third thing, the "what's new" row, lived here too through v0.45 -
+   deleted in v0.46 (Blake: TestFlight already shows release notes on update, so it was
+   redundant) along with its own CSS, which used to sit right below this comment. */
 .youCard{max-width:520px;margin:0 auto 12px;background:rgba(9,32,20,.55);
   border:1px solid rgba(255,255,255,.14);border-radius:16px;padding:14px 16px;
   text-align:left;backdrop-filter:blur(6px)}
@@ -691,15 +720,11 @@ button{font:inherit;cursor:pointer}
    to it (see renderYouCard()'s guest branch). */
 .youCardGuest{text-align:center;cursor:pointer}
 .youNudge{font-size:13.5px;color:#cfe8d6;line-height:1.5;margin-bottom:10px}
-/* A slim, single-line tappable row - deliberately NOT a full .savedTile-style card, so it reads
-   as a lightweight "check this later" affordance, not a third stat panel competing with the you
-   card above it. */
-.whatsNewRow{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;
-  max-width:520px;margin:0 auto 12px;background:transparent;
-  border:1px solid rgba(255,255,255,.22);border-radius:12px;color:var(--cream);
-  font-size:13.5px;font-weight:700;padding:9px 14px;min-height:44px}
-.whatsNewRow:active{background:rgba(255,255,255,.08)}
-.whatsNewDot{width:8px;height:8px;border-radius:50%;background:var(--gold);flex:none}
+/* 2026-07-27 (v0.46 bug fix): the brief in-between state, on a phone with a stored session,
+   while the boot-time refreshAccount() call hasn't answered yet - see ACCT_BOOT_CHECKING's own
+   comment, § ACCOUNT. Plain centered text, no spinner, not a tap target - it never lingers long
+   enough to need one. */
+.youCardChecking{text-align:center;font-size:13.5px;color:#cfe8d6;padding:4px 0}
 /* Plain italic text, no background, no border - reads as a caption, never as a control, so
    nobody goes hunting for a tap target that isn't there. 2026-07-27 (v0.45, Blake: "for the game
    advice/hints you need to label it as such. Otherwise it looks outta place.") - .tipLabel is a
@@ -1820,18 +1845,17 @@ button{font:inherit;cursor:pointer}
   .acctNote{font-size:12px}
   #accountOverlay .bigBtns{margin-top:12px}
 }
-/* ---------- 2026-07-26 (v0.36 item 1): the first-run sign-in screen ----------
-   Blake: "if it's a person's first time opening the app (or they don't have an account) they
-   should see a login screen with an apple button to create an account with their Apple ID.
-   Below that, there should be an option to continue as a guest with the knowledge that they
-   wouldn't be on the leaderboard. This is the only time this would happen though (don't make
-   them select guest every time) just let them know they can always change this by clicking the
-   admin button."
-   It is a plain .overlay so it inherits the § OVERLAY LAYER invariant for free, with one
-   deliberate difference: an OPAQUE backdrop. Every other overlay is rgba(5,15,9,.9) so the page
-   underneath ghosts through, which is right for a sheet over a live board and wrong for the very
-   first thing a person ever sees - the menu showing faintly behind a welcome screen reads as a
-   rendering fault. This is the only .solid overlay in the app.
+/* ---------- #welcomeOverlay: 2026-07-26 (v0.36) through v0.45, first-run sign-in screen;
+   2026-07-27 (v0.46), now the online sign-in gate ----------
+   This CSS dates back to when #welcomeOverlay was the app's boot-time first-run screen; that
+   flow is deleted (see § WELCOME, way down the script, for the whole story), but the overlay
+   itself and this styling both live on - it is now shown only when a signed-out player taps
+   something that needs an account (Online play, a join link). The OPAQUE backdrop stays
+   deliberate for the same underlying reason it always was: every other overlay is
+   rgba(5,15,9,.9) so the page underneath ghosts through, which is right for a sheet over a live
+   board and wrong for a full-screen "you need to sign in to do this" interruption - the menu
+   showing faintly behind it would read as a rendering fault, not a design choice. This is still
+   the only .solid overlay in the app.
    The layout is deliberately un-clever: one column, everything above the fold at 320x568, the
    two choices as full-width 44px+ buttons in the order Blake asked for (Apple first, guest
    underneath), and every sentence a real sentence rather than fine print. */
@@ -2161,15 +2185,13 @@ button{font:inherit;cursor:pointer}
        puts you on the family leaderboard, since v0.42 made online play and the leaderboard both
        accounts-only - this card is now the main place a guest learns that. -->
   <div class="youCard" id="youCard"></div>
-  <!-- 2026-07-27 (v0.44, same ask): "What's new" - the family gets frequent TestFlight builds
-       and has no idea what changed. One tappable row, one short plain-language list per version
-       (WHATS_NEW, § MENU) - written for Blake's relatives, not a changelog. The dot shows once
-       per version until tapped (openWhatsNew() marks it seen), then quietly stops showing -
-       never removed outright, so it is still there to check later if nobody's tapped it yet. -->
-  <button class="whatsNewRow" id="whatsNewRow" type="button">
-    <span>What's new in this update</span>
-    <span class="whatsNewDot hidden" id="whatsNewDot" aria-hidden="true"></span>
-  </button>
+  <!-- 2026-07-27 (v0.46): the "What's new" row that used to sit here (v0.44-v0.45) is gone -
+       Blake: "the family gets frequent TestFlight builds and has no idea what changed" turned out
+       to be already solved - TestFlight shows its own release notes on update, so this was a
+       redundant second copy of the same information. WHATS_NEW/openWhatsNew()/#whatsNewRow/
+       #whatsNewOverlay and the per-version "seen" tracking are all deleted, not hidden - see
+       § MENU for where they used to live. The you card and the tip line below now sit right next
+       to each other where this used to be between them. -->
   <div class="panel">
     <!-- v0.17: up to TWO offline saved games (slots) plus a rejoinable online room can exist
          at once, so the single tile grew into up to three, newest first - each labeled with
@@ -2262,7 +2284,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.45</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.46</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -2592,18 +2614,6 @@ button{font:inherit;cursor:pointer}
   </div>
 </div>
 
-<!-- 2026-07-27 (v0.44, Blake: "add some more stuff to the menu... what's new"): opened by
-     #whatsNewRow (§ MENU). #whatsNewBody is filled in by openWhatsNew() from WHATS_NEW, the one
-     source of truth for this version's plain-language release notes - see that array's own
-     comment, § MENU, for how to add the next version's entry. -->
-<div id="whatsNewOverlay" class="overlay hidden">
-  <div class="modalCard">
-    <h3>What's new</h3>
-    <ul id="whatsNewBody" style="font-size:14.5px;line-height:1.6;padding-left:20px;margin:6px 0 0"></ul>
-    <div class="bigBtns"><button class="btn primary" id="btnWhatsNewClose">Got it</button></div>
-  </div>
-</div>
-
 <!-- 2026-07-27 (Blake, change 1 of the same session): a BRAND-NEW Sign in with Apple account
      has no nickname yet, and this app has no other way to know what to put on the leaderboard -
      so this page is a genuine gate, not a dismissable dialog. No Cancel/Close button anywhere on
@@ -2719,61 +2729,32 @@ button{font:inherit;cursor:pointer}
   </div>
 </div>
 
-<!-- ================= 2026-07-26 (v0.36 item 1): the first-run sign-in screen =================
-     Blake: "if it's a person's first time opening the app (or they don't have an account) they
-     should see a login screen with an apple button to create an account with their Apple ID.
-     Below that, there should be an option to continue as a guest with the knowledge that they
-     wouldn't be on the leaderboard. This is the only time this would happen though (don't make
-     them select guest every time) just let them know they can always change this by clicking the
-     admin button."
-     ONCE PER VERSION as of v0.39 (2026-07-26) - it used to be once ever. Whichever button they
-     tap, the answer is written to localStorage AND mirrored into IndexedDB (see
-     rememberWelcomeChoice(), § WELCOME) so an iOS localStorage eviction - which this app has a
-     documented history of, see the IndexedDB mirror the offline saves use - cannot make this
-     screen come back inside the same version.
-       Blake, 2026-07-26: "Can you have the sign in screen appear on every new iteration of the
-       app? Whether it be TestFlight or an update that went through the App Store? Since it's
-       technically a new version of the app? That way I can also see this page every time in the
-       meantime as well."
-     So the stored answer now carries the version it was given under (#verTap's text, which Blake
-     bumps on every single release), and a version it does not recognise means "ask again". The
-     copy says so out loud - the old "You will only be asked this once" sentence would have become
-     a lie the moment this shipped.
-     THE WEBSITE HAS NO APPLE BUTTON. accountsAvailableHere() is false in a plain browser, so
-     #btnWelcomeApple is removed from the flow entirely and #welcomeWebNote takes its place. A
-     dead button that does nothing would be worse than an honest sentence, and the guest path is
-     always right there either way - nobody is ever blocked from playing.
-     #welcomeAppleNote (v0.39, Blake: "there should also be language that says like 'create an
-     account or sign in to an existing one via Apple' or something like that which acknowledges
-     you might already have an account") explains that the ONE button does both jobs. It is a
-     sentence beside the button rather than a longer button title on purpose: Apple's Human
-     Interface Guidelines fix the wording on a Sign in with Apple button, so the button keeps the
-     standard label and the explaining happens around it.
-     THE SIGNED-IN VARIANT (v0.39). Somebody who already has an account is not a new player, so
-     they are never asked to sign in a second time: the heading greets them back, the Apple button
-     and the guest button are replaced by one "Keep playing!" button, and the two lines that only
-     matter to a new player (guests/leaderboard and the 13+ line) are hidden. Switching to guest
-     or signing out lives in ADMIN, which the last line points at. See openWelcome(), § WELCOME.
-     THE AGE LINE is deliberate and deliberately low-friction: one plain sentence, no birthday
-     picker, no gate. Accounts are 13+; younger players continue as a guest and lose nothing but
-     a row on the shared board. -->
+<!-- ================= 2026-07-27 (v0.46): the online sign-in gate =================
+     This used to be the app's first-run/every-version welcome screen (v0.36-v0.45, shown at every
+     boot) - Blake asked for that to go entirely: "just get rid of the first page... just say
+     that I'm currently playing as a guest until I sign in" (the you card, § MENU, is now that
+     place - see #menu's own markup comment above #youCard). This overlay lives on for ONE
+     remaining job: requireAccountThen() (§ NET) opens it when a signed-out player taps something
+     that needs an account (Online play, a join link). It is NEVER shown at boot anymore, and
+     because it can only ever be reached while signed out, there is no "already signed in" variant
+     to branch on here either - see openWelcome()'s own header comment, § WELCOME.
+     THE AGE LINE (#welcomeAgeNote) stays here, next to the Sign in button, since this is one of
+     the two places an account can be created from - it was ALSO added next to the Admin panel's
+     own Sign in row (§ ACCOUNT, renderAccountRows()) since that is the other one. One plain
+     sentence, no birthday picker, no gate: accounts are 13+, younger players continue as a guest
+     and lose nothing but a row on the shared board. -->
 <div id="welcomeOverlay" class="overlay solid hidden">
   <div class="modalCard">
     <div class="sign"><b>NASTY</b></div>
-    <h3 id="welcomeTitle">Welcome to NASTY!</h3>
-    <p class="welcomeNote" id="welcomeNote">Race five tees home and send everybody else packing! Sign in and your wins, your takeouts and your bragging rights all stay yours.</p>
+    <h3 id="welcomeTitle">Sign in to play online</h3>
+    <p class="welcomeNote" id="welcomeNote">Online games need an account, so your wins, points and leaderboard spot are all yours. Sign in with Apple, or keep playing offline as a guest.</p>
     <div class="welcomeBtns">
       <button class="btn primary" id="btnWelcomeApple">Sign in with Apple</button>
-      <button class="btn primary hidden" id="btnWelcomeContinue">Keep playing!</button>
       <button class="btn ghost" id="btnWelcomeGuest">Continue as a guest</button>
     </div>
     <p class="welcomeFine" id="welcomeAppleNote">New here? It creates your account. Been here before? It signs you back in.</p>
     <p class="welcomeFine" id="welcomeWebNote">Signing in is coming soon on the website. In the iPhone app you can sign in with Apple.</p>
-    <!-- 2026-07-27 (v0.42, change 3): online is accounts-only now, so this line can no longer
-         promise "every game mode" - a guest can still play offline, just not online. -->
-    <p class="welcomeFine" id="welcomeGuestNote">Guests can play offline against CPUs - they just do not appear on the leaderboard, and online play needs an account.</p>
     <p class="welcomeFine" id="welcomeAgeNote">Accounts are for ages 13 and up. Anyone younger should continue as a guest.</p>
-    <p class="welcomeFine" id="welcomeAgainNote">You will see this again after every update. You can change it any time - tap ADMIN at the top of the game screen.</p>
   </div>
 </div>
 
@@ -2880,6 +2861,12 @@ button{font:inherit;cursor:pointer}
         </div>
       </div>
       <div class="acctNote" id="acctSoonNote">Accounts are coming soon. Your name and your games are saved on this phone in the meantime.</div>
+      <!-- 2026-07-27 (v0.46): relocated here from the old first-run welcome screen (deleted this
+           same pass, see § WELCOME) - this is one of the two places an account can be created
+           from, the Admin panel's own Sign in row being the other (see #welcomeAgeNote for that
+           one). Shown only while signed out, right under the Sign in row above - see
+           renderAccountRows(), § ACCOUNT. -->
+      <div class="acctNote" id="acctAgeNote">Accounts are for ages 13 and up. Anyone younger should continue as a guest.</div>
     </div>
     <div class="bigBtns"><button class="btn primary" id="btnAcctClose">Close</button></div>
   </div>
@@ -9762,7 +9749,7 @@ function startGame(){
     // possibly-stale copy baked into CFG.seatMeta - covers "Play again" and a reload that
     // resumes mid-speed-picker (loadPendingOfflineStart(), below), neither of which goes back
     // through the seat popup that would otherwise refresh it.
-    if(s.type==='human'&&ACCT&&ACCT.uid&&ACCT.gameName)name=ACCT.gameName;
+    if(s.type==='human'&&isAccountReady())name=ACCT.gameName;
     return {name,type:s.type,diff:s.diff,color:cols[i]};
   });
   // v0.12: solo vs-CPU always rotates to put you at the bottom; pass-and-play (2+ human
@@ -9873,7 +9860,7 @@ let OFFLINE_SEAT_IDX=0;
 function offlineSeatDisplayName(i){
   const cols=CFG.n===4?COLORS4:COLORS6;
   const names=DEFAULT_NAMES[CFG.n]||[];
-  if(i===OFFLINE_SEAT_IDX&&ACCT&&ACCT.uid&&ACCT.gameName)return ACCT.gameName;
+  if(i===OFFLINE_SEAT_IDX&&isAccountReady())return ACCT.gameName;
   return names[i]||cols[i].name;
 }
 // Same "Partners sit across: X + Y" wording renderMenu()'s own teamNote uses (Blake: "show the
@@ -10032,7 +10019,16 @@ async function youCardSignIn(){
 }
 function renderYouCard(){
   const box=$('youCard'); if(!box)return;
-  if(ACCT&&ACCT.uid&&ACCT.gameName){
+  // 2026-07-27 (v0.46 bug fix): while the boot-time account refresh is still in flight on a phone
+  // that IS carrying a stored session, say so plainly rather than painting the guest nudge - a
+  // signed-in player must never be told "sign in with Apple" for the split-second before the app
+  // has actually heard back, and this state does not linger: renderYouCard() is called again the
+  // moment refreshAccount() resolves either way (§ ACCOUNT SIGN-IN's boot block).
+  if(ACCT_BOOT_CHECKING){
+    box.innerHTML=`<div class="youCardChecking">Checking your account...</div>`;
+    return;
+  }
+  if(isAccountReady()){
     const name=ACCT.gameName;
     const letter=accountInitial(name), colors=accountColors();
     const st=loadStats();
@@ -10081,46 +10077,6 @@ function renderYouCard(){
     }
   }
 }
-
-/* ======================== § MENU: What's new (v0.44) ========================
-   Item 2 of Blake's "fill the menu out" ask: "the family gets frequent TestFlight builds and
-   has no idea what changed." WHATS_NEW is the one source of truth for this - plain-language,
-   written for Blake's relatives (no function names, no version-history housekeeping), newest
-   entry first. Only the newest entry is ever actually shown (openWhatsNew() always reads
-   WHATS_NEW[0]) - the array form exists so the NEXT version just prepends one more {ver,items}
-   entry here rather than a future session inventing a new place to put it. */
-const WHATS_NEW=[
-  {ver:'0.45',items:[
-    "Fixed: a guest now shows up as 'Guest' everywhere - never somebody else's name by mistake.",
-    "Tapping your name card at the top of the menu now opens your settings, not the leaderboard (the Leaderboard button still opens the leaderboard).",
-    "The playing tip on the menu is now clearly labelled TIP.",
-    "The leaderboard now shows a proper 'Loading...' message while it fetches, instead of possibly sitting there looking stuck.",
-  ]},
-  {ver:'0.44',items:[
-    "Picking who's playing and setting each computer opponent's difficulty now happen together, right when you tap Start game.",
-    "New: a stats card on the main menu shows your wins, games and points at a glance - and how you rank on the family leaderboard.",
-    "New: a quick playing tip shows up on the menu, a different one each time.",
-  ]},
-];
-const WHATS_NEW_SEEN_KEY='nasty-whatsnew-seen';
-function whatsNewSeenVer(){ try{ return localStorage.getItem(WHATS_NEW_SEEN_KEY)||''; }catch(e){ return ''; } }
-function markWhatsNewSeen(){ try{ localStorage.setItem(WHATS_NEW_SEEN_KEY,WHATS_NEW[0].ver); }catch(e){} }
-// The dot shows once per version until tapped - never removed outright (Blake might still want
-// to check it days later), it just quietly stops asking for attention.
-function renderWhatsNewRow(){
-  const dot=$('whatsNewDot'); if(!dot)return;
-  dot.classList.toggle('hidden',whatsNewSeenVer()===WHATS_NEW[0].ver);
-}
-function openWhatsNew(){
-  const body=$('whatsNewBody');
-  if(body)body.innerHTML=WHATS_NEW[0].items.map(t=>`<li>${esc(t)}</li>`).join('');
-  markWhatsNewSeen();
-  renderWhatsNewRow();
-  openOverlay('whatsNewOverlay');
-}
-$('whatsNewRow').onclick=openWhatsNew;
-$('btnWhatsNewClose').onclick=()=>closeOverlay('whatsNewOverlay');
-renderWhatsNewRow();   // paint the dot's initial state at boot, before the menu is even shown
 
 /* ======================== § MENU: rotating tip line (v0.44) ========================
    Item 3 of the same ask: "one short line of genuinely useful play advice or a rule reminder,
@@ -10434,6 +10390,27 @@ let ACCT=null;              // {token, uid, gameName, identities[], ...} once si
 let ACCT_BUSY=false;        // a sign-in or a delete is in flight - the rows go quiet meanwhile
 let ACCT_NOTICE='';         // one-shot plain-language line under the account rows
 let ACCT_NAME_MODE='local'; // which name the inline editor is editing: this phone's, or the account's
+// 2026-07-27 (v0.46 bug fix, the other half of it): true ONLY while the boot-time refreshAccount()
+// call (§ ACCOUNT SIGN-IN, right after loadAcctToken()/accountsAvailableHere() are both defined)
+// is still waiting on the network, on a phone that IS carrying a stored session token. Lets
+// renderYouCard() show a neutral "checking" line instead of guessing - the you card used to paint
+// the guest nudge the instant #menu first rendered (ACCT is null until the network answers), which
+// was honest as a brief flash but became a lie the moment nothing ever repainted it afterward (see
+// that same boot-time comment for the full story). Never true for a phone with no stored token at
+// all - a genuine guest sees the real guest card immediately, with no flash of anything else.
+let ACCT_BOOT_CHECKING=false;
+/* 2026-07-27 (v0.46 bug fix - Blake: "the welcome screen said I was signed in but the menu asked
+   me to sign in again"). THE ONE predicate for "am I signed in" and THE ONE predicate for "is my
+   account fully set up (signed in AND has a nickname)" - every other place in this file that used
+   to spell out `ACCT&&ACCT.uid` or `ACCT&&ACCT.uid&&ACCT.gameName` inline now calls one of these
+   two instead, so the two questions can never quietly drift apart again. See chosenName()/
+   mySeatName() just below, which already drew this exact distinction for NAME display - this is
+   the same split applied to every other yes/no check (renderYouCard(), the Admin panel's rows,
+   requireAccountThen(), the seat popup, etc). Neither function is what was actually broken (see
+   the boot-time refreshAccount() comment, § ACCOUNT SIGN-IN, for the real root cause) - this
+   consolidation exists so the NEXT session has one obvious place to look, not five. */
+function isSignedIn(){ return !!(ACCT&&ACCT.uid); }
+function isAccountReady(){ return isSignedIn()&&!!ACCT.gameName; }
 // Which seat is "me" on this phone. -1 = we are not in a game (or online but not seated yet).
 function accountSeatIndex(){
   if(!G||!G.seats)return -1;
@@ -10463,7 +10440,7 @@ function accountSeatIndex(){
    lookup, a convenience prefill) use the new mySeatName() below instead - see that function's own
    header comment, and see HANDOFF.md "v0.45" for the full per-call-site audit. */
 function chosenName(){
-  if(ACCT&&ACCT.uid&&ACCT.gameName)return ACCT.gameName;
+  if(isAccountReady())return ACCT.gameName;
   return 'Guest';
 }
 /* 2026-07-27 (v0.45) - this is the OLD chosenName() body, kept alive under its own honest name
@@ -10483,7 +10460,7 @@ function chosenName(){
    first human seat offline, same rule an old multi-human pass-and-play save still resolves
    through), or the first seat's stock name before any game exists at all. */
 function mySeatName(){
-  if(ACCT&&ACCT.uid&&ACCT.gameName)return ACCT.gameName;
+  if(isAccountReady())return ACCT.gameName;
   const n=(G?G.n:CFG.n), cols=n===6?COLORS6:COLORS4, names=DEFAULT_NAMES[n]||[];
   const i=accountSeatIndex();
   if(i>=0)return names[i]||(cols[i]&&cols[i].name)||'';
@@ -10640,7 +10617,7 @@ function openAccountNameEdit(mode,msg){
 // v0.42: a guest has no name to change - renderAccountRows() disables this row and says so; this
 // guard is belt-and-suspenders against the row's own `disabled` attribute rather than the only
 // thing stopping a signed-out edit from opening.
-$('btnAcctName').onclick=()=>{ if(ACCT&&ACCT.uid)openAccountNameEdit('account',''); };
+$('btnAcctName').onclick=()=>{ if(isSignedIn())openAccountNameEdit('account',''); };
 $('btnAcctNameCancel').onclick=closeAccountNameEdit;
 $('btnAcctNameSave').onclick=async ()=>{
   const inp=$('acctNameInput'), warn=$('acctNameWarn');
@@ -10855,7 +10832,7 @@ $('btnNickGateSave').onclick=()=>{ submitNicknameGate(); };
 $('nickGateInput').addEventListener('keydown',e=>{ if(e.key==='Enter')submitNicknameGate(); });
 async function accountSignIn(){
   const plugin=appleSignInPlugin();
-  if(!plugin||ACCT_BUSY||(ACCT&&ACCT.uid))return;
+  if(!plugin||ACCT_BUSY||isSignedIn())return;
   ACCT_BUSY=true; ACCT_NOTICE=''; renderAccountRows();
   try{
     const n=await accountFetch('/account/nonce');
@@ -10879,11 +10856,6 @@ async function accountSignIn(){
     }
     ACCT=Object.assign({token:r.body.sessionToken},r.body);
     saveAcctToken(r.body.sessionToken);
-    // v0.36 item 1: signing in IS choosing an account, so the first-run screen never has to ask
-    // again - including for a guest who chose "continue as a guest" months ago and changed their
-    // mind from the Admin panel. Written before the name binding so a slow /account/name call
-    // cannot leave the answer unrecorded.
-    rememberWelcomeChoice('account');
     // v0.36 item 3: a fresh sign-in is a fresh account, so any leftover offer from a previous
     // session on this page must not carry over.
     ACCT_CLAIM=null; CLAIM_PROBED=false;
@@ -10947,7 +10919,7 @@ async function accountDelete(eraseBoard){
 /* The one line in the app that answers "am I signed in?". Signing in or out repaints it, and so
    does opening the panel, so it can never lag behind the rows underneath it. */
 function accountSubtitle(){
-  if(ACCT&&ACCT.uid)return 'Signed in with Apple';
+  if(isSignedIn())return 'Signed in with Apple';
   return NET.online?'Playing online in this game':'Playing on this phone';
 }
 function renderAccountWho(){
@@ -10960,7 +10932,7 @@ function renderAccountRows(){
   renderAccountWho();
   const si=$('btnAcctSignIn'), so=$('btnAcctSignOut'), del=$('btnAcctDelete'), note=$('acctSoonNote');
   if(!si||!so||!del||!note)return;
-  const here=accountsAvailableHere(), on=!!(ACCT&&ACCT.uid);
+  const here=accountsAvailableHere(), on=isSignedIn();
   const siTxt=here?'Sign in with Apple':'Sign in';
   if(si.textContent!==siTxt)si.textContent=siTxt;
   si.disabled=!here||on||ACCT_BUSY;
@@ -10976,6 +10948,10 @@ function renderAccountRows(){
   else if(on)txt='Signed in with Apple'+(ACCT.gameName?(' as '+ACCT.gameName):'')+'. That only keeps your place on the leaderboard yours - nothing else changes.';
   else txt='Signing in is optional. It keeps your place on the leaderboard yours on any phone, and it is required to play online. Offline play works without it.';
   if(note.textContent!==txt)note.textContent=txt;
+  // 2026-07-27 (v0.46): the age disclosure only matters before an account exists - see
+  // #acctAgeNote's own markup comment for why it lives here at all (relocated from the deleted
+  // first-run welcome screen).
+  const ageNote=$('acctAgeNote'); if(ageNote)ageNote.classList.toggle('hidden',on);
   // 2026-07-27 (v0.42): a GUEST has no name to change anymore - only their seat's stock name
   // (mySeatName(), § ACCOUNT), never a nickname - so this row is disabled with a plain sentence
   // instead of opening an editor that would have nothing real to save. See btnAcctName's
@@ -11036,7 +11012,7 @@ function claimOfferText(c){
 function renderAccountClaim(){
   const box=$('acctClaim');
   if(!box)return;
-  const show=!!(ACCT&&ACCT.uid&&ACCT_CLAIM&&claimWindowOpen());
+  const show=!!(isSignedIn()&&ACCT_CLAIM&&claimWindowOpen());
   if(box.classList.contains('hidden')!==!show)box.classList.toggle('hidden',!show);
   if(!show){ ACCT_CLAIM_STEP='offer'; return; }
   const t=$('acctClaimText'), warn=$('acctClaimWarn'), offer=$('acctClaimOffer'), conf=$('acctClaimConfirm');
@@ -11090,7 +11066,7 @@ $('btnAcctClaimSure').onclick=()=>{ doAccountClaim(false); };
 $('btnAcctClaimNo').onclick=()=>{ doAccountClaim(true); };
 $('btnAcctSignIn').onclick=()=>{ if(accountsAvailableHere())accountSignIn(); };
 $('btnAcctSignOut').onclick=()=>{ accountSignOut(); };
-$('btnAcctDelete').onclick=()=>{ if(ACCT&&ACCT.uid)openAcctDeleteConfirm(); };
+$('btnAcctDelete').onclick=()=>{ if(isSignedIn())openAcctDeleteConfirm(); };
 $('btnAcctDelNo').onclick=closeAcctDeleteConfirm;
 $('btnAcctDelYes').onclick=()=>{ const cb=$('acctDelBoard'); accountDelete(!!(cb&&cb.checked)); };
 /* Test hook, in the same spirit as window.G and window.getNetGen. Sign in with Apple is native
@@ -11124,126 +11100,73 @@ window.__acct={
 };
 // Boot: if this phone is carrying a session, ask the server whether it is still good. This never
 // blocks anything - a guest and a signed-in player take the identical path to the menu.
+// 2026-07-27 (v0.46 bug fix - the REAL root cause of Blake's report: "the welcome screen said I
+// was signed in but the menu asked me to sign in again"). renderMenu() (bottom of this file, runs
+// synchronously at boot) paints the you card (renderYouCard(), § MENU) from whatever ACCT is at
+// that instant - which is still null here, because this fetch has not had any chance to answer
+// yet. That first paint showing the guest nudge was always expected and harmless BY ITSELF (see
+// ACCT_BOOT_CHECKING, § ACCOUNT, for how it's now shown honestly rather than as a false "sign in"
+// nudge) - the actual bug was that nothing ever repainted the you card once the real answer came
+// back: this .then() used to call ONLY renderAccountRows()/updateAccountButton() (the Admin
+// panel's own rows), so a genuinely signed-in player's you card stayed stuck on the guest nudge
+// forever, until some unrelated action happened to call renderMenu()/updateMenuResumeButtons()
+// first (switching Players/Game type, finishing a game, etc). renderYouCard() is now called here
+// too, so the menu repaints the moment the server actually confirms who is signed in - no more
+// waiting on an unrelated click to notice.
 if(accountsAvailableHere()&&loadAcctToken()){
-  refreshAccount().then(()=>{ try{ renderAccountRows(); updateAccountButton(); }catch(e){} }).catch(()=>{});
+  ACCT_BOOT_CHECKING=true;
+  refreshAccount().then(()=>{
+    ACCT_BOOT_CHECKING=false;
+    // A genuinely signed-in account with no nickname must resolve itself rather than silently
+    // reading as a guest forever - route it through the same blocking nickname gate a brand-new
+    // sign-in uses. This should be unreachable through any live sign-in flow as of v0.42 (a fresh
+    // sign-in cannot finish without picking a name, see bindAccountName()) - it only exists for an
+    // account that somehow has a stored token+uid with no gameName ever set (e.g. one created
+    // under a build older than v0.42). See openNicknameGate(), § ACCOUNT SIGN-IN.
+    try{ if(isSignedIn()&&!ACCT.gameName)openNicknameGate(); }catch(e){}
+    try{ renderAccountRows(); updateAccountButton(); renderYouCard(); }catch(e){}
+  }).catch(()=>{ ACCT_BOOT_CHECKING=false; try{ renderYouCard(); }catch(e){} });
 }
 renderAccountRows();
 updateAccountButton();
 
-/* ======================== § WELCOME (v0.36 item 1, 2026-07-26) ========================
-   Blake: "if it's a person's first time opening the app (or they don't have an account) they
-   should see a login screen with an apple button to create an account with their Apple ID.
-   Below that, there should be an option to continue as a guest with the knowledge that they
-   wouldn't be on the leaderboard. This is the only time this would happen though (don't make
-   them select guest every time) just let them know they can always change this by clicking the
-   admin button."
+/* ======================== § WELCOME (now: the online sign-in gate) ========================
+   2026-07-27 (v0.46): Blake, on the first-run/every-version screen this section used to be:
+   "the first screen says welcome back and that I'm signed in but once I get past that to the
+   real menu it asks me to sign in with Apple again. If that's the case, just get rid of the
+   first page then. Just say that I'm currently playing as a guest until I sign in."
 
-   v0.39 (2026-07-26, Blake): "Can you have the sign in screen appear on every new iteration of
-   the app? Whether it be TestFlight or an update that went through the App Store? Since it's
-   technically a new version of the app? That way I can also see this page every time in the
-   meantime as well."
+   THE OLD BOOT-TIME FLOW IS GONE ENTIRELY: the once-per-version re-show logic (WELCOME_KEY/
+   WELCOME_VER_KEY/WELCOME_IDB_KEY, appVersion(), rememberWelcomeChoice(), welcomeAnsweredThisVersion(),
+   welcomeLaunchIsPlain(), maybeShowWelcome(), the "welcome back"/#btnWelcomeContinue signed-in
+   greeting variant, and the window.__welcome test hook) has all been deleted, not merely
+   disabled - the app now boots straight to #menu every time, for a guest and a signed-in player
+   alike. A guest is simply shown as a guest on the you card (renderYouCard(), § MENU), which is
+   also where they sign in - see that function and its markup comment, right where #seatList used
+   to be. THE REAL BUG BEHIND BLAKE'S REPORT WAS NOT THIS SCREEN AT ALL - see the boot-time
+   refreshAccount() comment, § ACCOUNT SIGN-IN below, for the actual root cause and fix.
 
-   SO THE REQUIREMENT IS NOW "ONCE PER VERSION", NOT "ONCE EVER". The stored answer carries the
-   app version it was given under, and the boot check only trusts an answer that was given under
-   THIS version. Inside a version nothing changed at all - answer once, never asked again, however
-   many times the app is opened. After any update the screen says hello again, exactly once.
+   WHAT'S LEFT, AND WHY IT STAYS: this overlay (#welcomeOverlay) is also requireAccountThen()'s
+   (§ NET) sign-in gate - the screen a signed-out player sees when they tap something that needs
+   an account (Online play, a join link). That job still needs a screen, so rather than build a
+   second one, this one stays and is now used for NOTHING ELSE - which means it can ONLY ever be
+   reached while signed out (requireAccountThen() never calls openWelcome() while ACCT.uid is
+   true), so the copy below is finally written for the moment it is actually shown ("Sign in to
+   play online"), not for a first launch - a known gap the v0.42 HANDOFF entry flagged and this
+   pass fixes for free.
 
-   WHERE THE VERSION COMES FROM: appVersion() reads the version line under the menu (#verTap, the
-   "v0.39" next to "Est. 1993"). That is deliberately the one string in this file Blake's ship
-   checklist bumps on every single release - website push, TestFlight build and App Store update
-   alike - so this can never silently stop changing the way a separate hand-maintained constant
-   could. If that element were ever missing, appVersion() returns 'unknown', which is stable, so
-   the worst case is the old v0.36 behaviour (asked once, then remembered) rather than a screen
-   that appears on every launch.
-
-   THE STORAGE IS STILL DOUBLE-WRITTEN, for the reason v0.36 wrote it that way: iOS really does
-   evict a site's localStorage (ITP), and this app already carries a full IndexedDB mirror of the
-   offline saves for exactly that reason (see the "IndexedDB mirror" block, § SAVE). The answer and
-   its version are written to BOTH stores, and the boot check reads both before deciding to ask.
-   A player who answered under an OLDER version is asked again - which is the whole feature - and a
-   player whose phone still remembers THIS version is not, even if localStorage was wiped.
-
-   WHY THE BOOT CHECK IS ASYNC AND WHY IT IS BOUNDED. IndexedDB has no synchronous API, so the
-   only way to consult the mirror is to wait for it. Waiting risks the opposite failure - a phone
-   where IndexedDB is blocked or wedged would never reach the menu - so the read races a 1500ms
-   timer and a timeout is treated as "we do not know", which shows the screen. Being asked twice
-   in a freak case is a small annoyance; being unable to start a game is not, and this screen must
-   never trap anybody. Nothing else about the boot is blocked either way: the menu is already
-   painted underneath before this ever runs.
-
-   WHO IS NEVER ASKED:
-     - anybody who has already answered UNDER THIS VERSION, either store;
-     - the #autotest harnesses, which drive straight into a game;
-     - a launch that is already mid-flow: a deep-link join, a game in progress, or any other
-       full-screen page already up. Those simply do not record an answer, so the screen appears on
-       the next ordinary launch instead. That is the safe direction to be wrong in.
-
-   ALREADY SIGNED IN? v0.36 treated a session token as an answer and never showed the screen at
-   all. That was right when the screen only ever appeared once, and it is wrong now: Blake wants to
-   see this page after every update, and so does everybody else who already has an account. So a
-   signed-in player DOES see it after an update - but as a greeting, not as a sign-in form. The
-   heading welcomes them back, the Apple button and the guest button are replaced by a single
-   "Keep playing!" button, and the two lines that only mean something to a brand-new player (the
-   guest/leaderboard line and the 13+ line) are hidden. Asking somebody who is already signed in to
-   sign in again is a dead end dressed up as a choice. Switching to guest, or signing out, is in
-   ADMIN - which the last line on the screen points at, in both variants.
-
-   ON THE WEBSITE there is no native Apple sheet, so the Apple button is REMOVED (not disabled)
-   and an honest sentence takes its place. The guest button is always there; nobody is ever
-   blocked from playing, on either platform. */
-const WELCOME_KEY='nasty-welcome-choice';
-// v0.39: the version the answer above was given under. Separate key, so an old phone carrying only
-// the v0.36 choice key reads as "answered, but under a version we cannot name" - which asks again,
-// once, which is exactly the behaviour Blake asked for on the update that ships this.
-const WELCOME_VER_KEY='nasty-welcome-ver';
-const WELCOME_IDB_KEY='welcome';
-let WELCOME_SHOWN=false;
-/* THE version string, read from the one place that is guaranteed to change every release: the
-   version line under the menu. Never throws, never returns empty. */
-function appVersion(){
-  try{ const el=$('verTap'); const v=el?String(el.textContent||'').trim():''; return v||'unknown'; }
-  catch(e){ return 'unknown'; }
-}
-function loadWelcomeChoice(){ try{ return localStorage.getItem(WELCOME_KEY)||''; }catch(e){ return ''; } }
-function loadWelcomeVer(){ try{ return localStorage.getItem(WELCOME_VER_KEY)||''; }catch(e){ return ''; } }
-// Writes both stores, and stamps the version it was answered under (v0.39). localStorage first and
-// synchronously, because that is the copy the very next boot reads; the IndexedDB mirror is
-// best-effort and never awaited by a caller.
-function rememberWelcomeChoice(choice){
-  const v=(choice==='account')?'account':'guest';
-  const ver=appVersion();
-  try{ localStorage.setItem(WELCOME_KEY,v); localStorage.setItem(WELCOME_VER_KEY,ver); }catch(e){}
-  try{ idbPutSave({choice:v,ver:ver,ts:Date.now()},WELCOME_IDB_KEY); }catch(e){}
-}
-/* "Has this been answered under THIS version of the app?" (v0.39 - it used to be "ever"). Reads
-   localStorage first (free, synchronous), then the mirror, which also heals localStorage on the way
-   past so the question is answered synchronously from then on. An answer stamped with a different
-   version - or with no version at all, which is every phone updating from v0.38 or earlier - counts
-   as not answered, so the screen appears once and then stamps itself with the current version. */
-async function welcomeAnsweredThisVersion(){
-  const ver=appVersion();
-  if(loadWelcomeChoice()&&loadWelcomeVer()===ver)return true;
-  let rec=null;
-  try{ rec=await idbGetSave(WELCOME_IDB_KEY); }catch(e){ rec=null; }
-  if(rec&&rec.choice&&rec.ver===ver){
-    try{ localStorage.setItem(WELCOME_KEY,rec.choice); localStorage.setItem(WELCOME_VER_KEY,rec.ver); }catch(e){}
-    return true;
-  }
-  return false;
-}
-function closeWelcome(){
-  WELCOME_SHOWN=false;
-  closeOverlay('welcomeOverlay');
-}
-/* Deliberately silent. The screen they just closed ends with "You can change it any time - tap
-   ADMIN at the top of the game screen", so a toast would only repeat it - and the toast band sits
-   right over the seat rows on the menu, which is a poor first thing to see on a first launch. */
+   THE AGE DISCLOSURE ("Accounts are for ages 13 and up...") still lives here (#welcomeAgeNote,
+   next to the Sign in button) since this is one of the two places an account can be created from
+   - it was ALSO added to the Admin panel's own Sign in row (§ ACCOUNT, renderAccountRows()) since
+   that is the other one. Never deleted, only kept reachable everywhere an account can start. */
+function closeWelcome(){ closeOverlay('welcomeOverlay'); }
+/* Deliberately silent - see #welcomeGuestNote's replacement, folded into welcomeNote below, for
+   what a guest is told instead. */
 function chooseGuest(){
-  rememberWelcomeChoice('guest');
-  // 2026-07-27 (v0.42): if this screen was reached via requireAccountThen() (§ NET - a
-  // signed-out tap on "Online play" or a join link), choosing to stay a guest means "no thanks"
-  // to that action, not "do it anyway" - online has no guest path anymore. Drop it for good
-  // rather than letting it fire on some later, unrelated sign-in.
+  // 2026-07-27 (v0.42, unchanged by v0.46): this screen is only ever reached via
+  // requireAccountThen() now (§ NET - a signed-out tap on "Online play" or a join link), so
+  // choosing to stay a guest means "no thanks" to that action, not "do it anyway" - online has no
+  // guest path. Drop it for good rather than letting it fire on some later, unrelated sign-in.
   ONLINE_PENDING=null;
   closeWelcome();
 }
@@ -11258,7 +11181,7 @@ async function welcomeSignIn(){
   try{ await accountSignIn(); }
   catch(e){}
   if(btn)btn.disabled=false;
-  if(ACCT&&ACCT.uid){
+  if(isSignedIn()){
     closeWelcome();
     // 2026-07-27 (v0.42): resume whatever online action (Host/Join/an invite link) sent this
     // player through sign-in first, code preserved and all - see requireAccountThen(), § NET.
@@ -11266,102 +11189,21 @@ async function welcomeSignIn(){
     if(cont)cont();
   }
 }
-/* v0.39: the signed-in player's button. Nothing to decide and nothing to sign into - they already
-   have an account and it is already on this phone - so this only records that they have seen this
-   version's screen and gets out of the way. */
-function welcomeKeepPlaying(){
-  rememberWelcomeChoice('account');
-  closeWelcome();
-}
 $('btnWelcomeApple').onclick=()=>{ welcomeSignIn(); };
 $('btnWelcomeGuest').onclick=chooseGuest;
-$('btnWelcomeContinue').onclick=welcomeKeepPlaying;
-// v0.39: is this phone already signed in? Asked with loadAcctToken() rather than ACCT, on purpose -
-// ACCT is filled in by refreshAccount(), which is a network call that may not have answered yet (or
-// at all, on a phone with no signal). The stored session token is the synchronous, offline-safe
-// truth about "does this person have an account here".
-function welcomeIsSignedIn(){ return !!(loadAcctToken()&&accountsAvailableHere()); }
+/* 2026-07-27 (v0.46): this overlay is reached ONLY while signed out (requireAccountThen() is its
+   one caller, and it never calls this while ACCT.uid is true) - so, unlike the old boot-time
+   screen, there is no signed-in variant to branch on here at all anymore. Just the platform
+   difference: no native Apple sheet on the website, so the Apple button is REMOVED (not merely
+   disabled - a dead button reads as broken, not as not-yet) and an honest sentence takes its
+   place. */
 function openWelcome(){
   const here=accountsAvailableHere();
-  const signedIn=welcomeIsSignedIn();
-  // REMOVED, not merely disabled: a greyed-out "Sign in with Apple" on the website is still a
-  // dead Apple button, and Blake's family reads a greyed button as "broken", not "not yet".
-  // v0.39: also removed for somebody who is ALREADY signed in - see the § WELCOME header comment.
-  $('btnWelcomeApple').classList.toggle('hidden',!here||signedIn);
-  $('btnWelcomeContinue').classList.toggle('hidden',!signedIn);
-  $('btnWelcomeGuest').classList.toggle('hidden',signedIn);
-  $('welcomeAppleNote').classList.toggle('hidden',!here||signedIn);
-  $('welcomeWebNote').classList.toggle('hidden',here||signedIn);
-  $('welcomeGuestNote').classList.toggle('hidden',signedIn);
-  $('welcomeAgeNote').classList.toggle('hidden',signedIn);
-  // The greeting. This whole line only ever runs in the SIGNED-IN branch below (`signedIn` true
-  // means welcomeIsSignedIn() found a stored session token) - so the name, if there is one yet, can
-  // only be the account's own. 2026-07-27 (v0.45 bug fix): this used to fall back to chosenName()
-  // when ACCT.gameName hadn't loaded yet (a network race - refreshAccount() may not have answered),
-  // which could print "You are signed in as Ginny" (chosenName()'s old guest-seat fallback) for
-  // somebody who genuinely IS signed in, just waiting on the network - backwards, and exactly the
-  // kind of false identity Blake's report was about. Now it simply has no fallback: no gameName
-  // yet means no name at all, and the sentence below already has a clean no-name version for
-  // exactly that ("You are signed in, and every win..."). Never chosenName() here - a signed-in
-  // player must never be told they are "Guest".
-  const nm=(ACCT&&ACCT.gameName)||'';
-  $('welcomeTitle').textContent=signedIn?'Welcome back to NASTY!':'Welcome to NASTY!';
-  $('welcomeNote').textContent=signedIn
-    ?(nm?`You are signed in as ${nm}, and every win, takeout and bragging right is still yours. Fresh update - go and defend it!`
-        :'You are signed in, and every win, takeout and bragging right is still yours. Fresh update - go and defend it!')
-    :'Race five tees home and send everybody else packing! Sign in and your wins, your takeouts and your bragging rights all stay yours.';
-  WELCOME_SHOWN=true;
+  $('btnWelcomeApple').classList.toggle('hidden',!here);
+  $('welcomeAppleNote').classList.toggle('hidden',!here);
+  $('welcomeWebNote').classList.toggle('hidden',here);
   openOverlay('welcomeOverlay');
 }
-// Is this launch a plain "opened the app" launch, with nothing else going on?
-function welcomeLaunchIsPlain(){
-  if(location.hash.indexOf('autotest')>=0)return false;
-  try{ if(new URLSearchParams(location.search).get('join'))return false; }catch(e){}
-  if(typeof G!=='undefined'&&G&&G.seats)return false;              // a game is already running
-  if(!$('menu')||$('menu').classList.contains('hidden'))return false;
-  if(visibleModalOverlays().length)return false;                   // something else is already up
-  return true;
-}
-async function maybeShowWelcome(){
-  try{
-    if(!welcomeLaunchIsPlain())return;
-    // v0.39: a signed-in phone no longer short-circuits out of here. It used to record 'account'
-    // and never show the screen; now it sees the signed-in variant once per version, same as
-    // everybody else. openWelcome() is what decides which variant that is.
-    const answered=await Promise.race([
-      welcomeAnsweredThisVersion(),
-      new Promise(r=>setTimeout(()=>r(false),1500)),
-    ]);
-    if(answered)return;
-    if(!welcomeLaunchIsPlain())return;   // re-checked: 1500ms is long enough for a tap to land
-    openWelcome();
-  }catch(e){}
-}
-/* Test hook, same spirit as window.__acct: it reads the real DOM and drives the real handlers.
-   reset() clears BOTH stores so a suite can prove the screen comes back only when the answer is
-   genuinely gone, and comes back exactly once. */
-window.__welcome={
-  shown:()=>{ const o=$('welcomeOverlay'); return !!o&&!o.classList.contains('hidden'); },
-  choice:()=>loadWelcomeChoice(),
-  // v0.39: the version the stored answer was given under, and the version this build is. A suite
-  // proves "it comes back after an update" by making these two disagree - which is exactly what a
-  // real update does - rather than by calling anything test-only.
-  ver:()=>loadWelcomeVer(),
-  appVersion:()=>appVersion(),
-  signedIn:()=>welcomeIsSignedIn(),
-  appleVisible:()=>!$('btnWelcomeApple').classList.contains('hidden'),
-  continueVisible:()=>!$('btnWelcomeContinue').classList.contains('hidden'),
-  guestVisible:()=>!$('btnWelcomeGuest').classList.contains('hidden'),
-  webNoteVisible:()=>!$('welcomeWebNote').classList.contains('hidden'),
-  appleNoteVisible:()=>!$('welcomeAppleNote').classList.contains('hidden'),
-  show:()=>openWelcome(),
-  check:()=>maybeShowWelcome(),
-  reset:async()=>{
-    try{ localStorage.removeItem(WELCOME_KEY); localStorage.removeItem(WELCOME_VER_KEY); }catch(e){}
-    try{ await idbDeleteSave(WELCOME_IDB_KEY); }catch(e){}
-  },
-};
-maybeShowWelcome();
 
 /* sendInvite: shared by the online room's invite button (btnRoomText) and the reunion lobby's
    "Nudge" button - real invites only ever happen from inside the host lobby flow, once a room
@@ -11401,20 +11243,21 @@ function sendInvite(link){
        the SAME blocking nickname gate a brand-new sign-in uses (openNicknameGate(), § ACCOUNT
        SIGN-IN) rather than ever letting a nameless account onto the wire - see
        submitNicknameGate()'s own ONLINE_PENDING resume for the other half of this.
-     - signed out but able to sign in - reuse the real first-run sign-in screen (openWelcome(),
-       § WELCOME) rather than build a second one, so creating a nickname (§ ACCOUNT SIGN-IN,
-       change 1 of this same session) happens before ever seeing a seat. `cont` is remembered in
-       ONLINE_PENDING and resumed automatically - room code and all - the moment sign-in
-       completes (see welcomeSignIn(), § WELCOME); choosing "Continue as a guest" instead drops it
-       for good (chooseGuest(), § WELCOME) rather than firing it later against the player's wish. */
+     - signed out but able to sign in - opens the sign-in gate (openWelcome(), § WELCOME - as of
+       v0.46 this overlay's ONLY remaining job, see its own header comment) so creating a nickname
+       (§ ACCOUNT SIGN-IN, change 1 of this same session) happens before ever seeing a seat. `cont`
+       is remembered in ONLINE_PENDING and resumed automatically - room code and all - the moment
+       sign-in completes (see welcomeSignIn(), § WELCOME); choosing "Continue as a guest" instead
+       drops it for good (chooseGuest(), § WELCOME) rather than firing it later against the
+       player's wish. */
 let ONLINE_PENDING=null;   // the online action waiting on a sign-in (or a nickname), or null
 function requireAccountThen(cont){
   if(!accountsAvailableHere()){
     toast('Online play needs an account. Sign in with Apple in the iPhone app to play online.');
     return;
   }
-  if(ACCT&&ACCT.uid){
-    if(ACCT.gameName){ cont(); return; }
+  if(isAccountReady()){ cont(); return; }
+  if(isSignedIn()){
     ONLINE_PENDING=cont;
     openNicknameGate();
     return;
@@ -12430,12 +12273,12 @@ function updateMenuResumeButtons(){
   });
   // 2026-07-27 (v0.44): this function is already called at every single "the menu is back on
   // screen" moment in the app (boot, leaving a game, leaving an online room, a finished game's
-  // "Back to menu") - piggybacking the you card/What's new dot/tip line refresh here, rather
-  // than hunting down and editing every one of those call sites separately, is what makes
-  // "never stale after a sign-in/sign-out that happened mid-game" true by construction instead
-  // of by remembering to. All three are cheap and guarded - safe to call any time.
+  // "Back to menu") - piggybacking the you card/tip line refresh here, rather than hunting down
+  // and editing every one of those call sites separately, is what makes "never stale after a
+  // sign-in/sign-out that happened mid-game" true by construction instead of by remembering to.
+  // Both are cheap and guarded - safe to call any time. (v0.46: this used to also repaint the
+  // "What's new" dot - that row is deleted, see § MENU's own header comment.)
   renderYouCard();
-  renderWhatsNewRow();
   const tip=$('tipText'); if(tip)tip.textContent=pickMenuTip();   // v0.45: #tipLabel lives beside it, untouched
 }
 // v0.18.1: trash-can delete, 2-tap confirm. showDeleteConfirm swaps ONE tile's content for the
