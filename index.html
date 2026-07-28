@@ -51,6 +51,11 @@
                     your real record if signed in, a sign-in nudge if not), a "What's new" row
                     (WHATS_NEW/openWhatsNew()), and a rotating rules-based tip line (MENU_TIPS/
                     pickMenuTip()) - all three defined right after the seat popup, § MENU.
+                    v0.45: the you card's tap target now opens the Admin panel (openAccountPanel())
+                    instead of the leaderboard - the menu already has its own Leaderboard button,
+                    so nothing is lost; see renderYouCard()'s header comment for the guest-card
+                    decision. The tip line now carries a small "TIP" label (#tipLabel) so it reads
+                    as a labelled hint, not a stray sentence.
     § NET ......... online multiplayer: WS client, host/join lobby UI, deterministic
                     lockstep (server in /server, see HANDOFF.md "Online multiplayer").
                     v0.42: ACCOUNTS-ONLY - no guest join anymore. requireAccountThen() gates
@@ -59,10 +64,21 @@
                     and resumes the original action (ONLINE_PENDING) once it completes. The
                     join flow's old "type your name" step is gone - the name on the wire is
                     always ACCT.gameName.
+                    v0.45: the leaderboard overlay (openLeaderboardOverlay()) now shows a real
+                    "Loading..." state instead of possibly flashing a wrong "No games yet" while
+                    fetchGlobalLeaderboard() is still in flight - see LB_FETCH_PENDING/
+                    LB_FETCH_FAILED, defined right next to fetchGlobalLeaderboard() itself.
     § ACCOUNT ..... the ADMIN button's panel: rules, sound, table speed, name, connection.
-                    v0.42: chosenName() is now "signed in -> the account's name; guest -> the
+                    v0.42: chosenName() is "signed in -> the account's name; guest -> the
                     seat's own stock name" - guests no longer have a persistent nickname, so
                     "Change your name" is disabled for them with a plain sentence.
+                    v0.45 BUG FIX: that guest fallback was wrong for IDENTITY displays - a guest
+                    sitting in (or merely defaulted toward) seat 0 read as "Ginny" in the Admin
+                    panel's who-name and the account avatar, as if that were a chosen identity.
+                    chosenName() is now identity-only (signed in -> account name; guest -> the
+                    literal word "Guest", always). The seat-name logic it used to do lives on,
+                    unchanged in behavior, as the new mySeatName() - see both functions' header
+                    comments for the full split and HANDOFF.md "v0.45" for the call-site audit.
     § ACCOUNT SIGN-IN ... Sign in with Apple (iPhone app only). v0.42: a BRAND-NEW account is
                     blocked on a mandatory nickname right here - bindAccountName() opens a
                     full-screen prompt (openNicknameGate()) that cannot be skipped or dismissed
@@ -72,6 +88,12 @@
     § WELCOME ..... the sign-in screen, shown once per app version (v0.36; per-version in v0.39).
                     v0.42: also reused (via requireAccountThen(), § NET) as the "sign in before
                     you can play online" gate for anyone who isn't signed in yet.
+                    v0.45 BUG FIX: openWelcome()'s "welcome back" greeting used to fall back to
+                    chosenName() when ACCT.gameName hadn't loaded yet (a real network race - the
+                    session token says signed in, refreshAccount() just hasn't answered) - with the
+                    OLD chosenName(), that could print "You are signed in as Ginny" for somebody who
+                    genuinely is signed in. No fallback anymore; a no-name greeting already existed
+                    for exactly this case.
     § COMING SOON . v0.43: the public website's "coming soon" screen. Gated on
                     NASTY_WEBSITE_GATE_ENABLED (§ CAPACITOR, near IS_APP) - true shows this
                     INSTEAD of #menu/#game on the web (the app is unaffected, IS_APP always
@@ -405,6 +427,10 @@
     - chosenName() (§ ACCOUNT) is reworked for the new source of truth: signed in -> the
       account's name; guest -> the stock name of whichever seat they are sitting in. Guests no
       longer have a persistent nickname anywhere in the app.
+      (v0.45 CORRECTION: that guest answer was wrong wherever chosenName() fed an IDENTITY
+      display, not a seat name - see HANDOFF.md "v0.45". chosenName() now always answers "Guest"
+      for a signed-out player; the seat-name behavior described above lives on unchanged as the
+      new mySeatName(), § ACCOUNT.)
 -->
 </head>
 <body>
@@ -644,11 +670,11 @@ button{font:inherit;cursor:pointer}
 .youCard{max-width:520px;margin:0 auto 12px;background:rgba(9,32,20,.55);
   border:1px solid rgba(255,255,255,.14);border-radius:16px;padding:14px 16px;
   text-align:left;backdrop-filter:blur(6px)}
-/* Signed in: the whole card is one tap target straight through to the leaderboard (renderYouCard()
-   wires #youCardTap to the SAME openLeaderboardOverlay() the "Leaderboard" button calls - one
-   implementation, two doors, same convention the rules panel already follows). .youAvatar reuses
-   the account panel's own circle look (.acctAvatar, § STYLE above) rather than a second copy -
-   same --acctBg/--acctInk custom properties, same accountColors()/accountInitial() helpers. */
+/* Signed in: the whole card is one tap target straight through to the Admin panel (renderYouCard()
+   wires #youCardTap to openAccountPanel() - v0.45, was openLeaderboardOverlay(); see that
+   function's header comment, § MENU, for why). .youAvatar reuses the account panel's own circle
+   look (.acctAvatar, § STYLE above) rather than a second copy - same --acctBg/--acctInk custom
+   properties, same accountColors()/accountInitial() helpers. */
 .youCardRow{display:flex;gap:12px;align-items:center;cursor:pointer;min-height:44px}
 .youWho{min-width:0;flex:1}
 .youWho b{display:block;font-size:16px;color:var(--cream);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -660,7 +686,10 @@ button{font:inherit;cursor:pointer}
    spinner, not an error) unless/until fetchGlobalLeaderboard() actually answers - see
    renderYouCard()'s header comment, § MENU, for why that is a deliberate silence, not a bug. */
 .youRank{font-size:12.5px;color:var(--gold);font-weight:700;margin-top:4px;min-height:15px}
-.youCardGuest{text-align:center}
+/* v0.45: the guest card is now a tap target too (same Admin destination as the signed-in card
+   above) - cursor:pointer says so; the Sign in button inside stops its own click from bubbling up
+   to it (see renderYouCard()'s guest branch). */
+.youCardGuest{text-align:center;cursor:pointer}
 .youNudge{font-size:13.5px;color:#cfe8d6;line-height:1.5;margin-bottom:10px}
 /* A slim, single-line tappable row - deliberately NOT a full .savedTile-style card, so it reads
    as a lightweight "check this later" affordance, not a third stat panel competing with the you
@@ -672,9 +701,15 @@ button{font:inherit;cursor:pointer}
 .whatsNewRow:active{background:rgba(255,255,255,.08)}
 .whatsNewDot{width:8px;height:8px;border-radius:50%;background:var(--gold);flex:none}
 /* Plain italic text, no background, no border - reads as a caption, never as a control, so
-   nobody goes hunting for a tap target that isn't there. */
+   nobody goes hunting for a tap target that isn't there. 2026-07-27 (v0.45, Blake: "for the game
+   advice/hints you need to label it as such. Otherwise it looks outta place.") - .tipLabel is a
+   small uppercase heading INSIDE this line (not a separate row - see the #tipLine markup
+   comment), reusing the same muted uppercase-label look .optRow label already uses for PLAYERS/
+   GAME TYPE, just smaller and lighter so it reads as a quiet caption, not a banner. */
 .tipLine{font-size:12.5px;color:#a9d2b5;font-style:italic;line-height:1.4;text-align:center;
   margin:10px 2px 2px;min-height:32px}
+.tipLabel{display:inline-block;font-style:normal;font-weight:700;font-size:10.5px;
+  letter-spacing:.10em;text-transform:uppercase;color:#a9d2b5;opacity:.85;margin-right:5px}
 .bigBtns{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:18px}
 /* v0.26 item 2: the HOST speed picker only (#hostSpeedOverlay's #hostSpeedBtns) - a real 2x2
    grid instead of .bigBtns' generic flex-wrap column, per Blake's ask. Deliberately NOT
@@ -1971,6 +2006,17 @@ button{font:inherit;cursor:pointer}
 #comingSoon .csLinks a{color:#a9d2b5;text-decoration:underline;text-underline-offset:3px}
 #comingSoon .csLinks span{margin:0 10px;opacity:.6}
 .lbScroll{margin:6px 0 10px}
+/* 2026-07-27 (v0.45, Blake: "the leaderboard takes a bit to load in once clicked. Make there be a
+   'loading...' graphic so people know it's coming.") No spinner asset/animation library needed -
+   a plain sentence that gently pulses. Added to the prefers-reduced-motion list below (the
+   "anything that loops FOREVER" rule that block's own header comment already follows), since this
+   loops for as long as the fetch is in flight, same as the connection chip's own reconnecting
+   pulse. .lbErr uses a soft red-ish tone consistent with the app's --red token, not a fresh color
+   choice, for the one genuinely-wrong-answer case. */
+.lbLoading{color:#a9d2b5;font-size:13.5px;text-align:center;padding:20px 8px;
+  animation:lbPulse 1.3s ease-in-out infinite}
+@keyframes lbPulse{0%,100%{opacity:.5}50%{opacity:1}}
+.lbErr{color:#e7a89e;font-size:13.5px;text-align:center;padding:20px 8px;line-height:1.5}
 .lbTable{width:100%;border-collapse:collapse;table-layout:fixed;font-variant-numeric:tabular-nums}
 .lbTable th,.lbTable td{box-sizing:border-box;padding:6px 3px;font-size:clamp(10.5px,3.1vw,13.5px);
   border-bottom:1px solid rgba(255,255,255,.12);white-space:nowrap}
@@ -1999,10 +2045,12 @@ button{font:inherit;cursor:pointer}
    confetti burst is not CSS at all - it is 90 elements animated from JS for 2-5s each - and is
    gated separately in confettiBurst() (§ ANIM). See also the `REDUCED` live listener in § UTIL:
    this media query re-evaluates by itself when the setting changes, but the JS copy of it did
-   not, which is why toggling Reduce Motion in iOS Settings used to do nothing until relaunch. */
+   not, which is why toggling Reduce Motion in iOS Settings used to do nothing until relaunch.
+   2026-07-27 (v0.45): .lbLoading (the new leaderboard "Loading..." pulse) added to the infinite
+   list for the same reason as the connection chip's pulse right next to it. */
 @media (prefers-reduced-motion: reduce){
   .plaque.turn,.tee.selectable,.tee.targetable,#btnSkip.active,.toast.myTurn,
-  .pathDot.pathKill,#connIndicator.reconnecting,.tee.spotlightGlow,
+  .pathDot.pathKill,#connIndicator.reconnecting,.tee.spotlightGlow,.lbLoading,
   .pathDot,.changeRing,.toast{animation:none}
   /* stampPop ends at opacity:1 - both of these START at opacity:0, so simply killing the
      animation would make them permanently invisible and quietly delete information (the
@@ -2198,9 +2246,13 @@ button{font:inherit;cursor:pointer}
          below "Start game" - see its own markup comment), where it belongs, since that is now
          the ONE screen that knows which seats are even CPUs. Rather than leave the panel with a
          gap where that row used to be, Blake's own "fill it out" ask (same batch) put a rotating
-         playing tip here instead - see pickMenuTip()/MENU_TIPS, § MENU. Plain italic text, no
-         control, so it can never be mistaken for something tappable. -->
-    <div class="tipLine" id="tipLine"></div>
+         playing tip here instead - see pickMenuTip()/MENU_TIPS, § MENU. Plain text, no control,
+         so it can never be mistaken for something tappable.
+         2026-07-27 (v0.45, Blake: "for the game advice/hints you need to label it as such.
+         Otherwise it looks outta place.") - #tipLabel is a small "TIP" heading INSIDE the line
+         (not a second row - see .tipLabel's own CSS comment); #tipText is the rotating sentence
+         itself. renderMenu()/updateMenuResumeButtons() only ever write #tipText now. -->
+    <div class="tipLine" id="tipLine"><span class="tipLabel" aria-hidden="true">Tip</span><span id="tipText"></span></div>
     <div class="bigBtns">
       <button class="btn primary" id="btnStart">Start game</button>
       <button class="btn ghost" id="btnOnline">Online play</button>
@@ -2210,7 +2262,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.44</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.45</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -2788,10 +2840,13 @@ button{font:inherit;cursor:pointer}
            behind this full-screen panel) and the row is disabled for them. See
            $('btnAcctSpeed') and speedRowLabel(), § MENU. -->
       <button class="btn ghost acctRow" id="btnAcctSpeed">Table speed: Normal</button>
-      <!-- 2026-07-27 (v0.42): a GUEST has no name to change anymore - chosenName() (§ ACCOUNT)
-           gives guests only their seat's stock name, never a nickname - so this row is disabled
-           for them with the <small> line saying why, instead of opening an editor that would
-           have nothing real to save. See renderAccountRows(). -->
+      <!-- 2026-07-27 (v0.42): a GUEST has no name to change anymore - guests never had a
+           persistent nickname to begin with (only their seat's stock name, which they can't set)
+           - so this row is disabled for them with the <small> line saying why, instead of opening
+           an editor that would have nothing real to save. See renderAccountRows(). v0.45: the
+           who-name this panel shows above now reads the literal word "Guest" for them
+           (chosenName(), § ACCOUNT) rather than a stock name - see that function's header
+           comment. -->
       <button class="btn ghost acctRow" id="btnAcctName">Change your name<small></small></button>
       <button class="btn ghost acctRow hidden" id="btnAcctReset">Fix my connection<small>Reconnects this phone to the online game</small></button>
       <!-- 2026-07-25 (the top-row rebuild): once the game is OVER the top row's left slot shows
@@ -9661,7 +9716,7 @@ function renderMenu(){
   // every time this screen repaints, so switching Players/Game type never leaves either one
   // stale. See renderYouCard()/pickMenuTip(), just below.
   renderYouCard();
-  $('tipLine').textContent=pickMenuTip();
+  $('tipText').textContent=pickMenuTip();   // v0.45: #tipLine also carries #tipLabel now - see its markup comment
 }
 $('p4').onclick=()=>{CFG.n=4;saveCfg();renderMenu();};
 $('p6').onclick=()=>{CFG.n=6;saveCfg();renderMenu();};
@@ -9911,15 +9966,26 @@ $('btnStart').onclick=()=>openOfflineSeatPicker();
    doing" is one question, not two tabs. If the fetch fails, is slow, or this device is offline,
    the rank line is simply never written - there is no spinner and nothing that can look stuck,
    because every OTHER number on the card is already showing, synchronously, with nothing left
-   to wait on. Tapping the card (once it has a real record) opens the leaderboard - see
-   openLeaderboardOverlay(), shared with the "Leaderboard" button itself.
+   to wait on.
+   2026-07-27 (v0.45, Blake: "when you're signed in and you click your name plate at the top it
+   should bring you to the admin options not the leaderboard") - tapping the card now opens the
+   Admin panel (openAccountPanel()), not the leaderboard - the menu already has its own dedicated
+   Leaderboard button, so nothing is lost. The aria-label was reworded to match ("Open Admin
+   settings", not "Open the leaderboard").
 
-   Signed OUT (guest): no record at all - a guest has no persistent name to keep one under (see
-   chosenName()'s own header comment, § ACCOUNT) - just a plain sentence that signing in is what
-   puts you on the family leaderboard, since v0.42 made online play AND the leaderboard both
-   accounts-only. The "Sign in with Apple" button only appears where accountsAvailableHere() is
-   true (the iPhone app) - same "a dead button reads as broken, not as not-yet" reasoning
-   openWelcome() already follows for this exact button; the plain website (no Apple plugin) shows
+   Signed OUT (guest): no record at all - a guest has no persistent name to keep one under (guests
+   are never given a nickname - see mySeatName()'s header comment, § ACCOUNT, for why a seat still
+   keeps its own stock name regardless) - just a plain sentence that signing in is what puts you
+   on the family leaderboard, since v0.42 made online play AND the leaderboard both accounts-only.
+   v0.45: the whole guest card is now ALSO a tap target straight to the Admin panel, same
+   destination as the signed-in card - Admin is where "Sign in" already lives as a row too, so a
+   guest who taps anywhere on the card lands somewhere that makes sense either way. The "Sign in
+   with Apple" button INSIDE the card stops its own click from bubbling up to that same handler
+   (same stopPropagation idiom the seat popup's difficulty <select> already uses), so tapping Sign
+   in does sign-in only, never sign-in-then-also-open-Admin. The "Sign in with Apple" button only
+   appears where accountsAvailableHere() is true (the iPhone app) - same "a dead button reads as
+   broken, not as not-yet" reasoning openWelcome() already follows for this exact button; the
+   plain website (no Apple plugin) shows
    the sentence with no button under it at all. */
 // Solo + Teams summed together - "how am I doing", not a mode-specific slice of it. `has` is
 // false only when this name has never appeared in `st` at all (no row exists yet).
@@ -9976,12 +10042,15 @@ function renderYouCard(){
       :'No games recorded yet - play your first one!';
     const koTxt=(rec.koDealt||rec.koTaken)
       ?`<div class="youKo">${rec.koDealt} knockout${rec.koDealt===1?'':'s'} dealt · ${rec.koTaken} taken</div>`:'';
-    box.innerHTML=`<div class="youCardRow" id="youCardTap" role="button" tabindex="0" aria-label="Open the leaderboard">
+    box.innerHTML=`<div class="youCardRow" id="youCardTap" role="button" tabindex="0" aria-label="Open Admin settings">
         <div class="acctAvatar" style="--acctBg:${colors.bg};--acctInk:${colors.ink}">${esc(letter)}</div>
         <div class="youWho"><b>${esc(name)}</b><div class="youStats">${statsTxt}</div>${koTxt}<div class="youRank" id="youRank"></div></div>
       </div>`;
     const tap=$('youCardTap');
-    if(tap)tap.onclick=openLeaderboardOverlay;
+    // 2026-07-27 (v0.45, Blake: "when you're signed in and you click your name plate at the top
+    // it should bring you to the admin options not the leaderboard") - was openLeaderboardOverlay.
+    // The menu's own "Leaderboard" button is untouched, so the leaderboard is still one tap away.
+    if(tap)tap.onclick=openAccountPanel;
     // The rank needs the network - everything above is already showing, synchronously, real
     // numbers with nothing waiting on it. Only bother asking at all if there's a real record to
     // rank in the first place.
@@ -9995,12 +10064,21 @@ function renderYouCard(){
       });
     }
   }else{
-    box.innerHTML=`<div class="youCardGuest">
+    // 2026-07-27 (v0.45): the guest card is now ALSO a tap target to the Admin panel (same
+    // destination the signed-in card above uses) - see this function's own header comment for why.
+    // The Sign in button inside stops its click from bubbling up to this same handler, so tapping
+    // it does sign-in only, never sign-in-then-also-open-Admin.
+    box.innerHTML=`<div class="youCardGuest" id="youCardTap" role="button" tabindex="0" aria-label="Open Admin settings">
         <div class="youNudge">Sign in to get on the family leaderboard - your wins, points and knockouts, tracked across every phone.</div>
         ${accountsAvailableHere()?'<button class="btn primary" id="youCardSignIn" type="button">Sign in with Apple</button>':''}
       </div>`;
+    const tap=$('youCardTap');
+    if(tap)tap.onclick=openAccountPanel;
     const b=$('youCardSignIn');
-    if(b)b.onclick=youCardSignIn;
+    if(b){
+      b.onclick=youCardSignIn;
+      b.addEventListener('click',ev=>ev.stopPropagation());
+    }
   }
 }
 
@@ -10012,6 +10090,12 @@ function renderYouCard(){
    WHATS_NEW[0]) - the array form exists so the NEXT version just prepends one more {ver,items}
    entry here rather than a future session inventing a new place to put it. */
 const WHATS_NEW=[
+  {ver:'0.45',items:[
+    "Fixed: a guest now shows up as 'Guest' everywhere - never somebody else's name by mistake.",
+    "Tapping your name card at the top of the menu now opens your settings, not the leaderboard (the Leaderboard button still opens the leaderboard).",
+    "The playing tip on the menu is now clearly labelled TIP.",
+    "The leaderboard now shows a proper 'Loading...' message while it fetches, instead of possibly sitting there looking stuck.",
+  ]},
   {ver:'0.44',items:[
     "Picking who's playing and setting each computer opponent's difficulty now happen together, right when you tap Start game.",
     "New: a stats card on the main menu shows your wins, games and points at a glance - and how you rank on the family leaderboard.",
@@ -10357,19 +10441,48 @@ function accountSeatIndex(){
   const i=G.seats.findIndex(s=>s&&s.type==='human');
   return i;
 }
-/* 2026-07-27 (v0.42) - reworked for the new source of truth (Blake's names/seats pass):
-     signed in  -> the ACCOUNT's own name, always. Online is accounts-only now and an offline
-                   human seat is always given the account name at start (see
-                   commitOfflineSeatPick(), § MENU), so this is provably the same name the live
-                   seat carries whenever one exists - it just never needs to ask.
-     guest      -> the STOCK name (DEFAULT_NAMES) of whichever seat they are sitting in
-                   (accountSeatIndex() - the first human seat offline, same as always, so an old
-                   pass-and-play SAVE with 2+ human seats still resolves to "whoever's holding
-                   the phone" exactly as before), or the first seat's stock name before any game
-                   exists. Guests no longer have a persistent nickname anywhere in the app - see
-                   the seat-picker popup's comment, § MENU, and the Admin panel's "Change your
-                   name" row, which is disabled for exactly this reason. */
+/* 2026-07-27 (v0.45, Blake bug report) - split back into two DIFFERENT questions that v0.42's
+   rework had collapsed into one function and one wrong answer:
+     "who am I" (IDENTITY - the you card, the Admin panel's who-name, the avatar/initial, the
+       accessible label on the Admin button) vs "what does my SEAT read on the board" (a guest's
+       seat legitimately keeps its stock DEFAULT_NAMES name, e.g. Ginny/Geri/J.B./Jim/Tom/Don -
+       that is correct and is NOT changing here).
+   Blake, verbatim, after v0.42 shipped: "it said I was currently signed in as Ginny cause her
+   name was first at the top (I wasn't signed in yet)... it shoulda said 'You are signed in as
+   Guest' not Ginny." Root cause: chosenName() used to answer BOTH questions with the same value
+   - for a guest that value was the stock seat name, so anywhere the app displayed "who is this"
+   (the Admin panel's who-name in particular, via renderAccountPanel()) a guest who happened to be
+   sitting in (or merely defaulted toward) seat 0 read as "Ginny", which looks exactly like a
+   claimed identity nobody ever chose.
+   chosenName() is now IDENTITY ONLY:
+     signed in  -> the ACCOUNT's own name, always (unchanged from v0.42).
+     guest      -> the literal word "Guest". Full stop. Never a stock name, never blank - a guest
+                   is a guest everywhere identity is shown, whether or not a game/seat even exists
+                   yet.
+   Call sites that actually want "what would my seat be called right now" (a save-file seat
+   lookup, a convenience prefill) use the new mySeatName() below instead - see that function's own
+   header comment, and see HANDOFF.md "v0.45" for the full per-call-site audit. */
 function chosenName(){
+  if(ACCT&&ACCT.uid&&ACCT.gameName)return ACCT.gameName;
+  return 'Guest';
+}
+/* 2026-07-27 (v0.45) - this is the OLD chosenName() body, kept alive under its own honest name
+   for the two call sites that were never asking "who am I" in the first place:
+     - saveOwnSeat() (§ MENU, the saved-game tiles) matches this against a SAVED seat's own
+       `.name` field to find "which seat at this table is mine" - a guest's saved seat is always
+       named with its stock DEFAULT_NAMES entry, never "Guest", so the match has to use the same
+       seat-name logic that wrote it in the first place.
+     - openNicknameGate()'s prefill (§ ACCOUNT SIGN-IN) - suggests a starting point for a
+       BRAND-NEW account's first nickname. At that exact moment ACCT.uid is already true but
+       ACCT.gameName is not set yet, so this is deliberately NOT "guest" in the chosenName() sense
+       - prefilling "Guest" there would be a strange suggestion for somebody who just signed in.
+       The seat's current stock name (e.g. "Ginny") remains a reasonable, harmless suggestion they
+       can freely overwrite before tapping Save.
+   Logic is byte-for-byte what chosenName() used to do: signed in -> the account name; otherwise
+   -> the stock name (DEFAULT_NAMES) of whichever seat accountSeatIndex() says is "mine" (the
+   first human seat offline, same rule an old multi-human pass-and-play save still resolves
+   through), or the first seat's stock name before any game exists at all. */
+function mySeatName(){
   if(ACCT&&ACCT.uid&&ACCT.gameName)return ACCT.gameName;
   const n=(G?G.n:CFG.n), cols=n===6?COLORS6:COLORS4, names=DEFAULT_NAMES[n]||[];
   const i=accountSeatIndex();
@@ -10472,9 +10585,9 @@ $('btnAcctSound').onclick=()=>{
 };
 /* Change your name. Opens INSIDE this panel (never a second full-screen page - see
    § OVERLAY LAYER). 2026-07-27 (v0.42): reworked for the new source of truth - this now ONLY
-   ever pushes an ACCOUNT name change (the only kind of name change left in the app; see
-   chosenName()'s header comment - a guest has no name to set here at all, and the Admin panel
-   disables this row for them) into whatever is on screen right now:
+   ever pushes an ACCOUNT name change (the only kind of name change left in the app - a guest has
+   no name to set here at all, and the Admin panel disables this row for them) into whatever is on
+   screen right now:
      - offline, a game in progress is renamed live - the plaque text and the account circle
        both change immediately;
      - online, the table's seat names are the server's to hand out - nothing here touches a live
@@ -10507,11 +10620,13 @@ function closeAccountNameEdit(){
   if(row&&row.classList.contains('hidden'))row.classList.remove('hidden');
 }
 /* 2026-07-27 (v0.42): 'local' mode (renaming a signed-out guest's own player) is retired along
-   with the whole idea of a guest nickname - see chosenName()'s header comment. It is left in
-   place here, dormant, rather than ripped out: `mode` still defaults to 'local' if ever called
-   with anything else, so a stray future call fails SAFE (opens a box that edits nothing real)
-   rather than throwing. The only live caller is the button below, and it is now guarded so this
-   only ever opens in 'account' mode - a signed-out tap does nothing (the row is disabled). */
+   with the whole idea of a guest nickname. It is left in place here, dormant, rather than ripped
+   out: `mode` still defaults to 'local' if ever called with anything else, so a stray future call
+   fails SAFE (opens a box that edits nothing real) rather than throwing. The only live caller is
+   the button below, and it is now guarded so this only ever opens in 'account' mode - a signed-out
+   tap does nothing (the row is disabled), which makes the 'local' branch below genuinely dead code
+   today (2026-07-27, v0.45 audit) - left as chosenName() rather than mySeatName() since it can
+   never actually run either way; see HANDOFF.md "v0.45" for the full call-site audit. */
 function openAccountNameEdit(mode,msg){
   const box=$('acctNameEdit'), inp=$('acctNameInput');
   if(!box||!inp)return;
@@ -10522,9 +10637,9 @@ function openAccountNameEdit(mode,msg){
   $('btnAcctName').classList.add('hidden');
   try{ inp.focus(); inp.select(); }catch(e){}
 }
-// v0.42: a guest has no name to change (see chosenName()'s header comment) - renderAccountRows()
-// disables this row and says so; this guard is belt-and-suspenders against the row's own
-// `disabled` attribute rather than the only thing stopping a signed-out edit from opening.
+// v0.42: a guest has no name to change - renderAccountRows() disables this row and says so; this
+// guard is belt-and-suspenders against the row's own `disabled` attribute rather than the only
+// thing stopping a signed-out edit from opening.
 $('btnAcctName').onclick=()=>{ if(ACCT&&ACCT.uid)openAccountNameEdit('account',''); };
 $('btnAcctNameCancel').onclick=closeAccountNameEdit;
 $('btnAcctNameSave').onclick=async ()=>{
@@ -10551,6 +10666,11 @@ $('btnAcctNameSave').onclick=async ()=>{
     toast('You are '+ACCT.gameName+' on the leaderboard.');
     return;
   }
+  // 2026-07-27 (v0.45 audit): everything from here down is the retired 'local' mode - dead code
+  // today (see openAccountNameEdit()'s header comment above) since ACCT_NAME_MODE can no longer
+  // reach anything but 'account', which always returns above. Left as chosenName() rather than
+  // rewired to mySeatName() for the same reason - it makes no observable difference to code that
+  // can't run.
   setChosenName(raw);
   closeAccountNameEdit();
   renderAccountPanel();
@@ -10656,7 +10776,14 @@ async function bindAccountName(){
   if(ACCT.gameName){
     // A returning sign-in. The account's name is the one the board knows, so this phone adopts
     // it - the same "one name, everywhere" rule setChosenName() already follows.
-    if(ACCT.gameName!==chosenName())setChosenName(ACCT.gameName);
+    // 2026-07-27 (v0.45 audit, honest note): by the time this line runs, ACCT already carries
+    // .uid and .gameName (accountSignIn() assigns ACCT before awaiting bindAccountName()), so
+    // chosenName() already equals ACCT.gameName and this comparison is always false - setChosenName
+    // never actually fires from here. This predates v0.45 (the same was true of the old
+    // chosenName()) and is NOT something this pass introduced or was asked to fix - flagged here
+    // rather than silently left, since it means a live offline seat that still shows an OLD stock
+    // name at the moment of a RETURNING sign-in mid-game does not get renamed by this line. Left
+    // alone: fixing it touches live-game seat renaming, which is outside this pass's four asks.
     toast("You're in! You are "+ACCT.gameName+' on the leaderboard.');
     return;
   }
@@ -10672,12 +10799,14 @@ let NICK_GATE_RESOLVE=null;
 /* The blocking nickname prompt itself. No Cancel/Close anywhere on #nicknameGateOverlay's markup
    (see its HTML comment) - this is a genuine gate, not a dismissable dialog, because the app has
    no other way to know what to put on the leaderboard for a brand-new account. Prefilled with
-   whatever name this phone already happens to be using (chosenName() - a guest's current stock
-   seat name, almost always) purely as a convenient starting point; the player still has to tap
-   Save, and can change it to anything before doing so. */
+   whatever name this phone's SEAT already happens to be using (mySeatName() - a guest's current
+   stock seat name, almost always; see that function's header comment for why this deliberately
+   is not chosenName() - the player has just signed in, so "Guest" would be a strange suggestion
+   here) purely as a convenient starting point; the player still has to tap Save, and can change
+   it to anything before doing so. */
 function openNicknameGate(){
   const inp=$('nickGateInput'), warn=$('nickGateWarn');
-  if(inp)inp.value=cleanName(chosenName(),'');
+  if(inp)inp.value=cleanName(mySeatName(),'');
   if(warn)warn.textContent='';
   openOverlay('nicknameGateOverlay');
   try{ inp.focus(); inp.select(); }catch(e){}
@@ -10847,8 +10976,8 @@ function renderAccountRows(){
   else if(on)txt='Signed in with Apple'+(ACCT.gameName?(' as '+ACCT.gameName):'')+'. That only keeps your place on the leaderboard yours - nothing else changes.';
   else txt='Signing in is optional. It keeps your place on the leaderboard yours on any phone, and it is required to play online. Offline play works without it.';
   if(note.textContent!==txt)note.textContent=txt;
-  // 2026-07-27 (v0.42): a GUEST has no name to change anymore - chosenName() gives them only
-  // their seat's stock name, never a nickname - so this row is disabled with a plain sentence
+  // 2026-07-27 (v0.42): a GUEST has no name to change anymore - only their seat's stock name
+  // (mySeatName(), § ACCOUNT), never a nickname - so this row is disabled with a plain sentence
   // instead of opening an editor that would have nothing real to save. See btnAcctName's
   // header comment for why the click handler is guarded the same way, belt-and-suspenders.
   const nameRow=$('btnAcctName');
@@ -11165,10 +11294,17 @@ function openWelcome(){
   $('welcomeWebNote').classList.toggle('hidden',here||signedIn);
   $('welcomeGuestNote').classList.toggle('hidden',signedIn);
   $('welcomeAgeNote').classList.toggle('hidden',signedIn);
-  // The greeting. The name comes from the account when the server has answered, and from the name
-  // this phone plays under otherwise (bindAccountName() keeps those two the same) - and if there is
-  // somehow no name at all, the sentence simply does not use one.
-  const nm=(ACCT&&ACCT.gameName)||chosenName()||'';
+  // The greeting. This whole line only ever runs in the SIGNED-IN branch below (`signedIn` true
+  // means welcomeIsSignedIn() found a stored session token) - so the name, if there is one yet, can
+  // only be the account's own. 2026-07-27 (v0.45 bug fix): this used to fall back to chosenName()
+  // when ACCT.gameName hadn't loaded yet (a network race - refreshAccount() may not have answered),
+  // which could print "You are signed in as Ginny" (chosenName()'s old guest-seat fallback) for
+  // somebody who genuinely IS signed in, just waiting on the network - backwards, and exactly the
+  // kind of false identity Blake's report was about. Now it simply has no fallback: no gameName
+  // yet means no name at all, and the sentence below already has a clean no-name version for
+  // exactly that ("You are signed in, and every win..."). Never chosenName() here - a signed-in
+  // player must never be told they are "Guest".
+  const nm=(ACCT&&ACCT.gameName)||'';
   $('welcomeTitle').textContent=signedIn?'Welcome back to NASTY!':'Welcome to NASTY!';
   $('welcomeNote').textContent=signedIn
     ?(nm?`You are signed in as ${nm}, and every win, takeout and bragging right is still yours. Fresh update - go and defend it!`
@@ -11627,6 +11763,29 @@ async function fetchGlobalLeaderboard(){
     return await r.json();
   }catch(e){ return null; }
 }
+/* 2026-07-27 (v0.45, Blake: "sometimes the leaderboard takes a bit to load in once clicked. Make
+   there be a 'loading...' graphic so people know it's coming.") LB_FETCH_PENDING/LB_FETCH_FAILED
+   are the only two bits of new state this needed - both read exclusively by renderLb()/
+   renderLbKo()'s own "nothing to show" branch, right where the old code already had a plain "No
+   games yet" message that could be MISLEADING (not literally blank, but a false negative) the
+   moment a device with no LOCAL games opens the leaderboard for the very first time: the true
+   answer might still be sitting in the in-flight fetchGlobalLeaderboard() call, and the old code
+   had no way to say "we don't know yet" versus "we checked and there's really nothing".
+     LB_FETCH_PENDING - true from the instant openLeaderboardOverlay() kicks off the network
+       fetch until it resolves (success OR failure) - this is what lets the empty-state branch
+       show "Loading..." instead of jumping straight to "No games yet".
+     LB_FETCH_FAILED - true once a fetch has come back null (offline/unreachable/timed out) with
+       nothing better already on screen - shown as a plain, honest "couldn't reach it" message,
+       never a spinner that spins forever.
+   Deliberately NOT read anywhere else: the moment `st` actually HAS an active player for the
+   current tab (the common "already cached" case - a device that has played before, or the global
+   fetch already landed), renderLb()/renderLbKo() take their normal real-data branch, which never
+   even looks at these two flags - so a device with real numbers to show never flashes a loading
+   state for them, exactly per the ask. */
+let LB_FETCH_PENDING=false;
+let LB_FETCH_FAILED=false;
+function lbLoadingHtml(){ return `<p class="lbLoading">Loading the leaderboard...</p>`; }
+function lbUnreachableHtml(){ return `<p class="lbErr">Couldn't reach the family leaderboard. Check your connection and try again.</p>`; }
 /* v0.15 fix (Blake reported the shared leaderboard "still shows nobody else" - part of the
    diagnosis was a genuine double-count bug in THIS merge, separate from the online-recording
    gap fixed in recordWin()/server.js above). OLD behavior: `mergeStats(local,global)` summed
@@ -11685,7 +11844,11 @@ function renderLb(st){
   const pct=n=>games(n)?Math.round(wins(n)/games(n)*100)+'%':'-';
   const active=names.filter(n=>games(n)>0);
   if(!active.length){
-    $('lbBody').innerHTML=`<p>No ${isTeam?'team':'solo'} games yet - go play one!</p>`;
+    // v0.45: don't assert "No games yet" while the real answer might still be in flight - see
+    // LB_FETCH_PENDING/LB_FETCH_FAILED's own header comment, right above fetchGlobalLeaderboard().
+    $('lbBody').innerHTML=LB_FETCH_PENDING?lbLoadingHtml()
+      :LB_FETCH_FAILED?lbUnreachableHtml()
+      :`<p>No ${isTeam?'team':'solo'} games yet - go play one!</p>`;
     return;
   }
   active.sort((a,b)=>pts(b)-pts(a)||wins(b)-wins(a)||games(a)-games(b));
@@ -11732,7 +11895,11 @@ function renderLbKo(st){
   const taken=n=>v(n,'hkoTaken');
   const active=names.filter(n=>dealt(n)>0||taken(n)>0);
   if(!active.length){
-    $('lbBody').innerHTML=`<p>No knockouts yet - go send somebody back to base!</p>`;
+    // v0.45: same "don't say No knockouts yet while the real answer is still in flight" fix as
+    // renderLb()'s own empty branch, just above - see LB_FETCH_PENDING/LB_FETCH_FAILED's comment.
+    $('lbBody').innerHTML=LB_FETCH_PENDING?lbLoadingHtml()
+      :LB_FETCH_FAILED?lbUnreachableHtml()
+      :`<p>No knockouts yet - go send somebody back to base!</p>`;
     return;
   }
   // Ranked by ratio first (same convention a video-game K/D leaderboard uses), ties broken by
@@ -11799,22 +11966,35 @@ $('lbTabSolo').onclick=()=>setLbTab('solo');
 $('lbTabTeams').onclick=()=>setLbTab('teams');
 $('lbTabKo').onclick=()=>setLbTab('ko');
 // 2026-07-27 (v0.44): pulled out of $('btnLb').onclick's own arrow function, byte-for-byte
-// unchanged, so the new "you" card's tap-through (renderYouCard(), § MENU) can open the exact
-// same leaderboard screen the button always has - one implementation, two doors, same
-// convention the rules panel (#btnRules/the account panel's own rules row) already follows.
+// unchanged at the time, so the menu's "Leaderboard" button and (originally) the you card's own
+// tap-through shared one implementation. v0.45: the you card no longer opens this screen (it opens
+// the Admin panel now - see renderYouCard()'s header comment, § MENU) - the "Leaderboard" button
+// is the one remaining door, so this function stays exactly where it is.
 function openLeaderboardOverlay(){
   openOverlay('lbOverlay');
   lbTab='solo';   // v0.21: Solo is always the tab shown when the leaderboard is (re)opened
   $('lbTabSolo').classList.add('on'); $('lbTabTeams').classList.remove('on'); $('lbTabKo').classList.remove('on');
   updateLbCaption();
+  // v0.45: a fresh "we don't know yet" state every time this screen opens - see
+  // LB_FETCH_PENDING/LB_FETCH_FAILED's own header comment, right above fetchGlobalLeaderboard().
+  LB_FETCH_PENDING=true; LB_FETCH_FAILED=false;
   const local=loadStats();
   renderLb(local);   // show local instantly, then upgrade to the real shared board if the server answers
   fetchGlobalLeaderboard().then(g=>{
+    LB_FETCH_PENDING=false;
     // v0.15: global (plus anything still queued/unsynced) is the source of truth once it's
     // reachable - see mergeQueuedIntoGlobal()'s comment for why this replaced the old
     // always-sum-local-and-global mergeStats(). Only fall back to local-only if the fetch
     // genuinely failed (offline, unreachable server).
     if(g)renderLb(mergeQueuedIntoGlobal(g,loadSoloQueue()));
+    else{
+      // v0.45: the fetch genuinely failed/timed out - re-render whatever we already had (local
+      // stats, possibly empty) now that "still loading" is no longer true, so an empty tab shows
+      // the honest "couldn't reach it" message instead of spinning forever. A device that already
+      // had real local numbers to show is untouched by this - see renderLb()'s own comment for why.
+      LB_FETCH_FAILED=true;
+      renderLb(local);
+    }
   });
 }
 $('btnLb').onclick=openLeaderboardOverlay;
@@ -12116,9 +12296,11 @@ function renderPostGameReveal(){
    the "5m ago" at the end, never the tees-home count.
 
    WHOSE tees are counted (the judgement call): the seat this phone belongs to. That is the seat
-   whose name matches the name saved on this phone (chosenName(), § ACCOUNT) if one does; failing
-   that the FIRST human seat, which for a pass-and-play game on one phone is the person who set
-   the game up and typed their name first, and is also the name row 2 shows first. An all-CPU
+   whose name matches the name saved on this phone (mySeatName(), § ACCOUNT - v0.45: NOT
+   chosenName(), which now answers "Guest" for identity purposes and would never match a saved
+   seat's own stock name) if one does; failing that the FIRST human seat, which for a pass-and-play
+   game on one phone is the person who set the game up and typed their name first, and is also the
+   name row 2 shows first. An all-CPU
    save has no such seat and simply shows no count. accountSeatIndex() applies the same "first
    human seat" rule to a LIVE game, so the circle in the top corner and this tile agree. */
 let SAVED_GAMES=[];   // [{kind:'offline',slot,data,ts}|{kind:'online',last,ts}, ...] newest first
@@ -12160,9 +12342,13 @@ function shortAgo(ts){
 }
 // 2026-07-25: which seat at this saved table is the person holding the phone. See the § MENU
 // block comment above for the reasoning; returns -1 for an all-CPU save.
+// 2026-07-27 (v0.45): uses mySeatName(), not chosenName() - a saved seat is always named with
+// its stock DEFAULT_NAMES entry for a guest (never the literal word "Guest"), so matching against
+// chosenName()'s new identity-only answer would never find a guest's own seat again. See
+// mySeatName()'s header comment, § ACCOUNT, for the full reasoning.
 function saveOwnSeat(g){
   if(!g||!Array.isArray(g.seats))return -1;
-  const mine=(typeof chosenName==='function'?chosenName():'')||'';
+  const mine=(typeof mySeatName==='function'?mySeatName():'')||'';
   if(mine){
     const exact=g.seats.findIndex(x=>x&&x.type==='human'&&x.name===mine);
     if(exact>=0)return exact;
@@ -12250,7 +12436,7 @@ function updateMenuResumeButtons(){
   // of by remembering to. All three are cheap and guarded - safe to call any time.
   renderYouCard();
   renderWhatsNewRow();
-  const tip=$('tipLine'); if(tip)tip.textContent=pickMenuTip();
+  const tip=$('tipText'); if(tip)tip.textContent=pickMenuTip();   // v0.45: #tipLabel lives beside it, untouched
 }
 // v0.18.1: trash-can delete, 2-tap confirm. showDeleteConfirm swaps ONE tile's content for the
 // "Delete this saved game?" panel (closing any other tile's confirm first - only one at a time);
