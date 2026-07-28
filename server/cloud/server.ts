@@ -764,6 +764,124 @@ const CLAIM_CLOSED_BODY = {
 const LEADERBOARD_ACCOUNTS_ONLY = accountsEnvFlagOn(Deno.env.get("NASTY_LEADERBOARD_ACCOUNTS_ONLY"), "0");
 function accountsOnlyBoard(): boolean { return ACCOUNTS_ENABLED && LEADERBOARD_ACCOUNTS_ONLY && anyProviderConfigured(); }
 
+/* =======================================================================================
+ * 2026-07-28 § POINTS WALLET - twin of server.js's. A per-account SPENDABLE BALANCE, separate
+ * from the leaderboard's LIFETIME EARNED points (hptsS/hptsT), which rank the leaderboard and
+ * must never decrease. balance = lifetime earned - lifetime spent, computed live on every read
+ * (see accountEarnedPoints()/walletView() further down, right after boardRowsForDisplay() since
+ * they reuse its exact per-account shadowing rule) rather than stored redundantly.
+ *
+ * SERVER-OWNED CATALOG - the client is never trusted for prices; a purchase re-reads the cost
+ * from this array every time. Byte-identical item list to server.js's SHOP_CATALOG - keep both in
+ * sync if it ever changes, same convention as pointsForWinServer/buildResultEntriesServer.
+ * ===================================================================================== */
+// Palette entries carry colors4/colors6 - full replacement sets for the client's
+// COLORS4/COLORS6 arrays, same {name,c,dark} shape per seat (the per-seat NAME feeds
+// team-pairing text like "Green + Pink"). Felt c/dark are the two radial-gradient stops,
+// replacements for the client's --felt1/--felt2 (default #256b46/#0e3421).
+type SeatColor = { name: string; c: string; dark: string };
+type ShopItem = {
+  id: string; category: string; name: string; cost: number; consumable?: boolean;
+  colors4?: SeatColor[]; colors6?: SeatColor[]; c?: string; dark?: string;
+};
+const SHOP_CATALOG: ShopItem[] = [
+  {
+    id: "palette_sunset", category: "palette", name: "Sunset", cost: 40,
+    colors4: [
+      { name: "Coral", c: "#e8604c", dark: "#9c3423" },
+      { name: "Dusk", c: "#3e4e7e", dark: "#232e4e" },
+      { name: "Rose", c: "#e08bb0", dark: "#9c4f74" },
+      { name: "Gold", c: "#f2a93b", dark: "#a56f12" },
+    ],
+    colors6: [
+      { name: "Coral", c: "#e8604c", dark: "#9c3423" },
+      { name: "Dusk", c: "#3e4e7e", dark: "#232e4e" },
+      { name: "Rose", c: "#e08bb0", dark: "#9c4f74" },
+      { name: "Cream", c: "#f2e4c4", dark: "#b5a377" },
+      { name: "Violet", c: "#8a5ba6", dark: "#54326a" },
+      { name: "Gold", c: "#f2a93b", dark: "#a56f12" },
+    ],
+  },
+  {
+    id: "palette_ocean", category: "palette", name: "Ocean Breeze", cost: 40,
+    colors4: [
+      { name: "Teal", c: "#2a9d8f", dark: "#175a52" },
+      { name: "Deep Blue", c: "#2d4f8f", dark: "#182c55" },
+      { name: "Coral", c: "#ee6352", dark: "#a2372a" },
+      { name: "Sand", c: "#edd9a3", dark: "#ab9354" },
+    ],
+    colors6: [
+      { name: "Teal", c: "#2a9d8f", dark: "#175a52" },
+      { name: "Deep Blue", c: "#2d4f8f", dark: "#182c55" },
+      { name: "Coral", c: "#ee6352", dark: "#a2372a" },
+      { name: "Sand", c: "#edd9a3", dark: "#ab9354" },
+      { name: "Anemone", c: "#8f68b8", dark: "#553a74" },
+      { name: "Seafoam", c: "#9fd8c5", dark: "#5d9a85" },
+    ],
+  },
+  {
+    id: "palette_forest", category: "palette", name: "Forest", cost: 60,
+    colors4: [
+      { name: "Moss", c: "#6f9a3d", dark: "#425e1f" },
+      { name: "Sky", c: "#7fb6d9", dark: "#41708f" },
+      { name: "Berry", c: "#b04a72", dark: "#6e2543" },
+      { name: "Amber", c: "#e2a83c", dark: "#96690f" },
+    ],
+    colors6: [
+      { name: "Moss", c: "#6f9a3d", dark: "#425e1f" },
+      { name: "Sky", c: "#7fb6d9", dark: "#41708f" },
+      { name: "Berry", c: "#b04a72", dark: "#6e2543" },
+      { name: "Birch", c: "#efe7d4", dark: "#b7ab88" },
+      { name: "Bark", c: "#8a5a34", dark: "#54351d" },
+      { name: "Amber", c: "#e2a83c", dark: "#96690f" },
+    ],
+  },
+  {
+    id: "palette_royal", category: "palette", name: "Royal", cost: 90,
+    colors4: [
+      { name: "Emerald", c: "#1f8a5c", dark: "#0f5236" },
+      { name: "Sapphire", c: "#3a55b4", dark: "#1f2f6e" },
+      { name: "Crimson", c: "#b12a3c", dark: "#6d1220" },
+      { name: "Gold", c: "#d4af37", dark: "#8a6d14" },
+    ],
+    colors6: [
+      { name: "Emerald", c: "#1f8a5c", dark: "#0f5236" },
+      { name: "Sapphire", c: "#3a55b4", dark: "#1f2f6e" },
+      { name: "Crimson", c: "#b12a3c", dark: "#6d1220" },
+      { name: "Ivory", c: "#f1e9d5", dark: "#b6ab89" },
+      { name: "Amethyst", c: "#7d3fa8", dark: "#4a2166" },
+      { name: "Gold", c: "#d4af37", dark: "#8a6d14" },
+    ],
+  },
+  {
+    id: "palette_midnight", category: "palette", name: "Midnight", cost: 130,
+    colors4: [
+      { name: "Cyan", c: "#3fc5d1", dark: "#20707a" },
+      { name: "Violet", c: "#7a63d9", dark: "#463693" },
+      { name: "Magenta", c: "#d955a8", dark: "#8c2f68" },
+      { name: "Amber", c: "#f0a832", dark: "#a06d10" },
+    ],
+    colors6: [
+      { name: "Cyan", c: "#3fc5d1", dark: "#20707a" },
+      { name: "Violet", c: "#7a63d9", dark: "#463693" },
+      { name: "Magenta", c: "#d955a8", dark: "#8c2f68" },
+      { name: "Silver", c: "#c9ced9", dark: "#848b9c" },
+      { name: "Lime", c: "#9ed14b", dark: "#5e8422" },
+      { name: "Amber", c: "#f0a832", dark: "#a06d10" },
+    ],
+  },
+  { id: "felt_burgundy", category: "felt", name: "Burgundy Felt", cost: 15, c: "#6b2433", dark: "#35101a" },
+  { id: "felt_navy", category: "felt", name: "Navy Felt", cost: 15, c: "#23456b", dark: "#0e1f35" },
+  { id: "felt_charcoal", category: "felt", name: "Charcoal Felt", cost: 20, c: "#3a4048", dark: "#16191d" },
+  { id: "felt_sunflower", category: "felt", name: "Sunflower Felt", cost: 20, c: "#c99a1e", dark: "#6b4e08" },
+  { id: "title_rookie", category: "title", name: "Rookie", cost: 10 },
+  { id: "title_shark", category: "title", name: "Card Shark", cost: 30 },
+  { id: "title_legend", category: "title", name: "Legend", cost: 60 },
+  { id: "title_nasty", category: "title", name: "Certified Nasty", cost: 90 },
+  { id: "namechange_credit", category: "namechange", name: "Name Change Token", cost: 25, consumable: true },
+];
+function shopItemById(id: string): ShopItem | null { return SHOP_CATALOG.find((it) => it.id === id) || null; }
+
 type AccountIdentity = { provider: string; sub: string; linkedAt: number };
 type AccountRecord = {
   uid: string; provider: string; sub: string;
@@ -775,6 +893,11 @@ type AccountRecord = {
   gameName: string | null; nameFolded: string | null; nameChangedAt: number;
   nameHistory: { name: string | null; from: number; to: number }[];
   claimDeclined: boolean; created: number; lastSeen: number; refreshToken: string | null;
+  // 2026-07-28 § POINTS WALLET - twin of server.js's. Optional so an account record written
+  // before this feature existed still parses; every read defaults these with `|| 0` / `|| []`.
+  walletSpent?: number;
+  walletOwned?: string[];
+  walletNamechangeCredits?: number;
 };
 type SessionRecord = { uid: string; exp: number };
 type EmailChallenge = { hash: string; exp: number; attempts: number; sentAt: number; sentToday: number; dayStart: number };
@@ -1097,6 +1220,8 @@ function newAccountRecord(provider: string, sub: string): AccountRecord {
     email: null, emailSource: null, emailPrivateRelay: false,
     gameName: null, nameFolded: null, nameChangedAt: 0, nameHistory: [],
     claimDeclined: false, created: now, lastSeen: now, refreshToken: null,
+    // 2026-07-28 § POINTS WALLET - see server.js's newAccountRecord() for the full reasoning.
+    walletSpent: 0, walletOwned: [], walletNamechangeCredits: 0,
   };
 }
 // Stage 1 records have provider/sub and no identities array - read through this everywhere.
@@ -1377,6 +1502,56 @@ async function boardRowsForDisplay(): Promise<{ flat: Record<string, Record<stri
   return { flat, detail };
 }
 
+/* --- § POINTS WALLET (2026-07-28), continued from the SHOP_CATALOG block above. Twin of
+   server.js's - accountEarnedPoints() deliberately mirrors boardRowsForDisplay()'s own
+   per-account shadowing rule (frozen name-matched row, if any and not declined, PLUS this
+   account's own accountRowFor() row) so the wallet's idea of "earned" can never disagree with
+   what /leaderboard already shows for this account's name, in either state of the
+   NASTY_LEADERBOARD_ACCOUNTS_ONLY switch. No epoch scoping anywhere in this feature - see the
+   file header note near EPOCH_KEY for why. --- */
+async function accountEarnedPoints(acct: AccountRecord): Promise<number> {
+  let hptsS = 0, hptsT = 0;
+  if (acct && acct.nameFolded && !acct.claimDeclined) {
+    const board = await getLeaderboard();
+    for (const name of Object.keys(board)) {
+      if (leaderboardNameKey(name) !== acct.nameFolded) continue;
+      const r = board[name];
+      if (!r) continue;
+      hptsS += Number(r.hptsS) || 0;
+      hptsT += Number(r.hptsT) || 0;
+    }
+  }
+  const own = acct ? await accountRowFor(acct.uid) : {};
+  hptsS += Number(own.hptsS) || 0;
+  hptsT += Number(own.hptsT) || 0;
+  return hptsS + hptsT;
+}
+type WalletView = {
+  uid: string; lifetimeEarned: number; spent: number; balance: number;
+  owned: string[]; namechangeCredits: number;
+};
+async function walletView(acct: AccountRecord): Promise<WalletView> {
+  const earned = await accountEarnedPoints(acct);
+  const spent = Math.max(0, Number(acct.walletSpent) || 0);
+  return {
+    uid: acct.uid,
+    lifetimeEarned: earned,
+    spent,
+    balance: Math.max(0, earned - spent),
+    owned: Array.isArray(acct.walletOwned) ? acct.walletOwned.slice() : [],
+    namechangeCredits: Math.max(0, Number(acct.walletNamechangeCredits) || 0),
+  };
+}
+/* Idempotency for a double-submitted/retried purchase - twin of the Node solo-result `soloSeen`
+   gameId dedupe. A client-supplied `requestId` is remembered (native KV expiry, 24h) against the
+   FULL response body it got the first time, so a retry gets back the exact same answer instead of
+   being charged twice. Ownership is also a natural double-spend guard for every NON-consumable
+   category; `requestId` exists specifically for the namechange credit, which is consumable/
+   stackable and so can't rely on an ownership check. */
+function purchaseKey(uid: string, requestId: string): Deno.KvKey { return ["purchase", uid, requestId]; }
+const PURCHASE_ID_TTL_MS = 24 * 60 * 60 * 1000;
+type PurchaseSeen = { status: number; body: unknown };
+
 /* --- the three token-based providers, one body of code, three front doors. Twin of
    server.js's verifyProviderCredential. --- */
 const SIGNIN_ROUTES: Record<string, string> = { "/account/apple": "apple", "/account/google": "google", "/account/facebook": "facebook" };
@@ -1558,6 +1733,77 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
     return json(200, accountPublicView(me.account, me.exp));
   }
 
+  /* --- 2026-07-28 § POINTS WALLET. Twin of server.js's - same auth convention (session token in
+     the JSON body as `auth`), and a guest gets the same clean 401 SIGNED_OUT_BODY every other
+     account route answers with. A guest has no wallet; it is not an error, just nothing to show. */
+  if (p === "/account/wallet") {
+    const me = await resolveSession(body.auth);
+    if (!me) return json(401, SIGNED_OUT_BODY);
+    return json(200, await walletView(me.account));
+  }
+
+  if (p === "/account/purchase") {
+    const me = await resolveSession(body.auth);
+    if (!me) return json(401, SIGNED_OUT_BODY);
+    const itemId = typeof body.itemId === "string" ? body.itemId : "";
+    const requestId = typeof body.requestId === "string" && body.requestId ? body.requestId.slice(0, 128) : null;
+    const item = shopItemById(itemId);
+    if (!item) return json(404, { error: "noitem", message: "That item doesn't exist." });
+    // Compare-and-swap loop: Deno Deploy runs many isolates, so two "simultaneous" purchases for
+    // the same account are a real possibility (unlike Node, which serializes them for free).
+    //
+    // The requestId dedupe check is INSIDE the loop, and re-checked on every attempt, on purpose:
+    // for a NON-consumable item, a lost race harmlessly re-resolves to "alreadyowned" on retry -
+    // but for the CONSUMABLE namechange credit there is no ownership check to catch a second
+    // attempt, so two concurrent identical requests could otherwise both successfully add a
+    // credit. The fix is making the requestId claim part of the SAME atomic commit as the actual
+    // purchase (`check({key: purchaseKey, versionstamp: null})` - "nobody has recorded a result
+    // for this requestId yet"): only ONE of two concurrent identical requests can ever win that
+    // check, so only one purchase is ever actually applied. The loser's commit fails, it loops
+    // back to the TOP of the loop, and the re-check there finds the winner's now-recorded result
+    // and replays it - never attempts the purchase a second time.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      if (requestId) {
+        const seen = await kv.get<PurchaseSeen>(purchaseKey(me.uid, requestId));
+        if (seen.value) return json(seen.value.status, { ...(seen.value.body as Record<string, unknown>), duplicate: true });
+      }
+      const cur = await kv.get<AccountRecord>(accountKey(me.uid));
+      const acct = cur.value;
+      if (!acct) return json(401, SIGNED_OUT_BODY);
+      const owned = Array.isArray(acct.walletOwned) ? acct.walletOwned : [];
+      if (!item.consumable && owned.includes(item.id)) {
+        // No account mutation on this path, so a plain best-effort record is fine - a race here
+        // can at worst leave a slightly-stale cached duplicate body, never a double spend.
+        const failBody = { error: "alreadyowned", message: "You already own that.", wallet: await walletView(acct) };
+        if (requestId) await kv.set(purchaseKey(me.uid, requestId), { status: 409, body: failBody } as PurchaseSeen, { expireIn: PURCHASE_ID_TTL_MS });
+        return json(409, failBody);
+      }
+      const earned = await accountEarnedPoints(acct);
+      const spentSoFar = Math.max(0, Number(acct.walletSpent) || 0);
+      const balance = Math.max(0, earned - spentSoFar);
+      if (balance < item.cost) {
+        const failBody = { error: "cantafford", message: "Not enough points for that yet.", cost: item.cost, balance, wallet: await walletView(acct) };
+        if (requestId) await kv.set(purchaseKey(me.uid, requestId), { status: 409, body: failBody } as PurchaseSeen, { expireIn: PURCHASE_ID_TTL_MS });
+        return json(409, failBody);
+      }
+      const updated: AccountRecord = { ...acct, walletSpent: spentSoFar + item.cost };
+      if (item.consumable) updated.walletNamechangeCredits = Math.max(0, Number(acct.walletNamechangeCredits) || 0) + 1;
+      else updated.walletOwned = [...owned, item.id];
+      const okBody = { ok: true, purchased: item.id, wallet: await walletView(updated) };
+      let txn = kv.atomic().check(cur).set(accountKey(me.uid), updated);
+      if (requestId) {
+        // The account CAS and the requestId claim are ONE atomic commit - either both land or
+        // neither does, so a race can never charge without recording, or record without charging.
+        txn = txn.check({ key: purchaseKey(me.uid, requestId), versionstamp: null })
+          .set(purchaseKey(me.uid, requestId), { status: 200, body: okBody } as PurchaseSeen, { expireIn: PURCHASE_ID_TTL_MS });
+      }
+      const ok = await txn.commit();
+      if (!ok.ok) continue;   // lost the race (account changed, or another request already claimed this requestId) - retry from the top
+      return json(200, okBody);
+    }
+    return json(500, { error: "server error", message: "Couldn't complete that purchase right now. Try again." });
+  }
+
   if (p === "/account/name-available") {
     const clean = cleanName(body.name, "");
     if (!clean) return json(200, { available: false, reason: "empty", message: "Type a name first." });
@@ -1584,6 +1830,9 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
       return json(409, { error: "taken", message: "Somebody already has that name. Please pick another one." });
     }
     const now = Date.now();
+    // 2026-07-28 § POINTS WALLET: whether THIS call spent a purchased namechange credit to bypass
+    // the cooldown below. Twin of server.js's - surfaced on the success response.
+    let usedNamechangeCredit = false;
     if (acct.nameFolded === folded) {
       if (acct.gameName !== clean) { acct.gameName = clean; await kv.set(accountKey(acct.uid), acct); }
     } else if (!acct.nameFolded) {
@@ -1594,8 +1843,17 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
       await kv.set(nameIdxKey(folded), acct.uid);
     } else {
       if (acct.nameChangedAt && now - acct.nameChangedAt < NAME_COOLDOWN_MS) {
-        const daysLeft = Math.max(1, Math.ceil((NAME_COOLDOWN_MS - (now - acct.nameChangedAt)) / (24 * 60 * 60 * 1000)));
-        return json(429, { error: "cooldown", daysLeft, message: "You can change your name again in " + daysLeft + (daysLeft === 1 ? " day." : " days.") });
+        const credits = Math.max(0, Number(acct.walletNamechangeCredits) || 0);
+        // A purchased credit bypasses the cooldown ONCE, consuming it - only when the client
+        // explicitly asks (`useNamechangeCredit:true`), so it is never silently spent on an
+        // ordinary rename attempt. Twin of server.js's.
+        if (body.useNamechangeCredit === true && credits > 0) {
+          acct.walletNamechangeCredits = credits - 1;
+          usedNamechangeCredit = true;
+        } else {
+          const daysLeft = Math.max(1, Math.ceil((NAME_COOLDOWN_MS - (now - acct.nameChangedAt)) / (24 * 60 * 60 * 1000)));
+          return json(429, { error: "cooldown", daysLeft, message: "You can change your name again in " + daysLeft + (daysLeft === 1 ? " day." : " days."), namechangeCredits: credits });
+        }
       }
       const oldFolded = acct.nameFolded;
       if (!Array.isArray(acct.nameHistory)) acct.nameHistory = [];
@@ -1615,7 +1873,10 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
       const rows = await unclaimedRowsForFolded(folded);
       if (Object.keys(rows).length) pendingClaim = claimSummary(rows);
     }
-    return json(200, { gameName: acct.gameName, pendingClaim, claimWindow: claimWindowView() });
+    return json(200, {
+      gameName: acct.gameName, pendingClaim, claimWindow: claimWindowView(),
+      usedNamechangeCredit, namechangeCredits: Math.max(0, Number(acct.walletNamechangeCredits) || 0),
+    });
   }
 
   if (p === "/account/claim") {
@@ -2922,6 +3183,8 @@ async function handleAdminRoute(req: Request, url: URL): Promise<Response> {
         sessions: sessionCount,
         claim: j.value ? j.value.state : null,
         row: await accountRowFor(a.uid),
+        // 2026-07-28 § POINTS WALLET - purely informational for Blake's own god-mode view.
+        wallet: await walletView(a),
       });
     }
     return json(200, out);
@@ -3864,6 +4127,11 @@ async function handler(req: Request, info: Deno.ServeHandlerInfo): Promise<Respo
     const entries = rows.detail ||
       Object.keys(rows.flat).map((name) => ({ name, stats: rows.flat[name], account: false, frozen: false }));
     return json(200, { epoch, accountsOnly: accountsOnlyBoard(), claimWindow: claimWindowView(), entries });
+  }
+  // 2026-07-28 § POINTS WALLET - the server-owned shop catalog. Twin of server.js's: a plain,
+  // unauthenticated GET, gated on the same accounts kill switch as the rest of this feature.
+  if (ACCOUNTS_ENABLED && url.pathname === "/shop" && req.method === "GET") {
+    return json(200, { items: SHOP_CATALOG });
   }
   // 2026-07-25 § ACCOUNTS: only routed when the kill switch is ON. With
   // NASTY_ACCOUNTS_ENABLED=0 these paths fall through to the same 404 they hit today - twin of

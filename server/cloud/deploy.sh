@@ -104,7 +104,13 @@ if [ "$CHECK_ONLY" != "1" ]; then
 
   say "1/3  Deploying to Deno Deploy"
   DEPLOY_LOG="$(mktemp)"
-  if ! deno deploy . --org dadio --app nasty-relay-cloud --prod --non-interactive 2>&1 | tee "$DEPLOY_LOG"; then
+  # 2026-07-28: --json is REQUIRED here, not a nicety. Without it the CLI renders its
+  # interactive progress view, and on this machine that path failed SIX times in a row with
+  # "The build for this revision is no longer active. Re-run the deploy to start a new build."
+  # while the byte-identical command WITH --json succeeded first try. HANDOFF used to describe
+  # this as "Deno Deploy stalls intermittently, just retry" - it is not intermittent and
+  # retrying does not help. Do not remove this flag.
+  if ! deno deploy . --org dadio --app nasty-relay-cloud --prod --non-interactive --json 2>&1 | tee "$DEPLOY_LOG"; then
     rm -f "$DEPLOY_LOG"
     die "deno deploy failed - nothing was attached, the live domain is untouched"
   fi
@@ -114,8 +120,23 @@ if [ "$CHECK_ONLY" != "1" ]; then
   # This is the PRIMARY source on purpose: right after a deploy the app's
   # productionRevisionId can still be null, because production is not pinned until the
   # domain is attached - the chicken-and-egg the DEPLOY GOTCHA is about.
-  REV="$(grep -oE '(builds/|nasty-relay-cloud-)[a-z0-9]{6,}' "$DEPLOY_LOG" \
-          | sed -E 's#^(builds/|nasty-relay-cloud-)##' | tail -1)"
+  # With --json the CLI emits one JSON object carrying revisionId directly, so read that first.
+  # The old grep over the build URL / preview host stays as the fallback, so this keeps working
+  # even if the JSON shape ever changes.
+  REV="$(python3 -c "
+import json,sys
+try:
+    for line in open(sys.argv[1]):
+        line=line.strip()
+        if line.startswith('{'):
+            r=json.loads(line).get('revisionId')
+            if r: print(r); break
+except Exception: pass
+" "$DEPLOY_LOG" 2>/dev/null)"
+  if [ -z "$REV" ]; then
+    REV="$(grep -oE '(builds/|nasty-relay-cloud-)[a-z0-9]{6,}' "$DEPLOY_LOG" \
+            | sed -E 's#^(builds/|nasty-relay-cloud-)##' | tail -1)"
+  fi
   rm -f "$DEPLOY_LOG"
   if [ -n "$REV" ]; then
     echo "  new revision (from the deploy output): ${REV}"

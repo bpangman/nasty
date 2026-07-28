@@ -30,6 +30,19 @@
                     END marker on purpose - buildLayout() is copied verbatim into the two server
                     engines, so nothing about card placement may live inside it. Every LAY= in
                     this file calls makeLayout(), never buildLayout() directly.
+                    v0.50: COLORS4/COLORS6 are `let`, not `const`, now (DEFAULT_COLORS4/6 hold the
+                    original literals) - an equipped shop palette (§ SHOP) reassigns them wholesale.
+                    Confirmed safe before doing this: every one of the 14 call sites that reads
+                    COLORS4/COLORS6 does so INSIDE a function, at call time (`const
+                    cols=CFG.n===4?COLORS4:COLORS6`), never captured once at parse time - so a
+                    reassignment is visible everywhere for free, no call site needed editing. Seat
+                    COLOR is purely a client-side rendering choice: `G.seats[i].color` is a
+                    plain {name,c,dark} object snapshotted from `cols[i]` ONCE at game creation
+                    (startGame()/bootGameFromNetwork(), § MENU/§ NET) - the server never sees a
+                    color, only name/type/diff (confirmed by reading server.js/server.ts - zero
+                    references to seat color anywhere) - so switching your palette is a genuine
+                    per-viewer preference: it changes what a NEW game (or the setup screens) show
+                    on THIS phone, never an already-frozen game, and never anyone else's screen.
     § STATE ....... game state G, deck, deal schedules
     § ENGINE ...... legal-move generation + move application (THE RULES LIVE HERE)
     § AI .......... CPU players (easy / tricky / nasty)
@@ -89,6 +102,14 @@
                     card and this tab can never disagree for the same name. See renderLb()'s own
                     comment, right above renderLbTotal(), for why it deliberately does NOT apply
                     the Solo/Teams branch's Math.max(games,wins) clamp.
+                    v0.50 (Blake's points-economy client pass - "make these 2 new buttons... the
+                    same size... 2 stacked on 2 stacked on 2"): the menu's two .bigBtns rows became
+                    ONE grid, #menuBtns, with 6 identically-sized buttons (Start game/Online play/
+                    How to play/Leaderboard/Shop/Admin) - see #menuBtns's own CSS comment, § STYLE.
+                    Shop (openShopOverlay(), new § SHOP section right after § ACCOUNT SIGN-IN) is
+                    the new player-facing points-economy screen; Admin here is a SECOND door to the
+                    exact same #accountOverlay panel the in-game top-bar ADMIN button opens
+                    (openAccountPanel(), § ACCOUNT) - that button is untouched, nothing was removed.
     § NET ......... online multiplayer: WS client, host/join lobby UI, deterministic
                     lockstep (server in /server, see HANDOFF.md "Online multiplayer").
                     v0.42: ACCOUNTS-ONLY - no guest join anymore. requireAccountThen() gates
@@ -123,6 +144,17 @@
                     root cause (a missed repaint, not a wrong check). The Admin panel now also
                     shows the 13+ age line (#acctAgeNote) next to the Sign in row, guest-only -
                     relocated here from the deleted first-run welcome screen, see § WELCOME.
+                    v0.50 (Blake: "the admin page needs to show points earned and points
+                    remaining"): a new #acctWallet box, filled in by refreshAcctWallet() (§ SHOP,
+                    called from openAccountPanel()) - hidden entirely for a guest (no wallet
+                    exists). "Points remaining" is the spendable balance (earned minus spent);
+                    "Points earned" is the lifetime total the leaderboard already shows and never
+                    goes down. Also: "Change your name" now offers to spend a purchased namechange
+                    credit when the 30-day cooldown blocks a rename - see $('btnAcctNameSave')'s
+                    own comment for the confirm step. Sign out now WARNS (not blocks) when a saved
+                    offline game or a live/rejoinable online game is in progress under the current
+                    account's name - see gameInProgressForSignOut()/signOutWarningText(), § SHOP,
+                    and the $('btnAcctSignOut').onclick rewrite right below accountSignOut().
     § ACCOUNT SIGN-IN ... Sign in with Apple (iPhone app only). v0.42: a BRAND-NEW account is
                     blocked on a mandatory nickname right here - bindAccountName() opens a
                     full-screen prompt (openNicknameGate()) that cannot be skipped or dismissed
@@ -139,6 +171,34 @@
                     of the guest nudge for the brief window before that answer is known, on a phone
                     that IS carrying a stored session. See that boot block's own long comment for
                     the full story.
+    § SHOP ........ NEW (v0.50, 2026-07-28): the client half of the points economy - the server
+                    side (GET /shop, POST /account/wallet, POST /account/purchase, and
+                    POST /account/name's new useNamechangeCredit flag) shipped server-only the day
+                    before, inert until this. Lives right after § ACCOUNT SIGN-IN (everything here
+                    reads ACCT/isAccountReady()/accountFetch()). Three moving parts:
+                      - Catalog + wallet fetch (fetchShopCatalog()/fetchWalletResult()) and the
+                        Shop overlay itself (openShopOverlay()/paintShop()/buyItem()/equipToggle()) -
+                        reachable from the menu's new Shop button, § MENU.
+                      - EQUIP (localStorage `nasty-equipped`) - which palette/felt/title is
+                        ACTIVE is a pure DISPLAY PREFERENCE, stored only on this phone, separate
+                        from `owned` (which the server tracks per-account). Switching phones keeps
+                        your purchases but not your current pick - it reverts to the standard
+                        board until you re-equip there. applyEquippedPalette()/applyEquippedFelt()/
+                        applyEquipped() are what actually push an equipped choice onto COLORS4/6
+                        (§ LAYOUT) and the --felt1/--felt2 CSS vars (§ STYLE); applyEquipped() runs
+                        once at boot (right before the renderMenu()/renderComingSoon() dispatch) so
+                        a reload keeps whatever was equipped, and again every time an equip/unequip
+                        happens. A title is shown next to a name (lbTitleTag/youTitleTag CSS) ONLY
+                        for the row that matches the CURRENT SIGNED-IN account's own name - there
+                        is no way for this device to know another player's equipped title, since
+                        it was never sent anywhere.
+                      - The sign-out warning: gameInProgressForSignOut()/signOutWarningText(),
+                        wired into $('btnAcctSignOut').onclick (§ ACCOUNT SIGN-IN) - implements the
+                        v0.49 diagnosis's own recommendation (see HANDOFF.md "v0.49" Task 3): warn,
+                        never auto-concede, worded from the REAL established behavior (a saved
+                        offline game's frozen seat name still submits after sign-out; a live/
+                        rejoinable online game keeps crediting the account it started under either
+                        way) rather than a guess.
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -2230,6 +2290,75 @@ button{font:inherit;cursor:pointer}
    to the same v0.13.2 landed size, dead center), with a dust burst off its bottom edge at the
    impact frame and a longer landed hold before the menu reveals - all in § CAPACITOR (keyframes
    + inline-styled dust divs, zero CSS here, so the website stays bit-identical). */
+
+/* ============================= v0.50 additions (§ SHOP) - 2026-07-28 =============================
+   Blake: "make these 2 new buttons, and the how to play & leaderboard buttons, the same size as
+   the start game and online play button... need all 6 buttons to be the same size and 2 stacked
+   on 2 stacked on 2." One grid (#menuBtns replaces the menu's two separate .bigBtns rows), one
+   FIXED height on every .btn inside it - fixed, not min-height, is the part that actually makes
+   "same size" true regardless of label length: "How to play"/"Leaderboard" wrap to 2 lines at
+   320px while "Shop"/"Admin" never do, and a min-height would let that 2-line row grow taller
+   than the rest. #onlineGateNote (unchanged content/logic, still written by renderOnlineGate(),
+   § MENU) spans both columns and drops out of the grid ENTIRELY via its own .hidden class
+   (display:none removes it from flow) whenever there's nothing to say - the common signed-in case
+   is a clean 3-row x 2-col grid with no gap row; the guest/checking case gets its explanation
+   row between the first and second button pair, exactly where it sat before this change. */
+#menuBtns{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;width:100%;margin-top:18px}
+#menuBtns .btn{height:56px;display:flex;align-items:center;justify-content:center;text-align:center;
+  padding:4px 8px;font-size:14px;line-height:1.2;overflow:hidden}
+/* margin:0 (not the base rule's 8px top) on purpose - the grid's own 10px row gap already
+   supplies the breathing room above and below this row, so keeping the base top margin too
+   measured as a visibly bigger gap here than #teamNote gets under Players/Game type. */
+#menuBtns .onlineGateNote{grid-column:1/-1;margin:0 2px}
+@media (max-width:340px){ #menuBtns .btn{font-size:13px;height:52px} }
+
+/* ---- § ACCOUNT: the points wallet box in the Admin panel (Blake: "the admin page needs to show
+   points earned and points remaining... points earned will always show on leaderboard and won't
+   diminish as they spend - that's just for them to know"). Filled in by refreshAcctWallet()
+   (§ SHOP) - never hand-edited past this shell. Hidden entirely for a guest (there is no wallet). */
+.acctWallet{margin:0 0 14px;padding:12px;border-radius:12px;background:rgba(244,197,66,.08);
+  border:1px solid rgba(244,197,66,.25)}
+.acctWalletRow{display:flex;justify-content:space-between;align-items:baseline;font-size:14px;
+  color:var(--cream);padding:2px 0}
+.acctWalletRow b{color:var(--gold);font-size:17px}
+.acctWalletNote{font-size:11.5px;color:#a9d2b5;line-height:1.4;margin-top:6px}
+
+/* ---- § SHOP: the shop overlay itself (#shopOverlay). Balance up top, catalog grouped by
+   category below it, a purchase confirms in place (.shopConfirmRow) rather than a second stacked
+   overlay - spending is irreversible, so it gets one real "are you sure" step, but not a whole
+   extra full-screen page (this app's one-overlay-at-a-time invariant, § OVERLAY LAYER, would
+   have to special-case a stack for that anyway). */
+.shopBalanceBox{margin:0 0 12px;text-align:center}
+.shopBalanceMain{font-size:20px;font-weight:800;color:var(--gold)}
+.shopBalanceSub{font-size:12.5px;color:#a9d2b5;margin-top:2px}
+.shopGuestNote{font-size:14px;color:#cfe8d6;line-height:1.5;text-align:center}
+.shopMsg{font-size:13.5px;color:#a9d2b5;text-align:center;padding:14px 4px}
+.shopCatHead{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#a9d2b5;
+  margin:16px 2px 6px;font-weight:700}
+.shopCatHead:first-child{margin-top:0}
+.shopItem{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:8px 2px;
+  border-bottom:1px solid rgba(255,255,255,.1)}
+.shopItemInfo{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+.shopItemText{min-width:0}
+.shopItemName{font-size:14.5px;font-weight:700;color:var(--cream);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.shopItemMeta{font-size:12px;color:#a9d2b5;margin-top:1px}
+.shopSwatchRow{display:flex;gap:2px;flex:0 0 auto}
+.shopSwatch{width:14px;height:14px;border-radius:50%;border:1px solid rgba(255,255,255,.3);flex:0 0 auto}
+.shopSwatchFelt{width:22px;height:22px;border-radius:6px}
+.shopItemAction{flex:0 0 auto}
+.shopItemAction .btn{padding:8px 12px;font-size:13px;white-space:nowrap}
+.shopConfirmRow{flex-basis:100%;display:flex;flex-direction:column;gap:8px;margin-top:2px;
+  padding:10px;border-radius:10px;background:rgba(0,0,0,.25);font-size:13px;color:#ffe9a8}
+.shopConfirmBtns{display:flex;gap:8px}
+.shopConfirmBtns .btn{flex:1;padding:8px;font-size:13px}
+
+/* ---- leaderboard/you-card title tag. Equip state is LOCAL to this phone (§ SHOP), so this can
+   only ever show next to the CURRENT SIGNED-IN account's own row - there is no way for this
+   device to know what title anyone else has equipped on theirs. */
+.lbTitleTag,.youTitleTag{display:inline-block;font-size:10.5px;font-weight:700;color:#3a2c05;
+  background:var(--gold);border-radius:6px;padding:1px 5px;margin-left:5px;letter-spacing:.02em;
+  vertical-align:1px}
 </style>
 
 <!-- ================= MENU ================= -->
@@ -2349,25 +2478,34 @@ button{font:inherit;cursor:pointer}
          (not a second row - see .tipLabel's own CSS comment); #tipText is the rotating sentence
          itself. renderMenu()/updateMenuResumeButtons() only ever write #tipText now. -->
     <div class="tipLine" id="tipLine"><span class="tipLabel" aria-hidden="true">Tip</span><span id="tipText"></span></div>
-    <div class="bigBtns">
+    <!-- 2026-07-28 (v0.50, Blake: "make these 2 new buttons, and the how to play & leaderboard
+         buttons, the same size as the start game and online play button... need all 6 buttons to
+         be the same size and 2 stacked on 2 stacked on 2"). One grid, #menuBtns, replaces the old
+         two separate .bigBtns rows - see its CSS comment, § STYLE, for how "same size" is made
+         true regardless of label length, and the CODE MAP's § MENU entry for the full story.
+         Shop and Admin are new: Shop opens openShopOverlay() (§ SHOP); Admin here is a SECOND door
+         to the exact same #accountOverlay panel the in-game top-bar ADMIN button opens
+         (openAccountPanel(), § ACCOUNT) - that button is untouched, nothing was removed. -->
+    <div id="menuBtns">
       <button class="btn primary" id="btnStart">Start game</button>
       <button class="btn ghost" id="btnOnline">Online play</button>
-    </div>
-    <!-- 2026-07-28 (v0.48, Blake: "If online mode is account only, it should be greyed out and
-         have a message around it that explains that until you're signed in on the menu page.")
-         Sits right under the button it explains, same "quiet caption under the control" pattern
-         #teamNote already uses under Players/Game type. Filled in and shown/hidden entirely by
-         renderOnlineGate() (§ MENU, right next to isAccountReady()) - never hand-edited past this
-         empty shell. Starts hidden: the common real-world case for anyone who actually reaches
-         this screen signed in is no message at all, and an empty italic line with no text would
-         read as a stray blank row rather than nothing. -->
-    <div class="onlineGateNote hidden" id="onlineGateNote"></div>
-    <div class="bigBtns">
+      <!-- 2026-07-28 (v0.48, Blake: "If online mode is account only, it should be greyed out and
+           have a message around it that explains that until you're signed in on the menu page.")
+           Filled in and shown/hidden entirely by renderOnlineGate() (§ MENU, right next to
+           isAccountReady()) - never hand-edited past this empty shell. Starts hidden: the common
+           real-world case for anyone who actually reaches this screen signed in is no message at
+           all, and an empty italic line with no text would read as a stray blank row rather than
+           nothing. v0.50: spans both grid columns (see #menuBtns .onlineGateNote, § STYLE) and
+           disappears from the grid entirely (not just visually) while hidden, so the common case
+           is a clean 3-row grid with no gap between the first and second button pair. -->
+      <div class="onlineGateNote hidden" id="onlineGateNote"></div>
       <button class="btn ghost" id="btnRules">How to play</button>
       <button class="btn ghost" id="btnLb">Leaderboard</button>
+      <button class="btn ghost" id="btnShop">Shop</button>
+      <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.49</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.50</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -2571,6 +2709,19 @@ button{font:inherit;cursor:pointer}
     <div id="lbBody"></div>
     <p id="lbCaption" style="font-size:12.5px;color:#9ec7aa">Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a person - people only, CPUs never show up here.</p>
     <div class="bigBtns"><button class="btn primary" id="btnLbClose">Close</button></div>
+  </div>
+</div>
+
+<!-- 2026-07-28 (v0.50): the Shop - see § SHOP for openShopOverlay()/paintShop()/buyItem()/
+     equipToggle(). #shopBalanceBox and #shopBody are filled in entirely by paintShop() - never
+     hand-edited past these empty shells; the four states (loading/guest/unreachable/ready) are
+     all painted from there so this markup stays a plain, static skeleton. -->
+<div id="shopOverlay" class="overlay hidden">
+  <div class="modalCard">
+    <h3>Shop</h3>
+    <div class="shopBalanceBox" id="shopBalanceBox"></div>
+    <div id="shopBody"></div>
+    <div class="bigBtns"><button class="btn primary" id="btnShopClose">Close</button></div>
   </div>
 </div>
 
@@ -2878,6 +3029,16 @@ button{font:inherit;cursor:pointer}
       <div class="acctAvatar" id="acctAvatar">?</div>
       <div class="acctWho"><b id="acctWhoName">Player</b><small id="acctWhoSub">Playing on this phone</small></div>
     </div>
+    <!-- 2026-07-28 (v0.50, Blake: "the admin page needs to show points earned and points
+         remaining (points earned will always show on leaderboard, and won't diminish as they
+         spend - that's just for them to know)"). Hidden entirely for a guest - there is no wallet
+         to show. Filled in (and re-fetched) by refreshAcctWallet(), § SHOP, called from
+         openAccountPanel() every time this panel opens - never hand-edited past this shell. -->
+    <div class="acctWallet hidden" id="acctWallet">
+      <div class="acctWalletRow"><span>Points earned</span><b id="acctPtsEarned">0</b></div>
+      <div class="acctWalletRow"><span>Points remaining</span><b id="acctPtsRemaining">0</b></div>
+      <div class="acctWalletNote">Earned always matches the leaderboard and never goes down as you spend. Remaining is what's left to spend in the Shop.</div>
+    </div>
     <!-- 2026-07-26 (v0.36 item 3): THE ONE-TIME NAME CLAIM. Hidden unless the server says the
          window is open AND there really is history sitting under this account's name. Blake:
          "only allowed to do this once and claim 1 name - no going back." Two steps: the offer,
@@ -2930,6 +3091,12 @@ button{font:inherit;cursor:pointer}
     <div class="acctNameEdit hidden" id="acctNameEdit">
       <input id="acctNameInput" maxlength="10" aria-label="Your name" autocomplete="off" autocapitalize="words">
       <div class="acctWarn" id="acctNameWarn"></div>
+      <!-- 2026-07-28 (v0.50): shown only when the server just refused a rename for being inside
+           the 30-day cooldown AND this account holds at least one purchased Name Change Token
+           (§ SHOP). Tapping it re-sends the same rename with useNamechangeCredit:true, which
+           bypasses the cooldown once and consumes the credit - see btnAcctNameSave's own comment
+           for the full flow. Hidden/reset every time this box opens or closes. -->
+      <button class="btn ghost hidden" id="btnAcctNameUseCredit" style="margin-top:6px"></button>
       <div class="acctNameBtns">
         <button class="btn primary" id="btnAcctNameSave">Save name</button>
         <button class="btn ghost" id="btnAcctNameCancel">Cancel</button>
@@ -2960,6 +3127,25 @@ button{font:inherit;cursor:pointer}
       <div class="acctNote" id="acctAgeNote">Accounts are for ages 13 and up. Anyone younger should continue as a guest.</div>
     </div>
     <div class="bigBtns"><button class="btn primary" id="btnAcctClose">Close</button></div>
+  </div>
+</div>
+
+<!-- 2026-07-28 (v0.50, the sign-out-mid-game warning - see the v0.49 diagnosis this implements,
+     HANDOFF.md "v0.49" Task 3). #signOutWarnText is filled in by gameInProgressForSignOut()/
+     signOutWarningText() (§ SHOP) right before this opens - worded from the REAL established
+     behavior (a saved offline game's frozen seat name still submits after sign-out; a live or
+     rejoinable online game keeps crediting the account it started under either way), never a
+     guess. Only shown when there is actually something in flight - see
+     $('btnAcctSignOut').onclick, § ACCOUNT SIGN-IN. Cancel hands #accountOverlay back
+     (openOverlay's backTo mechanism, § OVERLAY LAYER) rather than closing to the menu/game. -->
+<div id="signOutWarnOverlay" class="overlay hidden">
+  <div class="confirmCard">
+    <div class="sign"><b>SIGN OUT?</b></div>
+    <p id="signOutWarnText"></p>
+    <div class="bigBtns">
+      <button class="btn danger" id="btnSignOutConfirm">Sign out anyway</button>
+      <button class="btn ghost" id="btnSignOutCancel">Cancel</button>
+    </div>
   </div>
 </div>
 
@@ -3976,7 +4162,11 @@ const sNo=()=>tone(180,.18,'triangle',.055,0,-30);
    test (server/test-engine-sync.js) fails loudly if the generated files ever drift from this
    block, but only if someone remembers to run it. */
 /* ============================= § LAYOUT ============================= */
-const COLORS4=[
+// 2026-07-28 (v0.50): renamed DEFAULT_COLORS4/6 (the standard board, never mutated) - COLORS4/
+// COLORS6 below are `let` now, and an equipped shop palette (§ SHOP) reassigns THEM wholesale.
+// See the CODE MAP's § LAYOUT entry (top of file) for why every existing call site is already
+// safe (they all read COLORS4/COLORS6 at call time, never capture the array once at parse time).
+const DEFAULT_COLORS4=[
   {name:'Green', c:'#2f8f5b',dark:'#1b5637'},
   {name:'Navy',  c:'#41598f',dark:'#273757'},
   {name:'Pink',  c:'#e56aa5',dark:'#a53a72'},
@@ -3987,7 +4177,7 @@ const COLORS4=[
 // that doesn't sit near ANY of the other five (Green/Navy/Red/White/Yellow) or the card
 // preview's red landing/kill fill (§ UTIL's showPaths CSS) - verified in a browser/sim
 // screenshot of a real 6P game, see PLANNING.md.
-const COLORS6=[
+const DEFAULT_COLORS6=[
   {name:'Green', c:'#2f8f5b',dark:'#1b5637'},
   {name:'Navy',  c:'#41598f',dark:'#273757'},
   {name:'Red',   c:'#c6444a',dark:'#7e2429'},
@@ -3995,6 +4185,7 @@ const COLORS6=[
   {name:'Purple',c:'#8859c9',dark:'#4f3070'},
   {name:'Yellow',c:'#f0c419',dark:'#a37c0a'},
 ];
+let COLORS4=DEFAULT_COLORS4, COLORS6=DEFAULT_COLORS6;   // reassigned by applyEquippedPalette(), § SHOP
 const SCHEDULES={4:[5,4,4],6:[4,4]};   // deal-round sizes; deck reshuffles after the last round
 const HOME_N=5;
 let LAY=null;
@@ -10246,7 +10437,7 @@ function renderYouCard(){
     const letter=accountInitial(name), colors=accountColors();
     box.innerHTML=`<div class="youCardRow" id="youCardTap" role="button" tabindex="0" aria-label="Open Admin settings">
         <div class="acctAvatar" style="--acctBg:${colors.bg};--acctInk:${colors.ink}">${esc(letter)}</div>
-        <div class="youWho"><b>${esc(name)}</b><div class="youStats" id="youStats"></div><div class="youKo" id="youKo"></div><div class="youStatsNote" id="youStatsNote"></div><div class="youRank" id="youRank"></div></div>
+        <div class="youWho"><b>${titledNameHtml(name)}</b><div class="youStats" id="youStats"></div><div class="youKo" id="youKo"></div><div class="youStatsNote" id="youStatsNote"></div><div class="youRank" id="youRank"></div></div>
       </div>`;
     const tap=$('youCardTap');
     // 2026-07-27 (v0.45, Blake: "when you're signed in and you click your name plate at the top
@@ -10809,8 +11000,11 @@ function openAccountPanel(){
   // page load - so on the website, signed out, or (as in production today) with the window shut,
   // this costs exactly nothing and no request is sent.
   try{ probeClaimOffer().catch(()=>{}); }catch(e){}
+  // 2026-07-28 (v0.50): the points-earned/points-remaining box - see refreshAcctWallet(), § SHOP.
+  try{ refreshAcctWallet(); }catch(e){}
 }
 $('btnAccount').onclick=openAccountPanel;
+$('btnMenuAdmin').onclick=openAccountPanel;   // v0.50: the menu's own Admin button - same panel, second door
 $('btnAcctClose').onclick=()=>{ ACCT_NOTICE=''; closeOverlay('accountOverlay'); };
 // The rules panel is the SAME #rulesOverlay the menu's "How to play" opens - one panel, two
 // doors. backTo hands this panel back when the rules are closed, so a player who came here to
@@ -10850,11 +11044,19 @@ function setChosenName(name){
   updateAccountButton();
   return true;
 }
+// 2026-07-28 (v0.50): the "Use a Name Change Token" offer is a one-shot thing tied to whatever
+// cooldown response JUST came back - reset it every time the name box opens or closes so a stale
+// offer (from a previous attempt, possibly for a different rename) can never linger.
+function hideNameCreditOffer(){
+  const b=$('btnAcctNameUseCredit');
+  if(b){ b.classList.add('hidden'); b.onclick=null; }
+}
 function closeAccountNameEdit(){
   ACCT_NAME_MODE='local';
   const box=$('acctNameEdit');
   if(box&&!box.classList.contains('hidden'))box.classList.add('hidden');
   const w=$('acctNameWarn'); if(w&&w.textContent)w.textContent='';
+  hideNameCreditOffer();
   const row=$('btnAcctName');
   if(row&&row.classList.contains('hidden'))row.classList.remove('hidden');
 }
@@ -10872,6 +11074,7 @@ function openAccountNameEdit(mode,msg){
   ACCT_NAME_MODE=(mode==='account')?'account':'local';
   inp.value=(ACCT_NAME_MODE==='account'&&ACCT&&ACCT.gameName)?ACCT.gameName:chosenName();
   const w=$('acctNameWarn'); if(w)w.textContent=msg||'';
+  hideNameCreditOffer();
   if(box.classList.contains('hidden'))box.classList.remove('hidden');
   $('btnAcctName').classList.add('hidden');
   try{ inp.focus(); inp.select(); }catch(e){}
@@ -10881,9 +11084,17 @@ function openAccountNameEdit(mode,msg){
 // thing stopping a signed-out edit from opening.
 $('btnAcctName').onclick=()=>{ if(isSignedIn())openAccountNameEdit('account',''); };
 $('btnAcctNameCancel').onclick=closeAccountNameEdit;
+// 2026-07-28 (v0.50): the actual server call, factored out so both a plain rename attempt and the
+// "use a credit instead" retry (below) share one implementation rather than two copies of the same
+// fetch. useCredit is the client's explicit opt-in - see the server's own comment (server.js
+// "§ POINTS WALLET") for why a credit is never spent silently on an ordinary rename attempt.
+async function saveAccountName(raw,useCredit){
+  return accountFetch('/account/name',{auth:ACCT.token,name:raw,useNamechangeCredit:!!useCredit});
+}
 $('btnAcctNameSave').onclick=async ()=>{
   const inp=$('acctNameInput'), warn=$('acctNameWarn');
   const raw=(inp.value||'').slice(0,NAME_MAX).trim();
+  hideNameCreditOffer();
   if(!raw){ warn.textContent='Type a name first.'; return; }
   // Same two rules the setup screen and the join screen already enforce - one implementation
   // (§ NAMES), so the account panel can never be a back door around them.
@@ -10893,7 +11104,38 @@ $('btnAcctNameSave').onclick=async ()=>{
     // cooldown, and it answers in plain English. Whatever it says goes straight onto the warning
     // line rather than being reworded here.
     warn.textContent='Saving...';
-    const r=await accountFetch('/account/name',{auth:ACCT.token,name:raw});
+    const r=await saveAccountName(raw,false);
+    if(r.status===429&&r.body&&r.body.error==='cooldown'){
+      // 2026-07-28 (v0.50): the cooldown blocked it - offer to spend a purchased Name Change
+      // Token (§ SHOP) if this account holds one, rather than just dead-ending here. The server's
+      // own message (days left) still shows on the warning line; the credit offer is a SEPARATE
+      // button underneath it, never auto-applied.
+      warn.textContent=r.body.message||"You can't change your name again yet.";
+      const credits=Math.max(0,Number(r.body.namechangeCredits)||0);
+      if(credits>0){
+        const b=$('btnAcctNameUseCredit');
+        if(b){
+          b.textContent=`Use a Name Change Token instead (${credits} ${credits===1?'credit':'credits'} - skips the wait)`;
+          b.classList.remove('hidden');
+          b.onclick=async()=>{
+            b.disabled=true; warn.textContent='Saving...';
+            const r2=await saveAccountName(raw,true);
+            b.disabled=false;
+            if(r2.status!==200||!r2.body||!r2.body.gameName){
+              warn.textContent=(r2.body&&r2.body.message)||"That name couldn't be saved. Try another one.";
+              return;
+            }
+            ACCT.gameName=r2.body.gameName;
+            setChosenName(r2.body.gameName);
+            hideNameCreditOffer();
+            closeAccountNameEdit();
+            renderAccountPanel();
+            toast('You are '+ACCT.gameName+' on the leaderboard. (1 Name Change Token used)');
+          };
+        }
+      }
+      return;
+    }
     if(r.status!==200||!r.body||!r.body.gameName){
       warn.textContent=(r.body&&r.body.message)||"That name couldn't be saved. Try another one.";
       return;
@@ -11327,7 +11569,26 @@ $('btnAcctClaimBack').onclick=()=>{ ACCT_CLAIM_STEP='offer'; renderAccountClaim(
 $('btnAcctClaimSure').onclick=()=>{ doAccountClaim(false); };
 $('btnAcctClaimNo').onclick=()=>{ doAccountClaim(true); };
 $('btnAcctSignIn').onclick=()=>{ if(accountsAvailableHere())accountSignIn(); };
-$('btnAcctSignOut').onclick=()=>{ accountSignOut(); };
+/* 2026-07-28 (v0.50) - implements the v0.49 diagnosis's own recommendation (HANDOFF.md "v0.49"
+   Task 3) verbatim: do NOT auto-concede (destructive, one accidental tap costs somebody a game),
+   do NOT silently rename the seat to Guest (not how any of this is actually wired, and would be
+   its own kind of surprise) - just stop the sign-out from being SILENT when something is actually
+   in flight. gameInProgressForSignOut()/signOutWarningText() (§ SHOP) do the real check and word
+   the warning from the ESTABLISHED behavior (not a guess): a saved offline game whose human seat
+   is still carrying this account's name keeps that name and still submits under it after sign-
+   out; a live or still-rejoinable online game keeps crediting the account it started under
+   either way (the room's own stored accountId, captured once at host/join time, never changes).
+   Nothing in flight -> sign out immediately, exactly as before this change (no nagging). */
+$('btnAcctSignOut').onclick=()=>{
+  if(!isSignedIn())return;
+  const st=gameInProgressForSignOut();
+  if(st.offline||st.online){
+    $('signOutWarnText').textContent=signOutWarningText(st);
+    openOverlay('signOutWarnOverlay',{backTo:'accountOverlay'});
+  }else accountSignOut();
+};
+$('btnSignOutConfirm').onclick=()=>{ accountSignOut(); closeOverlay('signOutWarnOverlay'); };
+$('btnSignOutCancel').onclick=()=>{ closeOverlay('signOutWarnOverlay'); };
 $('btnAcctDelete').onclick=()=>{ if(isSignedIn())openAcctDeleteConfirm(); };
 $('btnAcctDelNo').onclick=closeAcctDeleteConfirm;
 $('btnAcctDelYes').onclick=()=>{ const cb=$('acctDelBoard'); accountDelete(!!(cb&&cb.checked)); };
@@ -11391,6 +11652,349 @@ if(accountsAvailableHere()&&loadAcctToken()){
 }
 renderAccountRows();
 updateAccountButton();
+
+/* ============================= § SHOP (points economy, v0.50, 2026-07-28) =============================
+   The client half of what server/server.js + server/cloud/server.ts shipped the day before
+   (server-only, see HANDOFF.md "Server: points wallet backend"): GET /shop (public catalog),
+   POST /account/wallet {auth} (this account's earned/spent/balance/owned/namechangeCredits), and
+   POST /account/purchase {auth,itemId,requestId} (buy something, requestId makes a retried/
+   double-tapped purchase land exactly once - see that server section's own W6 test for proof).
+
+   OWNED vs EQUIPPED, stated plainly because it is the one real design decision this pass had to
+   make on its own: the SERVER is authoritative for what you OWN (it is what you paid for, tied to
+   your account, and must survive a new phone). Which one of your owned palettes/felts/titles is
+   currently ACTIVE is a pure DISPLAY PREFERENCE - there is no server field for it, and this session
+   did not add one. It lives ONLY in this phone's own localStorage (EQUIP/EQUIP_KEY, right below).
+   CONSEQUENCE, worth saying plainly: switching phones (or reinstalling/clearing site data) keeps
+   every purchase (the server still says you own it) but NOT your current pick - a phone that has
+   never equipped anything shows the standard board, exactly like a phone that owns nothing at all,
+   until you go back into the Shop and tap Equip again. Nothing is lost; the choice just isn't
+   synced. Titles follow the exact same rule - see the title-tag comment further down for what that
+   means for a title showing next to someone else's name (short answer: it can't, honestly).
+
+   SEAT COLOR IS CONFIRMED CLIENT-SIDE ONLY before any of this was built - see the CODE MAP's
+   § LAYOUT entry (top of file) for the full verification (every COLORS4/COLORS6 read is at call
+   time; G.seats[i].color is a one-time snapshot taken at game creation; server.js/server.ts have
+   zero references to a seat color anywhere). That is what makes a palette a safe PER-VIEWER
+   preference: it changes what game creation / the setup screens paint on THIS phone from now on,
+   never an already-frozen game, never anyone else's screen, and never anything sent to the server. */
+const DEFAULT_FELT={c:'#256b46',dark:'#0e3421'};   // keep in sync with :root's --felt1/--felt2, § STYLE
+const EQUIP_KEY='nasty-equipped';
+function loadEquip(){
+  try{
+    const j=JSON.parse(localStorage.getItem(EQUIP_KEY)||'null');
+    return Object.assign({palette:null,felt:null,title:null},j||{});
+  }catch(e){ return {palette:null,felt:null,title:null}; }
+}
+let EQUIP=loadEquip();
+function saveEquip(){ try{ localStorage.setItem(EQUIP_KEY,JSON.stringify(EQUIP)); }catch(e){} }
+// Reassigns COLORS4/COLORS6 (§ LAYOUT) wholesale - see that section's own comment for why every
+// existing reader is already safe. Falls back to the untouched DEFAULT_COLORS4/6 the instant
+// nothing is equipped, so "owns nothing -> standard board, no regression" is true by construction.
+function applyEquippedPalette(){
+  const p=EQUIP.palette;
+  COLORS4=(p&&Array.isArray(p.colors4)&&p.colors4.length)?p.colors4:DEFAULT_COLORS4;
+  COLORS6=(p&&Array.isArray(p.colors6)&&p.colors6.length)?p.colors6:DEFAULT_COLORS6;
+}
+// The felt is just two CSS custom properties - body's own background (and .overlay.solid's) read
+// them live, so this takes effect everywhere INCLUDING a game already on screen, immediately.
+function applyEquippedFelt(){
+  const f=EQUIP.felt;
+  document.documentElement.style.setProperty('--felt1',f?f.c:DEFAULT_FELT.c);
+  document.documentElement.style.setProperty('--felt2',f?f.dark:DEFAULT_FELT.dark);
+}
+function applyEquipped(){ applyEquippedPalette(); applyEquippedFelt(); }
+// Titles are shown next to a name (leaderboard rows, the you card) but the equip choice is LOCAL
+// (see this section's header comment) - so this can only ever be truthful for the CURRENT
+// signed-in account's own name. There is no code path anywhere that could show a title next to
+// someone else's name, because this phone has no way to know what they have equipped.
+function titledNameHtml(n){
+  const tag=(isAccountReady()&&EQUIP.title&&n===ACCT.gameName)?
+    ` <span class="lbTitleTag">${esc(EQUIP.title.name)}</span>`:'';
+  return esc(n)+tag;
+}
+
+// ---- catalog + wallet fetch ----
+let SHOP_CATALOG_CACHE=null;
+async function fetchShopCatalog(force){
+  if(SHOP_CATALOG_CACHE&&!force)return SHOP_CATALOG_CACHE;
+  try{
+    const wsUrl=await resolveWsUrl();
+    const r=await fetch(wsToHttp(wsUrl)+'/shop',{cache:'no-store'});
+    if(!r.ok)return null;
+    const j=await r.json();
+    if(!j||!Array.isArray(j.items))return null;
+    SHOP_CATALOG_CACHE=j;
+    return j;
+  }catch(e){ return null; }
+}
+async function fetchWalletResult(){
+  if(!isAccountReady())return {signedOut:true};
+  const r=await accountFetch('/account/wallet',{auth:ACCT.token});
+  if(r.status===200&&r.body)return {ok:true,wallet:r.body};
+  if(r.status===401)return {signedOut:true};
+  return {unreachable:true};
+}
+function findShopItem(id){
+  const items=(SHOP_STATE&&SHOP_STATE.catalog&&SHOP_STATE.catalog.items)||[];
+  return items.find(i=>i.id===id)||null;
+}
+
+// ---- the Admin panel's points-earned / points-remaining box (Blake's ask, § ACCOUNT) ----
+async function refreshAcctWallet(){
+  const box=$('acctWallet');
+  if(!box)return;
+  if(!isAccountReady()){ box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  const earnedEl=$('acctPtsEarned'), remEl=$('acctPtsRemaining');
+  if(earnedEl)earnedEl.textContent='...'; if(remEl)remEl.textContent='...';
+  const wr=await fetchWalletResult();
+  if(!isAccountReady()){ box.classList.add('hidden'); return; }   // signed out while the fetch was in flight
+  if(wr.ok){
+    if(earnedEl)earnedEl.textContent=wr.wallet.lifetimeEarned;
+    if(remEl)remEl.textContent=wr.wallet.balance;
+  }else if(wr.signedOut){
+    box.classList.add('hidden');
+  }else{
+    if(earnedEl)earnedEl.textContent='-'; if(remEl)remEl.textContent='-';
+  }
+}
+
+// ---- the Shop overlay itself ----
+let SHOP_STATE={phase:'loading',catalog:null,wallet:null};
+let SHOP_LOAD_SEQ=0;
+let SHOP_BUSY=false;
+function catItemRow(item,wallet){
+  const owned=Array.isArray(wallet.owned)&&wallet.owned.includes(item.id);
+  const equippedId=EQUIP[item.category]?EQUIP[item.category].id:null;
+  const isEquipped=owned&&equippedId===item.id;
+  const canAfford=wallet.balance>=item.cost;
+  let swatch='';
+  if(item.category==='palette'&&Array.isArray(item.colors4)){
+    swatch=`<span class="shopSwatchRow">${item.colors4.map(c=>`<span class="shopSwatch" style="background:${c.c}"></span>`).join('')}</span>`;
+  }else if(item.category==='felt'&&item.c){
+    swatch=`<span class="shopSwatch shopSwatchFelt" style="background:${item.c}"></span>`;
+  }
+  const metaBits=[];
+  let actionHtml;
+  if(item.category==='namechange'){
+    metaBits.push(`You have ${wallet.namechangeCredits} credit${wallet.namechangeCredits===1?'':'s'}`);
+    actionHtml=`<button class="btn primary shopBuyBtn" data-id="${item.id}" ${canAfford?'':'disabled'}>Buy - ${item.cost} pts</button>`;
+  }else if(owned){
+    metaBits.push('Owned');
+    actionHtml=isEquipped
+      ?`<button class="btn primary shopEquipBtn" data-id="${item.id}" aria-label="Equipped - tap to remove">Equipped</button>`
+      :`<button class="btn ghost shopEquipBtn" data-id="${item.id}">Equip</button>`;
+  }else{
+    if(!canAfford)metaBits.push(`Need ${item.cost-wallet.balance} more`);
+    actionHtml=`<button class="btn primary shopBuyBtn" data-id="${item.id}" ${canAfford?'':'disabled'}>Buy - ${item.cost} pts</button>`;
+  }
+  return `<div class="shopItem" data-id="${item.id}">
+    <div class="shopItemInfo">${swatch}<div class="shopItemText"><div class="shopItemName">${esc(item.name)}</div>
+      <div class="shopItemMeta">${item.cost} pt${item.cost===1?'':'s'}${metaBits.length?' · '+esc(metaBits.join(' · ')):''}</div></div></div>
+    <div class="shopItemAction">${actionHtml}</div>
+    <div class="shopConfirmRow hidden" data-id="${item.id}">
+      <span>Buy ${esc(item.name)} for ${item.cost} point${item.cost===1?'':'s'}? Spending can't be undone.</span>
+      <div class="shopConfirmBtns"><button class="btn primary shopConfirmYes" data-id="${item.id}">Confirm</button>
+        <button class="btn ghost shopConfirmNo" data-id="${item.id}">Cancel</button></div>
+    </div>
+  </div>`;
+}
+const SHOP_CATEGORY_LABELS=[
+  ['palette','Palettes - swap your seat colors'],
+  ['felt','Table felt - change the board background'],
+  ['title','Titles - shown next to your name'],
+  ['namechange','Name change tokens'],
+];
+function paintShop(){
+  const balBox=$('shopBalanceBox'), body=$('shopBody');
+  if(!balBox||!body)return;
+  const st=SHOP_STATE;
+  if(st.phase==='loading'){
+    balBox.innerHTML='';
+    body.innerHTML='<p class="shopMsg">Loading the shop...</p>';
+    return;
+  }
+  if(st.phase==='unreachable'){
+    balBox.innerHTML='';
+    body.innerHTML=`<p class="shopMsg">Couldn't reach the shop. Check your connection and try again.</p>
+      <div class="bigBtns"><button class="btn ghost" id="shopRetryBtn">Try again</button></div>`;
+    const rb=$('shopRetryBtn'); if(rb)rb.onclick=()=>openShopOverlay();
+    return;
+  }
+  if(st.phase==='guest'){
+    balBox.innerHTML=`<div class="shopGuestNote">Signing in is what earns and holds your points - your spendable balance lives on your account, not this phone.</div>
+      ${accountsAvailableHere()?'<button class="btn primary" id="shopSignInBtn" style="margin-top:10px">Sign in with Apple</button>':''}`;
+    body.innerHTML='';
+    const sb=$('shopSignInBtn');
+    if(sb)sb.onclick=async()=>{ await accountSignIn(); if(isAccountReady())openShopOverlay(); };
+    return;
+  }
+  if(st.phase==='wallet-unreachable'){
+    balBox.innerHTML=`<div class="shopGuestNote">Couldn't check your balance right now.</div>
+      <div class="bigBtns"><button class="btn ghost" id="shopRetryBtn2">Try again</button></div>`;
+    const rb=$('shopRetryBtn2'); if(rb)rb.onclick=()=>openShopOverlay();
+    body.innerHTML='<p class="shopMsg">The catalog is ready, but your balance couldn\'t be checked - try again to shop.</p>';
+    return;
+  }
+  // 'ready'
+  const wallet=st.wallet;
+  balBox.innerHTML=`<div class="shopBalanceMain">${wallet.balance} point${wallet.balance===1?'':'s'} to spend</div>
+    <div class="shopBalanceSub">${wallet.lifetimeEarned} earned lifetime · ${wallet.spent} spent so far</div>`;
+  const items=st.catalog.items;
+  let html='';
+  SHOP_CATEGORY_LABELS.forEach(([cat,label])=>{
+    const list=items.filter(i=>i.category===cat);
+    if(!list.length)return;
+    html+=`<div class="shopCatHead">${esc(label)}</div>`+list.map(i=>catItemRow(i,wallet)).join('');
+  });
+  body.innerHTML=html||'<p class="shopMsg">Nothing in the shop right now.</p>';
+}
+async function openShopOverlay(){
+  openOverlay('shopOverlay');
+  const seq=++SHOP_LOAD_SEQ;
+  SHOP_STATE={phase:'loading',catalog:null,wallet:null};
+  paintShop();
+  const catalogP=fetchShopCatalog();
+  const walletP=isAccountReady()?fetchWalletResult():Promise.resolve({signedOut:true});
+  const [catalog,wr]=await Promise.all([catalogP,walletP]);
+  if(seq!==SHOP_LOAD_SEQ)return;   // the overlay was closed/reopened (or account state changed) while this was in flight
+  if(!catalog){ SHOP_STATE={phase:'unreachable',catalog:null,wallet:null}; paintShop(); return; }
+  if(!isAccountReady()||wr.signedOut){ SHOP_STATE={phase:'guest',catalog,wallet:null}; paintShop(); return; }
+  if(!wr.ok){ SHOP_STATE={phase:'wallet-unreachable',catalog,wallet:null}; paintShop(); return; }
+  SHOP_STATE={phase:'ready',catalog,wallet:wr.wallet};
+  paintShop();
+}
+function showShopConfirm(id){
+  document.querySelectorAll('#shopBody .shopConfirmRow').forEach(r=>r.classList.toggle('hidden',r.dataset.id!==id));
+}
+function hideShopConfirm(id){
+  const r=document.querySelector(`#shopBody .shopConfirmRow[data-id="${id}"]`);
+  if(r)r.classList.add('hidden');
+}
+// Equip/unequip is purely local - no server round trip, no cost, reversible any time (this is a
+// DISPLAY PREFERENCE, see this section's header comment). Snapshots the item's own display data
+// (name/colors4/colors6/c/dark) into EQUIP so applyEquipped() at boot never needs a network fetch.
+function equipToggle(item){
+  const already=EQUIP[item.category]&&EQUIP[item.category].id===item.id;
+  if(already){
+    EQUIP[item.category]=null;
+    toast(item.name+' unequipped - back to the standard '+(item.category==='felt'?'felt':item.category==='title'?'title':'colors')+'.');
+  }else{
+    EQUIP[item.category]={id:item.id,name:item.name,colors4:item.colors4,colors6:item.colors6,c:item.c,dark:item.dark};
+    toast(item.name+' equipped.');
+  }
+  saveEquip();
+  applyEquipped();
+  paintShop();
+  // The setup screen's team-pairing note and the you card's own avatar both read COLORS4/COLORS6/
+  // EQUIP.title live - repaint them so switching palettes/titles is visible the moment you back
+  // out of the Shop, not just on the next boot.
+  try{ renderMenu(); }catch(e){}
+}
+// requestId is fresh per logical purchase ATTEMPT (a genuine retry after a real failure is a new
+// attempt) - the guard against a DOUBLE-TAP of the same attempt is SHOP_BUSY, checked and set
+// synchronously before any await, so a second click physically cannot start a second request
+// while the first is in flight (see server/server.js's own W6 test for the server-side half of
+// this - two concurrent requests with the SAME requestId land exactly one charge either way).
+async function buyItem(item){
+  if(SHOP_BUSY||!isAccountReady())return;
+  SHOP_BUSY=true;
+  const reqId='purch-'+Date.now()+'-'+Math.random().toString(36).slice(2,10);
+  const r=await accountFetch('/account/purchase',{auth:ACCT.token,itemId:item.id,requestId:reqId});
+  SHOP_BUSY=false;
+  if(r.status===200&&r.body&&r.body.ok){
+    if(SHOP_STATE.wallet)SHOP_STATE.wallet=r.body.wallet;
+    toast(item.name+' purchased!');
+    paintShop();
+    return;
+  }
+  if(r.status===409&&r.body&&r.body.error==='alreadyowned'){
+    if(r.body.wallet&&SHOP_STATE.wallet)SHOP_STATE.wallet=r.body.wallet;
+    toast('You already own '+item.name+'.');
+    paintShop();
+    return;
+  }
+  if(r.status===409&&r.body&&r.body.error==='cantafford'){
+    if(r.body.wallet&&SHOP_STATE.wallet)SHOP_STATE.wallet=r.body.wallet;
+    toast(`You need ${r.body.cost} points for that, but you only have ${r.body.balance}.`);
+    paintShop();
+    return;
+  }
+  if(r.status===404){
+    toast("That item isn't available anymore. Try refreshing the shop.");
+    SHOP_CATALOG_CACHE=null;
+    paintShop();
+    return;
+  }
+  if(r.status===401){
+    toast("You've been signed out - sign in again to keep shopping.");
+    SHOP_STATE={phase:'guest',catalog:SHOP_STATE.catalog,wallet:null};
+    paintShop();
+    try{ renderYouCard(); }catch(e){}
+    return;
+  }
+  toast("Couldn't reach the shop. Check your connection and try again.");
+  paintShop();
+}
+// Event delegation on the one container that gets rewritten - avoids re-binding a fresh listener
+// on every paintShop() call (which rebuilds #shopBody's innerHTML from scratch every time).
+$('shopBody').addEventListener('click',e=>{
+  const buyBtn=e.target.closest('.shopBuyBtn');
+  if(buyBtn&&!buyBtn.disabled){ showShopConfirm(buyBtn.dataset.id); return; }
+  const yesBtn=e.target.closest('.shopConfirmYes');
+  if(yesBtn){
+    const id=yesBtn.dataset.id;
+    hideShopConfirm(id);
+    const item=findShopItem(id);
+    if(item)buyItem(item);
+    return;
+  }
+  const noBtn=e.target.closest('.shopConfirmNo');
+  if(noBtn){ hideShopConfirm(noBtn.dataset.id); return; }
+  const eqBtn=e.target.closest('.shopEquipBtn');
+  if(eqBtn){
+    const item=findShopItem(eqBtn.dataset.id);
+    if(item)equipToggle(item);
+    return;
+  }
+});
+$('btnShop').onclick=()=>openShopOverlay();
+$('btnShopClose').onclick=()=>closeOverlay('shopOverlay');
+// Apply whatever was equipped on a PREVIOUS visit right away, before the first paint - so a
+// reload never flashes the standard board first. See applyEquipped()'s own comment above.
+applyEquipped();
+
+/* ---- the sign-out-mid-game warning (§ ACCOUNT SIGN-IN wires this into $('btnAcctSignOut')) ----
+   Implements the v0.49 diagnosis's own recommendation (HANDOFF.md "v0.49" Task 3) rather than
+   re-deriving it: check (a) any OFFLINE saved game (a live game on screen counts too, in case it
+   hasn't autosaved to a slot yet) whose human seat's name matches the CURRENT account's gameName,
+   and (b) whether an ONLINE game is either live right now or still sitting as a rejoinable room
+   (loadLastRoom()+loadNetSession() - the account was captured once at host/join time and stays
+   attached to that room regardless of whether this device is currently connected to it, so a
+   dormant-but-rejoinable room is just as real a case as a live one). Re-scans fresh every time -
+   never trusts a possibly-stale cached list. */
+function gameInProgressForSignOut(){
+  const name=ACCT&&ACCT.gameName;
+  if(!name)return {offline:false,online:false,name:null};
+  let offline=false;
+  for(const k of [1,2]){
+    const s=loadOfflineSlot(k);
+    if(s&&s.G&&Array.isArray(s.G.seats)&&s.G.seats.some(se=>se&&se.type==='human'&&se.name===name))offline=true;
+  }
+  if(G&&!NET.online&&Array.isArray(G.seats)&&G.seats.some(se=>se&&se.type==='human'&&se.name===name))offline=true;
+  const liveOnline=!!(NET.online&&G&&!G.over);
+  const last=loadLastRoom();
+  const dormantOnline=!!(last&&loadNetSession(last.code));
+  return {offline,online:liveOnline||dormantOnline,name};
+}
+function signOutWarningText(st){
+  const parts=[];
+  if(st.offline)parts.push(`You have a saved game in progress as ${st.name}. Signing out won't stop it - finishing it will still count for ${st.name} after you sign out.`);
+  if(st.online)parts.push(`You have an online game underway as ${st.name}. Signing out won't leave the game - it will keep counting for ${st.name}'s account when it finishes.`);
+  parts.push('Sign out anyway?');
+  return parts.join(' ');
+}
 
 /* ======================== § WELCOME (now: the online sign-in gate) ========================
    2026-07-27 (v0.46): Blake, on the first-run/every-version screen this section used to be:
@@ -11983,7 +12587,7 @@ function renderLb(st){
   active.sort((a,b)=>pts(b)-pts(a)||wins(b)-wins(a)||games(a)-games(b));
   $('lbBody').innerHTML=`<div class="lbScroll"><table class="lbTable"><tr><th>Player</th>
     <th>Games</th><th>Wins</th><th>Win%</th><th>Points</th></tr>`+
-    active.map(n=>`<tr><td>${esc(n)}</td><td>${games(n)}</td><td>${wins(n)}</td>
+    active.map(n=>`<tr><td>${titledNameHtml(n)}</td><td>${games(n)}</td><td>${wins(n)}</td>
       <td>${pct(n)}</td><td>${pts(n)}</td></tr>`).join('')+`</table></div>`;
 }
 // v0.49: the Total tab - see renderLb()'s own comment just above for why this reuses
@@ -12004,7 +12608,7 @@ function renderLbTotal(st){
   active.sort((a,b)=>rec(b).pts-rec(a).pts||rec(b).wins-rec(a).wins||rec(a).games-rec(b).games);
   $('lbBody').innerHTML=`<div class="lbScroll"><table class="lbTable"><tr><th>Player</th>
     <th>Games</th><th>Wins</th><th>Win%</th><th>Points</th></tr>`+
-    active.map(n=>`<tr><td>${esc(n)}</td><td>${rec(n).games}</td><td>${rec(n).wins}</td>
+    active.map(n=>`<tr><td>${titledNameHtml(n)}</td><td>${rec(n).games}</td><td>${rec(n).wins}</td>
       <td>${pct(n)}</td><td>${rec(n).pts}</td></tr>`).join('')+`</table></div>`;
 }
 // 2026-07-24 item 9: the KOs tab. "KOs" = pegs this player has sent back to base (hkoDealt),
@@ -12057,7 +12661,7 @@ function renderLbKo(st){
   active.sort((a,b)=>koRatioNum(dealt(b),taken(b))-koRatioNum(dealt(a),taken(a))||dealt(b)-dealt(a));
   $('lbBody').innerHTML=`<div class="lbScroll"><table class="lbTable lbKo"><tr><th>Player</th>
     <th>KOs</th><th>KO'd</th><th>Ratio</th></tr>`+
-    active.map(n=>`<tr><td>${esc(n)}</td><td>${dealt(n)}</td><td>${taken(n)}</td>
+    active.map(n=>`<tr><td>${titledNameHtml(n)}</td><td>${dealt(n)}</td><td>${taken(n)}</td>
       <td>${koRatioStr(dealt(n),taken(n))}</td></tr>`).join('')+`</table></div>`;
 }
 /* 2026-07-25 (Blake's post-game review request, item 1) - the win popup's own per-game

@@ -769,6 +769,7 @@ setInterval(() => {
   for (const [id, ts] of soloSeen) { if (now - ts > SOLO_ID_MAX_AGE_MS) { soloSeen.delete(id); pruned = true; } }
   if (pruned) scheduleSoloSeenPersist();
 }, 24 * 60 * 60 * 1000);
+setInterval(prunePurchaseSeen, 24 * 60 * 60 * 1000);   // 2026-07-28 § POINTS WALLET
 
 const SOLO_RATE_LIMIT = 20;
 const SOLO_RATE_WINDOW_MS = 60 * 1000;
@@ -1082,6 +1083,136 @@ const CLAIM_CLOSED_BODY = {
    sendLeaderboard() serializes literally the same object it always has. --- */
 const LEADERBOARD_ACCOUNTS_ONLY = accountsEnvFlagOn(process.env.NASTY_LEADERBOARD_ACCOUNTS_ONLY, "0");
 function accountsOnlyBoard() { return ACCOUNTS_ENABLED && LEADERBOARD_ACCOUNTS_ONLY && anyProviderConfigured(); }
+
+/* =======================================================================================
+ * 2026-07-28 § POINTS WALLET - a per-account SPENDABLE BALANCE, separate from the leaderboard's
+ * LIFETIME EARNED points (hptsS/hptsT). Earned points rank the leaderboard and must never
+ * decrease - see HANDOFF.md. The wallet never touches them; it only tracks what an account has
+ * SPENT, so balance = lifetime earned - lifetime spent, computed live on every read rather than
+ * stored redundantly (see accountEarnedPoints()/walletView() below, right after
+ * boardRowsForDisplay() since they reuse its exact "own account row + any frozen row this account
+ * owns the name for" shadowing logic - the wallet's idea of "earned" is deliberately defined as
+ * "whatever this account's row already shows on /leaderboard today", so it stays correct whether
+ * NASTY_LEADERBOARD_ACCOUNTS_ONLY is off (today, in production - earned lives in globalBoard,
+ * keyed by the account's claimed name) or on (earned lives in accountBoard, keyed by uid).
+ *
+ * SERVER-OWNED CATALOG - the client is never trusted for prices. Every item's cost lives here,
+ * nowhere else, and a purchase re-reads it from this array every time; nothing about a price is
+ * ever accepted from the request body. Costs are picked against the existing point economy: a
+ * win against a Nasty-difficulty CPU is worth 3 points (pointsForWinServer() above), so a typical
+ * player sits at tens to low hundreds of lifetime points (the live board, checked before writing
+ * these numbers, has real accounts around 20-450). `consumable:true` (namechange only) means the
+ * item is a stackable credit, not a one-time unlock - it is never "already owned" and can be
+ * bought again. Every other category is a permanent, one-time cosmetic unlock.
+ * ===================================================================================== */
+const SHOP_CATALOG = [
+  // palette - alternate FULL-BOARD color palettes. The headline item, Blake's own call over
+  // per-player peg colors: the SEAT color identifies the player, and free-pick colors would
+  // collide in online games, so a palette is a complete replacement SET of seat colors that
+  // stays internally distinct. Each entry carries colors4/colors6 - full replacements for the
+  // client's COLORS4/COLORS6 arrays, same {name,c,dark} shape per seat, because the client uses
+  // the per-seat NAME in team-pairing text ("Green + Pink") - so every seat here has a name too.
+  {
+    id: "palette_sunset", category: "palette", name: "Sunset", cost: 40,
+    colors4: [
+      { name: "Coral", c: "#e8604c", dark: "#9c3423" },
+      { name: "Dusk", c: "#3e4e7e", dark: "#232e4e" },
+      { name: "Rose", c: "#e08bb0", dark: "#9c4f74" },
+      { name: "Gold", c: "#f2a93b", dark: "#a56f12" },
+    ],
+    colors6: [
+      { name: "Coral", c: "#e8604c", dark: "#9c3423" },
+      { name: "Dusk", c: "#3e4e7e", dark: "#232e4e" },
+      { name: "Rose", c: "#e08bb0", dark: "#9c4f74" },
+      { name: "Cream", c: "#f2e4c4", dark: "#b5a377" },
+      { name: "Violet", c: "#8a5ba6", dark: "#54326a" },
+      { name: "Gold", c: "#f2a93b", dark: "#a56f12" },
+    ],
+  },
+  {
+    id: "palette_ocean", category: "palette", name: "Ocean Breeze", cost: 40,
+    colors4: [
+      { name: "Teal", c: "#2a9d8f", dark: "#175a52" },
+      { name: "Deep Blue", c: "#2d4f8f", dark: "#182c55" },
+      { name: "Coral", c: "#ee6352", dark: "#a2372a" },
+      { name: "Sand", c: "#edd9a3", dark: "#ab9354" },
+    ],
+    colors6: [
+      { name: "Teal", c: "#2a9d8f", dark: "#175a52" },
+      { name: "Deep Blue", c: "#2d4f8f", dark: "#182c55" },
+      { name: "Coral", c: "#ee6352", dark: "#a2372a" },
+      { name: "Sand", c: "#edd9a3", dark: "#ab9354" },
+      { name: "Anemone", c: "#8f68b8", dark: "#553a74" },
+      { name: "Seafoam", c: "#9fd8c5", dark: "#5d9a85" },
+    ],
+  },
+  {
+    id: "palette_forest", category: "palette", name: "Forest", cost: 60,
+    colors4: [
+      { name: "Moss", c: "#6f9a3d", dark: "#425e1f" },
+      { name: "Sky", c: "#7fb6d9", dark: "#41708f" },
+      { name: "Berry", c: "#b04a72", dark: "#6e2543" },
+      { name: "Amber", c: "#e2a83c", dark: "#96690f" },
+    ],
+    colors6: [
+      { name: "Moss", c: "#6f9a3d", dark: "#425e1f" },
+      { name: "Sky", c: "#7fb6d9", dark: "#41708f" },
+      { name: "Berry", c: "#b04a72", dark: "#6e2543" },
+      { name: "Birch", c: "#efe7d4", dark: "#b7ab88" },
+      { name: "Bark", c: "#8a5a34", dark: "#54351d" },
+      { name: "Amber", c: "#e2a83c", dark: "#96690f" },
+    ],
+  },
+  {
+    id: "palette_royal", category: "palette", name: "Royal", cost: 90,
+    colors4: [
+      { name: "Emerald", c: "#1f8a5c", dark: "#0f5236" },
+      { name: "Sapphire", c: "#3a55b4", dark: "#1f2f6e" },
+      { name: "Crimson", c: "#b12a3c", dark: "#6d1220" },
+      { name: "Gold", c: "#d4af37", dark: "#8a6d14" },
+    ],
+    colors6: [
+      { name: "Emerald", c: "#1f8a5c", dark: "#0f5236" },
+      { name: "Sapphire", c: "#3a55b4", dark: "#1f2f6e" },
+      { name: "Crimson", c: "#b12a3c", dark: "#6d1220" },
+      { name: "Ivory", c: "#f1e9d5", dark: "#b6ab89" },
+      { name: "Amethyst", c: "#7d3fa8", dark: "#4a2166" },
+      { name: "Gold", c: "#d4af37", dark: "#8a6d14" },
+    ],
+  },
+  {
+    id: "palette_midnight", category: "palette", name: "Midnight", cost: 130,
+    colors4: [
+      { name: "Cyan", c: "#3fc5d1", dark: "#20707a" },
+      { name: "Violet", c: "#7a63d9", dark: "#463693" },
+      { name: "Magenta", c: "#d955a8", dark: "#8c2f68" },
+      { name: "Amber", c: "#f0a832", dark: "#a06d10" },
+    ],
+    colors6: [
+      { name: "Cyan", c: "#3fc5d1", dark: "#20707a" },
+      { name: "Violet", c: "#7a63d9", dark: "#463693" },
+      { name: "Magenta", c: "#d955a8", dark: "#8c2f68" },
+      { name: "Silver", c: "#c9ced9", dark: "#848b9c" },
+      { name: "Lime", c: "#9ed14b", dark: "#5e8422" },
+      { name: "Amber", c: "#f0a832", dark: "#a06d10" },
+    ],
+  },
+  // felt - table background colors. c/dark are the two radial-gradient stops, direct
+  // replacements for the client's --felt1/--felt2 CSS variables (default #256b46/#0e3421).
+  { id: "felt_burgundy", category: "felt", name: "Burgundy Felt", cost: 15, c: "#6b2433", dark: "#35101a" },
+  { id: "felt_navy", category: "felt", name: "Navy Felt", cost: 15, c: "#23456b", dark: "#0e1f35" },
+  { id: "felt_charcoal", category: "felt", name: "Charcoal Felt", cost: 20, c: "#3a4048", dark: "#16191d" },
+  { id: "felt_sunflower", category: "felt", name: "Sunflower Felt", cost: 20, c: "#c99a1e", dark: "#6b4e08" },
+  // title - a short label shown next to the player's name on the leaderboard.
+  { id: "title_rookie", category: "title", name: "Rookie", cost: 10 },
+  { id: "title_shark", category: "title", name: "Card Shark", cost: 30 },
+  { id: "title_legend", category: "title", name: "Legend", cost: 60 },
+  { id: "title_nasty", category: "title", name: "Certified Nasty", cost: 90 },
+  // namechange - a one-shot credit that lets a player change their nickname despite the existing
+  // 30-day cooldown. Consumable/stackable, not a one-time unlock - see /account/name below.
+  { id: "namechange_credit", category: "namechange", name: "Name Change Token", cost: 25, consumable: true },
+];
+function shopItemById(id) { return SHOP_CATALOG.find((it) => it.id === id) || null; }
 
 /* --- storage. Six small JSON files, all env-overridable exactly like NASTY_LEADERBOARD_FILE so
    tests point them at scratch paths, all debounce-persisted like the leaderboard, and all in
@@ -1512,6 +1643,14 @@ function newAccountRecord(provider, sub) {
     created: now,
     lastSeen: now,
     refreshToken: null,     // stays null until Apple's .p8 key exists (revoke-on-delete, Stage 6)
+    // 2026-07-28 § WALLET - see the "§ POINTS WALLET" block below. Spendable balance is never
+    // stored directly; it is always LIFETIME EARNED (read live off the leaderboard - see
+    // accountEarnedPoints()) MINUS walletSpent, computed on every read so it can never drift from
+    // the leaderboard it depends on. walletOwned/walletSpent/walletNamechangeCredits are the only
+    // three numbers this feature actually needs to persist.
+    walletSpent: 0,             // lifetime points spent - NEVER reduces the leaderboard's earned total
+    walletOwned: [],            // owned non-consumable shop item ids (palette/felt/title)
+    walletNamechangeCredits: 0, // one-shot credits that bypass the 30-day rename cooldown once each
   };
 }
 // Stage 1 records have provider/sub and no identities array. Read through this everywhere so the
@@ -1835,6 +1974,86 @@ function boardRowsForDisplay() {
   return { flat, detail };
 }
 
+/* --- § POINTS WALLET (2026-07-28), continued from the SHOP_CATALOG block above.
+   accountEarnedPoints() deliberately mirrors boardRowsForDisplay()'s own per-account shadowing
+   rule (frozen name-matched row, if any and not declined, PLUS this account's own accountBoard
+   row) instead of reading only one of the two - that is the exact sum already being SHOWN on
+   /leaderboard for this account's name, so the wallet's idea of "earned" can never disagree with
+   what the family board displays, in either state of the NASTY_LEADERBOARD_ACCOUNTS_ONLY switch.
+   No epoch scoping anywhere in this feature, by design - see the file-level note below this
+   block for why. */
+function accountEarnedPoints(acct) {
+  let hptsS = 0, hptsT = 0;
+  if (acct && acct.nameFolded && !acct.claimDeclined) {
+    for (const name of Object.keys(globalBoard)) {
+      if (leaderboardNameKey(name) !== acct.nameFolded) continue;
+      const r = globalBoard[name];
+      if (!r || typeof r !== "object") continue;
+      hptsS += Number(r.hptsS) || 0;
+      hptsT += Number(r.hptsT) || 0;
+    }
+  }
+  const own = (acct && accountBoard[acct.uid]) || {};
+  hptsS += Number(own.hptsS) || 0;
+  hptsT += Number(own.hptsT) || 0;
+  return hptsS + hptsT;
+}
+// The wallet a client reads/spends against. Balance is NEVER stored - always earned-minus-spent,
+// computed fresh, so it can never drift out of step with the leaderboard or with a hand-edited
+// admin correction. Clamped at 0 defensively; in normal operation it can't go negative because
+// earned only ever grows (see HANDOFF.md) and every purchase is checked against the balance at
+// the moment it is made.
+function walletView(acct) {
+  const earned = accountEarnedPoints(acct);
+  const spent = Math.max(0, Number(acct.walletSpent) || 0);
+  return {
+    uid: acct.uid,
+    lifetimeEarned: earned,
+    spent,
+    balance: Math.max(0, earned - spent),
+    owned: Array.isArray(acct.walletOwned) ? acct.walletOwned.slice() : [],
+    namechangeCredits: Math.max(0, Number(acct.walletNamechangeCredits) || 0),
+  };
+}
+/* Idempotency for a double-submitted/retried purchase - twin of the existing solo-result
+   `soloSeen` gameId dedupe (see "§ SOLO RESULTS" below): a client-supplied `requestId` is
+   remembered against the FULL response body it got the first time, so a retry (a double-tap, or
+   a client that resent after a dropped reply) gets back the exact same answer instead of being
+   charged twice. Ownership itself is also a natural double-spend guard for every NON-consumable
+   category (a second buy of an already-owned palette/felt/title is rejected as "alreadyowned"
+   regardless of requestId) - `requestId` exists specifically because the namechange credit is
+   consumable/stackable, where ownership can't be the guard. */
+const PURCHASE_IDS_FILE = process.env.NASTY_PURCHASE_IDS_FILE
+  ? path.resolve(process.env.NASTY_PURCHASE_IDS_FILE)
+  : path.join(__dirname, "purchase-ids.json");
+const PURCHASE_ID_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+let purchaseSeen = {};   // "<uid>:<requestId>" -> {status, body, ts}
+function loadPurchaseSeen() {
+  try {
+    const o = JSON.parse(fs.readFileSync(PURCHASE_IDS_FILE, "utf8"));
+    if (o && typeof o === "object") purchaseSeen = o;
+  } catch (e) { purchaseSeen = {}; }
+}
+let purchaseSeenTimer = null;
+function schedulePurchaseSeenPersist() {
+  if (purchaseSeenTimer) return;
+  purchaseSeenTimer = setTimeout(() => { purchaseSeenTimer = null; persistPurchaseSeenNow(); }, PERSIST_DEBOUNCE_MS);
+}
+function persistPurchaseSeenNow() {
+  if (purchaseSeenTimer) { clearTimeout(purchaseSeenTimer); purchaseSeenTimer = null; }
+  try { fs.writeFileSync(PURCHASE_IDS_FILE, JSON.stringify(purchaseSeen)); }
+  catch (e) { log("purchase-ids persist failed", e.message); }
+}
+function prunePurchaseSeen() {
+  const now = Date.now();
+  let pruned = false;
+  for (const k of Object.keys(purchaseSeen)) {
+    if (now - (purchaseSeen[k].ts || 0) > PURCHASE_ID_MAX_AGE_MS) { delete purchaseSeen[k]; pruned = true; }
+  }
+  if (pruned) schedulePurchaseSeenPersist();
+}
+function purchaseIdemKey(uid, requestId) { return uid + ":" + requestId; }
+
 /* --- HTTP. Every route is POST with the session token in the JSON body as `auth`, except the
    nonce (a GET that carries nothing). /account/me and /account/name-available are POSTs
    specifically so a session token never lands in a URL, a server log, or a Referer header. --- */
@@ -2048,6 +2267,62 @@ async function handleAccountRoute(req, res, url) {
     return;
   }
 
+  /* --- 2026-07-28 § POINTS WALLET. Same auth convention as every other /account/* route: the
+     session token rides in the JSON body as `auth`, and a guest (no session, or an expired one)
+     gets the same clean 401 SIGNED_OUT_BODY every other account route already answers with -
+     never a crash, never a 500. A guest has no wallet; it is not an error, just nothing to show. */
+  if (p === "/account/wallet") {
+    const me = resolveSession(body.auth);
+    if (!me) { sendJson(res, 401, SIGNED_OUT_BODY); return; }
+    sendJson(res, 200, walletView(me.account));
+    return;
+  }
+
+  if (p === "/account/purchase") {
+    const me = resolveSession(body.auth);
+    if (!me) { sendJson(res, 401, SIGNED_OUT_BODY); return; }
+    const acct = me.account;
+    const itemId = typeof body.itemId === "string" ? body.itemId : "";
+    const requestId = typeof body.requestId === "string" && body.requestId ? body.requestId.slice(0, 128) : null;
+    // Idempotency: a retried/double-submitted purchase carrying the SAME requestId gets back the
+    // exact same answer it got the first time, without being charged again. See the block comment
+    // above PURCHASE_IDS_FILE for why this exists alongside (not instead of) the ownership check.
+    if (requestId) {
+      prunePurchaseSeen();
+      const seen = purchaseSeen[purchaseIdemKey(acct.uid, requestId)];
+      if (seen) { sendJson(res, seen.status, Object.assign({}, seen.body, { duplicate: true })); return; }
+    }
+    const item = shopItemById(itemId);
+    if (!item) { sendJson(res, 404, { error: "noitem", message: "That item doesn't exist." }); return; }
+    const owned = Array.isArray(acct.walletOwned) ? acct.walletOwned : (acct.walletOwned = []);
+    if (!item.consumable && owned.includes(item.id)) {
+      const failBody = { error: "alreadyowned", message: "You already own that.", wallet: walletView(acct) };
+      if (requestId) { purchaseSeen[purchaseIdemKey(acct.uid, requestId)] = { status: 409, body: failBody, ts: Date.now() }; schedulePurchaseSeenPersist(); }
+      sendJson(res, 409, failBody);
+      return;
+    }
+    const earned = accountEarnedPoints(acct);
+    const spentSoFar = Math.max(0, Number(acct.walletSpent) || 0);
+    const balance = Math.max(0, earned - spentSoFar);
+    if (balance < item.cost) {
+      const failBody = { error: "cantafford", message: "Not enough points for that yet.", cost: item.cost, balance, wallet: walletView(acct) };
+      if (requestId) { purchaseSeen[purchaseIdemKey(acct.uid, requestId)] = { status: 409, body: failBody, ts: Date.now() }; schedulePurchaseSeenPersist(); }
+      sendJson(res, 409, failBody);
+      return;
+    }
+    // The whole check-then-mutate above is synchronous, single JS-thread, no `await` anywhere in
+    // it - so two "simultaneous" purchases for the same account can never interleave here; Node
+    // processes them one after the other, and the second one sees the first one's result.
+    acct.walletSpent = spentSoFar + item.cost;
+    if (item.consumable) acct.walletNamechangeCredits = Math.max(0, Number(acct.walletNamechangeCredits) || 0) + 1;
+    else owned.push(item.id);
+    scheduleAccountStorePersist(STORE_ACCOUNTS);
+    const okBody = { ok: true, purchased: item.id, wallet: walletView(acct) };
+    if (requestId) { purchaseSeen[purchaseIdemKey(acct.uid, requestId)] = { status: 200, body: okBody, ts: Date.now() }; schedulePurchaseSeenPersist(); }
+    sendJson(res, 200, okBody);
+    return;
+  }
+
   if (p === "/account/name-available") {
     const clean = cleanName(body.name, "");
     if (!clean) { sendJson(res, 200, { available: false, reason: "empty", message: "Type a name first." }); return; }
@@ -2078,6 +2353,10 @@ async function handleAccountRoute(req, res, url) {
       return;
     }
     const now = Date.now();
+    // 2026-07-28 § POINTS WALLET: whether THIS call spent a purchased namechange credit to bypass
+    // the cooldown below. Surfaced on the success response so the client can show "credit used"
+    // and refresh its own wallet display; false on every path that isn't the cooldown-bypass one.
+    let usedNamechangeCredit = false;
     if (acct.nameFolded === folded) {
       // Same name, possibly a different capitalization. Idempotent and always free - the fold is
       // what identity is enforced on, so this is a label edit, not a rename.
@@ -2094,10 +2373,22 @@ async function handleAccountRoute(req, res, url) {
       // a name that changes hourly makes the board unreadable and lets somebody cycle through
       // and squat names. History is NOT touched - the account row is keyed on uid, so this
       // rewrites one string and nothing else.
+      // 2026-07-28 § POINTS WALLET: a purchased namechange credit bypasses the cooldown ONCE,
+      // consuming it - but only when the client explicitly asks (`useNamechangeCredit:true`), so
+      // a credit is never silently spent on an ordinary rename that would have gone through (or
+      // failed) anyway. Same cooldown-reset behavior as a normal rename below - it is still a real
+      // rename, just one that skipped the wait.
       if (acct.nameChangedAt && now - acct.nameChangedAt < NAME_COOLDOWN_MS) {
-        const daysLeft = Math.max(1, Math.ceil((NAME_COOLDOWN_MS - (now - acct.nameChangedAt)) / (24 * 60 * 60 * 1000)));
-        sendJson(res, 429, { error: "cooldown", daysLeft, message: "You can change your name again in " + daysLeft + (daysLeft === 1 ? " day." : " days.") });
-        return;
+        const credits = Math.max(0, Number(acct.walletNamechangeCredits) || 0);
+        if (body.useNamechangeCredit === true && credits > 0) {
+          acct.walletNamechangeCredits = credits - 1;
+          usedNamechangeCredit = true;
+          scheduleAccountStorePersist(STORE_ACCOUNTS);
+        } else {
+          const daysLeft = Math.max(1, Math.ceil((NAME_COOLDOWN_MS - (now - acct.nameChangedAt)) / (24 * 60 * 60 * 1000)));
+          sendJson(res, 429, { error: "cooldown", daysLeft, message: "You can change your name again in " + daysLeft + (daysLeft === 1 ? " day." : " days."), namechangeCredits: credits });
+          return;
+        }
       }
       delete accountIndex["name:" + acct.nameFolded];   // the old folded name goes back in the pool
       if (!Array.isArray(acct.nameHistory)) acct.nameHistory = [];
@@ -2122,7 +2413,10 @@ async function handleAccountRoute(req, res, url) {
       const rows = unclaimedRowsForFolded(folded);
       if (Object.keys(rows).length) pendingClaim = claimSummary(rows);
     }
-    sendJson(res, 200, { gameName: acct.gameName, pendingClaim, claimWindow: claimWindowView() });
+    sendJson(res, 200, {
+      gameName: acct.gameName, pendingClaim, claimWindow: claimWindowView(),
+      usedNamechangeCredit, namechangeCredits: Math.max(0, Number(acct.walletNamechangeCredits) || 0),
+    });
     return;
   }
 
@@ -3101,6 +3395,8 @@ async function handleAdminRoute(req, res, url) {
         sessions: Object.keys(sessions).filter((t) => sessions[t] && sessions[t].uid === uid).length,
         claim: j ? j.state : null,
         row: accountBoard[uid] || {},
+        // 2026-07-28 § POINTS WALLET - purely informational for Blake's own god-mode view.
+        wallet: walletView(a),
       };
     });
     sendJson(res, 200, list);
@@ -3166,6 +3462,14 @@ const server = http.createServer((req, res) => {
     const b = boardRowsForDisplay();
     const entries = b.detail || Object.keys(globalBoard).map((name) => ({ name, stats: globalBoard[name], account: false, frozen: false }));
     sendJson(res, 200, { epoch: leaderboardEpoch, accountsOnly: accountsOnlyBoard(), claimWindow: claimWindowView(), entries });
+    return;
+  }
+  // 2026-07-28 § POINTS WALLET - the server-owned shop catalog. A plain, unauthenticated GET:
+  // browsing prices needs no account, and the client must never be trusted for one anyway, so
+  // there is nothing here that needs a session. Gated on the same kill switch as the rest of the
+  // accounts feature it belongs to - with NASTY_ACCOUNTS_ENABLED=0 this 404s like everything else.
+  if (ACCOUNTS_ENABLED && url.pathname === "/shop" && req.method === "GET") {
+    sendJson(res, 200, { items: SHOP_CATALOG });
     return;
   }
   if (ACCOUNTS_ENABLED && url.pathname.startsWith("/account/")) {
@@ -4059,6 +4363,7 @@ loadLeaderboardEpoch();
 // creates none of them. On a machine that has never had an account (every machine today) this
 // leaves all six stores empty and writes nothing at all.
 loadAccountStores();
+loadPurchaseSeen();   // 2026-07-28 § POINTS WALLET - purchase-request dedupe, twin of loadSoloSeen()
 log(`admin token file: ${ADMIN_TOKEN_FILE}`);
 log(`protocol version: ${PROTOCOL_VERSION}`);
 log(`accounts: ${!ACCOUNTS_ENABLED ? "OFF (NASTY_ACCOUNTS_ENABLED=0)" : (accountsConfigured() ? "on, Apple audiences configured" : "on but Apple is not configured yet - /account/* answers 503")}`);
