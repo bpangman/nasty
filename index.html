@@ -74,6 +74,14 @@
                     the full loading/offline-fallback state machine. Local nasty-stats is now used
                     ONLY as a last-resort fallback when the shared board has never once been
                     reachable this session, and the card says so in words when it is.
+                    v0.48 (Blake: "if online mode is account only, it should be greyed out and have
+                    a message... until you're signed in on the menu page"): #btnOnline is now
+                    genuinely disabled (not just dimmed) whenever tapping it would only detour into
+                    requireAccountThen()'s (§ NET) sign-in gate, with a short sentence in
+                    #onlineGateNote explaining why - see renderOnlineGate(), right next to
+                    isAccountReady(), for the four states (checking / ready / needs sign-in /
+                    accounts unavailable here) and why it's called from inside renderYouCard()
+                    rather than a second call site.
     § NET ......... online multiplayer: WS client, host/join lobby UI, deterministic
                     lockstep (server in /server, see HANDOFF.md "Online multiplayer").
                     v0.42: ACCOUNTS-ONLY - no guest join anymore. requireAccountThen() gates
@@ -86,6 +94,10 @@
                     "Loading..." state instead of possibly flashing a wrong "No games yet" while
                     fetchGlobalLeaderboard() is still in flight - see LB_FETCH_PENDING/
                     LB_FETCH_FAILED, defined right next to fetchGlobalLeaderboard() itself.
+                    v0.48: the account requirement this gate enforces is now shown UP FRONT on the
+                    menu too, not just discovered by tapping - see renderOnlineGate(), § MENU. This
+                    function's own logic is completely unchanged; the button simply stops being
+                    clickable when it would only land here anyway.
     § ACCOUNT ..... the ADMIN button's panel: rules, sound, table speed, name, connection.
                     v0.42: chosenName() is "signed in -> the account's name; guest -> the
                     seat's own stock name" - guests no longer have a persistent nickname, so
@@ -753,6 +765,14 @@ button{font:inherit;cursor:pointer}
   margin:10px 2px 2px;min-height:32px}
 .tipLabel{display:inline-block;font-style:normal;font-weight:700;font-size:10.5px;
   letter-spacing:.10em;text-transform:uppercase;color:#a9d2b5;opacity:.85;margin-right:5px}
+/* 2026-07-28 (v0.48) - the up-front explanation for a greyed-out Online play button, painted by
+   renderOnlineGate() (§ MENU). Same quiet-caption look .tipLine/.youStatsNote already use (small,
+   italic, muted green) rather than a warning color - the point is to inform, not to scold. Plain
+   .hidden (display:none, no reserved height) when there is nothing to say, unlike #teamNote's
+   always-reserved min-height, because this line is the exception (most signed-in visits show
+   nothing here at all) rather than something that toggles between two always-present states. */
+.onlineGateNote{font-size:12.5px;color:#a9d2b5;font-style:italic;line-height:1.4;text-align:center;
+  margin:8px 2px 2px}
 .bigBtns{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:18px}
 /* v0.26 item 2: the HOST speed picker only (#hostSpeedOverlay's #hostSpeedBtns) - a real 2x2
    grid instead of .bigBtns' generic flex-wrap column, per Blake's ask. Deliberately NOT
@@ -2299,12 +2319,21 @@ button{font:inherit;cursor:pointer}
       <button class="btn primary" id="btnStart">Start game</button>
       <button class="btn ghost" id="btnOnline">Online play</button>
     </div>
+    <!-- 2026-07-28 (v0.48, Blake: "If online mode is account only, it should be greyed out and
+         have a message around it that explains that until you're signed in on the menu page.")
+         Sits right under the button it explains, same "quiet caption under the control" pattern
+         #teamNote already uses under Players/Game type. Filled in and shown/hidden entirely by
+         renderOnlineGate() (§ MENU, right next to isAccountReady()) - never hand-edited past this
+         empty shell. Starts hidden: the common real-world case for anyone who actually reaches
+         this screen signed in is no message at all, and an empty italic line with no text would
+         read as a stray blank row rather than nothing. -->
+    <div class="onlineGateNote hidden" id="onlineGateNote"></div>
     <div class="bigBtns">
       <button class="btn ghost" id="btnRules">How to play</button>
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.47</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.48</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -10167,6 +10196,7 @@ function renderYouCard(){
   // moment refreshAccount() resolves either way (§ ACCOUNT SIGN-IN's boot block).
   if(ACCT_BOOT_CHECKING){
     box.innerHTML=`<div class="youCardChecking">Checking your account...</div>`;
+    renderOnlineGate();   // v0.48: the Online play button gets the same honest "checking" state, not a guess
     return;
   }
   if(isAccountReady()){
@@ -10202,6 +10232,10 @@ function renderYouCard(){
       b.addEventListener('click',ev=>ev.stopPropagation());
     }
   }
+  // v0.48: the Online play button/#onlineGateNote rides along on every renderYouCard() repaint -
+  // see renderOnlineGate()'s own header comment, right next to isAccountReady(), for why this is
+  // the one and only call site rather than a second hand-maintained list.
+  renderOnlineGate();
 }
 
 /* ======================== § MENU: rotating tip line (v0.44) ========================
@@ -10537,6 +10571,66 @@ let ACCT_BOOT_CHECKING=false;
    consolidation exists so the NEXT session has one obvious place to look, not five. */
 function isSignedIn(){ return !!(ACCT&&ACCT.uid); }
 function isAccountReady(){ return isSignedIn()&&!!ACCT.gameName; }
+/* ======================== § MENU: the Online play button's up-front gate (v0.48) ========================
+   2026-07-28 (Blake, verbatim): "If online mode is account only, it should be greyed out and have
+   a message around it that explains that until you're signed in on the menu page." Before this,
+   #btnOnline looked fully available and requireAccountThen() (§ NET) only revealed the account
+   requirement AFTER a tap. Now the button is a REAL disabled <button> whenever tapping it would
+   only ever detour into a sign-in gate anyway - `disabled` means it cannot be clicked, tabbed to,
+   or activated from the keyboard, and is announced as disabled by a screen reader for free; no
+   separate "looks disabled" CSS class was needed, since .btn:disabled (§ STYLE) already dims it -
+   plus a short sentence in #onlineGateNote (see its own markup comment for placement) saying why.
+   Four states, not the three requireAccountThen() itself distinguishes - the extra one
+   (ACCT_BOOT_CHECKING) matters here because this repaints on every boot before the real account
+   answer is known, and a signed-in player must never see a false "sign in" state flash for that
+   split second - the exact class of bug v0.46 fixed for the you card itself, so it gets the same
+   answer, not a new one:
+     - boot check still in flight (ACCT_BOOT_CHECKING): disabled, "Checking your account..." -
+       never guesses either way.
+     - isAccountReady(): the only state where tapping Online play would not detour anywhere at
+       all - button enabled, no message.
+     - accountsAvailableHere() but not ready (signed out, or the ancient signed-in-no-nickname
+       edge case - see requireAccountThen()'s own comment): disabled, and the sentence points at
+       the you card's own Sign in button, which sits right above this one whenever it's showing.
+     - !accountsAvailableHere() (a plain browser - no native Sign in with Apple here): disabled,
+       and the words say plainly that online play is an iPhone-app thing - never "sign in with
+       Apple", which would be advice this device cannot act on. Matches the wording
+       requireAccountThen()'s own toast and #comingSoon's csNote already use for the same reason.
+   Deliberately called from INSIDE renderYouCard() (every branch, including its early
+   ACCT_BOOT_CHECKING return) rather than given its own separate call site anywhere - the whole
+   point of this pass is that the button must never lag behind the account state, and
+   renderYouCard() is already the proven single choke point every sign-in/sign-out/boot-resolve
+   path repaints through (boot's refreshAccount().then()/.catch(), accountSignIn(),
+   accountSignOut(), accountDelete(), submitNicknameGate(), youCardSignIn(), renderMenu()). Riding
+   along inside it means this can never reproduce the v0.46 class of bug (a second, hand-maintained
+   repaint call site that a future change eventually forgets to add). */
+function renderOnlineGate(){
+  const btn=$('btnOnline'), note=$('onlineGateNote');
+  if(!btn||!note)return;
+  if(ACCT_BOOT_CHECKING){
+    btn.disabled=true;
+    btn.setAttribute('aria-label','Online play - checking your account');
+    note.textContent='Checking your account...';
+    note.classList.remove('hidden');
+    return;
+  }
+  if(isAccountReady()){
+    btn.disabled=false;
+    btn.removeAttribute('aria-label');
+    note.textContent='';
+    note.classList.add('hidden');
+    return;
+  }
+  btn.disabled=true;
+  if(accountsAvailableHere()){
+    btn.setAttribute('aria-label','Online play - sign in above to unlock it');
+    note.textContent='Online play needs an account - sign in above to get one.';
+  }else{
+    btn.setAttribute('aria-label','Online play - only available in the iPhone app');
+    note.textContent='Online play happens right in the iPhone app.';
+  }
+  note.classList.remove('hidden');
+}
 // Which seat is "me" on this phone. -1 = we are not in a game (or online but not seated yet).
 function accountSeatIndex(){
   if(!G||!G.seats)return -1;
@@ -11375,7 +11469,18 @@ function sendInvite(link){
        is remembered in ONLINE_PENDING and resumed automatically - room code and all - the moment
        sign-in completes (see welcomeSignIn(), § WELCOME); choosing "Continue as a guest" instead
        drops it for good (chooseGuest(), § WELCOME) rather than firing it later against the
-       player's wish. */
+       player's wish.
+   v0.48 (Blake: the account requirement should be visible up front, not just discovered by
+   tapping): $('btnOnline') below is now a real disabled <button> (renderOnlineGate(), § MENU)
+   whenever this function would do anything other than run `cont` immediately - a disabled button
+   never fires `onclick` at all, so this function's own logic is completely untouched. In practice
+   that only ever leaves the "already signed in WITH a name" branch reachable through a real tap
+   now; the "signed in but somehow without a name yet" defensive branch just above is (as its own
+   comment already said) expected to be unreachable through any live flow, and renderOnlineGate()
+   correctly keeps the button disabled for it too (it checks isAccountReady(), the same "fully set
+   up" bar this function does) - that account still resolves itself automatically at boot via the
+   nickname gate (see the boot-time refreshAccount() comment, § ACCOUNT SIGN-IN), it just no longer
+   has this button as an alternate way in, which it never needed to be. */
 let ONLINE_PENDING=null;   // the online action waiting on a sign-in (or a nickname), or null
 function requireAccountThen(cont){
   if(!accountsAvailableHere()){
