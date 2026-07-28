@@ -82,6 +82,13 @@
                     isAccountReady(), for the four states (checking / ready / needs sign-in /
                     accounts unavailable here) and why it's called from inside renderYouCard()
                     rather than a second call site.
+                    v0.49: the leaderboard overlay (§ LEADERBOARD, near § ADMIN) gained a 4th tab,
+                    "Total" (Solo+Teams combined, sits between Teams and KOs) - renderLbTotal()
+                    reuses myCombinedRecord() (the same helper paintYouCardStats() already feeds
+                    the you card from) for every row rather than a second summation, so the you
+                    card and this tab can never disagree for the same name. See renderLb()'s own
+                    comment, right above renderLbTotal(), for why it deliberately does NOT apply
+                    the Solo/Teams branch's Math.max(games,wins) clamp.
     § NET ......... online multiplayer: WS client, host/join lobby UI, deterministic
                     lockstep (server in /server, see HANDOFF.md "Online multiplayer").
                     v0.42: ACCOUNTS-ONLY - no guest join anymore. requireAccountThen() gates
@@ -152,6 +159,13 @@
                     bypasses it); #autotest/#autotest6 and ?preview=1 also always bypass it. The
                     QR on this screen is a LOUD, DATED PLACEHOLDER (§ CAPACITOR) - do not ship a
                     real launch without replacing it, see that comment and HANDOFF.md "v0.43".
+                    v0.49 BUG FIX (Blake: "badge/fonts look different, Est. 1993 is overlapping"):
+                    the `.sign`/`.tag` badge was already genuinely shared with #menu (proven, not
+                    just claimed - see that CSS comment); the real drift was `.estTop`'s
+                    margin-top being `#menu`-scoped only, so this screen's copy of the same markup
+                    got no top margin at all and overlapped the sign. Now a single un-scoped
+                    `.estTop` rule (§ STYLE, near #menu) governs both screens. Also widened the
+                    QR-to-caption gap (`.csQrLabel` margin-top 10px -> 20px). See HANDOFF.md "v0.49".
     Autotest: open with #autotest (4p FFA all-CPU) or #autotest6 (6p teams) - fast-forwards a full game.
     Preview the real site while the gate is up: append ?preview=1 to the URL (v0.43).
 
@@ -534,7 +548,17 @@ button{font:inherit;cursor:pointer}
 
 /* ---------- Menu ---------- */
 #menu{position:fixed;inset:0;overflow-y:auto;padding:calc(26px + env(safe-area-inset-top)) 16px 60px;text-align:center}
-#menu .estTop{margin-top:9px;font-size:11px;letter-spacing:.24em;color:#9ec7aa;text-transform:uppercase}
+/* v0.49 (2026-07-28, Blake: "Est. 1993 needs more space from the badge, it's getting overlapped"):
+   this rule used to be scoped `#menu .estTop` ONLY - #comingSoon (§ COMING SOON) reuses the exact
+   same `<div class="estTop">Est. 1993</div>` markup but, because the selector never matched
+   outside #menu, it rendered with ZERO margin-top there and visibly overlapped the road-sign
+   badge above it (proven with getBoundingClientRect() during this session's testing: the sign's
+   bottom edge sat below the estTop's top edge by several px at 390px wide). Un-scoped to a plain
+   `.estTop` rule so every screen that uses this class gets the identical spacing and can never
+   drift apart again the way `#menu`-only scoping just did - and the value itself is bumped
+   9px -> 16px so there is real daylight under the sign's slightly-rotated bottom corner, not just
+   the bare minimum that happened to avoid touching. */
+.estTop{margin-top:16px;font-size:11px;letter-spacing:.24em;color:#9ec7aa;text-transform:uppercase}
 #menu .tag{margin:14px auto 22px;max-width:420px;color:#cfe8d6;font-size:15px;line-height:1.5}
 /* v0.9 refinement: "Resume Saved Game" tile - a distinct full-width row ABOVE the main
    Start/Online buttons, only shown when a save exists (see updateMenuResumeButtons). */
@@ -2050,7 +2074,15 @@ button{font:inherit;cursor:pointer}
    shape as #menu (fixed, felt background inherited from body, the same .sign badge and .tag
    styling #menu already uses) rather than an overlay stacked on anything - the menu/game are
    never rendered while this is up (see the boot sequence at the bottom of this file), so no
-   design token is invented here, only reused. */
+   design token is invented here, only reused.
+   v0.49 (Blake: "website appears to use a different Nasty badge... and the fonts are different"):
+   investigated with real getBoundingClientRect()/getComputedStyle() reads, not by eye - the road
+   sign (`.sign`/`.sign b`) and `.tag` were ALREADY the literal same shared rule #menu uses (font
+   family/weight/size came back byte-identical in testing), so there was no badge/font drift to
+   fix there. The genuine drift was `.estTop`: that rule was accidentally scoped `#menu .estTop`
+   only, so this screen's copy of the same markup silently got margin-top:0 and visibly overlapped
+   the sign - see `.estTop`'s own comment (§ STYLE, near #menu) for the fix, which un-scopes it so
+   both screens are governed by one rule that cannot drift apart again. */
 #comingSoon{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;
   justify-content:center;text-align:center;overflow-y:auto;-webkit-overflow-scrolling:touch;
   padding:calc(26px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom))}
@@ -2063,7 +2095,9 @@ button{font:inherit;cursor:pointer}
   width:132px;height:132px;box-shadow:0 10px 28px rgba(0,0,0,.4),inset 0 2px 0 rgba(255,255,255,.4);
   display:flex;align-items:center;justify-content:center}
 #comingSoon .csQrCard img{width:100%;height:100%;display:block}
-#comingSoon .csQrLabel{margin-top:10px;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:#9ec7aa}
+/* v0.49 (Blake: "add more space between the QR and the 'scan for the app store' font"):
+   10px -> 20px. */
+#comingSoon .csQrLabel{margin-top:20px;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:#9ec7aa}
 #comingSoon .csLinks{margin-top:34px;font-size:13px;color:#7fa88c}
 #comingSoon .csLinks a{color:#a9d2b5;text-decoration:underline;text-underline-offset:3px}
 #comingSoon .csLinks span{margin:0 10px;opacity:.6}
@@ -2333,7 +2367,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.48</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.49</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -2520,10 +2554,18 @@ button{font:inherit;cursor:pointer}
     <!-- 2026-07-24 (Blake's item 9): 3rd tab, "KOs" - lifetime knockouts dealt/suffered, see
          renderLbKo() below. Same .seg visual style as Solo/Teams, just one more button in the
          same flex row - "KOs" kept deliberately short (not "Knockouts") so 3 tabs fit as
-         comfortably on a narrow phone as 2 did (see .seg's CSS, § STYLE). -->
+         comfortably on a narrow phone as 2 did (see .seg's CSS, § STYLE).
+         v0.49: a 4th tab, "Total" - Solo+Teams combined, same points ranking the you card (§ MENU)
+         already shows. Sits BETWEEN Teams and KOs on purpose: it's still a points/wins/games tab
+         like Solo/Teams (just the combined view of the same two), while KOs is a genuinely
+         different, non-competitive "fun stat" pair that was always meant to read as its own last
+         category (see renderLbKo()'s own comment) - moving it earlier would blur that line. .segs
+         already wraps onto a 2nd row on its own (flex-wrap:wrap, § STYLE) if 4 buttons ever don't
+         fit one line on a narrow phone, so no new CSS was needed for the 4th button. -->
     <div class="segs" style="margin-bottom:8px">
       <button class="seg on" id="lbTabSolo">Solo</button>
       <button class="seg" id="lbTabTeams">Teams</button>
+      <button class="seg" id="lbTabTotal">Total</button>
       <button class="seg" id="lbTabKo">KOs</button>
     </div>
     <div id="lbBody"></div>
@@ -11903,12 +11945,25 @@ function mergeQueuedIntoGlobal(global,queue){
    local render and the fetchGlobalLeaderboard().then() upgrade - so KOs gets the identical
    "show local instantly, then upgrade to the shared board" treatment Solo/Teams already have)
    but delegates to its own renderLbKo() below rather than reusing the Games/Wins/Win%/Points
-   shape, since knockouts are a genuinely different pair of numbers, not another mode filter. */
+   shape, since knockouts are a genuinely different pair of numbers, not another mode filter.
+   2026-07-28 (v0.49): a 4th tab, "Total" (lbTab==='total') - Solo+Teams combined, i.e. exactly
+   "how am I doing" rather than a mode-specific slice of it. Rather than write a second summation
+   next to the Solo/Teams one above (which would inevitably drift the way #comingSoon's .estTop
+   just proved a "near-copy" can), this calls myCombinedRecord() - the SAME helper the you card's
+   paintYouCardStats() already uses (§ MENU) - for every name, so a player's Total row and their
+   you-card numbers are read from one shared function and can never disagree. One consequence,
+   deliberate: myCombinedRecord() does NOT apply the Math.max(games,wins) defensive clamp the
+   Solo/Teams branch below uses on its own hand-rolled sums - adding that clamp here would be
+   exactly the kind of "subtly different summation" this was written to avoid, and it would mean
+   the Total tab could show a different Games number than the you card for the same data. Ranked
+   the same way rankAmong() (the you card's own rank line) already ranks: combined points desc,
+   wins desc, games asc. */
 let lbTab='solo';
 let lbLastStats={};
 function renderLb(st){
   lbLastStats=st;
   if(lbTab==='ko'){ renderLbKo(st); return; }
+  if(lbTab==='total'){ renderLbTotal(st); return; }
   const names=Object.keys(st);
   const v=(n,k)=>st[n][k]||0;
   const isTeam=lbTab==='teams';
@@ -11930,6 +11985,27 @@ function renderLb(st){
     <th>Games</th><th>Wins</th><th>Win%</th><th>Points</th></tr>`+
     active.map(n=>`<tr><td>${esc(n)}</td><td>${games(n)}</td><td>${wins(n)}</td>
       <td>${pct(n)}</td><td>${pts(n)}</td></tr>`).join('')+`</table></div>`;
+}
+// v0.49: the Total tab - see renderLb()'s own comment just above for why this reuses
+// myCombinedRecord() (§ MENU) rather than a second hand-rolled sum. Same table shape as Solo/
+// Teams (Player/Games/Wins/Win%/Points), just fed from the combined record instead of one
+// mode-family's own keys.
+function renderLbTotal(st){
+  const names=Object.keys(st);
+  const rec=n=>myCombinedRecord(st,n);
+  const pct=n=>{ const r=rec(n); return r.games?Math.round(r.wins/r.games*100)+'%':'-'; };
+  const active=names.filter(n=>rec(n).games>0);
+  if(!active.length){
+    $('lbBody').innerHTML=LB_FETCH_PENDING?lbLoadingHtml()
+      :LB_FETCH_FAILED?lbUnreachableHtml()
+      :`<p>No games yet - go play one!</p>`;
+    return;
+  }
+  active.sort((a,b)=>rec(b).pts-rec(a).pts||rec(b).wins-rec(a).wins||rec(a).games-rec(b).games);
+  $('lbBody').innerHTML=`<div class="lbScroll"><table class="lbTable"><tr><th>Player</th>
+    <th>Games</th><th>Wins</th><th>Win%</th><th>Points</th></tr>`+
+    active.map(n=>`<tr><td>${esc(n)}</td><td>${rec(n).games}</td><td>${rec(n).wins}</td>
+      <td>${pct(n)}</td><td>${rec(n).pts}</td></tr>`).join('')+`</table></div>`;
 }
 // 2026-07-24 item 9: the KOs tab. "KOs" = pegs this player has sent back to base (hkoDealt),
 // "KO'd" = times one of THEIR pegs got sent back (hkoTaken), "Ratio" = KOs per KO'd - the same
@@ -12026,18 +12102,22 @@ function buildGameKoTableHtml(){
 function updateLbCaption(){
   $('lbCaption').textContent=lbTab==='ko'
     ?"KOs = tees you've sent back to base. KO'd = times your own tee got sent back. Ratio = KOs per KO'd (Perfect = never been KO'd yet) - people only, CPUs never show up here."
+    :lbTab==='total'
+    ?'Solo + Teams combined - the same total the you card on the menu shows. Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a person - people only, CPUs never show up here.'
     :'Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a person - people only, CPUs never show up here.';
 }
 function setLbTab(tab){
   lbTab=tab;
   $('lbTabSolo').classList.toggle('on',tab==='solo');
   $('lbTabTeams').classList.toggle('on',tab==='teams');
+  $('lbTabTotal').classList.toggle('on',tab==='total');
   $('lbTabKo').classList.toggle('on',tab==='ko');
   updateLbCaption();
   renderLb(lbLastStats);
 }
 $('lbTabSolo').onclick=()=>setLbTab('solo');
 $('lbTabTeams').onclick=()=>setLbTab('teams');
+$('lbTabTotal').onclick=()=>setLbTab('total');
 $('lbTabKo').onclick=()=>setLbTab('ko');
 // 2026-07-27 (v0.44): pulled out of $('btnLb').onclick's own arrow function, byte-for-byte
 // unchanged at the time, so the menu's "Leaderboard" button and (originally) the you card's own
@@ -12047,7 +12127,8 @@ $('lbTabKo').onclick=()=>setLbTab('ko');
 function openLeaderboardOverlay(){
   openOverlay('lbOverlay');
   lbTab='solo';   // v0.21: Solo is always the tab shown when the leaderboard is (re)opened
-  $('lbTabSolo').classList.add('on'); $('lbTabTeams').classList.remove('on'); $('lbTabKo').classList.remove('on');
+  $('lbTabSolo').classList.add('on'); $('lbTabTeams').classList.remove('on');
+  $('lbTabTotal').classList.remove('on'); $('lbTabKo').classList.remove('on');
   updateLbCaption();
   // v0.45: a fresh "we don't know yet" state every time this screen opens - see
   // LB_FETCH_PENDING/LB_FETCH_FAILED's own header comment, right above fetchGlobalLeaderboard().
