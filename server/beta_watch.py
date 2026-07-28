@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '17c5b103-f6a1-4157-94fa-505319af29b3'
+BUILD_SUBMISSION_ID = 'bb17bb2f-f5ad-4410-be2f-fd6261664408'
 
 
 def current_build():
@@ -101,12 +101,13 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p>This one is about the setup screen.</p>
+<p>This one is a set of fixes from your own testing.</p>
 <p>What is in this one:</p>
 <ul>
-<li><b>Picking bots moved.</b> There used to be a whole row on the setup screen just for choosing each computer opponent's difficulty. That row is gone now. Instead, when you tap "Pick your seat," every bot sitting at the table has its own easy, medium, or hard picker right there next to its name, so you choose your own seat and set up the bots in the same spot, in one step.</li>
-<li><b>The menu got a new card up top with you on it.</b> If you are signed in, it shows your color, your name, and your real record, games, wins, and points, and tapping it takes you straight to the family leaderboard. If you have not signed in yet, it gently invites you to instead.</li>
-<li><b>A "what's new in this update" row and a rotating tip.</b> The row you are reading about right now also lives right in the app, and the menu shows a different quick tip about the game each time you open it.</li>
+<li><b>The guest name mix up is fixed.</b> Before, if you played as a guest it could show you as one of the stock names, like Ginny, at the top, as if that was who you'd signed in as. Now it correctly says "Guest" everywhere. Your seat at the table still shows its normal name, that part was never wrong, it was just the "who am I" label that was confused.</li>
+<li><b>The play tip is labelled now.</b> The little rotating hint on the menu has a small "Tip" heading so it does not look out of place.</li>
+<li><b>Tapping your name card opens settings, not the leaderboard.</b> The Leaderboard button on the menu still opens the leaderboard same as always.</li>
+<li><b>The leaderboard shows it is loading.</b> If it takes a second to reach the server, it now says "Loading..." instead of sitting there looking stuck or blank.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -121,7 +122,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - CPU picks moved into the seat popup', body], check=True)
+                    f'NASTY: build {BUILD} is live - the guest name mix up is fixed', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
