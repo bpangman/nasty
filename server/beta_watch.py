@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = 'bb17bb2f-f5ad-4410-be2f-fd6261664408'
+BUILD_SUBMISSION_ID = 'f53eab20-166f-492c-8ee3-40c80abd7fc3'
 
 
 def current_build():
@@ -104,10 +104,9 @@ try:
 <p>This one is a set of fixes from your own testing.</p>
 <p>What is in this one:</p>
 <ul>
-<li><b>The guest name mix up is fixed.</b> Before, if you played as a guest it could show you as one of the stock names, like Ginny, at the top, as if that was who you'd signed in as. Now it correctly says "Guest" everywhere. Your seat at the table still shows its normal name, that part was never wrong, it was just the "who am I" label that was confused.</li>
-<li><b>The play tip is labelled now.</b> The little rotating hint on the menu has a small "Tip" heading so it does not look out of place.</li>
-<li><b>Tapping your name card opens settings, not the leaderboard.</b> The Leaderboard button on the menu still opens the leaderboard same as always.</li>
-<li><b>The leaderboard shows it is loading.</b> If it takes a second to reach the server, it now says "Loading..." instead of sitting there looking stuck or blank.</li>
+<li><b>Being signed in now actually shows as signed in.</b> Before, the menu could keep asking you to sign in with Apple even after you already had. Now it correctly shows you as signed in as soon as the app checks.</li>
+<li><b>The first "welcome" screen is gone.</b> The app opens straight to the main menu now. You are simply playing as a guest until you choose to sign in.</li>
+<li><b>The "what's new in this update" note is gone.</b> TestFlight already tells you what changed when you update, so the menu no longer repeats it.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -122,7 +121,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - the guest name mix up is fixed', body], check=True)
+                    f'NASTY: build {BUILD} is live - being signed in now shows up right', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
