@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = 'abc8cca2-7bf0-4879-b63c-cd4ba9bb6d27'
+BUILD_SUBMISSION_ID = '39897271-a507-4440-a48d-bbb81bfbc5b8'
 
 
 def current_build():
@@ -104,7 +104,8 @@ try:
 <p>This one is a fix from your own feedback.</p>
 <p>What is in this one:</p>
 <ul>
-<li><b>The Online play button now tells you up front if you need to sign in.</b> Before, you could tap Online play and only then find out you needed an account. Now, if you are not signed in, the button is greyed out with a short note right under it explaining why, and it turns on the moment you sign in above it. If you are already signed in, nothing changes for you.</li>
+<li><b>A new Total tab on the leaderboard.</b> It combines your Solo and Teams stats into one combined ranking, right between the Teams and KOs tabs.</li>
+<li><b>The coming soon page on the website got a small polish.</b> "Est. 1993" no longer overlaps the NASTY sign, and there is more breathing room between the QR code and its caption.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -119,7 +120,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - Online play shows the sign-in requirement up front', body], check=True)
+                    f'NASTY: build {BUILD} is live - a new Total leaderboard tab', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
