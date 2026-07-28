@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = 'f53eab20-166f-492c-8ee3-40c80abd7fc3'
+BUILD_SUBMISSION_ID = '8a210745-3b6a-409d-9b32-a07b58ca9d92'
 
 
 def current_build():
@@ -104,9 +104,8 @@ try:
 <p>This one is a set of fixes from your own testing.</p>
 <p>What is in this one:</p>
 <ul>
-<li><b>Being signed in now actually shows as signed in.</b> Before, the menu could keep asking you to sign in with Apple even after you already had. Now it correctly shows you as signed in as soon as the app checks.</li>
-<li><b>The first "welcome" screen is gone.</b> The app opens straight to the main menu now. You are simply playing as a guest until you choose to sign in.</li>
-<li><b>The "what's new in this update" note is gone.</b> TestFlight already tells you what changed when you update, so the menu no longer repeats it.</li>
+<li><b>Your stats on the menu now match the leaderboard, including online games.</b> Before, the number on your name card could be wrong if you played online games - it was only reading this phone's own local numbers, which never counted online games at all. Now it reads the same real numbers the family leaderboard shows.</li>
+<li><b>If your phone can't reach the family board, it says so honestly</b> instead of guessing at a number.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -121,7 +120,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - being signed in now shows up right', body], check=True)
+                    f'NASTY: build {BUILD} is live - your stats now match the leaderboard', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
