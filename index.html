@@ -61,6 +61,19 @@
                     and everything that tracked whether it had been seen are deleted, not hidden.
                     The you card and the tip line are unaffected and now sit a little closer
                     together where the row used to be between them.
+                    v0.47 BUG FIX (Blake: "the stats in my nameplate aren't accurate or at least
+                    don't match the leaderboard"): renderYouCard() used to compute its numbers
+                    from loadStats() - this PHONE's own local "nasty-stats" - which is missing
+                    every online game (recordWin() never writes locally for NET.online, see its
+                    own comment further down this file), every OTHER device the same account has
+                    played on, and can go stale across a season reset this device hasn't heard
+                    about yet. It now reads from the SAME merged shared board the leaderboard
+                    overlay renders (fetchGlobalLeaderboard()+mergeQueuedIntoGlobal(), reused
+                    rather than reinvented) via the new paintYouCardStats()/YOU_CARD_BOARD cache,
+                    right after renderYouCard() itself - see that function's header comment for
+                    the full loading/offline-fallback state machine. Local nasty-stats is now used
+                    ONLY as a last-resort fallback when the shared board has never once been
+                    reachable this session, and the card says so in words when it is.
     § NET ......... online multiplayer: WS client, host/join lobby UI, deterministic
                     lockstep (server in /server, see HANDOFF.md "Online multiplayer").
                     v0.42: ACCOUNTS-ONLY - no guest join anymore. requireAccountThen() gates
@@ -711,9 +724,14 @@ button{font:inherit;cursor:pointer}
 /* Knockouts only ever show up here when the real number is nonzero - see myCombinedRecord(),
    § MENU - so this line is simply absent for a brand-new account, never a fake "0 dealt". */
 .youKo{font-size:12px;color:#e0c86a;margin-top:2px}
+/* 2026-07-27 (v0.47 bug fix): the honest label for the ONE state where this card is showing
+   this-phone-only numbers instead of the real shared board - see paintYouCardStats()'s header
+   comment, § MENU. Empty and invisible (no reserved height) every other time - a caption, not a
+   permanent fixture of the card. */
+.youStatsNote{font-size:11.5px;color:#a9d2b5;font-style:italic;margin-top:2px}
 /* The one number in this card that needs the network. Starts empty and STAYS empty (not a
    spinner, not an error) unless/until fetchGlobalLeaderboard() actually answers - see
-   renderYouCard()'s header comment, § MENU, for why that is a deliberate silence, not a bug. */
+   paintYouCardStats()'s header comment, § MENU, for why that is a deliberate silence, not a bug. */
 .youRank{font-size:12.5px;color:var(--gold);font-weight:700;margin-top:4px;min-height:15px}
 /* v0.45: the guest card is now a tap target too (same Admin destination as the signed-in card
    above) - cursor:pointer says so; the Sign in button inside stops its own click from bubbling up
@@ -2178,12 +2196,14 @@ button{font:inherit;cursor:pointer}
   <!-- 2026-07-27 (v0.44, Blake: "add some more stuff to the menu page though to fill it out.
        Think of stuff that should be there and add it!") - THE most important addition, per
        Blake's own priority order. Filled in entirely by renderYouCard() (§ MENU) - never
-       hand-edited past this empty shell. Signed in: your avatar, name, and your REAL record
-       read straight off this device's own local nasty-stats (loadStats()) - see that function's
-       header comment for exactly which keys feed which number, and why a rank needs the network
-       and everything else does not. Signed out (guest): a plain nudge that signing in is what
-       puts you on the family leaderboard, since v0.42 made online play and the leaderboard both
-       accounts-only - this card is now the main place a guest learns that. -->
+       hand-edited past this empty shell. Signed in: your avatar, name, and your REAL record.
+       v0.47 BUG FIX: that record now comes from the SAME shared board the leaderboard overlay
+       shows (fetchGlobalLeaderboard()+mergeQueuedIntoGlobal(), via paintYouCardStats()) rather
+       than this device's own local nasty-stats - see renderYouCard()'s header comment for the
+       full story of why those two used to disagree and the loading/offline states this replaced
+       them with. Signed out (guest): a plain nudge that signing in is what puts you on the
+       family leaderboard, since v0.42 made online play and the leaderboard both accounts-only -
+       this card is now the main place a guest learns that. -->
   <div class="youCard" id="youCard"></div>
   <!-- 2026-07-27 (v0.46): the "What's new" row that used to sit here (v0.44-v0.45) is gone -
        Blake: "the family gets frequent TestFlight builds and has no idea what changed" turned out
@@ -2284,7 +2304,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnLb">Leaderboard</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.46</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.47</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -9938,22 +9958,40 @@ $('btnStart').onclick=()=>openOfflineSeatPicker();
    asked for, and by his own priority order the most important one.
 
    Signed in: your avatar (reusing accountColors()/accountInitial(), § ACCOUNT), your account
-   name, and your REAL record - read straight off loadStats() (§ ~LEADERBOARD, this device's own
-   local "nasty-stats"), keyed by ACCT.gameName exactly the way recordWin()/buildResultEntries()
-   already write it. Nothing here is invented: myCombinedRecord() below only ever reads the
-   hg4s/hw4s/hg6s/hw6s/hg4t/hw4t/hg6t/hw6t/hptsS/hptsT/hkoDealt/hkoTaken keys those functions
-   already write, and if there is no row at all yet for this name, the card says so in words
-   ("No games recorded yet") rather than showing a fabricated 0/0/0. Knockouts (hkoDealt/
-   hkoTaken) only ever appear when at least one is genuinely nonzero - same "don't show a stat
-   nobody's touched" rule renderLbKo()'s own `active` filter already follows.
-   The rank line ("3rd on the family board") is the ONE number that needs the network, so it is
-   fetched the same "show what we already know instantly, upgrade if the server answers" way the
-   leaderboard overlay itself works (fetchGlobalLeaderboard()/mergeQueuedIntoGlobal(), defined
-   further down this file) - ranked by COMBINED solo+teams points (rankAmong()), since "how am I
-   doing" is one question, not two tabs. If the fetch fails, is slow, or this device is offline,
-   the rank line is simply never written - there is no spinner and nothing that can look stuck,
-   because every OTHER number on the card is already showing, synchronously, with nothing left
-   to wait on.
+   name, and your REAL record.
+   2026-07-27 (v0.47 BUG FIX - Blake: "the stats in my nameplate aren't accurate or at least don't
+   match the leaderboard"). ROOT CAUSE: from v0.44 through v0.46 this card's numbers came straight
+   off loadStats() - this PHONE's own local "nasty-stats" - while the leaderboard overlay
+   (openLeaderboardOverlay(), § LEADERBOARD) has always shown the SHARED SERVER board
+   (fetchGlobalLeaderboard()+mergeQueuedIntoGlobal()). Those are not merely "different by design" -
+   local nasty-stats is structurally missing real games:
+     - EVERY online multiplayer game, always. recordWin() (§ LEADERBOARD, below) explicitly does
+       `if(NET.online)return;` - an online result is recorded by the SERVER the instant the game
+       ends (finishGame(), server.js/server.ts), and this client never writes anything local for
+       it. A family that plays online - the app's main mode - would never see those games on this
+       card, permanently, even after playing dozens of them.
+     - any OTHER phone/iPad the same account has ever played solo/pass-and-play on - nasty-stats
+       is per-device localStorage; the shared board is cross-device by definition.
+     - a season reset the device hasn't heard about yet - adoptEpoch() only wipes local
+       nasty-stats when something calls fetchGlobalLeaderboard()/submitSoloResult() and notices a
+       newer epoch, so a device that hasn't opened the leaderboard or finished a solo game since a
+       reset keeps showing pre-reset numbers on the card indefinitely.
+   FIX: the card's numbers now come from paintYouCardStats() (right after this function), which
+   reads the exact same merged board the leaderboard overlay renders - not a second, reimplemented
+   copy of that logic. The two can no longer disagree once both have loaded from the network; see
+   that function's own header comment for the full loading/cache/offline-fallback state machine,
+   including the one case (this session has NEVER reached the shared board even once) where local
+   nasty-stats is still used, honestly labelled, rather than silently presented as the real total.
+   Nothing here is invented either way: myCombinedRecord() only ever reads the
+   hg4s/hw4s/hg6s/hw6s/hg4t/hw4t/hg6t/hw6t/hptsS/hptsT/hkoDealt/hkoTaken keys recordWin()/
+   buildResultEntries() already write, and if there is no row at all yet for this name, the card
+   says so in words ("No games recorded yet") rather than showing a fabricated 0/0/0. Knockouts
+   (hkoDealt/hkoTaken) only ever appear when at least one is genuinely nonzero - same "don't show
+   a stat nobody's touched" rule renderLbKo()'s own `active` filter already follows.
+   The rank line ("3rd on the family board") rides the SAME fetch paintYouCardStats() already made
+   for the numbers above - ranked by COMBINED solo+teams points (rankAmong()), since "how am I
+   doing" is one question, not two tabs. If the shared board has never been reached this session,
+   the rank line is simply never written - there is no spinner and nothing that can look stuck.
    2026-07-27 (v0.45, Blake: "when you're signed in and you click your name plate at the top it
    should bring you to the admin options not the leaderboard") - tapping the card now opens the
    Admin panel (openAccountPanel()), not the leaderboard - the menu already has its own dedicated
@@ -10017,6 +10055,109 @@ async function youCardSignIn(){
   await accountSignIn();
   renderYouCard();
 }
+/* 2026-07-27 (v0.47 bug fix) - the merged-shared-board cache paintYouCardStats() keeps, plus its
+   race guard. See paintYouCardStats()'s own header comment for the full design; this is just the
+   state it lives in.
+     YOU_CARD_BOARD - the last successfully fetched mergeQueuedIntoGlobal(global,queue) result
+       this app session - the SAME shape/source openLeaderboardOverlay() feeds into renderLb(),
+       so a name's row here and its row on the leaderboard overlay are read from byte-identical
+       data. null until the first successful fetch; never cleared back to null afterward (a later
+       failed fetch just leaves the last known-good board in place rather than downgrading a real
+       number to a guess - see the "leave it exactly as it is" branch below).
+     YOU_CARD_LOCAL_FALLBACK - true once this session has had to fall back to THIS PHONE's own
+       local nasty-stats because the shared board has never once been reachable. Lets a repeat
+       render (offline, opening the menu again) show that same honest local-only state instantly
+       instead of flashing "Loading your stats..." every single time.
+     YOU_CARD_SEQ - bumped on every paintYouCardStats() call; a fetch that resolves after a NEWER
+       call has already started (sign-out, a different account, a fast repeat render) checks this
+       before writing the DOM, so a slow, stale response can never clobber a newer one. */
+let YOU_CARD_BOARD=null;
+let YOU_CARD_LOCAL_FALLBACK=false;
+let YOU_CARD_SEQ=0;
+function youStatsLine(rec){
+  return rec.has
+    ?`${rec.games} game${rec.games===1?'':'s'} · ${rec.wins} win${rec.wins===1?'':'s'} · ${rec.pts} point${rec.pts===1?'':'s'}`
+    :'No games recorded yet - play your first one!';
+}
+function youKoLine(rec){
+  return (rec.koDealt||rec.koTaken)?`${rec.koDealt} knockout${rec.koDealt===1?'':'s'} dealt · ${rec.koTaken} taken`:'';
+}
+/* 2026-07-27 (v0.47 bug fix - Blake: "the stats in my nameplate aren't accurate or at least don't
+   match the leaderboard"). See renderYouCard()'s own header comment for the full root-cause
+   writeup; this is the fix itself. Paints (and re-fetches) the three network-dependent lines
+   inside the already-rendered you-card shell: #youStats, #youKo, #youStatsNote, #youRank.
+
+   Three states, in order of preference, NONE of which ever invents a number:
+     1. YOU_CARD_BOARD already known (this session has reached the shared board at least once) -
+        paint from it immediately, synchronously, no loading flash - then quietly re-fetch below
+        to pick up anything that changed (a game just finished elsewhere, a season reset, etc).
+     2. Never reached the board, but already fell back to local once this session
+        (YOU_CARD_LOCAL_FALLBACK) - paint that same honest local-only state again immediately
+        (still labelled), rather than re-flashing "Loading..." on every single menu visit while
+        offline - then still try the network again below in case it has recovered.
+     3. Neither of the above (the very first paint of the session) - "Loading your stats..." with
+        nothing else, while the first fetch is in flight.
+   The fetch itself always runs (unlike the old code, which only bothered when local rec.has was
+   true - which silently skipped ranking/checking entirely for a player whose only games were
+   online, since those never touch local nasty-stats at all - see recordWin()). On resolve:
+     - success: cache the merged board, clear the local-fallback flag, paint the real numbers +
+       KO line + rank from it. This is now byte-for-byte the same source the leaderboard overlay
+       reads, so the two cannot disagree.
+     - failure, but YOU_CARD_BOARD is already set: do nothing further - a transient blip is not
+       worth downgrading a known-good, already-painted number to a guess.
+     - failure, and YOU_CARD_BOARD was never set: fall back to THIS PHONE's local nasty-stats,
+       set YOU_CARD_LOCAL_FALLBACK, and say so in words via #youStatsNote - never silently
+       presented as if it were the shared total. If local ALSO has no record for this name, the
+       card says plainly that the shared board couldn't be reached, rather than the old (and here
+       actively misleading) "No games recorded yet". */
+function paintYouCardStats(name){
+  const seq=++YOU_CARD_SEQ;
+  const statsEl=$('youStats'); if(!statsEl)return;
+  const koEl=$('youKo'), noteEl=$('youStatsNote'), rankEl=$('youRank');
+  if(YOU_CARD_BOARD){
+    const rec=myCombinedRecord(YOU_CARD_BOARD,name);
+    statsEl.textContent=youStatsLine(rec);
+    if(koEl)koEl.textContent=youKoLine(rec);
+    if(noteEl)noteEl.textContent='';
+    const rank=rankAmong(YOU_CARD_BOARD,name);
+    if(rankEl)rankEl.textContent=rank?ordinal(rank)+' on the family board':'';
+  }else if(YOU_CARD_LOCAL_FALLBACK){
+    const rec=myCombinedRecord(loadStats(),name);
+    statsEl.textContent=rec.has?youStatsLine(rec):"Couldn't reach the family board yet - check your connection.";
+    if(koEl)koEl.textContent=youKoLine(rec);
+    if(noteEl)noteEl.textContent=rec.has?"(this phone only - couldn't reach the family board)":'';
+    if(rankEl)rankEl.textContent='';
+  }else{
+    statsEl.textContent='Loading your stats...';
+    if(koEl)koEl.textContent='';
+    if(noteEl)noteEl.textContent='';
+    if(rankEl)rankEl.textContent='';
+  }
+  fetchGlobalLeaderboard().then(g=>{
+    if(seq!==YOU_CARD_SEQ)return;   // superseded by a newer call (sign-out, a different name, a re-render)
+    const s2=$('youStats'); if(!s2)return;   // the card isn't on screen right now
+    const k2=$('youKo'), n2=$('youStatsNote'), r2=$('youRank');
+    if(g){
+      const merged=mergeQueuedIntoGlobal(g,loadSoloQueue());
+      YOU_CARD_BOARD=merged; YOU_CARD_LOCAL_FALLBACK=false;
+      const rec=myCombinedRecord(merged,name);
+      s2.textContent=youStatsLine(rec);
+      if(k2)k2.textContent=youKoLine(rec);
+      if(n2)n2.textContent='';
+      const rank=rankAmong(merged,name);
+      if(r2)r2.textContent=rank?ordinal(rank)+' on the family board':'';
+    }else if(!YOU_CARD_BOARD){
+      YOU_CARD_LOCAL_FALLBACK=true;
+      const rec=myCombinedRecord(loadStats(),name);
+      s2.textContent=rec.has?youStatsLine(rec):"Couldn't reach the family board yet - check your connection.";
+      if(k2)k2.textContent=youKoLine(rec);
+      if(n2)n2.textContent=rec.has?"(this phone only - couldn't reach the family board)":'';
+      if(r2)r2.textContent='';
+    }
+    // else: fetch failed but YOU_CARD_BOARD is already real, known-good data from earlier this
+    // session - leave exactly what's already painted, on purpose (see this function's header).
+  });
+}
 function renderYouCard(){
   const box=$('youCard'); if(!box)return;
   // 2026-07-27 (v0.46 bug fix): while the boot-time account refresh is still in flight on a phone
@@ -10031,34 +10172,19 @@ function renderYouCard(){
   if(isAccountReady()){
     const name=ACCT.gameName;
     const letter=accountInitial(name), colors=accountColors();
-    const st=loadStats();
-    const rec=myCombinedRecord(st,name);
-    const statsTxt=rec.has
-      ?`${rec.games} game${rec.games===1?'':'s'} · ${rec.wins} win${rec.wins===1?'':'s'} · ${rec.pts} point${rec.pts===1?'':'s'}`
-      :'No games recorded yet - play your first one!';
-    const koTxt=(rec.koDealt||rec.koTaken)
-      ?`<div class="youKo">${rec.koDealt} knockout${rec.koDealt===1?'':'s'} dealt · ${rec.koTaken} taken</div>`:'';
     box.innerHTML=`<div class="youCardRow" id="youCardTap" role="button" tabindex="0" aria-label="Open Admin settings">
         <div class="acctAvatar" style="--acctBg:${colors.bg};--acctInk:${colors.ink}">${esc(letter)}</div>
-        <div class="youWho"><b>${esc(name)}</b><div class="youStats">${statsTxt}</div>${koTxt}<div class="youRank" id="youRank"></div></div>
+        <div class="youWho"><b>${esc(name)}</b><div class="youStats" id="youStats"></div><div class="youKo" id="youKo"></div><div class="youStatsNote" id="youStatsNote"></div><div class="youRank" id="youRank"></div></div>
       </div>`;
     const tap=$('youCardTap');
     // 2026-07-27 (v0.45, Blake: "when you're signed in and you click your name plate at the top
     // it should bring you to the admin options not the leaderboard") - was openLeaderboardOverlay.
     // The menu's own "Leaderboard" button is untouched, so the leaderboard is still one tap away.
     if(tap)tap.onclick=openAccountPanel;
-    // The rank needs the network - everything above is already showing, synchronously, real
-    // numbers with nothing waiting on it. Only bother asking at all if there's a real record to
-    // rank in the first place.
-    if(rec.has){
-      fetchGlobalLeaderboard().then(g=>{
-        if(!g)return;   // unreachable - leave the rank out silently, exactly per the ask
-        const merged=mergeQueuedIntoGlobal(g,loadSoloQueue());
-        const rank=rankAmong(merged,name);
-        const rankEl=$('youRank');
-        if(rankEl&&rank)rankEl.textContent=ordinal(rank)+' on the family board';
-      });
-    }
+    // 2026-07-27 (v0.47 bug fix): the numbers/KO/rank are now painted (and kept in sync with the
+    // shared board) by paintYouCardStats() - see its own header comment, right above this
+    // function, for the full state machine this replaced the old local-only render with.
+    paintYouCardStats(name);
   }else{
     // 2026-07-27 (v0.45): the guest card is now ALSO a tap target to the Admin panel (same
     // destination the signed-in card above uses) - see this function's own header comment for why.
