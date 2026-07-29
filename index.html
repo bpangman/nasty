@@ -360,6 +360,29 @@
                     got no top margin at all and overlapped the sign. Now a single un-scoped
                     `.estTop` rule (§ STYLE, near #menu) governs both screens. Also widened the
                     QR-to-caption gap (`.csQrLabel` margin-top 10px -> 20px). See HANDOFF.md "v0.49".
+    § OVERLAY LAYER (2026-07-25, near openOverlay()/closeOverlay(), § UI) ... the one-overlay-at-
+                    a-time invariant (openOverlay/closeOverlay/enforceSingleOverlay/
+                    syncAmbientPause) - see that section's own long header comment for the full
+                    story. v0.54 (2026-07-29, Blake: "for the shop pop-up and the rules pop-up and
+                    leaderboard... basically anything with a pop-up... add an 'x' in the top right
+                    corner... so I can get out of the window at anytime"): a new .overlayXBtn
+                    (generalized from the win popup's pre-existing .winCloseBtn, § STYLE, same
+                    class merged in rather than duplicated - bumped 38px -> 44px to clear this
+                    app's own 44px tap-target floor) was added to every overlay that is safe to
+                    leave anytime or has an unambiguous safe/cancel button already - 17 overlays in
+                    all, plus the pre-existing win popup - see OVERLAY_X_WIRING (right after
+                    enforceSingleOverlay(), same § OVERLAY LAYER block) for the exact list and
+                    HANDOFF.md "v0.54" for the full bucket-by-bucket inventory (which got one,
+                    which deliberately did not, and why). Every X only ever CLICKS an existing,
+                    already-safe button on its own card - never a new close implementation - so it
+                    can never disagree with, or be more dangerous than, that button already was.
+                    Escape performs the identical click for the same set of overlays. Two genuine
+                    gates (#nicknameGateOverlay, #speedPickerOverlay - the latter newly confirmed
+                    to belong in that category this pass, see its own markup comment) got NEITHER
+                    an X NOR Escape-to-close, on purpose; #reclaimReqOverlay (a real decision for a
+                    third person, no safe default) and #pauseOverlay/#passOverlay (already a
+                    zero-friction tap-anywhere dismissal) were deliberately left alone too - see
+                    each one's own markup comment. `#verTap` bumped `v0.53` -> `v0.54`.
     Autotest: open with #autotest (4p FFA all-CPU) or #autotest6 (6p teams) - fast-forwards a full game.
     Preview the real site while the gate is up: append ?preview=1 to the URL (v0.43).
 
@@ -2014,16 +2037,62 @@ button{font:inherit;cursor:pointer}
 @media (max-height:660px){
   #winOverlay .sign b,#passOverlay .sign b{font-size:clamp(18px,5.6vw,30px)}
 }
-/* The X close button (see closeWinOverlay(), § TURNS) - dismisses the win popup without any
-   consequence (the game already finished and was already recorded by recordWin()/the server)
-   and reveals the finished board underneath ("post-game review mode", see onPlaqueClick()/
-   renderPostGameReveal()). Positioned top-right of the overlay itself (.overlay is
-   position:fixed, so this absolute child is pinned to the real screen corner, safe-area aware),
-   never inside .sign so it can never be mistaken for part of the winner badge. */
-.winCloseBtn{position:absolute;top:calc(env(safe-area-inset-top) + 14px);right:16px;
-  width:38px;height:38px;border-radius:50%;border:1px solid rgba(255,255,255,.3);
-  background:rgba(0,0,0,.35);color:var(--cream);font-size:18px;line-height:1;
+/* The X close button - originally win-popup-only (closeWinOverlay(), § TURNS: dismisses without
+   any consequence, the game already finished and was already recorded by recordWin()/the server,
+   reveals the finished board underneath - "post-game review mode", see onPlaqueClick()/
+   renderPostGameReveal()). Positioned top-right of the OVERLAY itself, never inside .sign/
+   .modalCard/.confirmCard, so it can never be mistaken for part of a badge or scroll away with a
+   card's own internal content - .overlay is position:fixed and (per the § SHOP/§ ACCOUNT/etc.
+   cards' own max-height:82vh+overflow-y:auto, or confirmCard's short natural content) never
+   itself needs to scroll, so this absolute child stays pinned to the real screen corner exactly,
+   safe-area aware, regardless of how far the CARD's own inner content is scrolled.
+   2026-07-29 (v0.54, Blake: "for the shop pop-up and the rules pop-up and leaderboard...
+   basically anything with a pop-up... add an X in the top right corner... instead of having to
+   scroll to the bottom and press a close button"). GENERALIZED from the win-only .winCloseBtn to
+   .overlayXBtn, reused verbatim (byte-for-byte position/backdrop/border look - the app's existing
+   close-button visual language, not a new style) on every other overlay that gets an X - see
+   HANDOFF.md "v0.54" for the full bucket-by-bucket list of which overlays did and did not get
+   one. Bumped 38x38 -> 44x44 to clear this app's own 44px tap-target floor (every other button in
+   the file already holds to that; this one predates it). #btnWinClose keeps the old class name
+   too (below) so nothing about the win popup's own markup needed touching. */
+.winCloseBtn,.overlayXBtn{position:absolute;top:calc(env(safe-area-inset-top) + 14px);right:16px;
+  width:44px;height:44px;border-radius:50%;border:1px solid rgba(255,255,255,.3);
+  background:rgba(0,0,0,.35);color:var(--cream);font-size:19px;line-height:1;
   display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:2}
+/* v0.54: reserve room in every X-bearing modalCard's own title so the title's text can never
+   grow into the X's corner at any width, including 320px - measured directly (Playwright,
+   test_x_overlap.js) rather than assumed. Scoped by ID (this codebase's usual pattern for a
+   handful of specific overlays, see the .confirmCard .sign overrides above) to exactly the
+   modalCard overlays that got an X - every OTHER modalCard (speed pickers, the nickname gate,
+   reclaim/pause) is untouched. confirmCard overlays don't need this: their heading (.sign) is a
+   short, centered badge nowhere near the right edge (checked, not assumed - see HANDOFF.md). */
+#rulesOverlay h3,#lbOverlay h3,#shopOverlay h3,#accountOverlay h3,#adminOverlay h3,
+#onlineRulesOverlay h3,#onlineOverlay h3,#roomOverlay h3,#joinOverlay h3,
+#offlineSeatOverlay h3,#hostSpeedOverlay h3,#welcomeOverlay h3,#reunionOverlay h3
+  {padding-right:52px}
+/* v0.54 (measured, not assumed - a real gap this session actually caught with a screenshot, not
+   just reasoned about): .overlay centers a short .modalCard/.confirmCard vertically (margin:auto,
+   see that shared rule's own comment above) - a SHORT card (the Shop's "couldn't reach it" state,
+   the locked God-mode token screen, "Play online", etc.) can land 150-260px below the X, which is
+   fixed near the very top of the SCREEN, not the card - reading as the X belonging to nothing.
+   Fix, scoped to exactly the 18 overlay ids that got an X (every other overlay's card keeps
+   centering, untouched): pin the card's own top margin to 0 and give the OVERLAY a fixed
+   safe-area-aware top padding sized to clear the X itself (same safe-area+14px start, 44px tall,
+   plus a 14px breathing gap = safe-area+72px) - so the card always begins at the same predictable
+   spot right under the X, on every screen, regardless of how tall its own content is. A genuinely
+   TALL card (the rules panel, a long Shop catalog) is completely unaffected either way - it was
+   already flush against the top before this rule and remains exactly as flush now. */
+#rulesOverlay,#lbOverlay,#shopOverlay,#accountOverlay,#adminOverlay,#onlineRulesOverlay,
+#onlineOverlay,#roomOverlay,#joinOverlay,#offlineSeatOverlay,#hostSpeedOverlay,#welcomeOverlay,
+#reunionOverlay,#signOutWarnOverlay,#leaveConfirmOverlay,#surrenderConfirmOverlay,
+#overwriteWarnOverlay,#slotReplaceOverlay{padding-top:calc(env(safe-area-inset-top) + 72px)}
+#rulesOverlay>.modalCard,#lbOverlay>.modalCard,#shopOverlay>.modalCard,
+#accountOverlay>.modalCard,#adminOverlay>.modalCard,#onlineRulesOverlay>.modalCard,
+#onlineOverlay>.modalCard,#roomOverlay>.modalCard,#joinOverlay>.modalCard,
+#offlineSeatOverlay>.modalCard,#hostSpeedOverlay>.modalCard,#welcomeOverlay>.modalCard,
+#reunionOverlay>.modalCard,#signOutWarnOverlay>.confirmCard,#leaveConfirmOverlay>.confirmCard,
+#surrenderConfirmOverlay>.confirmCard,#overwriteWarnOverlay>.confirmCard,
+#slotReplaceOverlay>.confirmCard{margin-top:0}
 /* The per-game KO scoreboard (buildGameKoTableHtml(), § TURNS) reuses the leaderboard KOs tab's
    own .lbTable.lbKo styling verbatim (same column widths/font sizing) so the two tables read as
    one consistent design language - only the wrapper needs its own width here, since #winOverlay
@@ -2721,7 +2790,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.53</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.54</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -2850,6 +2919,11 @@ button{font:inherit;cursor:pointer}
 <div id="awayActions"></div>
 
 <!-- ================= OVERLAYS ================= -->
+<!-- 2026-07-29 (v0.54): deliberately left without an X. There is no scroll-to-the-bottom problem
+     here to begin with (one short sentence, no buttons at all) and the whole card is already a
+     "tap anywhere to continue" gesture (see the pass-and-play tap handler, § TURNS) - an X would
+     be a second way to do the one thing a tap anywhere already does, not a new escape from
+     anything. -->
 <div id="passOverlay" class="overlay hidden">
   <div class="sign"><b id="passName">-</b><small>your cards are ready!</small></div>
   <p>Pass the device - then tap anywhere to see your hand. No peeking, everyone else!</p>
@@ -2873,6 +2947,10 @@ button{font:inherit;cursor:pointer}
 </div>
 
 <div id="rulesOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket A - always safe to leave, browsable rules. X + Escape both
+       reuse btnRulesClose's own click (closeOverlay('rulesOverlay')) - see § UTIL's overlayXWire()
+       for the shared wiring, and HANDOFF.md "v0.54" for the full inventory. -->
+  <button id="btnRulesX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
     <h3>How to play Nasty</h3>
     <p>Get all <b>5 of your tees</b> from your base, once around the board clockwise, and into your <b>home row</b> before anyone else. Teams: you and the player straight across win together.</p>
@@ -2910,6 +2988,8 @@ button{font:inherit;cursor:pointer}
 </div>
 
 <div id="lbOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket A. See rulesOverlay's own comment above for the pattern. -->
+  <button id="btnLbX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
     <h3>Leaderboard</h3>
     <!-- 2026-07-24 (Blake's item 9): 3rd tab, "KOs" - lifetime knockouts dealt/suffered, see
@@ -2949,6 +3029,11 @@ button{font:inherit;cursor:pointer}
      hand-edited past these empty shells; the four states (loading/guest/unreachable/ready) are
      all painted from there so this markup stays a plain, static skeleton. -->
 <div id="shopOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket A - this is the overlay Blake explicitly named ("the shop
+       pop-up"), and its catalog is the longest-scrolling content in the app, so this is the
+       button that actually proves the "stays visible while scrolling" requirement - see
+       test_shop_scroll.js. -->
+  <button id="btnShopX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
     <h3>Shop</h3>
     <div class="shopBalanceBox" id="shopBalanceBox"></div>
@@ -2958,6 +3043,9 @@ button{font:inherit;cursor:pointer}
 </div>
 
 <div id="onlineOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket A - a plain Host/Join choice screen, already closeable via
+       btnOnlineClose with zero side effects; X reuses that same click. -->
+  <button id="btnOnlineX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
     <h3>Play online</h3>
     <p>Host a game - you'll get a link to text around so everyone plays from their own phone - or join a game someone else started.</p>
@@ -2972,6 +3060,10 @@ button{font:inherit;cursor:pointer}
 
 <!-- Host: room created, waiting for guests -->
 <div id="roomOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket A - X reuses btnRoomCancel's own click (leaveOnlineToMenu()),
+       the exact same cleanup the existing Cancel button already does (closes the socket, clears
+       online state, lands on the menu) - never a new/parallel exit path. -->
+  <button id="btnRoomX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
     <h3>Your room is open!</h3>
     <p>Tell everyone this code, or just text them the link - it fills in the code for them.</p>
@@ -2999,6 +3091,10 @@ button{font:inherit;cursor:pointer}
      is always ACCT.gameName (set once, at account creation - see § ACCOUNT SIGN-IN). Continue
      goes straight from the code to the seat step; see joinWithCode(), § NET. -->
 <div id="joinOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket A - X reuses btnJoinClose's own click, which already means "I am
+       done with this, put me on the menu" on EVERY step of this overlay (code entry or seat
+       picked) - see that handler's own v0.37 comment for why it was hardened this way. -->
+  <button id="btnJoinX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
     <h3>Join a game</h3>
     <div id="joinCodeStep">
@@ -3043,6 +3139,11 @@ button{font:inherit;cursor:pointer}
      that screen; dismissing reveals the seats). Never on a reconnect/rejoin into a running
      game (bootGameFromSnapshot() never shows it). See maybeShowOnlineRules(), § NET. -->
 <div id="onlineRulesOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket A - a one-time informational tutorial with a single
+       acknowledgment button; X reuses btnOnlineRulesOk's own click (same continuation - hands
+       the join/room screen back, maybeSendSeated(), maybeRequestPushPermission() - identical to
+       tapping "Got it", never a shortcut around it). -->
+  <button id="btnOnlineRulesX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
     <h3>Online games work a little differently</h3>
     <ul style="text-align:left;font-size:14.5px;line-height:1.6;padding-left:22px;margin:12px 0">
@@ -3072,6 +3173,12 @@ button{font:inherit;cursor:pointer}
      Order of gates on Start: THIS popup, then the existing one-time speed picker below, then
      the deal - see startGame()'s comment. -->
 <div id="offlineSeatOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket A - this is a step in starting a NEW offline game, nothing has
+       happened yet (no network, no deal) - X reuses btnOfflineSeatCancel's own click
+       (closeOverlay('offlineSeatOverlay')), backing out to the setup screen exactly like Cancel
+       already does. NOT the same category as the nickname gate/speed picker below (§ NEXT) -
+       this one already has a safe way out. -->
+  <button id="btnOfflineSeatX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
     <h3>Pick your seat</h3>
     <!-- 2026-07-27 (v0.44, Blake: "you still have them there to decide the CPU difficulty. This
@@ -3093,7 +3200,12 @@ button{font:inherit;cursor:pointer}
      so this page is a genuine gate, not a dismissable dialog. No Cancel/Close button anywhere on
      it: bindAccountName() (§ ACCOUNT SIGN-IN) opens it the moment a fresh account is confirmed
      and only closes it once POST /account/name comes back 200 - see submitNicknameGate(). A
-     RETURNING sign-in (the account already has a name) never sees this at all. -->
+     RETURNING sign-in (the account already has a name) never sees this at all.
+     2026-07-29 (v0.54): Bucket B - confirmed, not just carried forward. Deliberately gets NO X,
+     NO Escape-to-close, and (as always) no backdrop-tap dismissal - an account with no name
+     breaks the leaderboard, exactly the case this whole overlay exists to prevent. Verified by
+     Playwright (test_gate_no_exit.js): Escape does nothing while this is open, and there is no
+     other affordance anywhere on it that closes it. -->
 <div id="nicknameGateOverlay" class="overlay solid hidden">
   <div class="modalCard">
     <h3>Pick your leaderboard name</h3>
@@ -3111,7 +3223,11 @@ button{font:inherit;cursor:pointer}
      Gated on localStorage 'nasty-speed-chosen', shown once ever per device then never again.
      v0.19.2: offline, the whole first deal/turn loop is held until this resolves (startGame());
      online, this always resolves before the player reaches the lobby, so it never sits on top
-     of a live table - see the gateOnSpeedPicker() comment. -->
+     of a live table - see the gateOnSpeedPicker() comment.
+     2026-07-29 (v0.54): checked, per this session's own instructions, whether this belongs next
+     to the nickname gate above - it does. There is no Cancel/Close button anywhere on this card,
+     on purpose (gateOnSpeedPicker() holds the whole first offline deal until one of the four
+     tiles is tapped) - Bucket B, same as the nickname gate. NO X, NO Escape-to-close added. -->
 <div id="speedPickerOverlay" class="overlay hidden">
   <div class="modalCard">
     <h3>How fast should the game play?</h3>
@@ -3133,6 +3249,11 @@ button{font:inherit;cursor:pointer}
      Defaults to the host's own speed choice; the in-game Table speed row still changes it live
      (host-only), exactly as before. -->
 <div id="hostSpeedOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket A, NOT the same category as the speed picker above - this one
+       already has a real Cancel (btnHostSpeedCancel) and no online room exists yet at this point
+       (host picks speed BEFORE the room is created, per this comment's own opening line), so
+       backing out has zero side effects. X reuses that same click. -->
+  <button id="btnHostSpeedX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
     <h3>Set up your online game</h3>
     <!-- 2026-07-24 (Blake's item 14): "can you set it up so I can choose to play a team game
@@ -3167,6 +3288,11 @@ button{font:inherit;cursor:pointer}
      CPU - takeOverSeat, same seatToCpu machinery as leave-for-good). Everyone who IS present
      taps "I'm ready" - play resumes automatically, on its own, once every connected human has. -->
 <div id="reunionOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket A - X reuses btnReunionClose's own click ("Keep waiting in
+       background": stays connected, declares nothing, resumes on its own once everyone's ready) -
+       deliberately NOT wired to btnReunionResume ("I'm ready"), which commits this player as
+       present/ready and is the one choice on this screen that is not a plain "leave". -->
+  <button id="btnReunionX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
     <h3>Getting the table back together</h3>
     <p>Tap Ready up when you're at the table - play picks back up on its own once everyone connected is ready. Missing someone? Send them a rejoin link, or hand their seat to a CPU.</p>
@@ -3191,7 +3317,16 @@ button{font:inherit;cursor:pointer}
      this can need to be actioned by the host even while another overlay (most plausibly
      #pauseOverlay/#reunionOverlay, since a reclaim is most likely to happen exactly when
      someone's away/reconnecting) is already showing; without this it could sit behind an
-     unclickable/invisible confirmation the host has no way to respond to. -->
+     unclickable/invisible confirmation the host has no way to respond to.
+     2026-07-29 (v0.54): deliberately left WITHOUT an X, flagged rather than guessed at. This is
+     not a plain "leave anytime" popup (Bucket A) and it is not a safe-vs-destructive confirm with
+     an obvious cancel (Bucket C either) - it is a real decision with two genuinely different
+     outcomes for a THIRD person (the one trying to reclaim their seat): "Let them in" or "No,
+     keep their seat as is" both change what happens to someone else, and there is no neutral
+     "ask me later" choice on this card at all. An X that silently picked either meaning would be
+     guessing at a decision that affects another player, not backing out of the host's own dialog -
+     so per this session's own instruction ("if you are unsure whether something is a gate, leave
+     it alone and flag it"), it is unchanged. -->
 <div id="reclaimReqOverlay" class="overlay hidden" style="z-index:90">
   <div class="modalCard">
     <h3>Someone wants back in</h3>
@@ -3218,6 +3353,11 @@ button{font:inherit;cursor:pointer}
      sentence, no birthday picker, no gate: accounts are 13+, younger players continue as a guest
      and lose nothing but a row on the shared board. -->
 <div id="welcomeOverlay" class="overlay solid hidden">
+  <!-- 2026-07-29 (v0.54): Bucket A - reached only while signed out and always has a genuine
+       no-strings-attached way out already (chooseGuest(), "Continue as a guest" - drops the
+       pending online action for good, per that function's own comment). X reuses that exact
+       click - never the Sign in with Apple button. -->
+  <button id="btnWelcomeX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
     <div class="sign"><b>NASTY</b></div>
     <h3 id="welcomeTitle">Sign in to play online</h3>
@@ -3251,6 +3391,13 @@ button{font:inherit;cursor:pointer}
      places, so the panel reads identically on a phone and in a browser. Guests are untouched:
      nothing in this game is gated on signing in, here or anywhere else. -->
 <div id="accountOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket A - the player-facing "Admin" panel Blake's own request named.
+       X reuses btnAcctClose's own click. This panel has several INLINE confirm sections further
+       down (delete-account, the name-claim) that are just hidden/shown divs inside this SAME
+       card, never separate overlays - closing the whole panel via X while one of them happens to
+       be open is exactly as safe as the existing bottom Close button already sitting right below
+       them (neither one ever triggers a delete or a claim; both only ever hide the panel). -->
+  <button id="btnAcctX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
     <!-- 2026-07-26 (v0.36 item 2): the button that opens this panel says ADMIN now, so the panel
          says Admin too - a player who taps a button called ADMIN and lands on an untitled page
@@ -3405,6 +3552,10 @@ button{font:inherit;cursor:pointer}
      $('btnAcctSignOut').onclick, § ACCOUNT SIGN-IN. Cancel hands #accountOverlay back
      (openOverlay's backTo mechanism, § OVERLAY LAYER) rather than closing to the menu/game. -->
 <div id="signOutWarnOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket C - X reuses btnSignOutCancel's own click, the unambiguous safe
+       choice (hands #accountOverlay back, never signs out). NEVER wired to the destructive
+       "Sign out anyway" button. -->
+  <button id="btnSignOutX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="confirmCard">
     <div class="sign"><b>SIGN OUT?</b></div>
     <p id="signOutWarnText"></p>
@@ -3415,6 +3566,12 @@ button{font:inherit;cursor:pointer}
   </div>
 </div>
 
+<!-- 2026-07-29 (v0.54): deliberately left without an X. This card's own copy already IS the
+     close instruction ("tap anywhere to keep playing") - the whole overlay resumes the game on a
+     plain tap, so it is already a zero-scroll, one-tap-anywhere dismissal, not a corner button a
+     player has to hunt for. The only actual BUTTON here, "Leave game", is not a safe default to
+     wire an X to - it opens a further choice (leaveConfirmOverlay), it does not simply close this
+     screen. -->
 <div id="pauseOverlay" class="overlay hidden">
   <div class="confirmCard">
     <div class="sign"><b>PAUSED</b><small id="pauseSub">tap to resume</small></div>
@@ -3457,6 +3614,10 @@ button{font:inherit;cursor:pointer}
      was never a leave-the-game choice and did not belong in a list of ways to leave (Blake's
      ask). Same online-only gating, same hardResetConnection() call, new home. -->
 <div id="leaveConfirmOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket C - X reuses btnLeaveCancel's own click ("Return to game" - the
+       first, primary-styled, explicitly safe option on this sheet, per its own v0.27.1 comment
+       above). NEVER wired to Save & leave / Leave without saving / Hand my seat to a CPU. -->
+  <button id="btnLeaveX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="confirmCard">
     <div class="sign"><b>PAUSED</b></div>
     <p id="leaveConfirmText">Your game is holding right here. Jump back in, or step away for now.</p>
@@ -3485,6 +3646,11 @@ button{font:inherit;cursor:pointer}
      before they commit, not just silently skip the stat write. The strings below are the
      DEFAULT/fallback (first-surrenderer) copy only. -->
 <div id="surrenderConfirmOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket C - X reuses btnSurrenderCancel's own click ("Keep playing" -
+       first, primary, the explicitly safe option per the item-E comment above). NEVER wired to
+       "Save & leave instead" or "Concede"/"Leave" (the no-fault-exit variant) - both of those end
+       the game; only Cancel does not. -->
+  <button id="btnSurrenderX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="confirmCard">
     <div class="sign"><b id="surrenderConfirmHeading">CONCEDE?</b></div>
     <p id="surrenderConfirmText">Are you sure you want to concede? This will count as a loss on the leaderboard.</p>
@@ -3521,6 +3687,9 @@ button{font:inherit;cursor:pointer}
      slotReplaceOverlay below), so this warning is only about ONLINE games - hosting or joining
      a different online game replaces the one online room you can still get back into. -->
 <div id="overwriteWarnOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket C - X reuses btnOverwriteCancel's own click. NEVER wired to
+       "Go ahead" (which replaces the existing online game). -->
+  <button id="btnOverwriteX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="confirmCard">
     <div class="sign"><b>REPLACE GAME?</b></div>
     <p>You have an online game you can still get back into - starting another online game will replace it. Go ahead?</p>
@@ -3544,6 +3713,9 @@ button{font:inherit;cursor:pointer}
      recordOfflineSurrenderLoss()'s comment, § MENU, for why offline has no "someone else already
      left" race to begin with). -->
 <div id="slotReplaceOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): Bucket C - X reuses btnReplaceCancel's own click. NEVER wired to either
+       "Replace slot" button (both give up a saved game for good). -->
+  <button id="btnSlotReplaceX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="confirmCard">
     <div class="sign"><b>REPLACE A SAVE?</b></div>
     <p>Both save spots are full. Starting a new game means giving up one of your saved games for good - that counts as conceding (a loss on the leaderboard) for whoever was playing it. Pick which one to give up, or cancel to keep both.</p>
@@ -3556,8 +3728,15 @@ button{font:inherit;cursor:pointer}
 </div>
 
 <!-- God mode (v0.9) - hidden admin panel, revealed by tapping the version number 7 times.
-     See HANDOFF.md "God mode" for how Blake uses this. -->
+     See HANDOFF.md "God mode" for how Blake uses this.
+     2026-07-29 (v0.54): Bucket A - X hides this overlay directly (byte-for-byte what both
+     btnAdminClose and btnAdminClose2 already do, regardless of locked/unlocked state - no
+     token/session cleanup happens on close either way, so there is nothing state-dependent to
+     get wrong here). -->
 <div id="adminOverlay" class="overlay hidden">
+  <!-- 2026-07-29 (v0.54): kept OUTSIDE .modalCard on purpose, same reasoning as every other
+       overlay's X - see the .overlayXBtn CSS comment, § STYLE. -->
+  <button id="btnAdminX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard" style="max-width:560px">
     <!-- 2026-07-26 (v0.36 item 2): retitled "God mode". The player-facing settings panel is
          called Admin now (Blake's word, on his own button), and two different pages both headed
@@ -4072,6 +4251,72 @@ function enforceSingleOverlay(){
   }
   vis.forEach(ov=>{ if(ov!==keep)hideOverlayEl(ov); });
 }
+/* ===================== § OVERLAY X-CLOSE (2026-07-29, v0.54) =====================
+   Blake, verbatim: "for the shop pop-up and the rules pop-up and leaderboard (basically anything
+   with a pop-up) instead of having to scroll to the bottom and press a 'close' button can you
+   just add an 'x' in the top right corner of the window so I can get out of the window at
+   anytime?"
+   One shared wiring point for every .overlayXBtn added this pass (see that class's own CSS
+   comment, § STYLE, and HANDOFF.md "v0.54" for the full bucket-by-bucket inventory of which
+   overlays did and did not get one, and why). Every X here does one thing only: CLICK an
+   existing, already-on-that-same-card button that this app already trusted as safe before this
+   session touched anything - never a new/parallel "what does closing this mean" implementation.
+   For the five confirm-style dialogs in this list the clicked button is deliberately the
+   explicitly-safe one (Cancel / Return to game / Keep playing) and NEVER the destructive one -
+   see each overlay's own markup comment for which button and why. #btnWinClose (the one X this
+   app already shipped, v0.25/closeWinOverlay()) is included so Escape covers it too, without
+   touching its own existing code at all.
+   Two genuine gates - #nicknameGateOverlay and #speedPickerOverlay - are NOT in this list on
+   purpose and stay completely unreachable by X or Escape; nor is #reclaimReqOverlay (a real,
+   consequential decision with no safe default - see its own markup comment) or #pauseOverlay/
+   #passOverlay (already a zero-friction tap-anywhere dismissal, an X would be redundant - see
+   their own comments). */
+const OVERLAY_X_WIRING=[
+  // [overlay id, its own X button id, the existing SAFE button id this X clicks]
+  ['rulesOverlay','btnRulesX','btnRulesClose'],
+  ['lbOverlay','btnLbX','btnLbClose'],
+  ['shopOverlay','btnShopX','btnShopClose'],
+  ['accountOverlay','btnAcctX','btnAcctClose'],
+  ['onlineRulesOverlay','btnOnlineRulesX','btnOnlineRulesOk'],
+  ['onlineOverlay','btnOnlineX','btnOnlineClose'],
+  ['roomOverlay','btnRoomX','btnRoomCancel'],
+  ['joinOverlay','btnJoinX','btnJoinClose'],
+  ['offlineSeatOverlay','btnOfflineSeatX','btnOfflineSeatCancel'],
+  ['hostSpeedOverlay','btnHostSpeedX','btnHostSpeedCancel'],
+  ['welcomeOverlay','btnWelcomeX','btnWelcomeGuest'],
+  ['reunionOverlay','btnReunionX','btnReunionClose'],
+  ['signOutWarnOverlay','btnSignOutX','btnSignOutCancel'],
+  ['leaveConfirmOverlay','btnLeaveX','btnLeaveCancel'],
+  ['surrenderConfirmOverlay','btnSurrenderX','btnSurrenderCancel'],
+  ['overwriteWarnOverlay','btnOverwriteX','btnOverwriteCancel'],
+  ['slotReplaceOverlay','btnSlotReplaceX','btnReplaceCancel'],
+];
+OVERLAY_X_WIRING.forEach(([ovId,xId,safeId])=>{
+  const xBtn=$(xId);
+  if(xBtn)xBtn.onclick=()=>{ const b=$(safeId); if(b)b.click(); };
+});
+// adminOverlay (God mode) has TWO existing Close buttons (locked/unlocked state) that already do
+// the exact same thing (hide the overlay, no session/token cleanup either way) - the X just does
+// that directly rather than needing to know which state is currently showing.
+if($('btnAdminX'))$('btnAdminX').onclick=()=>$('adminOverlay').classList.add('hidden');
+/* Escape closes whichever of the overlays above is currently on screen, by clicking the exact
+   same safe button its own X clicks - so Escape can never be more dangerous than the X already
+   is. Skipped entirely while #reclaimReqOverlay (the one stackable exception, § OVERLAY LAYER) is
+   showing on top of something else - that popup is a real decision for a THIRD person and has no
+   safe default, so Escape must not reach through it to silently close whatever is underneath. */
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Escape')return;
+  const reclaim=$('reclaimReqOverlay');
+  if(reclaim&&!reclaim.classList.contains('hidden'))return;
+  const adminOv=$('adminOverlay');
+  if(adminOv&&!adminOv.classList.contains('hidden')){ $('btnAdminX').click(); return; }
+  const winOv=$('winOverlay');
+  if(winOv&&!winOv.classList.contains('hidden')){ $('btnWinClose').click(); return; }
+  for(const [ovId,,safeId] of OVERLAY_X_WIRING){
+    const ov=$(ovId);
+    if(ov&&!ov.classList.contains('hidden')){ $(safeId).click(); return; }
+  }
+});
 /* The ambient paused page. Deliberately only calls updatePauseUI() when the page has to APPEAR
    (it is the thing that writes the page's wording, and rewriting identical text every frame
    would be a mutation the observer reports back to us - an rAF spin). Once it is up, this is a
