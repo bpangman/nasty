@@ -444,6 +444,26 @@
                           (was "Your board settings") - see that markup's own comment, § ACCOUNT, and
                           HANDOFF.md "v0.56" for the corrected string list.
                         `#verTap` bumped `v0.55` -> `v0.56`.
+                    v0.57 (2026-07-29, Blake: "make sure the online play token is available for
+                        purchase in the store - I only see the nickname change token" + "move both
+                        of these to the very top as they're most important"). ROOT CAUSE: the
+                        server's SHOP_CATALOG always had the 15th item (online_month,
+                        category:"online", consumable:true) and GET /shop always sent it to the
+                        client - but SHOP_CATEGORY_LABELS (right above paintShop()) never listed the
+                        'online' category, and paintShop() only ever renders categories present in
+                        that list, so the item was silently dropped from the Shop UI the whole time
+                        v0.56 was live. FIX: added an 'online' entry and reordered the whole array -
+                        online first, namechange second, then palette/felt/title - per Blake's own
+                        "move both to the top" ask (the two functional/consumable tokens now lead,
+                        cosmetics follow). Two more widenings at the same time, same idiom: (a)
+                        catItemRow()'s `item.category==='namechange'` check (which forces a Buy
+                        button rather than "Owned"/"Equipped" for a consumable item) widened to
+                        `item.consumable`, so online_month gets the identical treatment without a
+                        second hardcoded branch; (b) refreshAcctEquip()'s
+                        `i.category!=='namechange'` filter widened to `!i.consumable`, so a
+                        purchased Online Access token can never wrongly appear in the Personalizations
+                        equip list. Both read the exact `consumable` field the server already sends -
+                        no new field needed anywhere. `#verTap` bumped `v0.56` -> `v0.57`.
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -494,6 +514,20 @@
                     third person, no safe default) and #pauseOverlay/#passOverlay (already a
                     zero-friction tap-anywhere dismissal) were deliberately left alone too - see
                     each one's own markup comment. `#verTap` bumped `v0.53` -> `v0.54`.
+                    v0.57 (2026-07-29, Blake: "the pop up that comes up before joining an online
+                    game... is way too high on the screen... make sure you... [it's] centered where
+                    we usually have these pop ups"). ROOT CAUSE: the v0.54 margin-top:0 rule (just
+                    above) pins EVERY X-bearing card flush under the X, overriding the base
+                    `.overlay>.confirmCard,.overlay>.modalCard{margin:auto}` centering rule - correct
+                    for most of these overlays (that's the X's whole clearance mechanism) but wrong
+                    for #onlineCaveatOverlay specifically, which Blake wants centered like a normal
+                    short popup. FIX: removed ONLY `#onlineCaveatOverlay>.confirmCard` from the
+                    margin-top:0 selector list - every other overlay in that list is untouched.
+                    Deliberately LEFT #onlineCaveatOverlay in the padding-top rule right above it -
+                    once centering wins the card back, that padding-top can no longer push it away
+                    from center on a normal/tall screen, but it still guarantees a minimum gap below
+                    the X on the very shortest screens. A single surgical carve-out, not a new
+                    mechanism.
     Autotest: open with #autotest (4p FFA all-CPU) or #autotest6 (6p teams) - fast-forwards a full game.
     Preview the real site while the gate is up: append ?preview=1 to the URL (v0.43).
 
@@ -2224,19 +2258,34 @@ button{font:inherit;cursor:pointer}
    plus a 14px breathing gap = safe-area+72px) - so the card always begins at the same predictable
    spot right under the X, on every screen, regardless of how tall its own content is. A genuinely
    TALL card (the rules panel, a long Shop catalog) is completely unaffected either way - it was
-   already flush against the top before this rule and remains exactly as flush now. */
+   already flush against the top before this rule and remains exactly as flush now.
+   2026-07-29 (v0.57): #onlineCaveatOverlay STAYS in this padding-top rule even though it was
+   carved OUT of the margin-top:0 rule right below - Blake: "the pop up... is way too high on the
+   screen... make sure you... [it's] centered where we usually have these pop ups." Once the card
+   centers again (margin:auto wins back, see the carve-out's own comment below), this padding-top
+   can never PUSH the card away from center on a normal/tall screen - centering always wins there -
+   but it becomes a pure FLOOR that stops the centered card from sliding up underneath the fixed X
+   button on the very shortest screens. A safety minimum, not a positioning mechanism anymore. */
 #rulesOverlay,#lbOverlay,#shopOverlay,#accountOverlay,#adminOverlay,#onlineRulesOverlay,
 #onlineOverlay,#roomOverlay,#joinOverlay,#offlineSeatOverlay,#hostSpeedOverlay,#welcomeOverlay,
 #reunionOverlay,#signOutWarnOverlay,#leaveConfirmOverlay,#surrenderConfirmOverlay,
 #overwriteWarnOverlay,#slotReplaceOverlay,#onlineCaveatOverlay,#onlineAccessBlockedOverlay
   {padding-top:calc(env(safe-area-inset-top) + 72px)}
+/* 2026-07-29 (v0.57, Blake, verbatim: "the pop up that comes up before joining an online game
+   (before you play)... is way too high on the screen... make sure you... [it's] centered where we
+   usually have these pop ups"). #onlineCaveatOverlay>.confirmCard removed from this list, ALONE -
+   every other overlay here keeps margin-top:0 exactly as before. Removing it lets the base
+   `.overlay>.confirmCard,.overlay>.modalCard{margin:auto}` rule (above) win again for this one
+   card, so it centers vertically like a normal short popup instead of being pinned under the X.
+   The padding-top rule just above still lists #onlineCaveatOverlay on purpose - see its own
+   comment for why that's now a floor, not a conflict. */
 #rulesOverlay>.modalCard,#lbOverlay>.modalCard,#shopOverlay>.modalCard,
 #accountOverlay>.modalCard,#adminOverlay>.modalCard,#onlineRulesOverlay>.modalCard,
 #onlineOverlay>.modalCard,#roomOverlay>.modalCard,#joinOverlay>.modalCard,
 #offlineSeatOverlay>.modalCard,#hostSpeedOverlay>.modalCard,#welcomeOverlay>.modalCard,
 #reunionOverlay>.modalCard,#signOutWarnOverlay>.confirmCard,#leaveConfirmOverlay>.confirmCard,
 #surrenderConfirmOverlay>.confirmCard,#overwriteWarnOverlay>.confirmCard,
-#slotReplaceOverlay>.confirmCard,#onlineCaveatOverlay>.confirmCard,
+#slotReplaceOverlay>.confirmCard,
 #onlineAccessBlockedOverlay>.confirmCard{margin-top:0}
 /* The per-game KO scoreboard (buildGameKoTableHtml(), § TURNS) reuses the leaderboard KOs tab's
    own .lbTable.lbKo styling verbatim (same column widths/font sizing) so the two tables read as
@@ -2968,7 +3017,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.56</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.57</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -13403,7 +13452,16 @@ function catItemRow(item,wallet){
   }
   const metaBits=[];
   let actionHtml;
-  if(item.category==='namechange'){
+  // 2026-07-29 (v0.57): was `item.category==='namechange'` - widened to `item.consumable` so the
+  // online_month item (also consumable:true, see SHOP_CATALOG server-side) gets the exact same
+  // treatment: a consumable item should ALWAYS show a Buy button, never "Owned"/"Equipped", even in
+  // the hypothetical case it appeared in wallet.owned. Reading item.consumable (a field the server
+  // already sends on every catalog item) is more correct than hardcoding two category names here -
+  // it also covers any future consumable category for free. In practice neither namechange_credit
+  // nor online_month ever lands in wallet.owned at all (server.js's /account/purchase pushes
+  // consumables into walletNamechangeCredits/walletOnlineMonths instead, never walletOwned), so
+  // `owned` is always false for both today - but this stays the right, defensive, DRY check.
+  if(item.consumable){
     actionHtml=`<button class="btn primary shopBuyBtn" data-id="${item.id}" ${canAfford?'':'disabled'}>Buy - ${item.cost} pts</button>`;
   }else if(owned){
     metaBits.push('Owned');
@@ -13425,13 +13483,25 @@ function catItemRow(item,wallet){
     </div>
   </div>`;
 }
+// 2026-07-29 (v0.57, Blake: "make sure the online play token is available for purchase in the
+// store - I only see the nickname change token" + "move both of these to the very top as they're
+// most important"). Two fixes in one: (a) 'online' was simply MISSING from this list - the
+// server's catalog always had the online_month item (category:"online"), but paintShop() only
+// ever renders categories present here, so it was silently dropped from the Shop UI even though
+// the server-side purchase endpoint has supported it since v0.56 (see catItemRow()'s own v0.57
+// comment right below, and refreshAcctEquip()'s v0.57 comment further down, for the client side of
+// that same server support). (b) reordered so the two functional/consumable tokens (online access,
+// nickname change) lead the list, cosmetics (palettes/felts/titles) come after - this is also
+// refreshAcctEquip()'s own category order (below), but both consumable categories are filtered out
+// of THAT view entirely, so the reorder is harmless there.
 const SHOP_CATEGORY_LABELS=[
+  ['online','Online access - one calendar month of online play'],
+  ['namechange','Nickname changes'],
   ['palette','Palettes - swap your seat colors'],
   ['felt','Table felt - change the board background'],
   // v0.51: was "shown next to your name" - titles are a small badge next to your name now
   // (.lbTitleBadge, § STYLE), not inline text - see titledNameHtml()'s own comment, § SHOP.
   ['title','Titles - shown as a badge next to your name'],
-  ['namechange','Nickname changes'],
 ];
 function paintShop(){
   const balBox=$('shopBalanceBox'), body=$('shopBody');
@@ -13547,7 +13617,12 @@ async function refreshAcctEquip(){
     return;
   }
   const owned=Array.isArray(wr.wallet.owned)?wr.wallet.owned:[];
-  const items=catalog.items.filter(i=>i.category!=='namechange'&&owned.includes(i.id));
+  // 2026-07-29 (v0.57): was `i.category!=='namechange'` - widened to `!i.consumable` for the same
+  // reason catItemRow() above widened its own check: online_month is ALSO consumable (never
+  // equippable board settings, always spent outright), so it must be excluded from this
+  // Personalizations/equip list the same way namechange tokens already were, or a purchased Online
+  // Access token would wrongly show up here as something to "equip."
+  const items=catalog.items.filter(i=>!i.consumable&&owned.includes(i.id));
   if(!items.length){
     // Blake: "if they own nothing, say so plainly and point at the Shop."
     body.innerHTML=`<div class="acctEquipMsg">You don't own any palettes, felts, or titles yet - the Shop is where you get them.</div>
