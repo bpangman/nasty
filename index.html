@@ -36,13 +36,23 @@
                     COLORS4/COLORS6 does so INSIDE a function, at call time (`const
                     cols=CFG.n===4?COLORS4:COLORS6`), never captured once at parse time - so a
                     reassignment is visible everywhere for free, no call site needed editing. Seat
-                    COLOR is purely a client-side rendering choice: `G.seats[i].color` is a
-                    plain {name,c,dark} object snapshotted from `cols[i]` ONCE at game creation
+                    COLOR is purely a client-side rendering choice: `G.seats[i].color` is a plain
+                    {name,c,dark} object set from `cols[i]` BY SEAT INDEX at game creation
                     (startGame()/bootGameFromNetwork(), § MENU/§ NET) - the server never sees a
                     color, only name/type/diff (confirmed by reading server.js/server.ts - zero
                     references to seat color anywhere) - so switching your palette is a genuine
-                    per-viewer preference: it changes what a NEW game (or the setup screens) show
-                    on THIS phone, never an already-frozen game, and never anyone else's screen.
+                    per-viewer preference: it never sends anything and never touches anyone else's
+                    screen. v0.52 BUG FIX (Blake: "the pegs don't change color mid-game"): before
+                    this, `G.seats[i].color` was a ONE-TIME SNAPSHOT that only a NEW game ever
+                    re-read - equipping a different palette never reached a game already in
+                    progress, and a RESUMED save kept whatever palette was equipped back when it
+                    was saved. Both are fixed the same way: every seat's color is now RE-DERIVED
+                    by index from the current COLORS4/COLORS6 (never trusted as a frozen value)
+                    every time it could possibly be stale - on equip/unequip
+                    (applyEquippedPalette() -> repaintSeatColors(), § BOARD ZOOM, right after
+                    fitBoard()) and on an offline resume (resumeOfflineGame(), § MENU). An online
+                    reconnect (bootGameFromSnapshot(), § NET) already did this per-index
+                    re-derivation before this fix and needed no change.
     § STATE ....... game state G, deck, deal schedules
     § ENGINE ...... legal-move generation + move application (THE RULES LIVE HERE)
     § AI .......... CPU players (easy / tricky / nasty)
@@ -59,6 +69,13 @@
                     SECOND simultaneous pointer (boardPointers.size===2) - a single finger's
                     pointerdown/move/up never calls preventDefault/stopPropagation, so ordinary
                     taps on tees/cards are provably untouched by this feature.
+                    v0.52: repaintSeatColors() (right after § BOARD ZOOM, called from
+                    applyEquippedPalette(), § SHOP) recolors a LIVE game's tees/safe-rows/holes/
+                    plaques/played-cards the instant a palette is equipped - see its own header
+                    comment for the full "every consumer found" list and why it saves/restores
+                    boardZoom/boardPanX/boardPanY around its own drawBoard() call (drawBoard()
+                    resets zoom at its top, which is correct for every OTHER caller but not this
+                    one).
     § ANIM ........ card flights, tee hops, NASTY blast, dealing, confetti
     § TURNS ....... async turn loop (humans + CPUs) - network-aware (see § NET) but the
                     offline path is untouched
@@ -274,6 +291,23 @@
                         title's first letter, an `aria-label` with the full title, and a real tap/
                         Enter (delegated, capture-phase, see the comment right below
                         titledNameHtml()) that reveals the full title as a toast.
+                    v0.52 (2026-07-29), two of Blake's own build-67 bug reports, both fixed at the
+                    SAME two functions this section already owns rather than anywhere new:
+                      - applyEquippedPalette() now also repaints a LIVE game the instant a palette
+                        is equipped (repaintSeatColors(), § BOARD ZOOM) - see the § LAYOUT entry's
+                        own v0.52 note (top of this CODE MAP) for the root cause ("the pegs don't
+                        change color mid-game") and resumeOfflineGame()'s matching fix for a
+                        resumed save. Online seat color is still never sent anywhere - this only
+                        ever repaints THIS phone's own view, confirmed unchanged.
+                      - applyEquippedFelt() now also calls syncNativeStatusBarColor() - Blake: "the
+                        felt color changes mid game... but the area at the top... doesn't." That
+                        strip turned out to be the native iOS status bar's own background view
+                        (capacitor.config.json's `StatusBar.overlaysWebView:false`), not web
+                        content at all - no CSS in this page could ever have reached it. See
+                        syncNativeStatusBarColor()'s own header comment, right next to
+                        applyEquippedFelt(), for the full diagnosis (confirmed by reading
+                        @capacitor/status-bar's iOS source directly) and why no new native build is
+                        required - this only calls a plugin method the app already ships.
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -2650,7 +2684,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.51</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.52</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -6384,6 +6418,65 @@ function onBoardPointerUp(ev){
 // Re-clamp (never reset - a resize/orientation change shouldn't throw away a deliberate zoom)
 // against the freshly-measured #boardWrap size every time fitBoard() itself re-measures it.
 addEventListener('resize',()=>{ clampBoardPan(); applyBoardZoomTransform(); });
+
+/* ==================== v0.52: repaintSeatColors() - recolor a LIVE game on an equip change ====================
+   Blake: "the pegs don't change color mid-game. they only change when I make the selection before
+   starting a game." Called from applyEquippedPalette() (§ SHOP) every time a palette is
+   equipped/unequipped, mid-game or not - a no-op (guarded there) when no game exists yet.
+
+   DERIVE, don't just re-snapshot: every seat's color is re-read from the just-reassigned
+   COLORS4/COLORS6 BY SEAT INDEX - the exact same rule a fresh game already uses at creation
+   (startGame()/bootGameFromNetwork() both do `color:cols[i]`) - so this can never go stale
+   regardless of how G came to exist (a brand-new game, an online reconnect snapshot, or a
+   resumed offline save - see resumeOfflineGame(), § MENU, for that last one's own matching fix).
+
+   EVERY CONSUMER OF G.seats[s].color FOUND AND ACCOUNTED FOR (grepped, not guessed):
+     - safe-row lanes, loop start-hole rings, home-hole rings, base-hole rings - all painted by
+       drawBoard() directly from G.seats[s].color, with no per-seat DOM id of their own (they're
+       plain SVG shapes with no way to recolor in place) - so drawBoard() itself is re-run to
+       repaint them. drawBoard() is otherwise idempotent/stateless (it only reads LAY + the now-
+       fresh G.seats colors, never game piece positions - those live in separate DOM layers built
+       by buildTable()), so calling it again mid-game is safe.
+     - EXCEPT drawBoard() also calls resetBoardZoom() at its own top (§ BOARD ZOOM, right above) -
+       correct for every OTHER caller (a fresh game/reconnect/resume should start at 1x) but wrong
+       here: a palette change has nothing to do with zoom. The player's current zoom/pan is saved
+       before the call and restored right after, so a mid-game palette change can never silently
+       reset an in-progress pinch-zoom.
+     - tees (teeSVG() output), the seat name plaques (border/text color), and the played-card
+       frame (--dcol) are each a real, already-existing DOM element (built once by buildTable() at
+       game boot) - these are updated IN PLACE (innerHTML/style only) rather than rebuilt via a
+       second buildTable() call, which would also tear down and recreate every tee's DOM node for
+       no reason: dropping any in-progress legal-move highlight class, breaking a mid-flight
+       animation, and losing click-listener identity, none of which have anything to do with color.
+     - sparks()/nastyBlast() (§ ANIM) and the win overlay's color strip (§ ANIM/win) all read
+       G.seats[s].color.c LIVE at the moment they fire, never a value cached earlier - so they
+       need no extra code here at all; they pick up the new color the instant it's written below.
+     - the account avatar, the online lobby's/offline seat popup's dot colors, and the setup
+       screen's team-pairing note all read COLORS4/COLORS6/accountColors() directly (never
+       G.seats[].color, since no game exists yet at those screens) - already correctly live via
+       the existing v0.50 mechanism, untouched here.
+   NEVER touches the ENGINE or G.pieces/G.turn/anything legal-move-related - purely a color
+   repaint of existing DOM, same as the felt's own --felt1/--felt2 live CSS vars. */
+function repaintSeatColors(){
+  if(!G||!Array.isArray(G.seats)||!LAY)return;
+  const cols=G.n===6?COLORS6:COLORS4;
+  G.seats.forEach((s,i)=>{ s.color=cols[i]; });
+  const z=boardZoom,px=boardPanX,py=boardPanY;   // see this function's own header comment - drawBoard() resets zoom, this undoes that
+  try{ drawBoard(); }catch(e){}
+  boardZoom=z; boardPanX=px; boardPanY=py;
+  try{ clampBoardPan(); applyBoardZoomTransform(); }catch(e){}
+  for(let s=0;s<G.n;s++){
+    const col=G.seats[s].color;
+    for(let pi=0;pi<5;pi++){
+      const d=$(`tee-${s}-${pi}`);
+      if(d)d.innerHTML=teeSVG(col,G.n===6);
+    }
+    const pq=$(`plaque-${s}`);
+    if(pq){ pq.style.borderLeftColor=col.c; pq.style.color=col.c; }
+    const dc=$(`discard-${s}`);
+    if(dc)dc.style.setProperty('--dcol',col.c);
+  }
+}
 
 /* v0.10 - name plates, actually ~2x (Blake asked twice).
    Two independent levers (see the Plaques CSS block comment for the full story):
@@ -12069,10 +12162,19 @@ function saveEquip(){ try{ localStorage.setItem(EQUIP_KEY,JSON.stringify(EQUIP))
 // Reassigns COLORS4/COLORS6 (§ LAYOUT) wholesale - see that section's own comment for why every
 // existing reader is already safe. Falls back to the untouched DEFAULT_COLORS4/6 the instant
 // nothing is equipped, so "owns nothing -> standard board, no regression" is true by construction.
+// v0.52 BUG FIX (Blake: "the pegs don't change color mid-game. they only change when I make the
+// selection before starting a game"). ROOT CAUSE (confirmed in an earlier session, restated here
+// because this is exactly where it's fixed): `G.seats[i].color` used to be a ONE-TIME SNAPSHOT
+// taken at game creation (startGame()/bootGameFromNetwork()) from whichever palette was active
+// THAT MOMENT - reassigning COLORS4/COLORS6 here always updated what a NEW game would use, but
+// never reached a game already in progress. Fix: re-derive every seat's color, BY SEAT INDEX, from
+// the palette just reassigned below, then repaint - see repaintSeatColors()'s own comment (§ BOARD
+// ZOOM) for exactly what "repaint" touches and why it's an in-place update, not a board rebuild.
 function applyEquippedPalette(){
   const p=EQUIP.palette;
   COLORS4=(p&&Array.isArray(p.colors4)&&p.colors4.length)?p.colors4:DEFAULT_COLORS4;
   COLORS6=(p&&Array.isArray(p.colors6)&&p.colors6.length)?p.colors6:DEFAULT_COLORS6;
+  if(G&&Array.isArray(G.seats))repaintSeatColors();
 }
 // The felt is just two CSS custom properties - body's own background (and .overlay.solid's) read
 // them live, so this takes effect everywhere INCLUDING a game already on screen, immediately.
@@ -12080,6 +12182,39 @@ function applyEquippedFelt(){
   const f=EQUIP.felt;
   document.documentElement.style.setProperty('--felt1',f?f.c:DEFAULT_FELT.c);
   document.documentElement.style.setProperty('--felt2',f?f.dark:DEFAULT_FELT.dark);
+  syncNativeStatusBarColor(f);
+}
+// v0.52 BUG FIX (Blake: "the felt color changes mid game when I choose it but the area at the
+// top... doesn't follow the color change of the board"). DIAGNOSIS, confirmed by reading
+// @capacitor/status-bar's own iOS source (node_modules/@capacitor/status-bar/ios/.../StatusBar.swift)
+// rather than guessed: that strip is NOT web content at all - capacitor.config.json ships
+// `StatusBar.overlaysWebView:false`, which makes the native plugin (a) shrink the WKWebView's own
+// frame to begin BELOW the status bar (`resizeWebView()`: `webViewFrame.origin.y=statusBarHeight`
+// when not overlaying) and (b) paint a SEPARATE native `backgroundView` UIView behind that status
+// bar frame, colored from `config.backgroundColor` exactly ONCE at native view-appear time
+// (`handleViewDidAppear()` -> `setBackgroundColor()`). No CSS in this page can ever reach that
+// view - it sits outside the WebView's own bounds entirely (this is the same root cause the
+// v0.13.1 boot-slam investigation already found and measured via `screen.height-innerHeight`, see
+// § CAPACITOR - that whole missing-strip height IS this native view). The only way to keep it in
+// sync is to call the plugin's own `setBackgroundColor()` at runtime, every time the felt changes.
+// Uses the felt's DARK end (`f.dark`/`DEFAULT_FELT.dark`) rather than inventing a new shade - that
+// matches the exact relationship capacitor.config.json's own static default already had (its
+// `StatusBar.backgroundColor` of `#0e3421` IS `DEFAULT_FELT.dark`), just kept in sync instead of
+// frozen. IS_APP-gated AND try/catch'd, same pattern as every other `CAP.Plugins` call in this file
+// (§ CAPACITOR) - a plain browser (CAP undefined), an older native build without this plugin
+// method, or any other native hiccup degrades silently, never throws. Called from
+// applyEquippedFelt() itself (so both the boot-time `applyEquipped()` call and every later
+// equip/unequip already cover this for free, no second call site to keep in sync) - see that
+// function's own CODE MAP entry, § SHOP, for the boot/live-update story.
+// NO NATIVE REBUILD REQUIRED: this only ever calls the ALREADY-SHIPPED @capacitor/status-bar
+// plugin at runtime - capacitor.config.json's own static `backgroundColor` value is untouched
+// (still the correct default-felt color for the very first frame before this script runs), so
+// build 67 does not need a new native build for this fix - the existing app binary already ships
+// everything this code calls. (It DOES need the next TestFlight build to actually GET this fix,
+// same as any other client-only change - see the standing "ships to both" rule.)
+function syncNativeStatusBarColor(f){
+  if(!IS_APP)return;
+  try{ CAP.Plugins.StatusBar.setBackgroundColor({color:(f&&f.dark)?f.dark:DEFAULT_FELT.dark}); }catch(e){}
 }
 function applyEquipped(){ applyEquippedPalette(); applyEquippedFelt(); }
 // Titles are shown next to a name (leaderboard rows, the you card) but the equip choice is LOCAL
@@ -14018,6 +14153,13 @@ function resumeOfflineGame(slot){
   // current state, so re-rendering it is inherently instant (drawBoard/buildTable/syncAll
   // just position tees directly, no animation involved either way; nothing to snap FROM).
   G=saved.G;
+  // v0.52 BUG FIX (Blake's mid-game recolor report also covers this): a saved offline game's
+  // `G.seats[i].color` is whatever palette was equipped back when THAT SAVE happened - a plain
+  // resume must never resurrect that stale snapshot. Re-derive every seat's color, by seat index,
+  // from whatever palette is CURRENTLY equipped (same rule a live equip-change/an online
+  // reconnect already use - see repaintSeatColors()/bootGameFromSnapshot()'s matching lines) right
+  // here, before drawBoard()/buildTable() ever paint it.
+  { const cols=G.n===6?COLORS6:COLORS4; G.seats.forEach((s,i)=>{ s.color=cols[i]; }); }
   // v0.9 refinement (Blake's preview feedback): resuming must drop you straight back into
   // the game, not bounce through another "tap to resume" / save prompt. Whatever G.paused
   // was AT THE MOMENT it got saved (e.g., you tapped Pause -> Save & quit) is stale once
