@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '0fb6f0c6-7a22-44b1-82f2-02385e9f10c4'
+BUILD_SUBMISSION_ID = '2af432c6-1f66-44aa-821d-b19e660968bd'
 
 
 def current_build():
@@ -101,11 +101,10 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p>What is in this one - three things at once:</p>
+<p>What is in this one - two fixes on top of the Online Access token from the last build:</p>
 <ul>
-<li><b>Every pop-up now has an X in the top right corner.</b> Shop, Leaderboard, How to play, Admin, and more - tap the X to get out any time, no more scrolling to find a Close button.</li>
-<li><b>Your felt color now shows up everywhere.</b> Popups, panels and cards all match the felt you picked instead of staying default green.</li>
-<li><b>Online play is free through the end of August.</b> After that it takes a 50 credit Online Access token, good for a full month - a countdown and a heads up popup let you know where you stand.</li>
+<li><b>The Online Access token now actually shows up in the Shop.</b> It was ready to buy on the server the whole time, it just wasn't showing up in the store list - now it does, and it sits right at the top next to the Nickname Change token since those two are the most important ones.</li>
+<li><b>The "before you play online" pop-up is centered now.</b> It was showing up too high on the screen, pinned right under the X button - now it sits centered like every other pop-up in the app.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -120,7 +119,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - X buttons, felt color everywhere, and Online Access', body], check=True)
+                    f'NASTY: build {BUILD} is live - Online Access token in the Shop, and a centered pop-up', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
