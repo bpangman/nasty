@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '69ca3931-b270-423d-a926-c3054255331e'
+BUILD_SUBMISSION_ID = '434ae475-1d54-4251-9de4-8985b29df87c'
 
 
 def current_build():
@@ -101,11 +101,10 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p>What is in this one:</p>
+<p>What is in this one - two fixes from your own testing of the last build:</p>
 <ul>
-<li><b>Pinch to zoom on the board.</b> Use two fingers to zoom in on a spot and drag to move around while zoomed. Double-tap to reset.</li>
-<li><b>A new Monthly tab on the leaderboard.</b> Shows wins and losses for just this month, alongside the existing Solo, Teams, Total and KOs tabs. The Admin page also got a section to switch between the board colors, felt and titles you own from the Shop.</li>
-<li><b>A handful of fixes from your own testing:</b> the leaderboard is just called the leaderboard now, titles you have bought show as a small badge instead of crowding your name, the Shop shows each price once on the right, and the Nickname Change token is now easy to find and use from the Admin rename screen.</li>
+<li><b>Board colors change right away now.</b> Switching your palette used to only take effect on your NEXT game - now the tees, bases and safe rows on a game already in progress update the instant you switch, and resuming a saved game uses whatever palette you have equipped right now instead of whatever was equipped when you saved it.</li>
+<li><b>The strip at the very top of the screen, near the clock, now follows your board color too.</b> It used to always stay green no matter what felt you picked - now it matches.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -120,7 +119,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - pinch to zoom and a Monthly leaderboard', body], check=True)
+                    f'NASTY: build {BUILD} is live - board colors change right away now', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
