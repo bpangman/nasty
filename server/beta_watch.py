@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '434ae475-1d54-4251-9de4-8985b29df87c'
+BUILD_SUBMISSION_ID = 'e98169ed-ad94-4fe1-b59d-b3baccececc0'
 
 
 def current_build():
@@ -101,10 +101,10 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p>What is in this one - two fixes from your own testing of the last build:</p>
+<p>What is in this one - two fixes from your own reports on the last build:</p>
 <ul>
-<li><b>Board colors change right away now.</b> Switching your palette used to only take effect on your NEXT game - now the tees, bases and safe rows on a game already in progress update the instant you switch, and resuming a saved game uses whatever palette you have equipped right now instead of whatever was equipped when you saved it.</li>
-<li><b>The strip at the very top of the screen, near the clock, now follows your board color too.</b> It used to always stay green no matter what felt you picked - now it matches.</li>
+<li><b>The strip at the very top of the screen, near the clock, now looks right.</b> It used to show as a darker, tinted band even though it already followed your board color - now it is computed to match the exact shade the board shows right at the top, so it reads as one continuous screen instead of a seam.</li>
+<li><b>The board settings section in the Admin page no longer opens by itself.</b> It used to auto expand and take over most of the page - now it is a single row you tap to open, and it closes again every time you come back to the Admin page.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -119,7 +119,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - board colors change right away now', body], check=True)
+                    f'NASTY: build {BUILD} is live - the top of the screen matches the board now', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
