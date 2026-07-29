@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = 'e98169ed-ad94-4fe1-b59d-b3baccececc0'
+BUILD_SUBMISSION_ID = '0fb6f0c6-7a22-44b1-82f2-02385e9f10c4'
 
 
 def current_build():
@@ -101,10 +101,11 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p>What is in this one - two fixes from your own reports on the last build:</p>
+<p>What is in this one - three things at once:</p>
 <ul>
-<li><b>The strip at the very top of the screen, near the clock, now looks right.</b> It used to show as a darker, tinted band even though it already followed your board color - now it is computed to match the exact shade the board shows right at the top, so it reads as one continuous screen instead of a seam.</li>
-<li><b>The board settings section in the Admin page no longer opens by itself.</b> It used to auto expand and take over most of the page - now it is a single row you tap to open, and it closes again every time you come back to the Admin page.</li>
+<li><b>Every pop-up now has an X in the top right corner.</b> Shop, Leaderboard, How to play, Admin, and more - tap the X to get out any time, no more scrolling to find a Close button.</li>
+<li><b>Your felt color now shows up everywhere.</b> Popups, panels and cards all match the felt you picked instead of staying default green.</li>
+<li><b>Online play is free through the end of August.</b> After that it takes a 50 credit Online Access token, good for a full month - a countdown and a heads up popup let you know where you stand.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -119,7 +120,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - the top of the screen matches the board now', body], check=True)
+                    f'NASTY: build {BUILD} is live - X buttons, felt color everywhere, and Online Access', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
