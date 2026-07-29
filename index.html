@@ -159,6 +159,12 @@
                     warmly, never as an error; a 404 (endpoint not deployed yet) reads as "not
                     turned on yet," not broken; a genuine network failure reuses the same
                     "couldn't reach it" sentence the other tabs already show.
+                    v0.56 (Blake's item 5, "gate the Online play button on entitlement, not just
+                    sign-in"): renderOnlineGate() gains a 5th state, right next to isAccountReady() -
+                    a signed-in player with no Online Access now sees the SAME greyed #btnOnline a
+                    guest does, pointing at Admin (the button/panel is unchanged, § ACCOUNT) instead
+                    of sign-in. See the § SHOP CODE MAP entry below for the whole Online Access
+                    feature.
     § NET ......... online multiplayer: WS client, host/join lobby UI, deterministic
                     lockstep (server in /server, see HANDOFF.md "Online multiplayer").
                     v0.42: ACCOUNTS-ONLY - no guest join anymore. requireAccountThen() gates
@@ -175,6 +181,16 @@
                     menu too, not just discovered by tapping - see renderOnlineGate(), § MENU. This
                     function's own logic is completely unchanged; the button simply stops being
                     clickable when it would only land here anyway.
+                    v0.56: requireAccountThen()'s "already ready" branch now routes through
+                    beginOnlineAction() instead of calling `cont` directly - the one-time "before you
+                    play online" caveat popup's single choke point (both ONLINE_PENDING resume sites
+                    route through it too). handleOnlineAccessRejection(), right next to it, is the
+                    graceful side of the SAME feature - a host/join refused with
+                    reason:"onlineAccessRequired"/"signInRequired" (the deep-link edge case
+                    renderOnlineGate()'s button-level check can't reach) gets the server's own
+                    message plus a real next step, never a dead end. paintOnlineOverlayNote()
+                    (also here) paints the Host/Join screen's own countdown line. See the § SHOP
+                    CODE MAP entry for the whole feature.
     § ACCOUNT ..... the ADMIN button's panel: rules, sound, table speed, name, connection.
                     v0.42: chosenName() is "signed in -> the account's name; guest -> the
                     seat's own stock name" - guests no longer have a persistent nickname, so
@@ -225,6 +241,16 @@
                         admin page") - see the § SHOP CODE MAP entry's own v0.53 note for the full
                         collapse/expand mechanism (openAccountPanel() here is what forces it closed
                         on every opening).
+                    v0.56: the ADMIN button/panel itself is UNCHANGED - Blake's "should be changed to
+                        personalizations" ask (see the #acctEquip markup comment) was about the
+                        equip SECTION inside this panel (added v0.51), not the panel or its button,
+                        which stay "Admin" (Blake, v0.50: "add the 'admin' button next to it there
+                        for symmetry" - renaming it away would have regressed that explicit ask). The
+                        #acctEquip header is now "Personalizations" (was "Your board settings").
+                        A new #acctOnline box (Online Access, refreshAcctOnline(), § SHOP) sits
+                        directly adjacent to it, between #acctWallet and #acctEquip - see the § SHOP
+                        CODE MAP entry for the whole Online Access feature and HANDOFF.md "v0.56"
+                        for the full writeup.
     § ACCOUNT SIGN-IN ... Sign in with Apple (iPhone app only). v0.42: a BRAND-NEW account is
                     blocked on a mandatory nickname right here - bindAccountName() opens a
                     full-screen prompt (openNicknameGate()) that cannot be skipped or dismissed
@@ -333,6 +359,91 @@
                         see that function's own header comment for whether a native rebuild is
                         needed for that static value (yes) vs. the runtime call itself (no, same as
                         v0.52).
+                    v0.55 (2026-07-29, Blake: "shouldn't the other pages (i.e. online play, how to
+                        play, leaderboard, shop, admin) follow the color change when the felt color
+                        is changed?... beware of font coloring now being illegible"). ROOT CAUSE:
+                        --felt1/--felt2 were the ONLY thing an equipped felt ever reached - every
+                        popup card (.modalCard/.panel/.youCard/.overlay, § STYLE) painted a
+                        HARDCODED dark green that never read a custom property, so a card stayed the
+                        default green no matter what was equipped. FIX: four new derived tokens
+                        (--feltSurface/--feltSurfaceRGB/--feltSurfaceAlpha/--feltBackdropRGB, set at
+                        :root next to --felt1/--felt2) computed by applySurfaceTokens() - called
+                        from applyEquippedFelt() itself, right next to feltTopEdgeColor(), same call
+                        site as v0.52/v0.53's own fixes - and read by every one of those hardcoded
+                        rules instead (see each rule's own v0.55 comment, § STYLE). Blake's own
+                        explicit design call: a DARKENED TINT of the equipped felt, never the raw
+                        felt color (Sunflower's raw bright accent painted straight onto a panel would
+                        be unreadable under the existing cream/gold text) - darkenToLuminance(),
+                        right above applySurfaceTokens(), does that darkening and reuses inkFor()'s
+                        own WCAG relative-luminance math (§ ACCOUNT SIGN-IN area) rather than
+                        inventing a second contrast method. Verified with real contrast math, not
+                        eyeballed, for every text color that lands on one of these surfaces, across
+                        the default felt and all 4 shop felts - full table in HANDOFF.md "v0.55".
+                        DEFAULT IS BYTE-IDENTICAL TO v0.54: every token's own fallback (:root) and
+                        every one of applySurfaceTokens()'s "nothing equipped" branches is the exact
+                        original literal each rule used to hardcode - proven with a real pixel diff,
+                        see HANDOFF.md. The board's own wood/tees/cards are untouched - this only
+                        ever reaches the popup-card surfaces, never § RENDER's board drawing, exactly
+                        as `applyEquippedPalette()`'s seat colors and this felt system have always
+                        been kept separate. `#verTap` bumped `v0.54` -> `v0.55`.
+                    v0.56 (2026-07-29, NEW - Blake's monthly Online Access token, plus the equip
+                        section's own rename): the SERVER half (POST /account/online-status, the
+                        additive `onlineAccess` field on POST /account/purchase, the 15th shop item
+                        `online_month`) shipped already live - this pass is the client. Free through
+                        the end of the signup month's first full calendar month, then 50 credits/
+                        month, no real money anywhere, ever - see HANDOFF.md "v0.56" for the full
+                        rules and every state/decision.
+                        - fetchOnlineStatus()/ONLINE_STATUS_CACHE (right after refreshAcctWallet(),
+                          same block as the rest of this section) - the one fetch/cache every
+                          consumer below shares, never trusted past its OWN accessUntil even
+                          within its TTL (the "don't go stale across the boundary" fix).
+                          ensureOnlineAccessKnown() is what fills it in for renderOnlineGate()
+                          (§ MENU), which must stay synchronous.
+                        - accessCountdownText()/formatMonthKey()/formatChicagoMonth() - the one
+                          place a timestamp or a "YYYY-MM" key becomes words, shared by the Admin
+                          panel's #acctOnline box, the online popup's note and the caveat popup so
+                          none of them can ever say something different about the same deadline.
+                          Clamped at zero - never a negative countdown.
+                        - refreshAcctOnline()/paintOnlineAccess() - the Admin panel's new
+                          #acctOnline box (§ ACCOUNT markup, right under #acctWallet, directly
+                          adjacent to #acctEquip/"Personalizations" just below it) - six states,
+                          all server-driven: guest, unreachable, free (dimmed), purchased (not
+                          dimmed, shows months banked ahead + a "buy another month" option),
+                          buyable, unaffordable (dimmed, explains HOW credits are earned, never a
+                          "you are N short" line - same instruction Blake gave for the Shop, v0.51).
+                        - buyOnlineAccess() - same requestId/busy-guard idiom buyItem() (§ SHOP)
+                          already uses. Paints the wallet box straight from the purchase response's
+                          own `wallet` (paintAcctWalletNumbers(), § ACCOUNT - split out of
+                          refreshAcctWallet() for this reuse) and the online-access section from its
+                          own `onlineAccess` - NO second round trip for either, and NO reload.
+                        - paintOnlineOverlayNote() (§ NET, near requireAccountThen()) - the SAME
+                          countdown, second location: a quiet always-current line on the Host/Join
+                          screen (#onlineAccessNote), repainted fresh every time that screen opens.
+                        - renderOnlineGate() (§ MENU) now ALSO greys #btnOnline for a signed-in but
+                          unentitled player, not just a signed-out one - see that function's own
+                          v0.56 comment for the new 5th state and why it stays synchronous.
+                        - beginOnlineAction()/openOnlineCaveat() (§ NET, right after
+                          requireAccountThen()) - the "before you play online" caveat popup, shown
+                          ONCE PER SESSION at the one place every online entry point (Host, Join, a
+                          ?join=CODE link, a Universal Link) actually begins. Skipped for anyone not
+                          entitled at all (that's handleOnlineAccessRejection()'s job below, not
+                          this popup's) and for anyone "comfortably covered" (purchased with more
+                          than 3 days left) - fails OPEN on a network hiccup, never blocks the game.
+                        - handleOnlineAccessRejection() (§ NET) - the server's own graceful refusal
+                          (reason:"onlineAccessRequired"/"signInRequired" on a host/join attempt,
+                          the one path a shared join link can reach even with #btnOnline greyed) -
+                          shows the server's own message plus an obvious next step ("See Online
+                          Access", which opens the Admin panel) rather than a dead end, via a new
+                          #onlineAccessBlockedOverlay.
+                        - CORRECTED MID-PASS: Blake's "board settings [...] should be changed to
+                          personalizations" ask is about the EQUIP section (§ SHOP's own v0.51
+                          addition - palettes/felts/titles), not the Admin panel or its button/menu
+                          entry, both of which STAY "Admin" (Blake, v0.50: "add the 'admin' button
+                          [...] for symmetry" - an explicit earlier ask this session almost
+                          regressed by renaming it). #acctEquip's own header is now "Personalizations"
+                          (was "Your board settings") - see that markup's own comment, § ACCOUNT, and
+                          HANDOFF.md "v0.56" for the corrected string list.
+                        `#verTap` bumped `v0.55` -> `v0.56`.
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -726,6 +837,20 @@
   /* v0.11.2 item 2: shared fixed height for #btnSkip and .toast, so the two sit flush on the
      same row - tall enough for a wrapped 2-line toast plus real padding. */
   --bandH:60px;
+  /* v0.55 (2026-07-29, Blake: "shouldn't the other pages... follow the color when felt is
+     changed?"). Every popup CARD (.modalCard: rules/leaderboard/shop/admin/online/etc.,
+     .panel/.youCard: the menu's setup rows and account summary, .overlay: the full-screen scrim
+     behind confirm dialogs) used to paint a background HARDCODED to one of three slightly
+     different dark greens (#10281a / rgba(9,32,20,.55) / rgba(5,15,9,.9)) that never read a
+     custom property at all - only the page's own body background (--felt1/--felt2 above) ever
+     followed an equipped felt. These four tokens are set here as the EXACT preexisting literals
+     (so nothing changes for a player who owns no felt - see applySurfaceTokens(), § SHOP, for the
+     byte-for-byte proof) and are overridden live, from that same function, the instant a felt is
+     equipped - see its own header comment for the full formula and the contrast math that
+     verifies it. Deliberately THREE different literal defaults, not unified into one: unifying
+     them would have shifted the no-felt-equipped look by a few RGB values, which the "byte-
+     identical to v0.54" requirement does not allow - see HANDOFF.md "v0.55". */
+  --feltSurface:#10281a; --feltSurfaceRGB:9,32,20; --feltSurfaceAlpha:0.55; --feltBackdropRGB:5,15,9;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%}
@@ -815,7 +940,14 @@ button{font:inherit;cursor:pointer}
 .savedTileConfirmRow{display:flex;gap:10px;margin-top:10px}
 .savedTileConfirmRow .btn{flex:1;min-height:44px;padding:10px 14px;font-size:14.5px}
 .btn.danger{background:var(--red);color:#fff}
-.panel{max-width:520px;margin:0 auto;background:rgba(9,32,20,.55);border:1px solid rgba(255,255,255,.14);
+/* v0.55: was a hardcoded rgba(9,32,20,.55) - see the --feltSurface* comment at :root and
+   applySurfaceTokens() (§ SHOP). Translucent (unlike .modalCard), so it also reads the page's OWN
+   felt gradient through the blur - --feltSurfaceAlpha is bumped from the historical .55 to .90
+   only once a felt is actually equipped, because at .55 the brightest shop felt (Sunflower, a
+   mid-tone gold) let enough of the page's own bright top-end bleed through to drop muted text
+   under 4.5:1 - verified, and re-verified safe at .90 for every felt/text pair, see HANDOFF.md
+   "v0.55". Default keeps the original .55 - it was already safe there. */
+.panel{max-width:520px;margin:0 auto;background:rgba(var(--feltSurfaceRGB),var(--feltSurfaceAlpha));border:1px solid rgba(255,255,255,.14);
   border-radius:18px;padding:18px 16px 22px;backdrop-filter:blur(6px);text-align:left}
 /* 2026-07-25 (item G of the UI polish batch): a flex item cannot shrink below its own content's
    natural width by default (min-width:auto), so the label + the two segmented buttons together
@@ -962,7 +1094,10 @@ button{font:inherit;cursor:pointer}
    own HTML comment for why). A third thing, the "what's new" row, lived here too through v0.45 -
    deleted in v0.46 (Blake: TestFlight already shows release notes on update, so it was
    redundant) along with its own CSS, which used to sit right below this comment. */
-.youCard{max-width:520px;margin:0 auto 12px;background:rgba(9,32,20,.55);
+/* v0.55: was a hardcoded rgba(9,32,20,.55) - same fix, same reasoning as .panel's own comment
+   right above (§ STYLE) - shares the same --feltSurfaceRGB/--feltSurfaceAlpha tokens so the two
+   can never drift apart. */
+.youCard{max-width:520px;margin:0 auto 12px;background:rgba(var(--feltSurfaceRGB),var(--feltSurfaceAlpha));
   border:1px solid rgba(255,255,255,.14);border-radius:16px;padding:14px 16px;
   text-align:left;backdrop-filter:blur(6px)}
 /* Signed in: the whole card is one tap target straight through to the Admin panel (renderYouCard()
@@ -1796,7 +1931,13 @@ button{font:inherit;cursor:pointer}
    of being sliced off/inaccessible, which is what a plain justify-content:center would do).
    passOverlay/winOverlay have no such single wrapper child (their .sign/p/bigBtns are direct
    overlay children) so they keep relying on justify-content:center exactly as before - untouched. */
-.overlay{position:fixed;inset:0;background:rgba(5,15,9,.9);z-index:80;display:flex;flex-direction:column;
+/* v0.55: was a hardcoded rgba(5,15,9,.9) - this is the full-screen scrim behind EVERY overlay,
+   including the confirm-style dialogs (pause/concede/leave/etc.) whose .confirmCard has no
+   background of its own (see that class, below), so this IS their visible surface. See the
+   --feltBackdropRGB comment at :root and applySurfaceTokens() (§ SHOP) - a further-darkened tint
+   than --feltSurfaceRGB on purpose, matching how much darker the original rgba(5,15,9) already
+   was than the original rgba(9,32,20)/#10281a pair. */
+.overlay{position:fixed;inset:0;background:rgba(var(--feltBackdropRGB),.9);z-index:80;display:flex;flex-direction:column;
   align-items:center;justify-content:center;padding:22px;text-align:center;
   overflow-y:auto;-webkit-overflow-scrolling:touch}
 .overlay>.confirmCard,.overlay>.modalCard{margin:auto}
@@ -1812,8 +1953,10 @@ button{font:inherit;cursor:pointer}
    are positioned against the fixed-position overlay, so they stay pinned at the bottom of the
    screen while the content moves underneath them. See updateScrollHints(), § UTIL, for the
    measurement and when it re-runs. */
+/* v0.55: was a hardcoded rgba(5,15,9,X) pair - matches .overlay's own --feltBackdropRGB fix right
+   above so the fade never mismatches the scrim it's fading into. */
 .overlay.canScroll::after{content:"";position:absolute;left:0;right:0;bottom:0;height:64px;
-  background:linear-gradient(to top,rgba(5,15,9,.96),rgba(5,15,9,0));pointer-events:none;z-index:3}
+  background:linear-gradient(to top,rgba(var(--feltBackdropRGB),.96),rgba(var(--feltBackdropRGB),0));pointer-events:none;z-index:3}
 .overlay.canScroll::before{content:"more below - swipe up";position:absolute;left:0;right:0;bottom:10px;
   text-align:center;font-size:12px;font-weight:700;letter-spacing:.06em;color:#a9d2b5;
   pointer-events:none;z-index:4}
@@ -2085,14 +2228,16 @@ button{font:inherit;cursor:pointer}
 #rulesOverlay,#lbOverlay,#shopOverlay,#accountOverlay,#adminOverlay,#onlineRulesOverlay,
 #onlineOverlay,#roomOverlay,#joinOverlay,#offlineSeatOverlay,#hostSpeedOverlay,#welcomeOverlay,
 #reunionOverlay,#signOutWarnOverlay,#leaveConfirmOverlay,#surrenderConfirmOverlay,
-#overwriteWarnOverlay,#slotReplaceOverlay{padding-top:calc(env(safe-area-inset-top) + 72px)}
+#overwriteWarnOverlay,#slotReplaceOverlay,#onlineCaveatOverlay,#onlineAccessBlockedOverlay
+  {padding-top:calc(env(safe-area-inset-top) + 72px)}
 #rulesOverlay>.modalCard,#lbOverlay>.modalCard,#shopOverlay>.modalCard,
 #accountOverlay>.modalCard,#adminOverlay>.modalCard,#onlineRulesOverlay>.modalCard,
 #onlineOverlay>.modalCard,#roomOverlay>.modalCard,#joinOverlay>.modalCard,
 #offlineSeatOverlay>.modalCard,#hostSpeedOverlay>.modalCard,#welcomeOverlay>.modalCard,
 #reunionOverlay>.modalCard,#signOutWarnOverlay>.confirmCard,#leaveConfirmOverlay>.confirmCard,
 #surrenderConfirmOverlay>.confirmCard,#overwriteWarnOverlay>.confirmCard,
-#slotReplaceOverlay>.confirmCard{margin-top:0}
+#slotReplaceOverlay>.confirmCard,#onlineCaveatOverlay>.confirmCard,
+#onlineAccessBlockedOverlay>.confirmCard{margin-top:0}
 /* The per-game KO scoreboard (buildGameKoTableHtml(), § TURNS) reuses the leaderboard KOs tab's
    own .lbTable.lbKo styling verbatim (same column widths/font sizing) so the two tables read as
    one consistent design language - only the wrapper needs its own width here, since #winOverlay
@@ -2101,7 +2246,11 @@ button{font:inherit;cursor:pointer}
    .lbScroll already stretches for free). */
 #winKoWrap{width:100%;max-width:380px;margin-top:10px}
 .winKoCaption{font-size:12.5px;color:#a9d2b5;letter-spacing:.03em;text-transform:uppercase;margin-bottom:4px}
-.modalCard{background:#10281a;border:1px solid rgba(255,255,255,.18);border-radius:18px;max-width:520px;
+/* v0.55: was a hardcoded #10281a - see the --feltSurface comment at :root and
+   applySurfaceTokens() (§ SHOP) for why this is now the one card background every popup
+   (rules/leaderboard/shop/admin/online/welcome/etc.) shares, and why it still renders this exact
+   color for a player with no felt equipped. */
+.modalCard{background:var(--feltSurface);border:1px solid rgba(255,255,255,.18);border-radius:18px;max-width:520px;
   width:100%;max-height:82vh;overflow-y:auto;padding:22px;text-align:left}
 .modalCard h3{margin:2px 0 12px;font-size:21px}
 .modalCard h4{margin:16px 0 4px;color:var(--gold);font-size:15px}
@@ -2200,7 +2349,8 @@ button{font:inherit;cursor:pointer}
    itself and this styling both live on - it is now shown only when a signed-out player taps
    something that needs an account (Online play, a join link). The OPAQUE backdrop stays
    deliberate for the same underlying reason it always was: every other overlay is
-   rgba(5,15,9,.9) so the page underneath ghosts through, which is right for a sheet over a live
+   rgba(var(--feltBackdropRGB),.9) (v0.55: was the hardcoded rgba(5,15,9,.9) - see that rule's own
+   comment, § STYLE) so the page underneath ghosts through, which is right for a sheet over a live
    board and wrong for a full-screen "you need to sign in to do this" interruption - the menu
    showing faintly behind it would read as a rendering fault, not a design choice. This is still
    the only .solid overlay in the app.
@@ -2568,6 +2718,29 @@ button{font:inherit;cursor:pointer}
 .acctWalletRow b{color:var(--gold);font-size:17px}
 .acctWalletNote{font-size:11.5px;color:#a9d2b5;line-height:1.4;margin-top:6px}
 
+/* ---- v0.56 (2026-07-29, NEW - Blake's "Online Access" ask). Same box treatment as .acctWallet
+   just above (so the two read as a matched pair of "money-ish" boxes) but its own subtle blue tint
+   so it reads as its own distinct thing at a glance, not a copy of the points wallet. .dimmed is
+   the literal "greyed out" Blake asked for - applied whenever there is genuinely nothing to DO
+   here yet (the free period, or not-enough-credits) - never applied to the guest/unreachable
+   states, which are informational, not "you don't need this," and never to the buyable/purchased
+   states, which ARE actionable. The countdown line reuses #ffe9a8 - the same soft-amber "pay
+   attention to this" accent .roomTeamNote/#joinNote already use elsewhere in this file, rather
+   than inventing a new color for the same job. */
+.acctOnline{margin:0 0 14px;padding:12px;border-radius:12px;background:rgba(125,180,211,.08);
+  border:1px solid rgba(125,180,211,.25);transition:opacity .15s ease}
+.acctOnline.dimmed{opacity:.62}
+.acctOnlineHead{font-size:13.5px;font-weight:800;color:var(--cream);margin-bottom:6px}
+.acctOnlineMsg{font-size:13.5px;color:#dcefe1;line-height:1.5}
+.acctOnlineNote{font-size:12px;color:#a9d2b5;line-height:1.45;margin-top:4px}
+.acctOnlineCountdown{font-size:12.5px;color:#ffe9a8;font-weight:700;margin-top:6px}
+.acctOnlineActions{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px}
+.acctOnlineActions .btn{padding:8px 12px;font-size:13px}
+.acctOnlineConfirm{margin-top:10px;padding:10px;border-radius:10px;background:rgba(0,0,0,.25);
+  font-size:13px;color:#ffe9a8;display:flex;flex-direction:column;gap:8px}
+.acctOnlineConfirm .bigBtns{display:flex;gap:8px}
+.acctOnlineConfirm .bigBtns .btn{flex:1;padding:8px;font-size:13px}
+
 /* ---- v0.51: the Admin panel's equip section (Blake: "add a section to the admin panel for
    people to switch between board settings that they got from the shop"). Deliberately REUSES the
    Shop's own .shopItem/.shopItemInfo/.shopItemName/.shopItemMeta/.shopSwatchRow/.shopSwatch/
@@ -2787,10 +2960,15 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnRules">How to play</button>
       <button class="btn ghost" id="btnLb">Leaderboard</button>
       <button class="btn ghost" id="btnShop">Shop</button>
+      <!-- v0.50, Blake: "add the 'admin' button next to it there for symmetry" - unchanged by
+           v0.56's own rename pass. Blake's "should be changed to personalizations" ask (2026-07-29)
+           turned out to be about the EQUIP section INSIDE this panel (§ ACCOUNT's #acctEquip,
+           added v0.51), not this button or the panel itself - both stay "Admin," see the
+           #acctEquip markup comment and HANDOFF.md "v0.56" for the corrected story. -->
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.54</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.56</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -2863,10 +3041,15 @@ button{font:inherit;cursor:pointer}
          construction rather than by copying numbers: one rule sets the height (44px), the
          uppercase display, the padding and the font clamp for both of them. The v0.34 contract
          is unchanged - PAUSE far left, the logo centred at the very top, this button far right,
-         and --topInset feeding all four insets so PAUSE's top/left equal ADMIN's top/right.
+         and --topInset feeding all four insets so PAUSE's top/left equal this button's top/right.
          Same id, same panel, same handler as the old circle. The circle itself is not gone: it
          is still the avatar at the top of the panel (#acctAvatar), where there is room for a
-         coloured initial and it means something. -->
+         coloured initial and it means something.
+         2026-07-29 (v0.56): unchanged by this pass - Blake's "should be changed to personalizations"
+         ask turned out to be about the EQUIP section inside the panel this button opens (§ ACCOUNT's
+         #acctEquip, added v0.51), not this button itself, which keeps its v0.36 wording (and its
+         v0.50 "for symmetry" reasoning, § MENU) unchanged. See the #acctEquip markup comment and
+         HANDOFF.md "v0.56" for the corrected story. -->
     <div class="topSlot topSlotR">
       <button class="iconBtn" id="btnAccount" aria-label="Admin - your settings and account">Admin</button>
     </div>
@@ -3049,12 +3232,62 @@ button{font:inherit;cursor:pointer}
   <div class="modalCard">
     <h3>Play online</h3>
     <p>Host a game - you'll get a link to text around so everyone plays from their own phone - or join a game someone else started.</p>
+    <!-- 2026-07-29 (v0.56, NEW - Blake: "a countdown clock of when they'll need to buy the token
+         to access [...] on the board settings and the online popup"). This is the SECOND of the
+         two places that countdown shows (the Admin panel's #acctOnline is the first) - a quiet
+         always-current line, painted fresh every time this screen opens by paintOnlineOverlayNote()
+         (§ SHOP), never gated on "once per session" the way the caveat popup below is. Starts
+         empty/hidden - a signed-out or not-yet-known state simply shows nothing here rather than
+         guessing. -->
+    <div id="onlineAccessNote" class="onlineGateNote hidden"></div>
     <div id="onlineErr" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
     <div class="bigBtns">
       <button class="btn primary" id="btnHostGame">Host a game</button>
       <button class="btn ghost" id="btnJoinGame">Join a game</button>
     </div>
     <div class="bigBtns"><button class="btn ghost" id="btnOnlineClose">Close</button></div>
+  </div>
+</div>
+
+<!-- 2026-07-29 (v0.56, NEW - Blake: "have this caveat pop up when they start a new online game").
+     Shown from beginOnlineAction() (§ NET), the ONE place every online entry point actually begins
+     (both the manual "Online play" tap and a resumed sign-in/nickname-gate from a deep link funnel
+     through requireAccountThen() -> beginOnlineAction() before ever reaching this point) - so Host,
+     Join, a ?join=CODE link and a Universal Link all get the exact same one-time notice, never a
+     second copy. ONCE PER SESSION (ONLINE_CAVEAT_SHOWN_THIS_SESSION, § SHOP) and SKIPPED ENTIRELY
+     for anyone already comfortably covered (see beginOnlineAction()'s own header comment for the
+     exact "comfortable" definition) - this is a heads-up, not a nag, and it never blocks or delays
+     the actual game start beyond the one round trip to check status. -->
+<div id="onlineCaveatOverlay" class="overlay hidden">
+  <!-- Bucket A - purely informational, nothing to confirm. X does exactly what "Got it" does
+       (proceeds into the game) - dismissing this must never cancel starting the online game,
+       it only ever skips ahead past the one-time notice. -->
+  <button id="btnOnlineCaveatX" class="overlayXBtn" aria-label="Close">✕</button>
+  <div class="confirmCard">
+    <div class="sign"><b>BEFORE YOU PLAY</b></div>
+    <p id="onlineCaveatText"></p>
+    <div class="bigBtns"><button class="btn primary" id="btnOnlineCaveatOk">Got it, let's play</button></div>
+  </div>
+</div>
+
+<!-- 2026-07-29 (v0.56, NEW - Blake's item 6, "handle the server's rejection gracefully"). Shown
+     when the server refuses a host/join attempt with reason:"onlineAccessRequired" or
+     reason:"signInRequired" (handleOnlineAccessRejection(), § NET) - the deep-link edge case
+     renderOnlineGate()'s button-level check (§ MENU) can't reach (a shared join link bypasses the
+     disabled #btnOnline entirely). leaveOnlineToMenu() already ran a clean reset by the time this
+     opens, so the player is safely back on the menu underneath it - this overlay only ever adds an
+     explanation and a next step, never a second cleanup path. -->
+<div id="onlineAccessBlockedOverlay" class="overlay hidden">
+  <!-- Bucket A - X reuses btnOnlineBlockedOk's own click, the plain "I've seen this" dismissal -
+       there is no destructive action anywhere on this card. -->
+  <button id="btnOnlineBlockedX" class="overlayXBtn" aria-label="Close">✕</button>
+  <div class="confirmCard">
+    <div class="sign"><b>CAN'T START THAT GAME</b></div>
+    <p id="onlineBlockedText"></p>
+    <div class="bigBtns">
+      <button class="btn primary" id="btnOnlineBlockedGo">See Online Access</button>
+      <button class="btn ghost" id="btnOnlineBlockedOk">OK</button>
+    </div>
   </div>
 </div>
 
@@ -3396,13 +3629,21 @@ button{font:inherit;cursor:pointer}
        down (delete-account, the name-claim) that are just hidden/shown divs inside this SAME
        card, never separate overlays - closing the whole panel via X while one of them happens to
        be open is exactly as safe as the existing bottom Close button already sitting right below
-       them (neither one ever triggers a delete or a claim; both only ever hide the panel). -->
+       them (neither one ever triggers a delete or a claim; both only ever hide the panel).
+       2026-07-29 (v0.56): this panel, its button (both here and the menu's #btnMenuAdmin) and its
+       title all stay "Admin" - Blake's "[the board settings section] should be changed to
+       personalizations" ask turned out to be about the EQUIP section INSIDE this panel
+       (#acctEquip, added v0.51), not the panel itself, which also keeps its earlier explicit
+       "for symmetry" naming (v0.50, § MENU). See #acctEquip's own markup comment, right below, for
+       the section that actually got renamed, and HANDOFF.md "v0.56" for the corrected story. This
+       is NOT the god-mode #adminOverlay (§ ADMIN, reached by tapping the version number 7 times),
+       a completely separate developer-only tool that keeps its own name untouched either way. -->
   <button id="btnAcctX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
-    <!-- 2026-07-26 (v0.36 item 2): the button that opens this panel says ADMIN now, so the panel
-         says Admin too - a player who taps a button called ADMIN and lands on an untitled page
-         has no way to know they arrived. The coloured initial that used to be the top-bar circle
-         is the avatar right below it. -->
+    <!-- 2026-07-26 (v0.36 item 2): the button that opens this panel says ADMIN, so the panel says
+         Admin too - a player who taps a button called ADMIN and lands on an untitled page has no
+         way to know they arrived. The coloured initial that used to be the top-bar circle is the
+         avatar right below it. Unchanged by v0.56 - see the #accountOverlay markup comment above. -->
     <h3 id="acctTitle">Admin</h3>
     <div class="acctHead">
       <div class="acctAvatar" id="acctAvatar">?</div>
@@ -3418,6 +3659,23 @@ button{font:inherit;cursor:pointer}
       <div class="acctWalletRow"><span>Points remaining</span><b id="acctPtsRemaining">0</b></div>
       <div class="acctWalletNote">Earned always matches the leaderboard and never goes down as you spend. Remaining is what's left to spend in the Shop.</div>
     </div>
+    <!-- 2026-07-29 (v0.56, NEW - Blake: "add a greyed out section on the board settings [...]
+         that is a token you can buy to play online. Saying that it's free for the first full
+         calendar month but after that they either need to have earned enough credits to buy the
+         token."). Lives right under the points wallet (spending context) and directly adjacent to
+         "Personalizations" (#acctEquip, right below - the OTHER thing bought from the Shop) - never
+         hidden entirely, even for a guest, because a guest still needs to be told what unlocks this
+         (see the guest state below, which is why this box does NOT follow #acctWallet/#acctEquip's
+         own "hidden for guest" pattern). Filled in by refreshAcctOnline() (§ SHOP), called from
+         openAccountPanel() same as the other two boxes, and re-painted on a slow interval while
+         this panel stays open (see the setInterval right after buyOnlineAccess(), § SHOP) so a
+         countdown never goes stale while the app just sits here. Six honest states, all
+         server-driven, none guessed - see refreshAcctOnline()'s own header comment for the full
+         list and HANDOFF.md "v0.56" for the whole feature. -->
+    <div class="acctOnline" id="acctOnline">
+      <div class="acctOnlineHead">Online Access</div>
+      <div id="acctOnlineBody"></div>
+    </div>
     <!-- 2026-07-28 (v0.51, Blake: "add a section to the admin panel for people to switch between
          board settings that they got from the shop"). Equipping used to only be reachable from
          inside the Shop itself - this is a second door onto the exact same EQUIP/equipToggle()
@@ -3432,11 +3690,17 @@ button{font:inherit;cursor:pointer}
          to it, so it can never trap focus. refreshAcctEquip() (§ SHOP) forces it back to collapsed
          at the TOP of every call - and it is called every single time this panel opens
          (openAccountPanel()) - so collapsed is the only state a fresh opening of this panel can
-         ever show, exactly matching Blake's ask that it never remember being left open. -->
+         ever show, exactly matching Blake's ask that it never remember being left open.
+         2026-07-29 (v0.56, Blake: "[the board settings section] should be changed to
+         personalizations"): heading text changed from "Your board settings" to "Personalizations" -
+         this is the ONE thing that rename actually meant (this narrower section - palettes/felts/
+         titles specifically), NOT the panel itself or the button that opens it, both of which stay
+         "Admin" (see the #accountOverlay markup comment above for the corrected story and
+         HANDOFF.md "v0.56"). -->
     <div class="acctEquip hidden" id="acctEquip">
       <button type="button" class="btn ghost acctRow acctEquipToggle" id="acctEquipToggleBtn"
         aria-expanded="false" aria-controls="acctEquipBody">
-        <span class="acctEquipHead">Your board settings</span>
+        <span class="acctEquipHead">Personalizations</span>
         <span class="acctEquipChevron" aria-hidden="true">&#9662;</span>
       </button>
       <div id="acctEquipBody" class="hidden"></div>
@@ -4097,8 +4361,9 @@ function fitConfirmCard(overlay){
    the whole old page behind it (I can see the buttons too)."
    Reproduced exactly. openPauseSheet() set G.paused - which makes updatePauseUI() reveal the
    full-screen #pauseOverlay - and THEN opened #leaveConfirmOverlay, a SECOND full-screen
-   .overlay, on top of it. Every .overlay backdrop is rgba(5,15,9,.9): 90% opaque, not 100%, so
-   the page underneath genuinely shows through, buttons and all.
+   .overlay, on top of it. Every .overlay backdrop is rgba(var(--feltBackdropRGB),.9) (v0.55: was
+   the hardcoded rgba(5,15,9,.9)) - 90% opaque, not 100%, so the page underneath genuinely shows
+   through, buttons and all.
    Fixing just that one call would have been a patch, not a fix - this app has 20 overlays and
    several of them legitimately hand off to each other, so the same mistake was one line of new
    code away from coming back. This section makes "only one full-screen page at a time" a real
@@ -4290,6 +4555,10 @@ const OVERLAY_X_WIRING=[
   ['surrenderConfirmOverlay','btnSurrenderX','btnSurrenderCancel'],
   ['overwriteWarnOverlay','btnOverwriteX','btnOverwriteCancel'],
   ['slotReplaceOverlay','btnSlotReplaceX','btnReplaceCancel'],
+  // v0.56: both purely informational (see each overlay's own markup comment) - the X does
+  // exactly what the primary button does, never a second/different close path.
+  ['onlineCaveatOverlay','btnOnlineCaveatX','btnOnlineCaveatOk'],
+  ['onlineAccessBlockedOverlay','btnOnlineBlockedX','btnOnlineBlockedOk'],
 ];
 OVERLAY_X_WIRING.forEach(([ovId,xId,safeId])=>{
   const xBtn=$(xId);
@@ -10013,6 +10282,13 @@ function handleNetMessage(m){
         netSend(Object.assign({type:'reclaim',code:JOIN.code,name:JOIN.name,protocolVersion:PROTOCOL_VERSION},acctField()));
         return;
       }
+      // v0.56 (Blake's item 6, "handle the server's rejection gracefully"): the one join-side path
+      // that can reach here even though renderOnlineGate() (§ MENU) already greys #btnOnline for a
+      // signed-in-but-unentitled account - a ?join=CODE web link or an iOS Universal Link skips
+      // that button entirely (openJoinOverlay() only gates on being SIGNED IN, via
+      // requireAccountThen() - see its own comment, § NET). See handleOnlineAccessRejection(),
+      // § NET, right next to requireAccountThen() - never a dead end, never a bare toast.
+      if(m.reason==='onlineAccessRequired'||m.reason==='signInRequired'){ handleOnlineAccessRejection(m); return; }
       $('joinErr').textContent=m.message;
       return;
     case 'reclaimError': $('joinErr').textContent=m.message; return;
@@ -10211,6 +10487,11 @@ function handleNetMessage(m){
     case 'error':
       // v0.25: generic server-side rejection with a human-readable message (e.g. Start tapped
       // before every guest readied up - a race the disabled button can't fully prevent).
+      // v0.56: a HOST attempt refused for reason:"onlineAccessRequired"/"signInRequired" arrives
+      // as this same generic 'error' type (hostCreateRoom()'s netSend('host'...) is the only send
+      // site that can trigger it) - see handleOnlineAccessRejection(), § NET, for the graceful
+      // handling; every OTHER 'error' (the race this case already handled) is untouched below.
+      if(m.reason==='onlineAccessRequired'||m.reason==='signInRequired'){ handleOnlineAccessRejection(m); return; }
       if(m.message)toast(m.message,3200);
       return;
     default: return;
@@ -10958,7 +11239,8 @@ $('btnStart').onclick=()=>openOfflineSeatPicker();
    should bring you to the admin options not the leaderboard") - tapping the card now opens the
    Admin panel (openAccountPanel()), not the leaderboard - the menu already has its own dedicated
    Leaderboard button, so nothing is lost. The aria-label was reworded to match ("Open Admin
-   settings", not "Open the leaderboard").
+   settings", not "Open the leaderboard") - unchanged by v0.56 (that pass renamed the EQUIP section
+   inside this same panel to "Personalizations," not the panel itself - see HANDOFF.md "v0.56").
 
    Signed OUT (guest): no record at all - a guest has no persistent name to keep one under (guests
    are never given a nickname - see mySeatName()'s header comment, § ACCOUNT, for why a seat still
@@ -11536,7 +11818,19 @@ function isAccountReady(){ return isSignedIn()&&!!ACCT.gameName; }
    path repaints through (boot's refreshAccount().then()/.catch(), accountSignIn(),
    accountSignOut(), accountDelete(), submitNicknameGate(), youCardSignIn(), renderMenu()). Riding
    along inside it means this can never reproduce the v0.46 class of bug (a second, hand-maintained
-   repaint call site that a future change eventually forgets to add). */
+   repaint call site that a future change eventually forgets to add).
+   v0.56 (Blake's item 5, "gate the Online play button on entitlement, not just sign-in"): a signed-
+   in player with no Online Access (free period over, no token bought) must ALSO see this button
+   greyed out, not just a guest. Added as a FIFTH state, checked only once isAccountReady() is
+   already true - every existing branch above (boot-checking, signed-out, no-accounts-here) is
+   completely untouched, in the same order, with the same wording. The entitlement answer itself
+   comes from ONLINE_STATUS_CACHE (§ SHOP), never fetched directly from here - this function stays
+   synchronous, exactly like every other branch, so it can keep riding along inside renderYouCard()
+   without becoming async itself. The very first time a signed-in player reaches this with no cached
+   answer yet, it shows a neutral "checking" state (same idea as ACCT_BOOT_CHECKING above - never
+   guesses entitled OR not) and kicks off ensureOnlineAccessKnown() (§ SHOP), which repaints via
+   renderYouCard() the instant the real answer lands - the SAME "never leave a stale/guessed state
+   on screen" discipline v0.46 fixed for the you card itself, applied to this one new case. */
 function renderOnlineGate(){
   const btn=$('btnOnline'), note=$('onlineGateNote');
   if(!btn||!note)return;
@@ -11548,10 +11842,27 @@ function renderOnlineGate(){
     return;
   }
   if(isAccountReady()){
-    btn.disabled=false;
-    btn.removeAttribute('aria-label');
-    note.textContent='';
-    note.classList.add('hidden');
+    const st=ONLINE_STATUS_CACHE&&ONLINE_STATUS_CACHE.data;
+    if(!st){
+      // Entitlement not known yet this boot/sign-in - neutral, never a guess either way.
+      btn.disabled=true;
+      btn.setAttribute('aria-label','Online play - checking your online access');
+      note.textContent='Checking your online access...';
+      note.classList.remove('hidden');
+      ensureOnlineAccessKnown();   // no-op if a fetch is already in flight, § SHOP
+      return;
+    }
+    if(st.entitled){
+      btn.disabled=false;
+      btn.removeAttribute('aria-label');
+      note.textContent='';
+      note.classList.add('hidden');
+      return;
+    }
+    btn.disabled=true;
+    btn.setAttribute('aria-label','Online play - needs an Online Access token, see Admin');
+    note.textContent='Online play needs an Online Access token now - see Admin to get one.';
+    note.classList.remove('hidden');
     return;
   }
   btn.disabled=true;
@@ -11650,9 +11961,12 @@ function accountColors(){
 // Paints the top bar's ADMIN button and the panel's own coloured avatar. Every write is guarded
 // ("is it already that?") - this runs from syncAll() after every move, and the account panel's
 // avatar lives inside an .overlay that the scroll-hint MutationObserver watches (§ UTIL).
-// 2026-07-26 (v0.36 item 2): the top-bar control is a text box reading ADMIN now, so the only
-// thing written to it here is the accessible label. The letter and the seat colour still get
-// written - to the avatar at the head of the panel, which is where the initial lives now.
+// 2026-07-26 (v0.36 item 2): the top-bar control is a text box reading ADMIN, so the only thing
+// written to it here is the accessible label. The letter and the seat colour still get written -
+// to the avatar at the head of the panel, which is where the initial lives now.
+// 2026-07-29 (v0.56): unchanged by this pass - Blake's "should be changed to personalizations" ask
+// turned out to be about the equip section inside this panel (#acctEquip, § ACCOUNT), not this
+// button or its label - see HANDOFF.md "v0.56" for the corrected story.
 function updateAccountButton(){
   const btn=$('btnAccount');
   if(!btn)return;
@@ -11702,6 +12016,8 @@ function openAccountPanel(){
   try{ probeClaimOffer().catch(()=>{}); }catch(e){}
   // 2026-07-28 (v0.50): the points-earned/points-remaining box - see refreshAcctWallet(), § SHOP.
   try{ refreshAcctWallet(); }catch(e){}
+  // 2026-07-29 (v0.56): the Online Access box - see refreshAcctOnline(), § SHOP.
+  try{ refreshAcctOnline(); }catch(e){}
   // 2026-07-28 (v0.51): the equip section - see refreshAcctEquip(), § SHOP.
   // 2026-07-29 (v0.53, Blake: "don't have the shop stuff auto open in the admin page... make it
   // something they have to click and then it opens"). Forced back to COLLAPSED right here, every
@@ -12107,8 +12423,10 @@ async function submitNicknameGate(){
   // v0.42: resume an online action that was waiting specifically on THIS gate - the defensive
   // "signed in but no name yet" branch of requireAccountThen() (§ NET), not a fresh sign-in
   // (which resumes through welcomeSignIn() instead, and would have left this null already).
+  // v0.56: routed through beginOnlineAction() (§ NET), not called directly - the caveat popup
+  // must get its one chance to show here too, exactly like the "already signed in" immediate path.
   const cont=ONLINE_PENDING; ONLINE_PENDING=null;
-  if(cont)cont();
+  if(cont)beginOnlineAction(cont);
 }
 $('btnNickGateSave').onclick=()=>{ submitNicknameGate(); };
 $('nickGateInput').addEventListener('keydown',e=>{ if(e.key==='Enter')submitNicknameGate(); });
@@ -12141,6 +12459,11 @@ async function accountSignIn(){
     // v0.36 item 3: a fresh sign-in is a fresh account, so any leftover offer from a previous
     // session on this page must not carry over.
     ACCT_CLAIM=null; CLAIM_PROBED=false;
+    // v0.56: ditto for the Online Access cache (§ SHOP) - a previous account's entitlement must
+    // never be shown for a newly-signed-in one, even for the split second before the first real
+    // fetchOnlineStatus() call lands (ensureOnlineAccessKnown(), triggered by the renderYouCard()
+    // call in `finally` below, § MENU).
+    ONLINE_STATUS_CACHE=null;
     await bindAccountName();
   } finally {
     ACCT_BUSY=false;
@@ -12158,6 +12481,7 @@ async function accountSignOut(){
   ACCT=null; ACCT_NOTICE='';
   // v0.36 item 3: the offer belongs to the account, not to this phone.
   ACCT_CLAIM=null; ACCT_CLAIM_STEP='offer'; CLAIM_PROBED=false;
+  ONLINE_STATUS_CACHE=null;   // v0.56: entitlement belongs to the account too - never carry it past sign-out
   saveAcctToken('');
   renderAccountRows(); updateAccountButton();
   renderYouCard();   // v0.44: back to the guest nudge, the moment the menu is on screen again
@@ -12189,6 +12513,7 @@ async function accountDelete(eraseBoard){
   }
   ACCT=null;
   ACCT_CLAIM=null; ACCT_CLAIM_STEP='offer'; CLAIM_PROBED=false;   // v0.36 item 3
+  ONLINE_STATUS_CACHE=null;   // v0.56: same reasoning as accountSignOut() just above
   saveAcctToken('');
   closeAcctDeleteConfirm();
   // Apple keeps its own list of the apps you have used Sign in with Apple on, and only the person
@@ -12513,12 +12838,108 @@ function feltTopEdgeColor(f){
   const blend=a.map((v,i)=>Math.round(v+(b[i]-v)*F_TOP));
   return '#'+blend.map(v=>Math.max(0,Math.min(255,v)).toString(16).padStart(2,'0')).join('');
 }
+// v0.55 (2026-07-29, Blake: "shouldn't the other pages (i.e. online play, how to play,
+// leaderboard, shop, admin) follow the color change when the felt color is changed? ... beware of
+// font coloring now being illegible"). ROOT CAUSE, confirmed before touching anything: --felt1/
+// --felt2 (right above/below) were the ONLY thing an equipped felt ever reached. Every popup CARD
+// (.modalCard: rules/leaderboard/shop/admin/online/room/join/welcome/etc., .panel/.youCard: the
+// menu's setup rows and account summary, .overlay: the full-screen scrim behind confirm dialogs)
+// painted a background hardcoded to a plain literal (#10281a / rgba(9,32,20,.55) / rgba(5,15,9,.9)
+// - three independently-picked dark greens, see the :root comment, § STYLE) that never read a
+// custom property - so switching felts recolored the page behind a card and left the card itself
+// exactly the same green regardless of what was equipped.
+//
+// THE FIX is these two functions plus four new CSS custom properties (--feltSurface/
+// --feltSurfaceRGB/--feltSurfaceAlpha/--feltBackdropRGB, set at :root next to --felt1/--felt2) -
+// every one of the hardcoded backgrounds above now reads one of these instead (see each rule's own
+// v0.55 comment, § STYLE). Blake's own explicit design call, worth restating here because it drove
+// every number below: "Panels become a DARKENED TINT of the equipped felt, not the raw felt
+// color" - Sunflower's raw bright accent (--felt1, #c99a1e) painted straight onto a panel would be
+// genuinely unreadable under the app's existing cream/gold text.
+//
+// darkenToLuminance(hex, frac, ceilingL): darkens `hex` toward black by a flat `frac` (changes
+// lightness only - hue and saturation ratios are preserved, which is "the felt's own identity"
+// staying intact) and then, ONLY if that alone isn't dark enough, keeps scaling further until the
+// result's own WCAG relative luminance drops under `ceilingL` - the exact same relative-luminance
+// math inkFor() (§ ACCOUNT SIGN-IN area) already uses to pick dark-vs-cream tee ink, reused here
+// rather than a second contrast method invented from scratch. None of today's 5 felts (default +
+// the 4 shop felts) actually need the ceiling clamp - a flat 30%/60% darken already lands every one
+// of them safely under it, verified below - but a future, brighter shop felt is automatically kept
+// safe by it rather than silently shipping illegible text.
+//
+// THE NUMBERS, verified with real WCAG contrast math (not eyeballed) against every text color that
+// actually lands on one of these surfaces - body/heading cream, the gold accent, muted/secondary
+// green, leaderboard table text, the points/KO gold, and the warning/error reds - for all 5 felts.
+// Full table in HANDOFF.md "v0.55". Summary:
+//   --feltSurface (opaque, .modalCard)            = darkenToLuminance(felt.dark, 0.30, 0.05)
+//     Worst case (Sunflower, the one bright/gold felt): #4b3706 - every text color above still
+//     clears 4.5:1 (smallest margin: warning-red text at 5.59:1).
+//   --feltBackdropRGB (.overlay scrim + its scroll-fade) = darkenToLuminance(felt.dark, 0.60, 0.02)
+//     Deeper than the surface on purpose, matching how much darker the original rgba(5,15,9) was
+//     than the original rgba(9,32,20)/#10281a pair. Every felt clears 9.9:1+.
+//   --feltSurfaceAlpha (.panel/.youCard's translucency): stays the historical 0.55 while nothing is
+//     equipped (already safe there, unchanged), but jumps to 0.90 the instant a felt IS equipped -
+//     at the old 0.55, Sunflower's own bright page background bled enough through the blur to drop
+//     muted secondary text to about 4.35:1 (measured, real fail) against the SAME surface color
+//     that passes at 9-14:1 once it's opaque. Re-verified at 0.90 against the worst realistic case
+//     (the panel sitting directly over the brightest point of the page's own felt gradient): every
+//     felt/text pair clears 4.5:1, smallest margin 4.76:1 (Sunflower's warning-red text).
+// DEFAULT IS UNCHANGED, BYTE-FOR-BYTE: every one of these returns the ORIGINAL literal the instant
+// no felt is equipped (f is falsy) - #10281a / 9,32,20 / .55 / 5,15,9, exactly as :root already
+// defaults them - so a player who owns no felt is provably unaffected (see HANDOFF.md "v0.55" for
+// the pixel-diff proof). The three defaults are deliberately NOT unified with each other (they
+// were three independently-picked dark greens to begin with) - only once a felt is actually
+// equipped do all of them collapse onto this one shared formula.
+function relLuminanceRGB(r,g,b){
+  const lin=v=>{ const c=v/255; return c<=0.03928?c/12.92:Math.pow((c+0.055)/1.055,2.4); };
+  return 0.2126*lin(r)+0.7152*lin(g)+0.0722*lin(b);
+}
+function hexToRgbArr(hex){
+  hex=String(hex||'').replace('#','');
+  return [parseInt(hex.slice(0,2),16),parseInt(hex.slice(2,4),16),parseInt(hex.slice(4,6),16)];
+}
+function rgbArrToHex(rgb){
+  return '#'+rgb.map(v=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')).join('');
+}
+function darkenToLuminance(hex,frac,ceilingL){
+  let [r,g,b]=hexToRgbArr(hex);
+  r*=(1-frac); g*=(1-frac); b*=(1-frac);
+  if(relLuminanceRGB(r,g,b)>ceilingL){
+    let lo=0,hi=1;
+    for(let i=0;i<24;i++){
+      const mid=(lo+hi)/2;
+      if(relLuminanceRGB(r*mid,g*mid,b*mid)>ceilingL)hi=mid; else lo=mid;
+    }
+    r*=lo; g*=lo; b*=lo;
+  }
+  return rgbArrToHex([r,g,b]);
+}
+const DEFAULT_SURFACE='#10281a', DEFAULT_SURFACE_RGB='9,32,20', DEFAULT_BACKDROP_RGB='5,15,9';
+function applySurfaceTokens(f){
+  const root=document.documentElement.style;
+  if(!f){
+    root.setProperty('--feltSurface',DEFAULT_SURFACE);
+    root.setProperty('--feltSurfaceRGB',DEFAULT_SURFACE_RGB);
+    root.setProperty('--feltSurfaceAlpha','0.55');
+    root.setProperty('--feltBackdropRGB',DEFAULT_BACKDROP_RGB);
+    return;
+  }
+  const surface=darkenToLuminance(f.dark,0.30,0.05);
+  const backdrop=darkenToLuminance(f.dark,0.60,0.02);
+  root.setProperty('--feltSurface',surface);
+  root.setProperty('--feltSurfaceRGB',hexToRgbArr(surface).join(','));
+  root.setProperty('--feltSurfaceAlpha','0.90');
+  root.setProperty('--feltBackdropRGB',hexToRgbArr(backdrop).join(','));
+}
 // The felt is just two CSS custom properties - body's own background (and .overlay.solid's) read
 // them live, so this takes effect everywhere INCLUDING a game already on screen, immediately.
+// v0.55: also pushes the four surface/backdrop tokens above, same call site, so every popup card
+// updates in the same frame the page background does - see applySurfaceTokens()'s own comment.
 function applyEquippedFelt(){
   const f=EQUIP.felt;
   document.documentElement.style.setProperty('--felt1',f?f.c:DEFAULT_FELT.c);
   document.documentElement.style.setProperty('--felt2',f?f.dark:DEFAULT_FELT.dark);
+  applySurfaceTokens(f);
   syncNativeStatusBarColor(f);
 }
 // v0.52 BUG FIX (Blake: "the felt color changes mid game when I choose it but the area at the
@@ -12636,6 +13057,19 @@ function findShopItem(id){
 }
 
 // ---- the Admin panel's points-earned / points-remaining box (Blake's ask, § ACCOUNT) ----
+// v0.56: split the "paint from a wallet object I already have" half out from the "go fetch one"
+// half - buyOnlineAccess() (§ SHOP) already gets a fresh wallet on its own purchase response and
+// paints straight from THAT (no second round trip needed, same reasoning as the online-status
+// side of the same purchase), same as this panel's other consumer, refreshAcctWallet() below,
+// which still fetches for every OTHER caller (opening the panel fresh, a Try again tap, etc).
+function paintAcctWalletNumbers(wallet){
+  const box=$('acctWallet');
+  if(!box||!isAccountReady())return;
+  box.classList.remove('hidden');
+  const earnedEl=$('acctPtsEarned'), remEl=$('acctPtsRemaining');
+  if(earnedEl)earnedEl.textContent=wallet.lifetimeEarned;
+  if(remEl)remEl.textContent=wallet.balance;
+}
 async function refreshAcctWallet(){
   const box=$('acctWallet');
   if(!box)return;
@@ -12646,14 +13080,265 @@ async function refreshAcctWallet(){
   const wr=await fetchWalletResult();
   if(!isAccountReady()){ box.classList.add('hidden'); return; }   // signed out while the fetch was in flight
   if(wr.ok){
-    if(earnedEl)earnedEl.textContent=wr.wallet.lifetimeEarned;
-    if(remEl)remEl.textContent=wr.wallet.balance;
+    paintAcctWalletNumbers(wr.wallet);
   }else if(wr.signedOut){
     box.classList.add('hidden');
   }else{
     if(earnedEl)earnedEl.textContent='-'; if(remEl)remEl.textContent='-';
   }
 }
+
+/* ==================== v0.56 (2026-07-29, NEW): Online Access - the monthly online-play token ====
+   Blake's own rule: online play is free through the end of the first full calendar month after
+   signup; after that, playing online needs an "Online Access" token - 50 credits, covers one
+   calendar month, no real money anywhere, ever. The SERVER is the one source of truth for all of
+   this (POST /account/online-status, and POST /account/purchase's additive `onlineAccess` field
+   on a successful buy) - nothing here computes a month boundary, a free-period end date, or an
+   entitled/not-entitled answer itself; this file only ever RENDERS what the server already decided
+   and sends the one purchase request. Three consumers share this one fetch/cache/format layer:
+     - the Admin panel's own #acctOnline box (refreshAcctOnline()/paintOnlineAccess(), right
+       below) - the full six-state picture, plus the actual Buy button.
+     - the Host/Join screen's quiet countdown line (paintOnlineOverlayNote(), § NET area below,
+       called every time that screen opens - #onlineAccessNote).
+     - the #btnOnline entitlement gate (renderOnlineGate(), § MENU) - reads ONLINE_STATUS_CACHE
+       directly rather than fetching, since that function must stay synchronous (see its own
+       header comment) - ensureOnlineAccessKnown() right below is what keeps the cache filled in. */
+const ONLINE_ACCESS_ITEM_FALLBACK='online_month';   // only used if a status/purchase response is somehow missing itemId
+const ONLINE_ACCESS_COST_FALLBACK=50;               // ditto for tokenCost - the server always sends the real number
+let ONLINE_STATUS_CACHE=null;      // {data, fetchedAt} - the last POST /account/online-status answer, or null if never known
+const ONLINE_STATUS_TTL=20000;     // re-fetch after this long even if nothing else forced it
+/* Fetches (or reuses a fresh-enough cached) online-access status. `force` always re-fetches - used
+   right after a purchase and by the staleness-guard interval further down. Guest -> {guest:true}
+   without ever touching the network (there is no status for a signed-out phone). A network
+   failure never throws - callers always get a plain {unreachable:true}, same convention as
+   fetchWalletResult()/fetchShopCatalog() above.
+   THE STALENESS FIX (Blake's own ask, item 3: "make sure it re-reads status... if the app sits
+   open across the boundary"): a cached "still good" answer is never trusted past its OWN
+   accessUntil, even if the TTL above hasn't expired yet - so a phone left open exactly through
+   midnight America/Chicago on the last covered day cannot keep showing a stale "entitled" reading
+   off an old cache; the very next read (this function is polled every 30s by the interval below
+   whenever a screen that shows it is open) forces a real re-check instead. */
+async function fetchOnlineStatus(force){
+  if(!isAccountReady())return {guest:true};
+  const now=Date.now();
+  const cached=ONLINE_STATUS_CACHE;
+  const cacheExpired=!!(cached&&typeof cached.data.accessUntil==='number'&&now>=cached.data.accessUntil);
+  if(!force&&cached&&!cacheExpired&&(now-cached.fetchedAt)<ONLINE_STATUS_TTL)return cached.data;
+  const r=await accountFetch('/account/online-status',{auth:ACCT.token});
+  if(r.status===200&&r.body){ ONLINE_STATUS_CACHE={data:r.body,fetchedAt:now}; return r.body; }
+  if(r.status===401)return {guest:true};
+  return {unreachable:true};
+}
+let ONLINE_ACCESS_FETCH_INFLIGHT=false;
+// Called from renderOnlineGate() (§ MENU) the first time it sees isAccountReady() with no cached
+// status yet - fetches once (guarded against overlapping calls) and repaints via renderYouCard()
+// the moment a real answer lands, exactly the ACCT_BOOT_CHECKING/refreshAccount() pattern § ACCOUNT
+// SIGN-IN already established for "am I signed in" itself.
+function ensureOnlineAccessKnown(){
+  if(ONLINE_ACCESS_FETCH_INFLIGHT||!isAccountReady())return;
+  ONLINE_ACCESS_FETCH_INFLIGHT=true;
+  fetchOnlineStatus().then(()=>{ try{ renderYouCard(); }catch(e){} })
+    .finally(()=>{ ONLINE_ACCESS_FETCH_INFLIGHT=false; });
+}
+/* ---- turning a timestamp/month-key into words - the ONE place every consumer above does this,
+   so the Admin panel's Online Access box, the online popup and the caveat popup can never say
+   different things about the same deadline. Never negative, never "-1 days" (Blake's item 3's own
+   requirement) - clamped
+   to zero inside msRemaining() before anything ever formats it. */
+function msRemaining(accessUntil){
+  if(typeof accessUntil!=='number')return null;
+  return Math.max(0,accessUntil-Date.now());
+}
+function humanDuration(ms){
+  if(ms<3600000){ const m=Math.max(1,Math.round(ms/60000)); return m+' minute'+(m===1?'':'s'); }
+  if(ms<172800000){ const h=Math.max(1,Math.round(ms/3600000)); return h+' hour'+(h===1?'':'s'); }
+  const d=Math.max(1,Math.round(ms/86400000)); return d+' day'+(d===1?'':'s');
+}
+function accessCountdownText(accessUntil){
+  const ms=msRemaining(accessUntil);
+  if(ms===null)return '';
+  if(ms<=0)return 'Access has ended';
+  return humanDuration(ms)+' left';
+}
+// "2026-08" -> "August 2026". A plain calendar-month KEY, not an instant - there is no timezone to
+// convert from, so this is just string parsing + Intl formatting, deliberately via Date.UTC so the
+// reader's own local timezone can never shift it a day either direction.
+function formatMonthKey(key){
+  if(!key||typeof key!=='string')return '';
+  const m=/^(\d{4})-(\d{2})$/.exec(key);
+  if(!m)return key;
+  const d=new Date(Date.UTC(Number(m[1]),Number(m[2])-1,1));
+  return d.toLocaleDateString('en-US',{month:'long',year:'numeric',timeZone:'UTC'});
+}
+// accessUntil IS an instant (a real timestamp, unlike freeThroughMonth above), and Blake's own
+// rule is explicit that month boundaries are America/Chicago - so THIS conversion (unlike the
+// plain calendar-key one above) genuinely needs a real timezone, via Intl rather than hand-rolled
+// offset math. Backs up 1 minute before formatting so landing exactly on the boundary instant
+// reads as the LAST covered month, never the one that hasn't started yet.
+function formatChicagoMonth(ms){
+  if(typeof ms!=='number')return '';
+  try{ return new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',month:'long',year:'numeric'}).format(new Date(ms-60000)); }
+  catch(e){ return ''; }
+}
+/* ---- the Admin panel's own Online Access box (#acctOnline) - Blake's ask, verbatim:
+   "add a greyed out section on the board settings [...] that is a token you can buy to play
+   online. Saying that it's free for the first full calendar month but after that they either need
+   to have earned enough credits to buy the token." Six states, every one server-driven:
+     guest              - no wallet exists yet; explains signing in is what unlocks this. Unlike
+                           #acctWallet/#acctEquip this box is NEVER hidden entirely for a guest -
+                           it is the one place a guest learns this system exists at all.
+     unreachable        - the status fetch itself failed; a Try again button, never a spinner.
+     free (entitled)    - DIMMED (Blake: greyed out because "they do not need it yet") - states the
+                          free period plainly, with the countdown to when it ends.
+     purchased(entitled)- NOT dimmed (this is the informative/manage state, not "nothing to do") -
+                          says what they're covered through, how many extra months are banked ahead
+                          if more than one, and offers a "Buy another month" button (a judgement
+                          call beyond what was explicitly asked - see HANDOFF.md "v0.56" - since
+                          monthsAheadCovered existing at all implies stacking ahead is a real,
+                          supported thing to do, not just a display number).
+     buyable (not entitled, can afford)    - a real Buy button, confirm-in-place, same pattern the
+                          Shop's own catItemRow() (above) already uses.
+     unaffordable (not entitled, can't)    - DIMMED, greyed Buy button, plus a plain "how you earn
+                          it" sentence. Deliberately NEVER prints a "you are N short" line - Blake
+                          explicitly disliked that exact sentence in the Shop and had it removed
+                          (v0.51, catItemRow()'s own comment above) - this box holds that line too. */
+let ONLINE_ACCESS_BUSY=false;
+async function refreshAcctOnline(){
+  const box=$('acctOnline'), body=$('acctOnlineBody');
+  if(!box||!body)return;
+  if(!isAccountReady()){
+    box.classList.add('dimmed');
+    body.innerHTML=`<div class="acctOnlineMsg">Sign in to see your Online Access - it's tied to your account, and covers one calendar month at a time.</div>`;
+    return;
+  }
+  box.classList.remove('dimmed');
+  body.innerHTML='<div class="acctOnlineMsg">Checking your Online Access...</div>';
+  const [status,wr]=await Promise.all([fetchOnlineStatus(),fetchWalletResult()]);
+  if(!isAccountReady())return;   // signed out while the fetch was in flight - openAccountPanel()'s
+                                 // own refreshAcctWallet()/refreshAcctEquip() calls already hide
+                                 // their own boxes in this exact race; this one simply stops rather
+                                 // than paint a signed-in state over a guest panel.
+  paintOnlineAccess(status,wr.ok?wr.wallet:null);
+}
+function paintOnlineAccess(status,wallet){
+  const box=$('acctOnline'), body=$('acctOnlineBody');
+  if(!box||!body)return;
+  if(!isAccountReady())return;
+  if(!status||status.unreachable||status.guest){
+    box.classList.remove('dimmed');
+    body.innerHTML=`<div class="acctOnlineMsg">Couldn't check your Online Access right now.</div>
+      <div class="acctOnlineActions"><button class="btn ghost" id="acctOnlineRetryBtn">Try again</button></div>`;
+    const rb=$('acctOnlineRetryBtn'); if(rb)rb.onclick=()=>refreshAcctOnline();
+    return;
+  }
+  const cost=status.tokenCost||ONLINE_ACCESS_COST_FALLBACK;
+  const itemId=status.itemId||ONLINE_ACCESS_ITEM_FALLBACK;
+  if(status.entitled&&status.reason==='free'){
+    box.classList.add('dimmed');
+    body.innerHTML=`<div class="acctOnlineMsg">Online play is free through ${esc(formatMonthKey(status.freeThroughMonth))}. After that, you'll need an Online Access token - ${cost} credits, good for a full calendar month.</div>
+      <div class="acctOnlineCountdown">${esc(accessCountdownText(status.accessUntil))} in your free period</div>`;
+    return;
+  }
+  if(status.entitled&&status.reason==='purchased'){
+    box.classList.remove('dimmed');
+    const aheadTxt=status.monthsAheadCovered>0
+      ?` (${status.monthsAheadCovered} extra month${status.monthsAheadCovered===1?'':'s'} banked ahead)`:'';
+    const canAfford=!!wallet&&wallet.balance>=cost;
+    body.innerHTML=`<div class="acctOnlineMsg">You're covered through ${esc(formatChicagoMonth(status.accessUntil))}${esc(aheadTxt)}.</div>
+      <div class="acctOnlineCountdown">${esc(accessCountdownText(status.accessUntil))}</div>
+      <div class="acctOnlineActions">
+        <button class="btn ghost" id="acctOnlineBuyBtn" data-item="${esc(itemId)}" ${canAfford?'':'disabled'}>Buy another month - ${cost} credits</button>
+      </div>
+      <div class="acctOnlineConfirm hidden" id="acctOnlineConfirmRow">
+        <span>Buy another month of Online Access for ${cost} credits? Spending can't be undone.</span>
+        <div class="bigBtns"><button class="btn primary" id="acctOnlineConfirmYes">Confirm</button>
+          <button class="btn ghost" id="acctOnlineConfirmNo">Cancel</button></div>
+      </div>`;
+    wireAcctOnlineBuy();
+    return;
+  }
+  // Not entitled - the server contract's only remaining reason is 'none'.
+  const canAfford=!!wallet&&wallet.balance>=cost;
+  box.classList.toggle('dimmed',!canAfford);
+  body.innerHTML=`<div class="acctOnlineMsg">Your free period has ended - online play now needs an Online Access token. One token is ${cost} credits and covers a full calendar month.</div>
+    ${canAfford?'':'<div class="acctOnlineNote">You earn credits by winning games - keep playing to earn enough for a token.</div>'}
+    <div class="acctOnlineActions">
+      <button class="btn primary" id="acctOnlineBuyBtn" data-item="${esc(itemId)}" ${canAfford?'':'disabled'}>Buy Online Access - ${cost} credits</button>
+    </div>
+    <div class="acctOnlineConfirm hidden" id="acctOnlineConfirmRow">
+      <span>Buy Online Access for ${cost} credits? Spending can't be undone.</span>
+      <div class="bigBtns"><button class="btn primary" id="acctOnlineConfirmYes">Confirm</button>
+        <button class="btn ghost" id="acctOnlineConfirmNo">Cancel</button></div>
+    </div>`;
+  wireAcctOnlineBuy();
+}
+// Same confirm-in-place idiom the Shop's own showShopConfirm()/hideShopConfirm() use (above) -
+// re-wired every paint since #acctOnlineBody's innerHTML is rebuilt from scratch each time.
+function wireAcctOnlineBuy(){
+  const buyBtn=$('acctOnlineBuyBtn');
+  if(buyBtn&&!buyBtn.disabled)buyBtn.onclick=()=>{ const row=$('acctOnlineConfirmRow'); if(row)row.classList.remove('hidden'); };
+  const yes=$('acctOnlineConfirmYes'), no=$('acctOnlineConfirmNo');
+  if(yes)yes.onclick=()=>{ const row=$('acctOnlineConfirmRow'); if(row)row.classList.add('hidden'); buyOnlineAccess(); };
+  if(no)no.onclick=()=>{ const row=$('acctOnlineConfirmRow'); if(row)row.classList.add('hidden'); };
+}
+// requestId/busy-guard convention is identical to buyItem() (§ SHOP, below) - a fresh id per
+// logical purchase ATTEMPT, and a synchronous-before-any-await busy flag so a double-tap on
+// Confirm cannot fire a second request while the first is in flight.
+async function buyOnlineAccess(){
+  if(ONLINE_ACCESS_BUSY||!isAccountReady())return;
+  ONLINE_ACCESS_BUSY=true;
+  const known=(ONLINE_STATUS_CACHE&&ONLINE_STATUS_CACHE.data)||{};
+  const itemId=known.itemId||ONLINE_ACCESS_ITEM_FALLBACK;
+  const reqId='purch-'+Date.now()+'-'+Math.random().toString(36).slice(2,10);
+  const r=await accountFetch('/account/purchase',{auth:ACCT.token,itemId,requestId:reqId});
+  ONLINE_ACCESS_BUSY=false;
+  if(r.status===200&&r.body&&r.body.ok){
+    // The spec's own additive `onlineAccess` field on a successful purchase means this needs no
+    // second round trip to /account/online-status - the fresh truth rides the purchase response.
+    if(r.body.onlineAccess)ONLINE_STATUS_CACHE={data:r.body.onlineAccess,fetchedAt:Date.now()};
+    toast("Online Access purchased - you're covered for another month.");
+    paintOnlineAccess(r.body.onlineAccess||(ONLINE_STATUS_CACHE&&ONLINE_STATUS_CACHE.data),r.body.wallet||null);
+    // The points-remaining number just changed too - paint straight from THIS response's own
+    // wallet (paintAcctWalletNumbers(), § ACCOUNT) rather than a second /account/wallet round
+    // trip; only fall back to a real re-fetch on the (should-be-unreachable) chance the server
+    // ever answers `ok` without a wallet attached.
+    try{ if(r.body.wallet)paintAcctWalletNumbers(r.body.wallet); else refreshAcctWallet(); }catch(e){}
+    try{ renderYouCard(); }catch(e){}          // repaints #btnOnline's entitlement gate, § MENU
+    try{ paintOnlineOverlayNote(); }catch(e){} // keeps the online popup's own note in step if open
+    return;
+  }
+  if(r.status===409&&r.body&&r.body.error==='cantafford'){
+    // Defensive only - the Buy button above is already disabled whenever this would be true.
+    // Reactive-after-a-real-attempt toast, the SAME convention buyItem() (§ SHOP) already uses for
+    // every other item - NOT the static "Need N more" label Blake had removed from the Shop, which
+    // stays gone; this only ever fires from an actual tap, never printed proactively.
+    toast(`You need ${r.body.cost} credits for that, but you only have ${r.body.balance}.`);
+    refreshAcctOnline();
+    return;
+  }
+  if(r.status===401){
+    toast("You've been signed out - sign in again to buy Online Access.");
+    ONLINE_STATUS_CACHE=null;
+    refreshAcctOnline();
+    try{ renderYouCard(); }catch(e){}
+    return;
+  }
+  toast("Couldn't reach the shop. Check your connection and try again.");
+}
+// ---- keep the countdown from going stale while the app just sits open (Blake's item 3) ----
+// Cheap by construction: only does real work while the Admin panel or the online popup
+// is actually on screen; refreshAcctOnline()/paintOnlineOverlayNote() are no-ops (or fast/no-op)
+// the rest of the time. fetchOnlineStatus() itself is what decides whether this tick actually
+// reaches the network (its own TTL/expired-accessUntil guard, right above) - this interval is just
+// the thing making sure that check keeps happening on a phone left open for a while.
+setInterval(()=>{
+  try{
+    const acctOpen=$('accountOverlay')&&!$('accountOverlay').classList.contains('hidden');
+    const onlineOpen=$('onlineOverlay')&&!$('onlineOverlay').classList.contains('hidden');
+    if(acctOpen)refreshAcctOnline();
+    if(onlineOpen)typeof paintOnlineOverlayNote==='function'&&paintOnlineOverlayNote();
+  }catch(e){}
+},30000);
 
 // ---- the Shop overlay itself ----
 let SHOP_STATE={phase:'loading',catalog:null,wallet:null};
@@ -13095,8 +13780,10 @@ async function welcomeSignIn(){
     closeWelcome();
     // 2026-07-27 (v0.42): resume whatever online action (Host/Join/an invite link) sent this
     // player through sign-in first, code preserved and all - see requireAccountThen(), § NET.
+    // v0.56: routed through beginOnlineAction() (§ NET), same reasoning as submitNicknameGate()'s
+    // own resume just above - the caveat popup gets its one shot here too.
     const cont=ONLINE_PENDING; ONLINE_PENDING=null;
-    if(cont)cont();
+    if(cont)beginOnlineAction(cont);
   }
 }
 $('btnWelcomeApple').onclick=()=>{ welcomeSignIn(); };
@@ -13170,14 +13857,21 @@ function sendInvite(link){
    correctly keeps the button disabled for it too (it checks isAccountReady(), the same "fully set
    up" bar this function does) - that account still resolves itself automatically at boot via the
    nickname gate (see the boot-time refreshAccount() comment, § ACCOUNT SIGN-IN), it just no longer
-   has this button as an alternate way in, which it never needed to be. */
+   has this button as an alternate way in, which it never needed to be.
+   v0.56 (Blake's item 5, "gate on entitlement, not just sign-in"): renderOnlineGate() ALSO greys
+   #btnOnline for a signed-in player with no Online Access now - see that function's own v0.56
+   comment, § MENU. That is a client-side convenience only; a shared ?join=CODE link or a Universal
+   Link still reaches openJoinOverlay() -> requireAccountThen() directly, bypassing the button
+   entirely (exactly as this comment already documented for the sign-in case, above) - the actual,
+   unavoidable enforcement is the SERVER's own refusal on the real host/join attempt, handled
+   gracefully by handleOnlineAccessRejection() right below, never assumed away by this gate. */
 let ONLINE_PENDING=null;   // the online action waiting on a sign-in (or a nickname), or null
 function requireAccountThen(cont){
   if(!accountsAvailableHere()){
     toast('Online play needs an account. Sign in with Apple in the iPhone app to play online.');
     return;
   }
-  if(isAccountReady()){ cont(); return; }
+  if(isAccountReady()){ beginOnlineAction(cont); return; }
   if(isSignedIn()){
     ONLINE_PENDING=cont;
     openNicknameGate();
@@ -13185,6 +13879,96 @@ function requireAccountThen(cont){
   }
   ONLINE_PENDING=cont;
   openWelcome();
+}
+/* ==================== v0.56 (2026-07-29, NEW): the "before you play online" caveat popup ========
+   Blake, verbatim: "have this caveat pop up when they start a new online game." beginOnlineAction()
+   is the ONE place every online entry point actually begins (requireAccountThen()'s immediate
+   branch just above, plus both ONLINE_PENDING resume sites - submitNicknameGate() and
+   welcomeSignIn() - so Host, Join, a ?join=CODE link and a Universal Link all pass through here
+   exactly once before `cont` ever runs).
+   JUDGEMENT CALLS made here, stated plainly (see HANDOFF.md "v0.56" for the fuller reasoning):
+     - ONCE PER SESSION (ONLINE_CAVEAT_SHOWN_THIS_SESSION - an in-memory flag, resets on reload,
+       never localStorage - Blake's own wording, "once per session," not "once ever") - the very
+       first time this runs while entitled and not comfortably covered, and never again this visit
+       regardless of what changes afterward (buying a token mid-session correctly stops it from
+       showing on a LATER attempt too, simply because the flag is already true by then).
+     - SKIPPED for anyone not entitled at all (reason:'none') - that state is what
+       handleOnlineAccessRejection() below actually exists for if the attempt goes through anyway
+       (a deep link); showing this heads-up first would just be a confusing second voice saying a
+       version of the same thing right before the real refusal.
+     - SKIPPED for anyone "comfortably covered" - defined here as a PURCHASED entitlement with more
+       than ONLINE_CAVEAT_COMFORTABLE_MS left on the clock. Three days was picked as long enough to
+       not interrupt someone who just bought a month, short enough to still give fair warning before
+       it actually lapses.
+     - FAILS OPEN - a network hiccup checking status never blocks starting the game; the popup is
+       purely informational and must never become a NEW way to get stuck. */
+let ONLINE_CAVEAT_SHOWN_THIS_SESSION=false;
+const ONLINE_CAVEAT_COMFORTABLE_MS=3*24*3600*1000;   // 3 days - see the header comment just above
+async function beginOnlineAction(cont){
+  if(ONLINE_CAVEAT_SHOWN_THIS_SESSION||!isAccountReady()){ cont(); return; }
+  let status;
+  try{ status=await fetchOnlineStatus(); }catch(e){ cont(); return; }
+  if(!status||status.unreachable||status.guest||!status.entitled){ cont(); return; }
+  const showFree=status.reason==='free';
+  const ms=msRemaining(status.accessUntil);
+  const comfortable=status.reason==='purchased'&&(ms===null||ms>ONLINE_CAVEAT_COMFORTABLE_MS);
+  if(!showFree&&comfortable){ cont(); return; }
+  ONLINE_CAVEAT_SHOWN_THIS_SESSION=true;
+  openOnlineCaveat(status,cont);
+}
+function openOnlineCaveat(status,cont){
+  const cost=status.tokenCost||ONLINE_ACCESS_COST_FALLBACK;
+  const text=status.reason==='free'
+    ? `Online play is free through ${formatMonthKey(status.freeThroughMonth)}. ${accessCountdownText(status.accessUntil)} in your free period - after that you'll need an Online Access token (${cost} credits, good for a full calendar month) to keep playing online.`
+    : `Your Online Access runs out in ${accessCountdownText(status.accessUntil)} (through ${formatChicagoMonth(status.accessUntil)}). After that you'll need another token - ${cost} credits covers a full calendar month.`;
+  const p=$('onlineCaveatText'); if(p)p.textContent=text;
+  const proceed=()=>{ closeOverlay('onlineCaveatOverlay'); cont(); };
+  $('btnOnlineCaveatOk').onclick=proceed;
+  openOverlay('onlineCaveatOverlay');
+}
+/* ==================== v0.56 (2026-07-29, NEW): graceful host/join rejection (Blake's item 6) =====
+   Fires from handleNetMessage()'s 'error' case (a refused HOST attempt) and 'joinError' case (a
+   refused JOIN attempt) whenever reason is "onlineAccessRequired" or "signInRequired" - see each
+   case's own comment, above in this file, for exactly which send site can trigger it. This is the
+   deep-link edge case renderOnlineGate()'s button-level check cannot reach (a shared ?join=CODE
+   link or Universal Link goes straight to openJoinOverlay(), bypassing the disabled #btnOnline
+   entirely) - so it is the one place this app is EVER actually blocked by the server after already
+   trying to connect, and it must never just leave a spinner or a bare toast sitting there. */
+function handleOnlineAccessRejection(m){
+  if(m.onlineAccess)ONLINE_STATUS_CACHE={data:m.onlineAccess,fetchedAt:Date.now()};   // fresh truth, no extra round trip
+  leaveOnlineToMenu();   // the same full reset every other server-side refusal already uses - lands cleanly back on the menu
+  const p=$('onlineBlockedText'); if(p)p.textContent=m.message||"That game needs an Online Access token.";
+  $('btnOnlineBlockedGo').onclick=()=>{ closeOverlay('onlineAccessBlockedOverlay'); openAccountPanel(); };
+  $('btnOnlineBlockedOk').onclick=()=>closeOverlay('onlineAccessBlockedOverlay');
+  openOverlay('onlineAccessBlockedOverlay');
+  try{ renderYouCard(); }catch(e){}   // repaints #btnOnline's gate with the fresh truth above
+}
+/* ==================== v0.56 (2026-07-29, NEW): the Host/Join screen's own countdown line =========
+   Blake's item 3, "a countdown clock [...] on the board settings and the online popup" - this is
+   the second of the two places (#acctOnline in the Admin panel is the first, § SHOP). Unlike the
+   caveat popup above, this is NOT gated on "once per session" - it is a quiet, always-current line
+   repainted fresh every time #onlineOverlay actually opens (called from $('btnOnline').onclick
+   below) and again on the staleness-guard interval (§ SHOP) while the screen stays open. */
+async function paintOnlineOverlayNote(){
+  const note=$('onlineAccessNote');
+  if(!note)return;
+  if(!isAccountReady()){ note.textContent=''; note.classList.add('hidden'); return; }
+  const status=await fetchOnlineStatus();
+  const n2=$('onlineAccessNote'); if(!n2)return;   // the overlay may have closed while this was in flight
+  if(!status||status.unreachable||status.guest||!status.entitled){
+    // Not entitled: renderOnlineGate() (§ MENU) already greys #btnOnline before this screen is
+    // normally reachable that way - say nothing alarming here rather than guess. A deep link that
+    // reaches this screen anyway is covered by the server's own refusal
+    // (handleOnlineAccessRejection(), just above) once the actual host/join attempt is sent.
+    n2.textContent=''; n2.classList.add('hidden');
+    return;
+  }
+  if(status.reason==='free'){
+    n2.textContent=`Online play is free through ${formatMonthKey(status.freeThroughMonth)} - ${accessCountdownText(status.accessUntil)}.`;
+  }else{
+    n2.textContent=`You're covered through ${formatChicagoMonth(status.accessUntil)} (${accessCountdownText(status.accessUntil)}).`;
+  }
+  n2.classList.remove('hidden');
 }
 /* ---- Online: entry point + host/join button wiring ---- */
 // v0.19.2: gate the speed picker HERE, before the online entry overlay even opens - hosting
@@ -13194,7 +13978,7 @@ function requireAccountThen(cont){
 // live table client-side the way offline holds the deal.
 $('btnOnline').onclick=()=>{
   $('onlineErr').textContent='';
-  requireAccountThen(()=>gateOnSpeedPicker(()=>openOverlay('onlineOverlay')));
+  requireAccountThen(()=>gateOnSpeedPicker(()=>{ openOverlay('onlineOverlay'); paintOnlineOverlayNote(); }));
 };
 $('btnOnlineClose').onclick=()=>$('onlineOverlay').classList.add('hidden');
 // v0.11 item 3: confirmed hosting/joining DOES claim the same local save slot - saveLastRoom()
