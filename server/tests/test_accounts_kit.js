@@ -223,6 +223,10 @@ function serverEnv(kind, scratch, port, adminToken, extra) {
       NASTY_LEADERBOARD_FILE: path.join(scratch, "leaderboard.json"),
       NASTY_LEADERBOARD_EPOCH_FILE: path.join(scratch, "leaderboard-epoch.json"),
       NASTY_SOLO_IDS_FILE: path.join(scratch, "solo-ids.json"),
+      // 2026-07-28 § MONTHLY RANKING - without this override every suite using this helper would
+      // fall back to the server's DEFAULT path (server/monthly-leaderboard.json, the real repo
+      // directory) and pollute it with test data on every run.
+      NASTY_MONTHLY_HISTORY_FILE: path.join(scratch, "monthly-leaderboard.json"),
       NASTY_ACCOUNTS_FILE: path.join(scratch, "accounts.json"),
       NASTY_ACCOUNT_INDEX_FILE: path.join(scratch, "account-index.json"),
       NASTY_SESSIONS_FILE: path.join(scratch, "sessions.json"),

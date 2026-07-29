@@ -427,6 +427,7 @@ function applyLeaderboardEntry(name, delta) {
   const r = globalBoard[bk] = globalBoard[bk] || {};
   for (const key of Object.keys(s.keys)) r[key] = (r[key] || 0) + s.keys[key];
   scheduleLeaderboardPersist();
+  recordMonthlyResult(bk, s.keys);   // 2026-07-28 § MONTHLY RANKING - additive, see that block
 }
 /* v0.21 § LEADERBOARD SPLIT MIGRATION - boot-time, idempotent. Entries stored before the
    solo/teams split have an aggregate "hpts" and neither hptsS nor hptsT yet. For each such
@@ -568,6 +569,129 @@ function sendLeaderboard(res, status) {
   // boardRowsForDisplay() hands back globalBoard itself, so this line is byte-for-byte the
   // JSON.stringify(globalBoard) it has always been.
   res.end(JSON.stringify(boardRowsForDisplay().flat));
+}
+
+/* ---------------------------------------------------------------------------------------
+ * 2026-07-28 § MONTHLY RANKING - Blake's ask: "a Monthly Ranking that shows wins and losses for
+ * the month and resets each month automatically - starting August 1... just a mini ranking for
+ * people to reengage each month." Read the wallet backend's "epoch/season-reset" note above
+ * before touching any of this - the SAME "no season resets, ever" decision governs here.
+ * "Resets each month" means the VIEW is scoped to a calendar month; a month rollover NEVER
+ * deletes anything. Lifetime counters (globalBoard/accountBoard, hg-, hw- and hpts-prefixed stat keys) are completely
+ * untouched by anything in this block - additive, dated history recorded ALONGSIDE them.
+ *
+ * WHY NEW STORAGE IS UNAVOIDABLE: the existing leaderboard only ever stores a running LIFETIME
+ * total per stat key - once a win lands in hptsS it carries no timestamp, so it can never be
+ * sliced back out into "August's wins" after the fact. From the moment this deploys, every
+ * finished game's result is recorded a second time, dated, so a monthly view can be built
+ * without ever touching the lifetime rows. History starts accumulating at deploy time - nothing
+ * is or can be backfilled.
+ *
+ * SHAPE: monthlyBoard["YYYY-MM"][displayName] = {games, wins, pts}. Aggregated at WRITE time
+ * (not a growing list of individual game records) - the only view this ever needs to serve is
+ * "totals for calendar month X", so bucketing directly at write time serves that exactly as well
+ * as a list would, at a small, bounded size instead of one that grows with every game ever
+ * played. `displayName` is the SAME key /leaderboard already uses for this player (the board key
+ * from boardKeyFor(), or the account's own clean name) - so a client can match rows across both
+ * endpoints with zero translation.
+ *
+ * TIMEZONE: Blake is on Central time, so a month flips at LOCAL midnight in America/Chicago, not
+ * UTC. chicagoMonthKey() asks Intl for the wall-clock year/month "right now, in America/Chicago"
+ * - that pulls from the real IANA tzdata, which already encodes exactly when CST/CDT changes
+ * each year, so this needs no manual DST arithmetic and stays correct automatically across any
+ * DST transition, including one that happened to land on the 1st (current US rules mean it
+ * never does, but the calculation is correct even if that ever changed) - it always computes the
+ * actual local calendar date, never a fixed UTC offset.
+ *
+ * PRUNING: kept to the most recent 13 calendar months (the current one plus a full trailing
+ * year) - enough for a future year-over-year view to compare against a full 12 prior months even
+ * in January. This bound applies ONLY to this monthly-history file; it never touches
+ * globalBoard/accountBoard, which stay lifetime and unpruned forever (Blake's "one season"
+ * decision, unchanged).
+ *
+ * NASTY_MONTHLY_NOW_MS is a test-only override (a server-side env var, never reachable from any
+ * client request) so a suite can prove "a month rollover changes the view without deleting
+ * anything" deterministically instead of waiting for a real month boundary. Unset in every real
+ * deployment, where chicagoMonthKey() always uses the real clock.
+ * ------------------------------------------------------------------------------------- */
+const MONTHLY_HISTORY_FILE = process.env.NASTY_MONTHLY_HISTORY_FILE
+  ? path.resolve(process.env.NASTY_MONTHLY_HISTORY_FILE)
+  : path.join(__dirname, "monthly-leaderboard.json");
+const MONTHLY_MAX_MONTHS = 13;
+let monthlyBoard = {};   // "YYYY-MM" -> { displayName: {games, wins, pts} }
+function loadMonthlyHistory() {
+  try { monthlyBoard = JSON.parse(fs.readFileSync(MONTHLY_HISTORY_FILE, "utf8")) || {}; }
+  catch (e) { monthlyBoard = {}; }
+  pruneMonthlyHistory(); // in case the retention window itself ever shrinks, or time passed
+}
+let monthlyPersistTimer = null;
+function scheduleMonthlyPersist() {
+  if (monthlyPersistTimer) return;
+  monthlyPersistTimer = setTimeout(() => { monthlyPersistTimer = null; persistMonthlyHistoryNow(); }, PERSIST_DEBOUNCE_MS);
+}
+function persistMonthlyHistoryNow() {
+  try { fs.writeFileSync(MONTHLY_HISTORY_FILE, JSON.stringify(monthlyBoard)); }
+  catch (e) { log("monthly history persist failed", e.message); }
+}
+function monthlyNowMs() {
+  const override = Number(process.env.NASTY_MONTHLY_NOW_MS);
+  return Number.isFinite(override) && override > 0 ? override : Date.now();
+}
+function chicagoMonthKey(ms) {
+  const d = new Date(ms === undefined ? monthlyNowMs() : ms);
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit" }).formatToParts(d);
+  const y = parts.find((p) => p.type === "year").value;
+  const m = parts.find((p) => p.type === "month").value;
+  return `${y}-${m}`;
+}
+// Deletes ONLY entries falling off the trailing-13-month window - on a normally-running server
+// this runs at most once per real calendar month (called right after a write that just created
+// this month's first entry).
+function pruneMonthlyHistory() {
+  const keys = Object.keys(monthlyBoard).sort();
+  while (keys.length > MONTHLY_MAX_MONTHS) delete monthlyBoard[keys.shift()];
+}
+/* Called from applyLeaderboardEntry()/applyAccountLeaderboardEntry() - the SAME two functions
+   BOTH the online path (finishGame -> buildResultEntriesServer) and the offline path
+   (/solo-result -> handleSoloResult) already funnel every finished game's per-player delta
+   through, so hooking in here covers both without a second call site or any risk of the two
+   drifting apart. `keys` is the ALREADY-VALIDATED, already-sanitized delta
+   (sanitizeLeaderboardDelta's own output) - reuses the exact same win/points shape the lifetime
+   counters do; this just additionally files one dated result under today's Chicago month. */
+function recordMonthlyResult(name, keys) {
+  if (!name) return;
+  const hasGame = Object.keys(keys).some((k) => /^hg[46][st]$/.test(k));
+  if (!hasGame) return; // every real delta carries exactly one of these; defensive, not expected
+  const won = Object.keys(keys).some((k) => /^hw[46][st]$/.test(k));
+  const pts = (keys.hptsS || 0) + (keys.hptsT || 0);
+  const month = chicagoMonthKey();
+  const bucket = monthlyBoard[month] = monthlyBoard[month] || {};
+  const row = bucket[name] = bucket[name] || { games: 0, wins: 0, pts: 0 };
+  row.games += 1;
+  if (won) row.wins += 1;
+  row.pts += pts;
+  pruneMonthlyHistory();
+  scheduleMonthlyPersist();
+}
+function monthlyLeaderboardView(month) {
+  const bucket = monthlyBoard[month] || {};
+  const players = {};
+  for (const name of Object.keys(bucket)) {
+    const r = bucket[name];
+    const games = r.games || 0, wins = r.wins || 0;
+    players[name] = { games, wins, losses: games - wins, pts: r.pts || 0 };
+  }
+  return players;
+}
+const MONTH_PARAM_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+// GET /leaderboard/monthly - public, no auth, same CORS as /leaderboard. A month with no data
+// (including every month before this feature deployed) answers 200 with an empty players object,
+// never a 404 or an error - a brand-new client asking about a brand-new feature must never see a
+// failure state just because nobody has finished a game yet this month.
+function sendMonthlyLeaderboard(res, status, monthParam) {
+  const month = (typeof monthParam === "string" && MONTH_PARAM_RE.test(monthParam)) ? monthParam : chicagoMonthKey();
+  res.writeHead(status, Object.assign({ "content-type": "application/json" }, CORS_HEADERS));
+  res.end(JSON.stringify({ month, players: monthlyLeaderboardView(month) }));
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -1651,6 +1775,12 @@ function newAccountRecord(provider, sub) {
     walletSpent: 0,             // lifetime points spent - NEVER reduces the leaderboard's earned total
     walletOwned: [],            // owned non-consumable shop item ids (palette/felt/title)
     walletNamechangeCredits: 0, // one-shot credits that bypass the 30-day rename cooldown once each
+    // 2026-07-28 § POINTS WALLET ADMIN GRANT - which currently-owned ids arrived via
+    // POST /admin/wallet/grantall rather than a real purchase, so a later revoke can undo
+    // EXACTLY what it granted and never touch anything genuinely bought. An id can only ever be
+    // owned via one route or the other (a purchase 409s "alreadyowned" for anything already
+    // granted), so this small additive list is enough to tell the two apart precisely.
+    walletGrantedItems: [],
   };
 }
 // Stage 1 records have provider/sub and no identities array. Read through this everywhere so the
@@ -1932,6 +2062,7 @@ function applyAccountLeaderboardEntry(uid, name, delta) {
   const r = accountBoard[uid] = accountBoard[uid] || {};
   for (const key of Object.keys(s.keys)) r[key] = (r[key] || 0) + s.keys[key];
   scheduleAccountStorePersist(STORE_ACCT_BOARD);
+  recordMonthlyResult(s.clean, s.keys);   // 2026-07-28 § MONTHLY RANKING - additive, see that block
 }
 // The rows the board should show, in one place, used by both /leaderboard and /leaderboard/v2.
 // With the switch OFF this returns globalBoard ITSELF (not a copy), so sendLeaderboard()
@@ -3410,6 +3541,71 @@ async function handleAdminRoute(req, res, url) {
     sendJson(res, 200, r);
     return true;
   }
+  /* -------------------------------------------------------------------------------------
+   * 2026-07-28 § POINTS WALLET ADMIN GRANT - Blake's ask, verbatim: "give me (nickname on
+   * account is Baker Sr.) unlocked access to all the shop items so I can test them." A real
+   * account, real board row - this must NOT touch earned points (never inflate
+   * accountEarnedPoints()'s inputs, i.e. never touch globalBoard/accountBoard) and must NOT
+   * touch `spent` (a real purchase debits spent; this is a direct grant, not a purchase, so
+   * spent stays exactly where it was). Only `walletOwned`/`walletNamechangeCredits` on the
+   * account record move - the same two fields a real purchase would move, just without the
+   * price ever being charged. Admin-token-gated (this endpoint can hand out the whole catalog
+   * for free - it must never be reachable without the token), same auth pattern as every other
+   * /admin/* route in this file.
+   *
+   * Body: { name?, uid?, namechangeCredits? (default 2), revoke?: true }. `name` is folded and
+   * looked up the same way /account/name-available does (accountOwningFoldedName) so Blake can
+   * just pass "Baker Sr."; `uid` is accepted directly too, for scripting. `revoke:true` is the
+   * reverse of a normal call - it removes every non-consumable catalog item from `walletOwned`
+   * and subtracts the SAME namechangeCredits amount back off (floored at 0) - the exact inverse
+   * of what a normal call would have granted, so this is fully reversible without hand-editing
+   * accounts.json.
+   * ----------------------------------------------------------------------------------- */
+  if (ACCOUNTS_ENABLED && parts.length === 3 && parts[1] === "wallet" && parts[2] === "grantall" && req.method === "POST") {
+    const body = await readJsonBody(req);
+    let uid = typeof body.uid === "string" ? body.uid : "";
+    if (!uid && typeof body.name === "string" && body.name) {
+      const folded = leaderboardNameKey(cleanName(body.name, ""));
+      uid = accountOwningFoldedName(folded) || "";
+    }
+    if (!uid || !accounts[uid]) { sendJson(res, 404, { error: "no such account" }); return true; }
+    const acct = accounts[uid];
+    const owned = Array.isArray(acct.walletOwned) ? acct.walletOwned : (acct.walletOwned = []);
+    const grantedTracked = Array.isArray(acct.walletGrantedItems) ? acct.walletGrantedItems : (acct.walletGrantedItems = []);
+    const creditAmount = Number.isFinite(body.namechangeCredits) && body.namechangeCredits >= 0
+      ? Math.round(body.namechangeCredits) : 2;
+    if (body.revoke === true) {
+      // Removes EXACTLY the ids this route previously granted (walletGrantedItems), never an
+      // item that was genuinely purchased - see the field's own comment on newAccountRecord().
+      const grantedSet = new Set(grantedTracked);
+      const before = owned.length;
+      acct.walletOwned = owned.filter((id) => !grantedSet.has(id));
+      const removedItemIds = owned.filter((id) => grantedSet.has(id));
+      const removedItems = before - acct.walletOwned.length;
+      acct.walletGrantedItems = [];
+      acct.walletNamechangeCredits = Math.max(0, (Number(acct.walletNamechangeCredits) || 0) - creditAmount);
+      scheduleAccountStorePersist(STORE_ACCOUNTS);
+      log("admin revoked granted wallet items", uid, "items=" + removedItems, "credits=" + creditAmount);
+      sendJson(res, 200, { ok: true, uid, revokedItems: removedItems, revokedItemIds: removedItemIds, revokedCredits: creditAmount, wallet: walletView(acct) });
+      return true;
+    }
+    let grantedItems = 0;
+    const grantedItemIds = [];
+    for (const item of SHOP_CATALOG) {
+      if (item.consumable) continue;   // namechange credits are granted separately, below
+      if (!owned.includes(item.id)) {
+        owned.push(item.id);
+        if (!grantedTracked.includes(item.id)) grantedTracked.push(item.id);
+        grantedItems++;
+        grantedItemIds.push(item.id);
+      }
+    }
+    acct.walletNamechangeCredits = Math.max(0, Number(acct.walletNamechangeCredits) || 0) + creditAmount;
+    scheduleAccountStorePersist(STORE_ACCOUNTS);
+    log("admin granted every wallet item", uid, "items=" + grantedItems, "credits=" + creditAmount);
+    sendJson(res, 200, { ok: true, uid, grantedItems, grantedItemIds, grantedCredits: creditAmount, wallet: walletView(acct) });
+    return true;
+  }
   sendJson(res, 404, { error: "no such admin route" });
   return true;
 }
@@ -3441,6 +3637,12 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === "/leaderboard") {
     sendLeaderboard(res, 200);
+    return;
+  }
+  // 2026-07-28 § MONTHLY RANKING - public, no auth, ungated by NASTY_ACCOUNTS_ENABLED (this is
+  // not an accounts feature - it works off the same name-keyed rows /leaderboard always has).
+  if (url.pathname === "/leaderboard/monthly") {
+    sendMonthlyLeaderboard(res, 200, url.searchParams.get("month"));
     return;
   }
   if (url.pathname.startsWith("/admin/")) {
@@ -4351,6 +4553,7 @@ if (process.env.NASTY_DEBUG_DIGEST) {
 }
 loadRoomsFromDisk();
 loadLeaderboard();
+loadMonthlyHistory();   // 2026-07-28 § MONTHLY RANKING
 migrateLegacyLeaderboardPoints();
 // 2026-07-25 (bug 6): ORDER IS LOAD-BEARING - the solo/teams split runs first so a legacy
 // pre-split row's plain "hpts" is turned into hptsS/hptsT while that row still stands alone;
@@ -4378,6 +4581,8 @@ function shutdown() {
   if (soloSeenPersistTimer) { clearTimeout(soloSeenPersistTimer); soloSeenPersistTimer = null; }
   persistSoloSeenNow();
   persistLeaderboardEpoch();
+  if (monthlyPersistTimer) { clearTimeout(monthlyPersistTimer); monthlyPersistTimer = null; }
+  persistMonthlyHistoryNow();   // 2026-07-28 § MONTHLY RANKING
   flushAccountStores();   // 2026-07-25 § ACCOUNTS: only writes stores with a pending debounce
   for (const ws of wss.clients) { try { ws.terminate(); } catch (e) {} }
   server.close(() => process.exit(0));

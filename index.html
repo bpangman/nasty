@@ -46,7 +46,19 @@
     § STATE ....... game state G, deck, deal schedules
     § ENGINE ...... legal-move generation + move application (THE RULES LIVE HERE)
     § AI .......... CPU players (easy / tricky / nasty)
-    § RENDER ...... SVG board, tees, plaques, HUD
+    § RENDER ...... SVG board, tees, plaques, HUD. v0.51: two-finger pinch zoom/pan, see
+                    § BOARD ZOOM (right after fitBoard()) - a pure CSS transform on a NEW wrapper,
+                    #boardZoom, that sits OUTSIDE #boardScale (never inside it), so fitBoard()'s
+                    own left/top/scale math for #boardScale is completely untouched (it still
+                    resolves against #boardWrap - #boardZoom deliberately has no `position` of its
+                    own, see #boardZoom's own CSS comment, § STYLE, for exactly why that matters).
+                    Every tee/card is a real DOM element with its own native click listener, so
+                    taps land correctly at any zoom/pan by construction - the browser's own hit
+                    testing already accounts for however many transforms sit above an element,
+                    same as it always has for fitBoard()'s own scale(s). Only ever acts on a
+                    SECOND simultaneous pointer (boardPointers.size===2) - a single finger's
+                    pointerdown/move/up never calls preventDefault/stopPropagation, so ordinary
+                    taps on tees/cards are provably untouched by this feature.
     § ANIM ........ card flights, tee hops, NASTY blast, dealing, confetti
     § TURNS ....... async turn loop (humans + CPUs) - network-aware (see § NET) but the
                     offline path is untouched
@@ -110,6 +122,26 @@
                     the new player-facing points-economy screen; Admin here is a SECOND door to the
                     exact same #accountOverlay panel the in-game top-bar ADMIN button opens
                     (openAccountPanel(), § ACCOUNT) - that button is untouched, nothing was removed.
+                    v0.51 (Blake: "on my account block at the top of the menu, it shouldn't say
+                    family leaderboard next to my place in the standings - it should just be
+                    called leaderboard"): every user-visible "family board"/"family leaderboard"
+                    string in the you card (paintYouCardStats()'s rank line + its two offline-
+                    fallback sentences) and its guest nudge now reads plain "leaderboard" - see
+                    HANDOFF.md "v0.51" for the full string list, including the leaderboard
+                    overlay's own unreachable message (lbUnreachableHtml()) fixed the same way for
+                    consistency. The leaderboard overlay itself (openLeaderboardOverlay(), near
+                    renderLb(), below the § AI/§ RENDER blocks - see "leaderboard v2" comment)
+                    also gained a 5th tab, Monthly - wins/losses for the CURRENT CALENDAR MONTH
+                    only, fed by a NEW server endpoint (GET /leaderboard/monthly) a parallel
+                    session shipped the same day. Genuinely separate from the other four tabs: its
+                    own fetch (fetchMonthlyLeaderboard()), its own state machine
+                    (MONTHLY_STATE/loadMonthlyTab()/renderLbMonthlyPaint()), fetched lazily only
+                    when the tab is actually opened. Ranked wins-desc then points-desc (see
+                    loadMonthlyTab()'s own header comment for why, right above renderLbMonthlyPaint()).
+                    An empty month (the normal case every month until the first win lands) reads
+                    warmly, never as an error; a 404 (endpoint not deployed yet) reads as "not
+                    turned on yet," not broken; a genuine network failure reuses the same
+                    "couldn't reach it" sentence the other tabs already show.
     § NET ......... online multiplayer: WS client, host/join lobby UI, deterministic
                     lockstep (server in /server, see HANDOFF.md "Online multiplayer").
                     v0.42: ACCOUNTS-ONLY - no guest join anymore. requireAccountThen() gates
@@ -155,6 +187,23 @@
                     offline game or a live/rejoinable online game is in progress under the current
                     account's name - see gameInProgressForSignOut()/signOutWarningText(), § SHOP,
                     and the $('btnAcctSignOut').onclick rewrite right below accountSignOut().
+                    v0.51: TWO more additions, both Blake's own asks.
+                      - A new #acctEquip box, right under #acctWallet - "add a section to the
+                        admin panel for people to switch between board settings that they got
+                        from the shop." refreshAcctEquip() (§ SHOP, called from
+                        openAccountPanel() same as the wallet box) lists every OWNED palette/
+                        felt/title with an Equip/Equipped toggle - the SAME equipToggle() the Shop
+                        itself uses, called through acctEquipToggle(), so the two screens can
+                        never disagree - plus a "Use default" row per category and a plain
+                        "you don't own anything yet, the Shop is where you get it" state.
+                      - The change-name box's Nickname Change (renamed from "Name Change Token")
+                        offer is now shown the INSTANT the box opens, not just after a cooldown
+                        refusal - "make the name change token easier to understand... make it
+                        obvious I need to redeem when clicking the change nickname button... I
+                        don't see anything about it there." See refreshNameCreditInfo()/
+                        useNameCreditNow(), right next to saveAccountName() - both replace the
+                        v0.50 version of this that only ever built the offer inside the 429
+                        handler below.
     § ACCOUNT SIGN-IN ... Sign in with Apple (iPhone app only). v0.42: a BRAND-NEW account is
                     blocked on a mandatory nickname right here - bindAccountName() opens a
                     full-screen prompt (openNicknameGate()) that cannot be skipped or dismissed
@@ -188,10 +237,11 @@
                         (§ LAYOUT) and the --felt1/--felt2 CSS vars (§ STYLE); applyEquipped() runs
                         once at boot (right before the renderMenu()/renderComingSoon() dispatch) so
                         a reload keeps whatever was equipped, and again every time an equip/unequip
-                        happens. A title is shown next to a name (lbTitleTag/youTitleTag CSS) ONLY
-                        for the row that matches the CURRENT SIGNED-IN account's own name - there
-                        is no way for this device to know another player's equipped title, since
-                        it was never sent anywhere.
+                        happens. A title is shown as a small round badge next to a name (v0.51:
+                        was inline text, see the CODE MAP's v0.51 entry below and .lbTitleBadge's
+                        own CSS comment for why) ONLY for the row that matches the CURRENT
+                        SIGNED-IN account's own name - there is no way for this device to know
+                        another player's equipped title, since it was never sent anywhere.
                       - The sign-out warning: gameInProgressForSignOut()/signOutWarningText(),
                         wired into $('btnAcctSignOut').onclick (§ ACCOUNT SIGN-IN) - implements the
                         v0.49 diagnosis's own recommendation (see HANDOFF.md "v0.49" Task 3): warn,
@@ -199,6 +249,31 @@
                         offline game's frozen seat name still submits after sign-out; a live/
                         rejoinable online game keeps crediting the account it started under either
                         way) rather than a guess.
+                    v0.51 (2026-07-28) additions, all Blake's own build-66 feedback:
+                      - catItemRow() no longer prints a catalog item's price twice (once under the
+                        name, once on the Buy button) and no longer shows the "Need N more"
+                        shortfall line at all - both per Blake's explicit ask. The shortfall
+                        removal also fixed a real bug, not just a cosmetic one: the `namechange`
+                        category used to ALWAYS print "You have N credits" (wallet.namechangeCredits,
+                        an OWNED-TOKEN COUNT) in this same slot regardless of affordability, so an
+                        easily-affordable item could read "You have 0 credits" - true, but reading
+                        like a false affordability warning since it sat exactly where the (now also
+                        removed) "Need N more" text sat for every other item. See catItemRow()'s own
+                        header comment for the full root-cause writeup - wallet.balance/canAfford
+                        were never wrong anywhere; this was a labeling bug, not a math bug.
+                      - shopDisplayName(item) - a display-only rename, "Name Change Token" ->
+                        "Nickname Change" everywhere a player sees it (this catalog row, its Buy
+                        confirm text, buyItem()'s own toasts, the Admin panel's name-change flow,
+                        § ACCOUNT). The server's own catalog id (`namechange_credit`) and its own
+                        `name` field are completely untouched - only ever a client-side display
+                        swap, never sent anywhere different.
+                      - titledNameHtml() now renders a small round badge (.lbTitleBadge, § STYLE)
+                        instead of the equipped title's full text - Blake: "don't make this
+                        something that goes next to your name... make it more like a badge icon or
+                        the info won't fit on the leaderboard screen." The badge carries the
+                        title's first letter, an `aria-label` with the full title, and a real tap/
+                        Enter (delegated, capture-phase, see the comment right below
+                        titledNameHtml()) that reveals the full title as a toast.
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -815,7 +890,10 @@ button{font:inherit;cursor:pointer}
    properties, same accountColors()/accountInitial() helpers. */
 .youCardRow{display:flex;gap:12px;align-items:center;cursor:pointer;min-height:44px}
 .youWho{min-width:0;flex:1}
-.youWho b{display:block;font-size:16px;color:var(--cream);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* v0.51: titledNameHtml() (§ SHOP) now wraps its own output in .lbNameRow (a flex wrapper, see
+   its own CSS comment near .lbTable td:first-child) - this rule just needs to stop competing with
+   that wrapper's own ellipsis, not add a second one. */
+.youWho b{display:block;font-size:16px;color:var(--cream);overflow:hidden}
 .youStats{font-size:13px;color:#dcefe1;margin-top:2px;line-height:1.4}
 /* Knockouts only ever show up here when the real number is nonzero - see myCombinedRecord(),
    § MENU - so this line is simply absent for a brand-new account, never a fake "0 dealt". */
@@ -1157,6 +1235,21 @@ button{font:inherit;cursor:pointer}
    also pushes the vertically-centered board DOWN, which is most of item C's logo overlap gone
    for free (the rest is handled in updateLogoSub2(), § RENDER). */
 #boardWrap{flex:1;position:relative;overflow:hidden;margin-bottom:calc(var(--bandH) + 18px)}
+/* v0.51 (Blake: "add a zoom feature on the board so people can use their 2 fingers to zoom in
+   on the board in certain spots") - a PURE TRANSFORM LAYER, see boardZoomTransform()/§ BOARD ZOOM
+   near fitBoard() (§ RENDER) for the full design. Deliberately NOT position:absolute/relative and
+   deliberately given no size of its own beyond width/height:100% - #boardScale (its only child)
+   keeps being positioned exactly as fitBoard() always computed it (relative to #boardWrap, the
+   nearest POSITIONED ancestor - a `transform` alone does not make an element `position:static`
+   itself into one, but it DOES make it the containing block for any absolutely-positioned
+   DESCENDANT, which is exactly why #boardScale still resolves against #boardWrap here: #boardZoom
+   has no `position` set, so it is not itself a positioned element and is skipped when the browser
+   walks up looking for #boardScale's containing block - #boardWrap is still what fitBoard()'s own
+   left/top math targets, byte-for-byte unchanged). touch-action:none stops the OS's own
+   pinch/pan gestures inside this box so the JS pinch handler (not Safari) owns the gesture -
+   this has ZERO effect on ordinary tap/click dispatch, which is a completely separate event
+   path this feature never touches for a single pointer. */
+#boardZoom{width:100%;height:100%;touch-action:none;transform-origin:0 0}
 #boardScale{position:absolute;width:1000px;height:1000px;transform-origin:top left}
 #boardSvg{position:absolute;inset:0}
 #tableLayer,#fxLayer,#plaqueLayer,#bubbleLayer,#pathLayer{position:absolute;inset:0;pointer-events:none}
@@ -1938,6 +2031,11 @@ button{font:inherit;cursor:pointer}
 .acctNameEdit .acctNameBtns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .acctNameEdit .btn{min-height:44px;padding:11px 10px;font-size:15px}
 .acctWarn{font-size:12.5px;color:#ff9a9a;min-height:16px;margin:0 2px}
+/* v0.51: the change-name box's proactive Nickname Change info - see refreshNameCreditInfo(),
+   § SHOP, and the markup comment right above #acctNameCreditNote. Same soft-gold info-box
+   treatment .acctWallet already uses (§ ACCOUNT) - a held token is good news, not a warning. */
+.acctNameCreditNote{font-size:12.5px;color:#e9f4ec;line-height:1.5;padding:8px 10px;
+  border-radius:10px;background:rgba(244,197,66,.1);border:1px solid rgba(244,197,66,.2)}
 /* 2026-07-26 (v0.36 item 3): the one-time name claim. Blake is opening a short window so people
    who have been playing for months can attach the record they already have to their new account.
    His rule: "only allowed to do this once and claim 1 name - no going back."
@@ -2179,6 +2277,25 @@ button{font:inherit;cursor:pointer}
 .lbTable th{color:#a9d2b5;font-size:clamp(8.5px,2.4vw,11px);letter-spacing:.04em;text-transform:uppercase;text-align:right}
 .lbTable td{text-align:right;color:#e9f4ec}
 .lbTable th:first-child,.lbTable td:first-child{text-align:left;width:26%;overflow:hidden;text-overflow:ellipsis}
+/* v0.51 BUG FIX (found in this session's own 320px screenshot review, not just reasoned about):
+   the title badge (.lbTitleBadge, right below) is a SIBLING of the name text inside this same
+   td:first-child - td:first-child's own text-overflow:ellipsis truncates the whole cell's flowed
+   content as ONE run, so once a name + badge together exceeded the column's ~26%-of-320px width,
+   the ELLIPSIS landed mid-name and the badge - which comes right after in source order - was
+   simply never painted at all (clipped by the td's own overflow:hidden, confirmed directly:
+   getBoundingClientRect() still reported real geometry for it, just positioned past the visible
+   edge). That directly broke this feature's own "must be legible at 320px" requirement for any
+   name long enough to compete with the badge for room - "Blakey" (6 characters) already did it.
+   FIRST FIX ATTEMPT (display:flex directly on td:first-child) was itself wrong and is NOT what
+   shipped: setting `display:flex` on a table cell strips its `display:table-cell`, which broke
+   table-layout:fixed's own 26% column-width math for that column entirely (measured directly:
+   the column collapsed to ~15px, narrower than before, and the badge STILL overflowed it) - also
+   caught by this session's own testing, not shipped. THE ACTUAL FIX: td:first-child stays a
+   normal table cell (width/overflow/ellipsis all untouched, right above) - a NEW inline-flex
+   WRAPPER (.lbNameRow) goes INSIDE it, so the flex layout only governs the name-vs-badge split
+   within the cell's own already-correct width, never the cell's own sizing in the table. */
+.lbNameRow{display:flex;align-items:center;gap:2px;max-width:100%;overflow:hidden}
+.lbNameText{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto}
 .lbTable th:nth-child(2),.lbTable td:nth-child(2){width:19%}
 .lbTable th:nth-child(3),.lbTable td:nth-child(3){width:16%}
 .lbTable th:nth-child(4),.lbTable td:nth-child(4){width:18%}
@@ -2323,6 +2440,24 @@ button{font:inherit;cursor:pointer}
 .acctWalletRow b{color:var(--gold);font-size:17px}
 .acctWalletNote{font-size:11.5px;color:#a9d2b5;line-height:1.4;margin-top:6px}
 
+/* ---- v0.51: the Admin panel's equip section (Blake: "add a section to the admin panel for
+   people to switch between board settings that they got from the shop"). Deliberately REUSES the
+   Shop's own .shopItem/.shopItemInfo/.shopItemName/.shopItemMeta/.shopSwatchRow/.shopSwatch/
+   .shopCatHead row styling (below) rather than a second near-identical set of rules - an owned
+   item reads the same way whether you're switching it here or in the Shop, by construction. Only
+   what's genuinely new to THIS panel gets its own class. */
+.acctEquip{margin:0 0 14px;padding:12px;border-radius:12px;background:rgba(255,255,255,.04);
+  border:1px solid rgba(255,255,255,.1)}
+.acctEquipHead{font-size:13.5px;font-weight:800;color:var(--cream);margin-bottom:6px}
+.acctEquipMsg{font-size:13px;color:#a9d2b5;line-height:1.5}
+.acctEquipCatHead{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#a9d2b5;
+  margin:10px 2px 4px;font-weight:700}
+.acctEquipCatHead:first-child{margin-top:0}
+.acctEquipDefaultRow{display:flex;justify-content:space-between;align-items:center;gap:8px;
+  padding:6px 2px;border-bottom:1px solid rgba(255,255,255,.1)}
+.acctEquipDefaultRow span{font-size:13px;color:#cfe8d6}
+.acctEquipDefaultRow .btn{padding:6px 10px;font-size:12.5px;white-space:nowrap;flex:0 0 auto}
+
 /* ---- § SHOP: the shop overlay itself (#shopOverlay). Balance up top, catalog grouped by
    category below it, a purchase confirms in place (.shopConfirmRow) rather than a second stacked
    overlay - spending is irreversible, so it gets one real "are you sure" step, but not a whole
@@ -2353,12 +2488,22 @@ button{font:inherit;cursor:pointer}
 .shopConfirmBtns{display:flex;gap:8px}
 .shopConfirmBtns .btn{flex:1;padding:8px;font-size:13px}
 
-/* ---- leaderboard/you-card title tag. Equip state is LOCAL to this phone (§ SHOP), so this can
-   only ever show next to the CURRENT SIGNED-IN account's own row - there is no way for this
+/* ---- v0.51 (Blake: "for the designations (ie rookie) you can buy in the shop, don't make this
+   something that goes next to your name in the leaderboard. Make it more like a badge icon or
+   the info won't fit on the leaderboard screen"). Was .lbTitleTag/.youTitleTag - the FULL TITLE
+   TEXT inline next to the name (see HANDOFF.md "v0.51" for why that broke down at 320px, and the
+   original v0.50 build this replaces). Now a small round badge - the SAME initial-in-a-circle
+   language the account avatar (.acctAvatar) already uses elsewhere in this app, not a new visual
+   idiom - carrying just the title's first letter, with the full title only ever a tap away (see
+   titledNameHtml()'s own comment, § SHOP, for the accessible label + tap-to-reveal). Small and
+   fixed-size on purpose: it sits INSIDE the leaderboard's already-truncating first column
+   (.lbTable td:first-child, right above) so it can never itself widen a column, only ever share
+   the same tight space the name already has. Equip state is LOCAL to this phone (§ SHOP), so this
+   can only ever show next to the CURRENT SIGNED-IN account's own row - there is no way for this
    device to know what title anyone else has equipped on theirs. */
-.lbTitleTag,.youTitleTag{display:inline-block;font-size:10.5px;font-weight:700;color:#3a2c05;
-  background:var(--gold);border-radius:6px;padding:1px 5px;margin-left:5px;letter-spacing:.02em;
-  vertical-align:1px}
+.lbTitleBadge{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
+  width:14px;height:14px;border-radius:50%;background:var(--gold);color:#3a2c05;
+  font-size:9px;font-weight:800;line-height:1;vertical-align:1px;margin-left:4px;cursor:pointer}
 </style>
 
 <!-- ================= MENU ================= -->
@@ -2505,7 +2650,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.50</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.51</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -2591,21 +2736,28 @@ button{font:inherit;cursor:pointer}
          board (see #connIndicator's CSS + positionConnIndicator(), § RENDER). Hidden by
          default; updateConnIndicator() (§ NET) is the only thing that ever shows it. -->
     <div id="connIndicator" class="hidden"></div>
-    <div id="boardScale">
-      <svg id="boardSvg" width="1000" height="1000" viewBox="0 0 1000 1000"></svg>
-      <div class="tableCard" id="deckSpot" style="left:415px;top:500px">
-        <div class="card back"></div><div id="deckCount">52</div>
+    <!-- v0.51: the pinch-zoom/pan wrapper - see its own CSS comment right above #boardZoom
+         (§ STYLE) and § BOARD ZOOM (near fitBoard(), § RENDER) for the full design. Everything
+         that used to be a direct child of #boardWrap now lives one level deeper, inside this -
+         #boardWrap itself and #connIndicator are both left OUTSIDE on purpose, so the app's own
+         chrome never zooms/pans, only the board. -->
+    <div id="boardZoom">
+      <div id="boardScale">
+        <svg id="boardSvg" width="1000" height="1000" viewBox="0 0 1000 1000"></svg>
+        <div class="tableCard" id="deckSpot" style="left:415px;top:500px">
+          <div class="card back"></div><div id="deckCount">52</div>
+        </div>
+        <div id="discardLayer"></div>
+        <div id="tableLayer"></div>
+        <!-- v0.9.1: pathLayer moved AFTER tableLayer (was before) so the red landing-hole fill
+             (see § UI's showPaths()) paints ON TOP of tees - otherwise a kill preview's red fill
+             was hidden almost entirely behind the victim's own (opaque) tee, exactly the case
+             Blake most wanted visible ("fill in the hole in red to show where they'd land"). -->
+        <div id="pathLayer"></div>
+        <div id="plaqueLayer"></div>
+        <div id="bubbleLayer"></div>
+        <div id="fxLayer"></div>
       </div>
-      <div id="discardLayer"></div>
-      <div id="tableLayer"></div>
-      <!-- v0.9.1: pathLayer moved AFTER tableLayer (was before) so the red landing-hole fill
-           (see § UI's showPaths()) paints ON TOP of tees - otherwise a kill preview's red fill
-           was hidden almost entirely behind the victim's own (opaque) tee, exactly the case
-           Blake most wanted visible ("fill in the hole in red to show where they'd land"). -->
-      <div id="pathLayer"></div>
-      <div id="plaqueLayer"></div>
-      <div id="bubbleLayer"></div>
-      <div id="fxLayer"></div>
     </div>
   </div>
   <!-- v0.11 item 4: fixed-position, not part of the topbar flex row anymore - see #btnSkip's
@@ -2699,11 +2851,20 @@ button{font:inherit;cursor:pointer}
          different, non-competitive "fun stat" pair that was always meant to read as its own last
          category (see renderLbKo()'s own comment) - moving it earlier would blur that line. .segs
          already wraps onto a 2nd row on its own (flex-wrap:wrap, § STYLE) if 4 buttons ever don't
-         fit one line on a narrow phone, so no new CSS was needed for the 4th button. -->
+         fit one line on a narrow phone, so no new CSS was needed for the 4th button.
+         v0.51: a 5th tab, "Monthly" - wins/losses for the CURRENT CALENDAR MONTH only, a separate
+         mini ranking meant to re-engage people each month (starting August 2026), not another
+         slice of the lifetime record. Sits between Total and KOs for the same reason Total sits
+         between Teams and KOs above: it's a real ranking table (Player/Games/Wins/Losses/Points,
+         see renderLbMonthlyPaint()), so it belongs with the other ranking tabs rather than after
+         the "fun stat" KOs tab. Fed by a DIFFERENT endpoint (GET /leaderboard/monthly) than the
+         other four tabs - see loadMonthlyTab()/fetchMonthlyLeaderboard(), § LEADERBOARD, right
+         next to renderLb()'s own guard for why this tab is never painted from lbLastStats. -->
     <div class="segs" style="margin-bottom:8px">
       <button class="seg on" id="lbTabSolo">Solo</button>
       <button class="seg" id="lbTabTeams">Teams</button>
       <button class="seg" id="lbTabTotal">Total</button>
+      <button class="seg" id="lbTabMonthly">Monthly</button>
       <button class="seg" id="lbTabKo">KOs</button>
     </div>
     <div id="lbBody"></div>
@@ -3039,6 +3200,16 @@ button{font:inherit;cursor:pointer}
       <div class="acctWalletRow"><span>Points remaining</span><b id="acctPtsRemaining">0</b></div>
       <div class="acctWalletNote">Earned always matches the leaderboard and never goes down as you spend. Remaining is what's left to spend in the Shop.</div>
     </div>
+    <!-- 2026-07-28 (v0.51, Blake: "add a section to the admin panel for people to switch between
+         board settings that they got from the shop"). Equipping used to only be reachable from
+         inside the Shop itself - this is a second door onto the exact same EQUIP/equipToggle()
+         mechanism (§ SHOP), not a second implementation. Hidden entirely for a guest (there is
+         nothing owned to switch between). Filled in by refreshAcctEquip(), § SHOP, called from
+         openAccountPanel() every time this panel opens, same as #acctWallet above. -->
+    <div class="acctEquip hidden" id="acctEquip">
+      <div class="acctEquipHead">Your board settings</div>
+      <div id="acctEquipBody"></div>
+    </div>
     <!-- 2026-07-26 (v0.36 item 3): THE ONE-TIME NAME CLAIM. Hidden unless the server says the
          window is open AND there really is history sitting under this account's name. Blake:
          "only allowed to do this once and claim 1 name - no going back." Two steps: the offer,
@@ -3090,12 +3261,23 @@ button{font:inherit;cursor:pointer}
     </div>
     <div class="acctNameEdit hidden" id="acctNameEdit">
       <input id="acctNameInput" maxlength="10" aria-label="Your name" autocomplete="off" autocapitalize="words">
+      <!-- 2026-07-28 (v0.51, Blake: "make the name change token easier to understand - and make
+           it something that's obvious I need to redeem when clicking the change nickname button
+           ... I don't see anything about it there"). Filled in by refreshNameCreditInfo(), § SHOP,
+           the INSTANT this box opens (openAccountNameEdit()) - not just after a cooldown blocks a
+           rename, which is where this info used to be hidden until v0.51. Always states the plain
+           30-day rule truthfully; adds the held-token count only when the account actually has
+           one or more. -->
+      <div class="acctNameCreditNote hidden" id="acctNameCreditNote"></div>
       <div class="acctWarn" id="acctNameWarn"></div>
-      <!-- 2026-07-28 (v0.50): shown only when the server just refused a rename for being inside
-           the 30-day cooldown AND this account holds at least one purchased Name Change Token
-           (§ SHOP). Tapping it re-sends the same rename with useNamechangeCredit:true, which
-           bypasses the cooldown once and consumes the credit - see btnAcctNameSave's own comment
-           for the full flow. Hidden/reset every time this box opens or closes. -->
+      <!-- 2026-07-28 (v0.50, reworked v0.51): shown proactively whenever this account holds at
+           least one Nickname Change (renamed from "Name Change Token" - same underlying server
+           item id, namechange_credit, untouched) - see refreshNameCreditInfo()/useNameCreditNow(),
+           § SHOP. Tapping it saves whatever's currently typed WITH useNamechangeCredit:true - the
+           server only actually spends the token if the 30-day lock would otherwise have refused
+           the rename (confirmed by the server's own tests, HANDOFF.md "Server: points wallet
+           backend" W9), so this is safe to offer even before anyone knows whether the lock is
+           currently active. Hidden/reset every time this box opens or closes. -->
       <button class="btn ghost hidden" id="btnAcctNameUseCredit" style="margin-top:6px"></button>
       <div class="acctNameBtns">
         <button class="btn primary" id="btnAcctNameSave">Save name</button>
@@ -5692,6 +5874,10 @@ function positionDeck(seat,animate){
   e.style.left=p.x+'px'; e.style.top=p.y+'px'; e.style.width=p.w+'px'; e.style.height=p.h+'px';
 }
 function drawBoard(){
+  // v0.51: a fresh board (new game, or 4P<->6P) starts at the normal zoom - see § BOARD ZOOM,
+  // right after fitBoard(). resetBoardZoom is a plain function declaration (hoisted), so this
+  // call is safe even though it's defined later in the file.
+  try{ resetBoardZoom(); }catch(e){}
   const svg=$('boardSvg'); svg.innerHTML='';
   const defs=el('defs',{},svg);
   defs.innerHTML=`
@@ -6073,6 +6259,131 @@ function updateLogoSub2(){
   if(sr.bottom>br.top+2)sub.style.visibility='hidden';
 }
 addEventListener('resize',fitBoard);
+
+/* ============================= § BOARD ZOOM (v0.51) =============================
+   Blake: "add a zoom feature on the board so people can use their 2 fingers to zoom in on the
+   board in certain spots." Two-finger pinch to zoom, two-finger drag to pan while zoomed,
+   double-tap to reset - see the risk list this was written against, all satisfied by the design:
+
+   1. NEVER interferes with ordinary single-finger taps. This is the whole reason the gesture
+      handling below only ever DOES anything (preventDefault, mutate zoom/pan state) once a
+      SECOND pointer is down (boardPointers.size===2). A single finger's pointerdown/move/up
+      sequence runs through this code and changes NOTHING except a passive double-tap timestamp
+      (see onBoardPointerDown's `size===1` branch) - it never calls preventDefault or
+      stopPropagation, so the tee/card elements' own native `click` listeners (§ RENDER/UI, e.g.
+      `d.addEventListener('click',()=>onTeeClick(...))`) fire exactly as they always have. This
+      is provable, not just claimed - see HANDOFF.md's testing section for a real Playwright tap
+      that still lands a legal move at 1x with this feature installed.
+   2. Taps still land on the right hole/card when zoomed and panned. This works BY CONSTRUCTION,
+      not by any coordinate math this code has to get right: #boardZoom (§ STYLE) is a pure CSS
+      transform on a wrapper OUTSIDE #boardScale, and every tee/card is a real DOM element with
+      its own native click listener - the browser's own hit-testing already accounts for however
+      many nested CSS transforms sit between the viewport and the element, exactly the same way
+      it already does for #boardScale's own `scale(s)` from fitBoard(). Nothing here ever
+      computes "which hole is under this screen point" by hand - see the CODE MAP's § LAYOUT/
+      § RENDER entries for why that would have been the fragile way to do this.
+   3. Pan is only possible once zoomed - clampBoardPan() forces panX/panY to exactly 0 whenever
+      boardZoom===1 (the allowed range collapses to a single point: `w*(1-1)=0`), so "the board
+      sits where it always has" at 1x is true by the same clamp that bounds panning at any other
+      zoom level, not a separate special case.
+   4. Double-tap resets. A second tap within 350ms and 30px of the first (tracked passively on
+      every single-finger pointerdown, see point 1) sets zoom/pan back to the default - but ONLY
+      acts (resetBoardZoom()) when boardZoom!==1, so at the default zoom two ordinary quick taps
+      remain two ordinary quick taps with zero side effect.
+   5. Zoom is clamped to [BOARD_ZOOM_MIN,BOARD_ZOOM_MAX] and pan is clamped every time either
+      changes (clampBoardPan()) so the zoomed board can never be dragged fully off screen - the
+      clamp keeps the board's edges from ever moving inside #boardWrap's own edges, i.e. some
+      part of the board always covers the full wrap, the same "cover" clamp an image viewer uses.
+   6. #autotest/#autotest6 are untouched - they drive the game by calling functions directly
+      (see AUTOTEST_HASH's own comment), never by dispatching pointer events, so none of this
+      code path is ever reached during a soak test either way. */
+let boardZoom=1,boardPanX=0,boardPanY=0;
+const BOARD_ZOOM_MIN=1,BOARD_ZOOM_MAX=3;
+function applyBoardZoomTransform(){
+  const el=$('boardZoom'); if(!el)return;
+  el.style.transform=`matrix(${boardZoom},0,0,${boardZoom},${boardPanX},${boardPanY})`;
+}
+// "Cover" clamp: at boardZoom===1 this forces panX/panY to exactly 0 (see point 3 above) - at
+// any bigger zoom it keeps the zoomed board's edges from ever moving inside #boardWrap's own
+// edges, so the board can never be dragged fully off screen (point 5 above).
+function clampBoardPan(){
+  const wrap=$('boardWrap'); if(!wrap)return;
+  const w=wrap.clientWidth,h=wrap.clientHeight;
+  const minX=w*(1-boardZoom),minY=h*(1-boardZoom);
+  boardPanX=Math.min(0,Math.max(minX,boardPanX));
+  boardPanY=Math.min(0,Math.max(minY,boardPanY));
+}
+function resetBoardZoom(){
+  boardZoom=1; boardPanX=0; boardPanY=0;
+  applyBoardZoomTransform();
+}
+// pointerId -> {x,y}, in #boardWrap-relative CSS pixels (i.e. BEFORE the #boardZoom transform -
+// the same coordinate system boardPanX/boardPanY already live in).
+const boardPointers=new Map();
+let boardPinchStart=null;   // {d0,z0,panX0,panY0,mid0} - set the instant a 2nd finger lands
+let boardLastTapAt=0,boardLastTapX=0,boardLastTapY=0;
+function boardWrapPoint(ev){
+  const r=$('boardWrap').getBoundingClientRect();
+  return {x:ev.clientX-r.left,y:ev.clientY-r.top};
+}
+function pointerDist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y); }
+function pointerMid(a,b){ return {x:(a.x+b.x)/2,y:(a.y+b.y)/2}; }
+function onBoardPointerDown(ev){
+  if(ev.pointerType==='mouse'&&ev.button!==0)return;
+  boardPointers.set(ev.pointerId,boardWrapPoint(ev));
+  if(boardPointers.size===2){
+    const pts=[...boardPointers.values()];
+    boardPinchStart={d0:pointerDist(pts[0],pts[1]),z0:boardZoom,panX0:boardPanX,panY0:boardPanY,
+      mid0:pointerMid(pts[0],pts[1])};
+  }else if(boardPointers.size===1){
+    // Passive double-tap bookkeeping ONLY - see point 1/4 above. Never preventDefault/
+    // stopPropagate here, so a single tap's own click handler is completely untouched.
+    const p=boardWrapPoint(ev),now=Date.now();
+    if(now-boardLastTapAt<350&&pointerDist(p,{x:boardLastTapX,y:boardLastTapY})<30){
+      if(boardZoom!==1)resetBoardZoom();
+      boardLastTapAt=0;   // consumed - a 3rd rapid tap starts a fresh pair, not a re-trigger
+    }else{
+      boardLastTapAt=now; boardLastTapX=p.x; boardLastTapY=p.y;
+    }
+  }
+}
+function onBoardPointerMove(ev){
+  if(!boardPointers.has(ev.pointerId))return;
+  boardPointers.set(ev.pointerId,boardWrapPoint(ev));
+  if(boardPointers.size===2&&boardPinchStart){
+    ev.preventDefault();   // stop the OS's own page pan/zoom from fighting this (touch-action:none, § STYLE, is the primary guard)
+    const pts=[...boardPointers.values()];
+    const d1=pointerDist(pts[0],pts[1]),mid1=pointerMid(pts[0],pts[1]);
+    let z=boardPinchStart.z0*(d1/Math.max(boardPinchStart.d0,1));
+    z=Math.min(BOARD_ZOOM_MAX,Math.max(BOARD_ZOOM_MIN,z));
+    // Keep whatever board point was under the ORIGINAL two-finger midpoint stationary under the
+    // CURRENT midpoint - this is what makes the gesture feel like pinching the board itself
+    // (zoom) while a same-distance two-finger drag (unchanged d1/d0 ratio) simply pans, both
+    // through this one piece of math (Blake's "pan around while zoomed" ask, same gesture).
+    const lx=(boardPinchStart.mid0.x-boardPinchStart.panX0)/boardPinchStart.z0;
+    const ly=(boardPinchStart.mid0.y-boardPinchStart.panY0)/boardPinchStart.z0;
+    boardZoom=z;
+    boardPanX=mid1.x-z*lx;
+    boardPanY=mid1.y-z*ly;
+    clampBoardPan();
+    applyBoardZoomTransform();
+  }
+}
+function onBoardPointerUp(ev){
+  boardPointers.delete(ev.pointerId);
+  if(boardPointers.size<2)boardPinchStart=null;
+}
+(function initBoardZoomGestures(){
+  const bz=$('boardZoom'); if(!bz)return;
+  bz.addEventListener('pointerdown',onBoardPointerDown,{passive:true});
+  bz.addEventListener('pointermove',onBoardPointerMove,{passive:false});
+  bz.addEventListener('pointerup',onBoardPointerUp,{passive:true});
+  bz.addEventListener('pointercancel',onBoardPointerUp,{passive:true});
+  bz.addEventListener('pointerleave',onBoardPointerUp,{passive:true});
+})();
+// Re-clamp (never reset - a resize/orientation change shouldn't throw away a deliberate zoom)
+// against the freshly-measured #boardWrap size every time fitBoard() itself re-measures it.
+addEventListener('resize',()=>{ clampBoardPan(); applyBoardZoomTransform(); });
 
 /* v0.10 - name plates, actually ~2x (Blake asked twice).
    Two independent levers (see the Plaques CSS block comment for the full story):
@@ -10250,7 +10561,8 @@ $('btnStart').onclick=()=>openOfflineSeatPicker();
    says so in words ("No games recorded yet") rather than showing a fabricated 0/0/0. Knockouts
    (hkoDealt/hkoTaken) only ever appear when at least one is genuinely nonzero - same "don't show
    a stat nobody's touched" rule renderLbKo()'s own `active` filter already follows.
-   The rank line ("3rd on the family board") rides the SAME fetch paintYouCardStats() already made
+   The rank line ("3rd on the leaderboard" - v0.51: was "family board," see HANDOFF.md "v0.51"
+   for Blake's "just call it leaderboard" fix) rides the SAME fetch paintYouCardStats() already made
    for the numbers above - ranked by COMBINED solo+teams points (rankAmong()), since "how am I
    doing" is one question, not two tabs. If the shared board has never been reached this session,
    the rank line is simply never written - there is no spinner and nothing that can look stuck.
@@ -10382,12 +10694,12 @@ function paintYouCardStats(name){
     if(koEl)koEl.textContent=youKoLine(rec);
     if(noteEl)noteEl.textContent='';
     const rank=rankAmong(YOU_CARD_BOARD,name);
-    if(rankEl)rankEl.textContent=rank?ordinal(rank)+' on the family board':'';
+    if(rankEl)rankEl.textContent=rank?ordinal(rank)+' on the leaderboard':'';
   }else if(YOU_CARD_LOCAL_FALLBACK){
     const rec=myCombinedRecord(loadStats(),name);
-    statsEl.textContent=rec.has?youStatsLine(rec):"Couldn't reach the family board yet - check your connection.";
+    statsEl.textContent=rec.has?youStatsLine(rec):"Couldn't reach the leaderboard yet - check your connection.";
     if(koEl)koEl.textContent=youKoLine(rec);
-    if(noteEl)noteEl.textContent=rec.has?"(this phone only - couldn't reach the family board)":'';
+    if(noteEl)noteEl.textContent=rec.has?"(this phone only - couldn't reach the leaderboard)":'';
     if(rankEl)rankEl.textContent='';
   }else{
     statsEl.textContent='Loading your stats...';
@@ -10407,13 +10719,13 @@ function paintYouCardStats(name){
       if(k2)k2.textContent=youKoLine(rec);
       if(n2)n2.textContent='';
       const rank=rankAmong(merged,name);
-      if(r2)r2.textContent=rank?ordinal(rank)+' on the family board':'';
+      if(r2)r2.textContent=rank?ordinal(rank)+' on the leaderboard':'';
     }else if(!YOU_CARD_BOARD){
       YOU_CARD_LOCAL_FALLBACK=true;
       const rec=myCombinedRecord(loadStats(),name);
-      s2.textContent=rec.has?youStatsLine(rec):"Couldn't reach the family board yet - check your connection.";
+      s2.textContent=rec.has?youStatsLine(rec):"Couldn't reach the leaderboard yet - check your connection.";
       if(k2)k2.textContent=youKoLine(rec);
-      if(n2)n2.textContent=rec.has?"(this phone only - couldn't reach the family board)":'';
+      if(n2)n2.textContent=rec.has?"(this phone only - couldn't reach the leaderboard)":'';
       if(r2)r2.textContent='';
     }
     // else: fetch failed but YOU_CARD_BOARD is already real, known-good data from earlier this
@@ -10454,7 +10766,7 @@ function renderYouCard(){
     // The Sign in button inside stops its click from bubbling up to this same handler, so tapping
     // it does sign-in only, never sign-in-then-also-open-Admin.
     box.innerHTML=`<div class="youCardGuest" id="youCardTap" role="button" tabindex="0" aria-label="Open Admin settings">
-        <div class="youNudge">Sign in to get on the family leaderboard - your wins, points and knockouts, tracked across every phone.</div>
+        <div class="youNudge">Sign in to get on the leaderboard - your wins, points and knockouts, tracked across every phone.</div>
         ${accountsAvailableHere()?'<button class="btn primary" id="youCardSignIn" type="button">Sign in with Apple</button>':''}
       </div>`;
     const tap=$('youCardTap');
@@ -11002,6 +11314,8 @@ function openAccountPanel(){
   try{ probeClaimOffer().catch(()=>{}); }catch(e){}
   // 2026-07-28 (v0.50): the points-earned/points-remaining box - see refreshAcctWallet(), § SHOP.
   try{ refreshAcctWallet(); }catch(e){}
+  // 2026-07-28 (v0.51): the equip section - see refreshAcctEquip(), § SHOP.
+  try{ refreshAcctEquip(); }catch(e){}
 }
 $('btnAccount').onclick=openAccountPanel;
 $('btnMenuAdmin').onclick=openAccountPanel;   // v0.50: the menu's own Admin button - same panel, second door
@@ -11044,12 +11358,16 @@ function setChosenName(name){
   updateAccountButton();
   return true;
 }
-// 2026-07-28 (v0.50): the "Use a Name Change Token" offer is a one-shot thing tied to whatever
-// cooldown response JUST came back - reset it every time the name box opens or closes so a stale
-// offer (from a previous attempt, possibly for a different rename) can never linger.
+// 2026-07-28 (v0.50; reworked v0.51 - see refreshNameCreditInfo(), § SHOP, for the proactive
+// version this now works alongside): resets the note+button to their closed/unknown state every
+// time the name box opens or closes, so a stale offer (from a previous attempt, possibly a
+// different account entirely) can never linger for the split second before the fresh async
+// wallet check (refreshNameCreditInfo()) answers.
 function hideNameCreditOffer(){
   const b=$('btnAcctNameUseCredit');
-  if(b){ b.classList.add('hidden'); b.onclick=null; }
+  if(b)b.classList.add('hidden');
+  const n=$('acctNameCreditNote');
+  if(n)n.classList.add('hidden');
 }
 function closeAccountNameEdit(){
   ACCT_NAME_MODE='local';
@@ -11078,6 +11396,10 @@ function openAccountNameEdit(mode,msg){
   if(box.classList.contains('hidden'))box.classList.remove('hidden');
   $('btnAcctName').classList.add('hidden');
   try{ inp.focus(); inp.select(); }catch(e){}
+  // 2026-07-28 (v0.51): the Nickname Change info/offer is now shown the INSTANT this box opens,
+  // not just after a cooldown blocks a plain rename - see refreshNameCreditInfo(), § SHOP, and
+  // Blake's own ask in that function's header comment.
+  if(ACCT_NAME_MODE==='account')try{ refreshNameCreditInfo(); }catch(e){}
 }
 // v0.42: a guest has no name to change - renderAccountRows() disables this row and says so; this
 // guard is belt-and-suspenders against the row's own `disabled` attribute rather than the only
@@ -11091,10 +11413,79 @@ $('btnAcctNameCancel').onclick=closeAccountNameEdit;
 async function saveAccountName(raw,useCredit){
   return accountFetch('/account/name',{auth:ACCT.token,name:raw,useNamechangeCredit:!!useCredit});
 }
+/* ==================== v0.51: the Nickname Change offer, made obvious up front ====================
+   Blake: "make the name change token easier to understand - and make it something that's obvious
+   I need to redeem when clicking the change nickname button on the admin drop down. I don't see
+   anything about it there." Previously (v0.50) this whole offer only existed AFTER a rename
+   attempt got refused by the 30-day cooldown - genuinely invisible until you hit the wall. Now
+   openAccountNameEdit() calls refreshNameCreditInfo() the instant the box opens, so the info and
+   the redeem action are both right there before anyone has typed anything.
+
+   ALWAYS states the plain rule truthfully, whether or not the account holds a token - Blake's own
+   instruction, and confirmed against the server's own tests (HANDOFF.md "Server: points wallet
+   backend" W9): changing your nickname locks it for 30 days; spending a Nickname Change bypasses
+   that lock ONCE, and then the 30-day lock starts again from today. This is not a standing
+   exemption and this file never claims it is one anywhere.
+
+   Renamed in player language per Blake's ask - "Name Change Token" -> "Nickname Change" - EVERY
+   place this file shows the item to a player (here, and the Shop's own catalog row, § SHOP). The
+   underlying server item id (`namechange_credit`) is completely untouched - the server owns the
+   catalog, and nothing here ever sends or expects a different id. See shopDisplayName(), § SHOP,
+   for the one small helper that makes this a display-only rename. */
+let ACCT_NAME_CREDITS=0;
+async function refreshNameCreditInfo(){
+  const note=$('acctNameCreditNote'), btn=$('btnAcctNameUseCredit');
+  if(!note||!btn)return;
+  note.textContent='Changing your name locks it for 30 days before you can change it again.';
+  note.classList.remove('hidden');
+  btn.classList.add('hidden');
+  if(!isAccountReady())return;
+  const wr=await fetchWalletResult();
+  if(!isAccountReady())return;   // signed out while this was in flight
+  // A stale response for a box the player already closed (or reopened since) shouldn't paint -
+  // cheap to check, since this box has no seq counter of its own: just confirm it's still open.
+  if($('acctNameEdit').classList.contains('hidden'))return;
+  const credits=wr.ok?Math.max(0,Number(wr.wallet.namechangeCredits)||0):0;
+  ACCT_NAME_CREDITS=credits;
+  if(credits>0){
+    note.textContent=`You have ${credits} Nickname Change${credits===1?'':'s'}. Changing your name normally locks it for 30 days - a Nickname Change skips that wait once, right now, and then the 30-day lock starts again from today.`;
+    btn.textContent=`Use a Nickname Change now (${credits} left)`;
+    btn.classList.remove('hidden');
+  }
+}
+// The obvious, always-available redeem action (once the account holds at least one Nickname
+// Change) - saves WHATEVER's currently typed with useNamechangeCredit:true. Safe to offer even
+// when no cooldown is actually active: the server only spends the credit if the lock would have
+// refused the rename anyway (confirmed by the server's own tests, see this section's header
+// comment), so tapping this on a name that would have saved for free just... saves it for free,
+// and usedNamechangeCredit in the response says which one actually happened (see the toast below).
+async function useNameCreditNow(){
+  const inp=$('acctNameInput'), warn=$('acctNameWarn'), btn=$('btnAcctNameUseCredit');
+  const raw=(inp.value||'').slice(0,NAME_MAX).trim();
+  if(!raw){ warn.textContent='Type a name first.'; return; }
+  if(isBadName(raw)){ warn.textContent='Pick a nicer name.'; return; }
+  if(btn)btn.disabled=true;
+  warn.textContent='Saving...';
+  const r=await saveAccountName(raw,true);
+  if(btn)btn.disabled=false;
+  if(r.status!==200||!r.body||!r.body.gameName){
+    warn.textContent=(r.body&&r.body.message)||"That name couldn't be saved. Try another one.";
+    return;
+  }
+  ACCT.gameName=r.body.gameName;
+  setChosenName(r.body.gameName);
+  hideNameCreditOffer();
+  closeAccountNameEdit();
+  renderAccountPanel();
+  toast('You are '+ACCT.gameName+(r.body.usedNamechangeCredit?' on the leaderboard. (Nickname Change used)':' on the leaderboard.'));
+}
+$('btnAcctNameUseCredit').onclick=useNameCreditNow;
 $('btnAcctNameSave').onclick=async ()=>{
   const inp=$('acctNameInput'), warn=$('acctNameWarn');
   const raw=(inp.value||'').slice(0,NAME_MAX).trim();
-  hideNameCreditOffer();
+  // v0.51: no longer hides the proactive Nickname Change note/button here - a plain Save attempt
+  // (this button) never touches that offer's visibility one way or the other; it's shown/hidden
+  // by refreshNameCreditInfo() on open and hideNameCreditOffer() on close, full stop.
   if(!raw){ warn.textContent='Type a name first.'; return; }
   // Same two rules the setup screen and the join screen already enforce - one implementation
   // (§ NAMES), so the account panel can never be a back door around them.
@@ -11106,33 +11497,20 @@ $('btnAcctNameSave').onclick=async ()=>{
     warn.textContent='Saving...';
     const r=await saveAccountName(raw,false);
     if(r.status===429&&r.body&&r.body.error==='cooldown'){
-      // 2026-07-28 (v0.50): the cooldown blocked it - offer to spend a purchased Name Change
-      // Token (§ SHOP) if this account holds one, rather than just dead-ending here. The server's
-      // own message (days left) still shows on the warning line; the credit offer is a SEPARATE
-      // button underneath it, never auto-applied.
+      // 2026-07-28 (v0.50; reworded v0.51): the cooldown blocked a PLAIN rename. The Nickname
+      // Change offer itself is no longer built here - it is shown proactively the instant this
+      // box opened (refreshNameCreditInfo(), § SHOP) and its button (useNameCreditNow()) already
+      // works off whatever's currently typed. This branch's only job now is the honest reason on
+      // the warning line, plus a belt-and-suspenders refresh of the credit count/button in case
+      // the proactive check hadn't finished yet (or was itself unreachable) when Save was tapped -
+      // the 429 response carries its own namechangeCredits, so this can never show a stale count.
       warn.textContent=r.body.message||"You can't change your name again yet.";
       const credits=Math.max(0,Number(r.body.namechangeCredits)||0);
-      if(credits>0){
-        const b=$('btnAcctNameUseCredit');
-        if(b){
-          b.textContent=`Use a Name Change Token instead (${credits} ${credits===1?'credit':'credits'} - skips the wait)`;
-          b.classList.remove('hidden');
-          b.onclick=async()=>{
-            b.disabled=true; warn.textContent='Saving...';
-            const r2=await saveAccountName(raw,true);
-            b.disabled=false;
-            if(r2.status!==200||!r2.body||!r2.body.gameName){
-              warn.textContent=(r2.body&&r2.body.message)||"That name couldn't be saved. Try another one.";
-              return;
-            }
-            ACCT.gameName=r2.body.gameName;
-            setChosenName(r2.body.gameName);
-            hideNameCreditOffer();
-            closeAccountNameEdit();
-            renderAccountPanel();
-            toast('You are '+ACCT.gameName+' on the leaderboard. (1 Name Change Token used)');
-          };
-        }
+      ACCT_NAME_CREDITS=credits;
+      const b=$('btnAcctNameUseCredit');
+      if(credits>0&&b){
+        b.textContent=`Use a Nickname Change now (${credits} left)`;
+        b.classList.remove('hidden');
       }
       return;
     }
@@ -11708,11 +12086,46 @@ function applyEquipped(){ applyEquippedPalette(); applyEquippedFelt(); }
 // (see this section's header comment) - so this can only ever be truthful for the CURRENT
 // signed-in account's own name. There is no code path anywhere that could show a title next to
 // someone else's name, because this phone has no way to know what they have equipped.
+// v0.51 (Blake: "don't make this something that goes next to your name... make it more like a
+// badge icon or the info won't fit on the leaderboard screen") - the full title TEXT used to sit
+// right in the name cell, which was fine on a wide phone and genuinely didn't fit at 320px
+// (crowding the Games/Wins/Win%/Points columns on a table that's already tight there - see
+// HANDOFF.md "v0.51"). Now a small round badge (.lbTitleBadge, § STYLE) carrying just the
+// title's first letter - the actual title is never lost, just moved off the name itself:
+// `aria-label` makes it readable to a screen reader outright, and a real tap/click (delegated
+// listener right below, in CAPTURE phase specifically so it can stopPropagation() BEFORE a
+// bubble-phase ancestor handler fires - the you card's whole row is itself one big tap target,
+// see renderYouCard(), so a badge tap must never also open the Admin panel underneath it) shows
+// the full title as a toast for anyone sighted who wants it spelled out.
+// v0.51 BUG FIX: the name is wrapped in its OWN .lbNameText span (not just a bare text node) so
+// the CSS flex fix right above (.lbTable td:first-child/.youWho b, § STYLE) can shrink/truncate
+// JUST the name and leave the badge always fully painted - see that CSS comment for the full
+// root-cause writeup (a 320px screenshot review during this session's own testing caught the
+// badge disappearing entirely behind the name's ellipsis before this fix).
 function titledNameHtml(n){
-  const tag=(isAccountReady()&&EQUIP.title&&n===ACCT.gameName)?
-    ` <span class="lbTitleTag">${esc(EQUIP.title.name)}</span>`:'';
-  return esc(n)+tag;
+  if(!(isAccountReady()&&EQUIP.title&&n===ACCT.gameName))return `<span class="lbNameRow"><span class="lbNameText">${esc(n)}</span></span>`;
+  const t=EQUIP.title.name;
+  const letter=esc((t.trim().charAt(0)||'?').toUpperCase());
+  return `<span class="lbNameRow"><span class="lbNameText">${esc(n)}</span><span class="lbTitleBadge" tabindex="0" role="button" aria-label="Title: ${esc(t)}" data-title="${esc(t)}">${letter}</span></span>`;
 }
+// Capture-phase (not the usual bubble phase) is the part that matters: it runs BEFORE the you
+// card's own #youCardTap onclick (§ MENU) or a future ancestor handler ever sees the click, so
+// stopPropagation() here reliably stops a badge tap from ALSO triggering whatever the row it
+// sits inside is a tap target for. One delegated listener for every badge this app ever paints
+// (leaderboard rows, the you card) rather than binding one per badge on every re-render.
+document.addEventListener('click',e=>{
+  const b=e.target.closest('.lbTitleBadge');
+  if(!b)return;
+  e.stopPropagation();
+  toast('Title: '+b.dataset.title,2600);
+},true);
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Enter'&&e.key!==' ')return;
+  const b=e.target.closest&&e.target.closest('.lbTitleBadge');
+  if(!b)return;
+  e.preventDefault(); e.stopPropagation();
+  toast('Title: '+b.dataset.title,2600);
+},true);
 
 // ---- catalog + wallet fetch ----
 let SHOP_CATALOG_CACHE=null;
@@ -11764,6 +12177,52 @@ async function refreshAcctWallet(){
 let SHOP_STATE={phase:'loading',catalog:null,wallet:null};
 let SHOP_LOAD_SEQ=0;
 let SHOP_BUSY=false;
+/* v0.51 (Blake: "you have the price of the items listed beneath them and beside them to the
+   right. Only have the price to the right. I don't like how you say how many credits I'm behind
+   though if I don't have enough credits to buy things. However, for the thing that I had enough
+   credits, this portion said I had zero credits which isn't true.")
+
+   THREE changes, the last one a real bug fix, not just a copy edit:
+   1. The price used to be printed TWICE - once in .shopItemMeta (under the name) AND again on
+      the Buy button itself (to the right, "Buy - N pts"). Now it lives ONLY on the button. An
+      owned item shows no price at all anymore (Equip/Equipped never needed one - you already
+      spent it), which is the one place "only on the right" simplifies to "nowhere," on purpose.
+   2. The `!canAfford` "Need N more" shortfall line is deleted outright, per Blake's own
+      instruction - the Buy button already goes visibly disabled/greyed when you can't afford
+      something (unchanged), which was always the actual signal; the extra sentence was not asked
+      for and is gone.
+   3. THE ROOT CAUSE of "this portion said I had zero credits which isn't true," root-caused
+      rather than just deleted: the `namechange` category's row used to ALWAYS print
+      `You have ${wallet.namechangeCredits} credit(s)` in this exact same meta slot, REGARDLESS of
+      affordability - and `wallet.namechangeCredits` is not the player's spendable balance at
+      all, it's a completely different number: how many Name Change Tokens (now "Nickname
+      Change," § ACCOUNT SIGN-IN - see that section for the rename) the account has ALREADY
+      BOUGHT and not yet redeemed (server-confirmed default 0 for any account that's never bought
+      one - HANDOFF.md "Server: points wallet backend," test W1). For an item Blake could easily
+      afford (plenty of points balance, `canAfford` was computing correctly the whole time and the
+      Buy button was correctly enabled), this owned-count line still said "You have 0 credits" -
+      technically true (he owned zero tokens) but sitting in the exact same visual slot/format the
+      "Need N more" shortfall used for every OTHER unaffordable item, so it read as a false
+      affordability warning on an item that was never actually a problem. The balance itself was
+      NEVER read wrong anywhere - `wallet.balance`/`canAfford` are correct in this file end to end
+      (confirmed by re-reading every wallet.balance call site, § SHOP) - this was a LABELING bug,
+      not a math bug: an accurate-but-irrelevant inventory count, using the overloaded word
+      "credits," shown exactly where an afford check would be. Fix: this line is gone from the
+      Shop entirely. The genuinely useful version of this information - how many you're holding,
+      with an obvious way to actually USE one - now lives in the Admin panel's own change-name
+      flow (§ ACCOUNT SIGN-IN), where it is actionable, not just adjacent to an unrelated Buy
+      button. */
+// v0.51 (Blake: "make the name change token easier to understand... 'Name Change Token' is
+// jargon; something like 'Nickname Change' reads better"). A DISPLAY-ONLY rename - the server's
+// own catalog (SHOP_CATALOG, server.js/server.ts) still calls the item "Name Change Token" and
+// still keys it as `namechange_credit`; nothing here ever changes, sends, or expects a different
+// id or a different catalog name. Every place this file shows a shop item's name to a player
+// (this row, its Buy confirm text, buyItem()'s own toasts below) reads it through this one
+// function rather than `item.name` directly, so the friendlier name is consistent everywhere and
+// there is exactly one place to change it again later.
+function shopDisplayName(item){
+  return (item&&item.id==='namechange_credit')?'Nickname Change':(item?item.name:'');
+}
 function catItemRow(item,wallet){
   const owned=Array.isArray(wallet.owned)&&wallet.owned.includes(item.id);
   const equippedId=EQUIP[item.category]?EQUIP[item.category].id:null;
@@ -11778,7 +12237,6 @@ function catItemRow(item,wallet){
   const metaBits=[];
   let actionHtml;
   if(item.category==='namechange'){
-    metaBits.push(`You have ${wallet.namechangeCredits} credit${wallet.namechangeCredits===1?'':'s'}`);
     actionHtml=`<button class="btn primary shopBuyBtn" data-id="${item.id}" ${canAfford?'':'disabled'}>Buy - ${item.cost} pts</button>`;
   }else if(owned){
     metaBits.push('Owned');
@@ -11786,15 +12244,15 @@ function catItemRow(item,wallet){
       ?`<button class="btn primary shopEquipBtn" data-id="${item.id}" aria-label="Equipped - tap to remove">Equipped</button>`
       :`<button class="btn ghost shopEquipBtn" data-id="${item.id}">Equip</button>`;
   }else{
-    if(!canAfford)metaBits.push(`Need ${item.cost-wallet.balance} more`);
     actionHtml=`<button class="btn primary shopBuyBtn" data-id="${item.id}" ${canAfford?'':'disabled'}>Buy - ${item.cost} pts</button>`;
   }
+  const dispName=shopDisplayName(item);
   return `<div class="shopItem" data-id="${item.id}">
-    <div class="shopItemInfo">${swatch}<div class="shopItemText"><div class="shopItemName">${esc(item.name)}</div>
-      <div class="shopItemMeta">${item.cost} pt${item.cost===1?'':'s'}${metaBits.length?' · '+esc(metaBits.join(' · ')):''}</div></div></div>
+    <div class="shopItemInfo">${swatch}<div class="shopItemText"><div class="shopItemName">${esc(dispName)}</div>
+      ${metaBits.length?`<div class="shopItemMeta">${esc(metaBits.join(' · '))}</div>`:''}</div></div>
     <div class="shopItemAction">${actionHtml}</div>
     <div class="shopConfirmRow hidden" data-id="${item.id}">
-      <span>Buy ${esc(item.name)} for ${item.cost} point${item.cost===1?'':'s'}? Spending can't be undone.</span>
+      <span>Buy ${esc(dispName)} for ${item.cost} point${item.cost===1?'':'s'}? Spending can't be undone.</span>
       <div class="shopConfirmBtns"><button class="btn primary shopConfirmYes" data-id="${item.id}">Confirm</button>
         <button class="btn ghost shopConfirmNo" data-id="${item.id}">Cancel</button></div>
     </div>
@@ -11803,8 +12261,10 @@ function catItemRow(item,wallet){
 const SHOP_CATEGORY_LABELS=[
   ['palette','Palettes - swap your seat colors'],
   ['felt','Table felt - change the board background'],
-  ['title','Titles - shown next to your name'],
-  ['namechange','Name change tokens'],
+  // v0.51: was "shown next to your name" - titles are a small badge next to your name now
+  // (.lbTitleBadge, § STYLE), not inline text - see titledNameHtml()'s own comment, § SHOP.
+  ['title','Titles - shown as a badge next to your name'],
+  ['namechange','Nickname changes'],
 ];
 function paintShop(){
   const balBox=$('shopBalanceBox'), body=$('shopBody');
@@ -11892,6 +12352,97 @@ function equipToggle(item){
   // out of the Shop, not just on the next boot.
   try{ renderMenu(); }catch(e){}
 }
+/* ==================== v0.51: the Admin panel's own equip section ====================
+   Blake: "add a section to the admin panel for people to switch between board settings that they
+   got from the shop." Today equipping was only reachable from inside the Shop - this is a SECOND
+   DOOR onto the exact same EQUIP/equipToggle()/catalog machinery above, not a second
+   implementation: acctEquipToggle() below calls the very same equipToggle() the Shop's own Equip
+   buttons call, so the two screens can never disagree about what's equipped. Only shows OWNED
+   items (namechange tokens are consumable/spent, not "equipped," and have their own place in the
+   change-name flow - § ACCOUNT SIGN-IN) grouped by category, reusing the Shop's own row styling
+   (.shopItem/.shopItemInfo/.shopItemName/.shopSwatchRow/.shopSwatch, § STYLE) so an owned item
+   looks identical whether you're switching it here or in the Shop. A "Use default" row per
+   category (only shown once something in that category IS equipped) covers "including back to
+   the default" explicitly, on top of the existing "tap the equipped item again to remove it"
+   toggle the Shop already has - two ways to reach the same place, since this panel doesn't
+   present the items in a scannable swatch strip the way the Shop's fuller layout does. */
+async function refreshAcctEquip(){
+  const box=$('acctEquip'); if(!box)return;
+  if(!isAccountReady()){ box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  const body=$('acctEquipBody');
+  if(body)body.innerHTML='<div class="acctEquipMsg">Loading your items...</div>';
+  const [catalog,wr]=await Promise.all([fetchShopCatalog(),fetchWalletResult()]);
+  if(!isAccountReady()){ box.classList.add('hidden'); return; }   // signed out while the fetch was in flight
+  if(!body)return;
+  if(!catalog||!wr.ok){
+    body.innerHTML=`<div class="acctEquipMsg">Couldn't load your items right now.</div>`;
+    return;
+  }
+  const owned=Array.isArray(wr.wallet.owned)?wr.wallet.owned:[];
+  const items=catalog.items.filter(i=>i.category!=='namechange'&&owned.includes(i.id));
+  if(!items.length){
+    // Blake: "if they own nothing, say so plainly and point at the Shop."
+    body.innerHTML=`<div class="acctEquipMsg">You don't own any palettes, felts, or titles yet - the Shop is where you get them.</div>
+      <div class="bigBtns" style="margin-top:8px"><button class="btn ghost" id="btnAcctEquipShop">Open the Shop</button></div>`;
+    const b=$('btnAcctEquipShop');
+    if(b)b.onclick=()=>{ closeOverlay('accountOverlay'); openShopOverlay(); };
+    return;
+  }
+  let html='';
+  SHOP_CATEGORY_LABELS.forEach(([cat,label])=>{
+    const list=items.filter(i=>i.category===cat);
+    if(!list.length)return;
+    html+=`<div class="acctEquipCatHead">${esc(label)}</div>`;
+    if(EQUIP[cat]){
+      html+=`<div class="acctEquipDefaultRow"><span>Currently equipped: ${esc(EQUIP[cat].name)}</span>
+        <button class="btn ghost acctEquipResetBtn" data-cat="${cat}">Use default</button></div>`;
+    }
+    html+=list.map(i=>acctEquipItemRow(i)).join('');
+  });
+  body.innerHTML=html;
+}
+function acctEquipItemRow(item){
+  const equippedId=EQUIP[item.category]?EQUIP[item.category].id:null;
+  const isEquipped=equippedId===item.id;
+  let swatch='';
+  if(item.category==='palette'&&Array.isArray(item.colors4)){
+    swatch=`<span class="shopSwatchRow">${item.colors4.map(c=>`<span class="shopSwatch" style="background:${c.c}"></span>`).join('')}</span>`;
+  }else if(item.category==='felt'&&item.c){
+    swatch=`<span class="shopSwatch shopSwatchFelt" style="background:${item.c}"></span>`;
+  }
+  return `<div class="shopItem" data-id="${item.id}">
+    <div class="shopItemInfo">${swatch}<div class="shopItemText"><div class="shopItemName">${esc(item.name)}</div></div></div>
+    <div class="shopItemAction">${isEquipped
+      ?`<button class="btn primary acctEquipBtn" data-id="${item.id}" aria-label="Equipped - tap to remove">Equipped</button>`
+      :`<button class="btn ghost acctEquipBtn" data-id="${item.id}">Equip</button>`}</div>
+  </div>`;
+}
+async function acctEquipToggle(itemId){
+  const catalog=await fetchShopCatalog();
+  const item=catalog&&catalog.items.find(i=>i.id===itemId);
+  if(!item)return;
+  equipToggle(item);   // the SAME toggle the Shop's own Equip/Equipped buttons call, right above
+  refreshAcctEquip();
+}
+function acctEquipReset(cat){
+  if(!EQUIP[cat])return;
+  EQUIP[cat]=null;
+  saveEquip();
+  applyEquipped();
+  toast('Back to the standard '+(cat==='felt'?'felt':cat==='title'?'title (none)':'colors')+'.');
+  try{ renderMenu(); }catch(e){}
+  try{ paintShop(); }catch(e){}
+  refreshAcctEquip();
+}
+// Event delegation on the one container that gets rewritten (#acctEquipBody) - the same "one
+// listener, not a fresh bind per repaint" idiom #shopBody already uses, § SHOP.
+$('acctEquipBody').addEventListener('click',e=>{
+  const eqBtn=e.target.closest('.acctEquipBtn');
+  if(eqBtn){ acctEquipToggle(eqBtn.dataset.id); return; }
+  const resetBtn=e.target.closest('.acctEquipResetBtn');
+  if(resetBtn){ acctEquipReset(resetBtn.dataset.cat); return; }
+});
 // requestId is fresh per logical purchase ATTEMPT (a genuine retry after a real failure is a new
 // attempt) - the guard against a DOUBLE-TAP of the same attempt is SHOP_BUSY, checked and set
 // synchronously before any await, so a second click physically cannot start a second request
@@ -11905,13 +12456,13 @@ async function buyItem(item){
   SHOP_BUSY=false;
   if(r.status===200&&r.body&&r.body.ok){
     if(SHOP_STATE.wallet)SHOP_STATE.wallet=r.body.wallet;
-    toast(item.name+' purchased!');
+    toast(shopDisplayName(item)+' purchased!');
     paintShop();
     return;
   }
   if(r.status===409&&r.body&&r.body.error==='alreadyowned'){
     if(r.body.wallet&&SHOP_STATE.wallet)SHOP_STATE.wallet=r.body.wallet;
-    toast('You already own '+item.name+'.');
+    toast('You already own '+shopDisplayName(item)+'.');
     paintShop();
     return;
   }
@@ -12505,7 +13056,7 @@ async function fetchGlobalLeaderboard(){
 let LB_FETCH_PENDING=false;
 let LB_FETCH_FAILED=false;
 function lbLoadingHtml(){ return `<p class="lbLoading">Loading the leaderboard...</p>`; }
-function lbUnreachableHtml(){ return `<p class="lbErr">Couldn't reach the family leaderboard. Check your connection and try again.</p>`; }
+function lbUnreachableHtml(){ return `<p class="lbErr">Couldn't reach the leaderboard. Check your connection and try again.</p>`; }
 /* v0.15 fix (Blake reported the shared leaderboard "still shows nobody else" - part of the
    diagnosis was a genuine double-count bug in THIS merge, separate from the online-recording
    gap fixed in recordWin()/server.js above). OLD behavior: `mergeStats(local,global)` summed
@@ -12566,6 +13117,11 @@ let lbTab='solo';
 let lbLastStats={};
 function renderLb(st){
   lbLastStats=st;
+  // v0.51: Monthly is fed by a completely different endpoint/state machine (loadMonthlyTab(),
+  // right below) - bail out here so a late-resolving fetchGlobalLeaderboard() (from the OTHER
+  // four tabs' own network round trip) can never clobber whatever the Monthly tab is showing if
+  // the player switched tabs while that fetch was still in flight.
+  if(lbTab==='monthly')return;
   if(lbTab==='ko'){ renderLbKo(st); return; }
   if(lbTab==='total'){ renderLbTotal(st); return; }
   const names=Object.keys(st);
@@ -12610,6 +13166,101 @@ function renderLbTotal(st){
     <th>Games</th><th>Wins</th><th>Win%</th><th>Points</th></tr>`+
     active.map(n=>`<tr><td>${titledNameHtml(n)}</td><td>${rec(n).games}</td><td>${rec(n).wins}</td>
       <td>${pct(n)}</td><td>${rec(n).pts}</td></tr>`).join('')+`</table></div>`;
+}
+/* ==================== v0.51: the Monthly tab ====================
+   Blake's ask: "a new tab showing wins and losses for the current calendar month. It does not
+   affect overall records - it is a separate mini ranking to re-engage people each month,
+   starting August." Built against a server contract another session shipped in parallel to this
+   one, exactly as briefed:
+     GET /leaderboard/monthly (public, no auth), optional ?month=YYYY-MM, defaults to the current
+     month in America/Chicago -> `{month:"2026-08", players:{Name:{games,wins,losses,pts}}}`.
+     An empty month is a normal 200 with `players:{}` (the expected case every month until the
+     first win lands), not an error.
+   RANKING CHOICE (the brief left this to judgement): wins descending, then points descending,
+   then games ascending as the final tie-break - same tie-break ORDER renderLb()/renderLbTotal()
+   already use (points/wins/games), just with wins promoted ahead of points here because this tab
+   is explicitly framed as "wins and losses," not a points ranking - a player who went 5-0 this
+   month should outrank one who went 8-3 even if the second player's point total is higher.
+   THREE FAILURE MODES, each worded so an empty/broken state never reads as broken (Blake's own
+   "word it warmly" instruction, since an all-empty board IS the normal case until August):
+     - phase 'notavailable' (a 404) - the parallel session's endpoint may not be deployed yet by
+       the time this ships. Reads as "not turned on yet," never as an error - there is nothing
+       wrong with the app, the server piece just isn't live.
+     - phase 'unreachable' - genuinely offline/timed out/malformed response. Reuses
+       lbUnreachableHtml() (the same "couldn't reach it" sentence the other tabs already show) so
+       every tab's network-failure message reads identically.
+     - phase 'ready' with an EMPTY players object - the honest, expected common case. "Nothing
+       played yet this month" rather than anything that reads like an error or an empty state
+       that looks broken.
+   Fetched LAZILY (only when this tab is actually selected, see setLbTab()) rather than
+   alongside the other four tabs' shared fetchGlobalLeaderboard() call - it is a genuinely
+   different endpoint with its own month parameter, and most menu visits never open the
+   leaderboard at all, let alone this one tab of it. MONTHLY_SEQ guards the same "a slow response
+   from a PREVIOUS tab visit shouldn't clobber a newer one" race every other async render in this
+   app already guards (YOU_CARD_SEQ, SHOP_LOAD_SEQ) - switching tabs away and back quickly, or the
+   overlay closing mid-fetch, can never paint a stale answer over a fresher one. */
+let MONTHLY_STATE={phase:'idle',month:null,data:null};
+let MONTHLY_SEQ=0;
+async function fetchMonthlyLeaderboard(month){
+  try{
+    const wsUrl=await resolveWsUrl();
+    const url=wsToHttp(wsUrl)+'/leaderboard/monthly'+(month?('?month='+encodeURIComponent(month)):'');
+    const r=await fetch(url,{cache:'no-store'});
+    if(r.status===404)return {notavailable:true};
+    if(!r.ok)return {unreachable:true};
+    const j=await r.json();
+    if(!j||typeof j.players!=='object'||!j.players)return {unreachable:true};
+    return {ok:true,month:j.month,players:j.players};
+  }catch(e){ return {unreachable:true}; }
+}
+const MONTH_NAMES=['January','February','March','April','May','June','July','August','September','October','November','December'];
+function monthLabel(m){
+  if(!m||typeof m!=='string')return '';
+  const parts=m.split('-'); const y=parseInt(parts[0],10),mo=parseInt(parts[1],10);
+  if(!y||!mo||mo<1||mo>12)return m;
+  return MONTH_NAMES[mo-1]+' '+y;
+}
+async function loadMonthlyTab(){
+  const seq=++MONTHLY_SEQ;
+  MONTHLY_STATE={phase:'loading',month:null,data:null};
+  renderLbMonthlyPaint();
+  const res=await fetchMonthlyLeaderboard();
+  if(seq!==MONTHLY_SEQ)return;   // superseded - the player switched tabs (or closed the overlay) since this started
+  if(res.ok)MONTHLY_STATE={phase:'ready',month:res.month,data:res.players};
+  else if(res.notavailable)MONTHLY_STATE={phase:'notavailable',month:null,data:null};
+  else MONTHLY_STATE={phase:'unreachable',month:null,data:null};
+  renderLbMonthlyPaint();
+  // BUG FIX (found in v0.51 testing): updateLbCaption() only ever ran once, synchronously, from
+  // setLbTab() the instant the Monthly tab was tapped - before this async fetch had a chance to
+  // learn the real month, so the caption's "August 2026 - " prefix (updateLbCaption()'s own
+  // `lbTab==='monthly'` branch) never actually appeared; MONTHLY_STATE.month was always still
+  // null at the one moment the caption got painted. Re-running it here, now that MONTHLY_STATE is
+  // final, is what actually shows the month once it's known.
+  updateLbCaption();
+}
+function renderLbMonthlyPaint(){
+  if(lbTab!=='monthly')return;   // a stale paint arriving after the player already left this tab
+  const st=MONTHLY_STATE;
+  if(st.phase==='loading'||st.phase==='idle'){ $('lbBody').innerHTML=lbLoadingHtml(); return; }
+  if(st.phase==='notavailable'){
+    $('lbBody').innerHTML=`<p class="lbErr">Monthly rankings aren't turned on yet - check back soon.</p>`;
+    return;
+  }
+  if(st.phase==='unreachable'){ $('lbBody').innerHTML=lbUnreachableHtml(); return; }
+  const players=st.data||{};
+  const names=Object.keys(players);
+  if(!names.length){
+    // The normal case every month until somebody's first win lands - worded warmly on purpose,
+    // never as an error (Blake's own instruction).
+    $('lbBody').innerHTML=`<p>Nothing played yet this month - be the first one on the board!</p>`;
+    return;
+  }
+  const g=(n,k)=>players[n][k]||0;
+  names.sort((a,b)=>g(b,'wins')-g(a,'wins')||g(b,'pts')-g(a,'pts')||g(a,'games')-g(b,'games'));
+  $('lbBody').innerHTML=`<div class="lbScroll"><table class="lbTable"><tr><th>Player</th>
+    <th>Games</th><th>Wins</th><th>Losses</th><th>Points</th></tr>`+
+    names.map(n=>`<tr><td>${titledNameHtml(n)}</td><td>${g(n,'games')}</td><td>${g(n,'wins')}</td>
+      <td>${g(n,'losses')}</td><td>${g(n,'pts')}</td></tr>`).join('')+`</table></div>`;
 }
 // 2026-07-24 item 9: the KOs tab. "KOs" = pegs this player has sent back to base (hkoDealt),
 // "KO'd" = times one of THEIR pegs got sent back (hkoTaken), "Ratio" = KOs per KO'd - the same
@@ -12708,6 +13359,10 @@ function updateLbCaption(){
     ?"KOs = tees you've sent back to base. KO'd = times your own tee got sent back. Ratio = KOs per KO'd (Perfect = never been KO'd yet) - people only, CPUs never show up here."
     :lbTab==='total'
     ?'Solo + Teams combined - the same total the you card on the menu shows. Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a person - people only, CPUs never show up here.'
+    // v0.51: worded to say plainly this resets every month and doesn't touch the lifetime record
+    // above, plus the ranking choice (see loadMonthlyTab()'s own header comment for why).
+    :lbTab==='monthly'
+    ?(MONTHLY_STATE.month?monthLabel(MONTHLY_STATE.month)+' - ':'')+"a fresh ranking every month, starting over each time - it doesn't change your lifetime record on the other tabs. Ranked by wins, then points."
     :'Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a person - people only, CPUs never show up here.';
 }
 function setLbTab(tab){
@@ -12715,13 +13370,19 @@ function setLbTab(tab){
   $('lbTabSolo').classList.toggle('on',tab==='solo');
   $('lbTabTeams').classList.toggle('on',tab==='teams');
   $('lbTabTotal').classList.toggle('on',tab==='total');
+  $('lbTabMonthly').classList.toggle('on',tab==='monthly');
   $('lbTabKo').classList.toggle('on',tab==='ko');
   updateLbCaption();
+  // v0.51: Monthly is a genuinely different endpoint/state machine - see loadMonthlyTab()'s own
+  // header comment, right above renderLbMonthlyPaint(). Every OTHER tab keeps repainting from
+  // whatever renderLb() already has cached in lbLastStats, no new fetch on every tab switch.
+  if(tab==='monthly'){ loadMonthlyTab(); return; }
   renderLb(lbLastStats);
 }
 $('lbTabSolo').onclick=()=>setLbTab('solo');
 $('lbTabTeams').onclick=()=>setLbTab('teams');
 $('lbTabTotal').onclick=()=>setLbTab('total');
+$('lbTabMonthly').onclick=()=>setLbTab('monthly');
 $('lbTabKo').onclick=()=>setLbTab('ko');
 // 2026-07-27 (v0.44): pulled out of $('btnLb').onclick's own arrow function, byte-for-byte
 // unchanged at the time, so the menu's "Leaderboard" button and (originally) the you card's own
@@ -12732,7 +13393,8 @@ function openLeaderboardOverlay(){
   openOverlay('lbOverlay');
   lbTab='solo';   // v0.21: Solo is always the tab shown when the leaderboard is (re)opened
   $('lbTabSolo').classList.add('on'); $('lbTabTeams').classList.remove('on');
-  $('lbTabTotal').classList.remove('on'); $('lbTabKo').classList.remove('on');
+  $('lbTabTotal').classList.remove('on'); $('lbTabMonthly').classList.remove('on');
+  $('lbTabKo').classList.remove('on');
   updateLbCaption();
   // v0.45: a fresh "we don't know yet" state every time this screen opens - see
   // LB_FETCH_PENDING/LB_FETCH_FAILED's own header comment, right above fetchGlobalLeaderboard().

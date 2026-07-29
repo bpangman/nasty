@@ -344,6 +344,7 @@ async function applyLeaderboardEntry(name: unknown, delta: unknown) {
   for (const key of Object.keys(s.keys)) {
     await kv.atomic().sum(["leaderboard", bk, key], BigInt(s.keys[key])).commit();
   }
+  await recordMonthlyResult(bk, s.keys);   // 2026-07-28 § MONTHLY RANKING - additive, see that block
 }
 /* v0.21 § LEADERBOARD SPLIT MIGRATION - startup, idempotent. Twin of server.js's matching
    function, adapted to KV having no single "load everything" boot moment: iterate every
@@ -534,6 +535,101 @@ async function jsonLeaderboard(status: number): Promise<Response> {
   return new Response(JSON.stringify(board), {
     status,
     headers: { "content-type": "application/json", "x-leaderboard-epoch": String(epoch), ...CORS_HEADERS },
+  });
+}
+
+/* ---------------------------------------------------------------------------------------
+ * 2026-07-28 § MONTHLY RANKING - twin of server.js's matching block, see that file for the full
+ * design writeup (why new dated storage is unavoidable, the timezone/DST reasoning, the pruning
+ * choice). Same "no season resets, ever" rule applies here: a month rollover changes what the
+ * VIEW is scoped to, never deletes anything. Lifetime KV counters under ["leaderboard", ...] /
+ * ["lbacct", ...] are completely untouched by anything in this block.
+ *
+ * STORAGE, KV-shaped rather than server.js's one-object-per-month: three small atomic KvU64
+ * counters per (month, player) - ["lbmonth", month, name, "games"|"wins"|"pts"] - same
+ * atomic-sum convention ["leaderboard", name, statKey] already uses, so a concurrent write from
+ * two isolates is exactly as race-free as the lifetime board already is. ["lbmonthidx", month]
+ * is a tiny presence marker (one key per month that has ever had a write) so pruning can find
+ * which months exist without a full ["lbmonth"] scan across every player.
+ * ------------------------------------------------------------------------------------- */
+const MONTHLY_MAX_MONTHS = 13;
+function monthlyNowMs(): number {
+  // Test-only override (a Deno Deploy secret is never set to this in production) - see
+  // server.js's matching comment for why this exists and how it's used.
+  const override = Number(Deno.env.get("NASTY_MONTHLY_NOW_MS"));
+  return Number.isFinite(override) && override > 0 ? override : Date.now();
+}
+function chicagoMonthKey(ms?: number): string {
+  const d = new Date(ms === undefined ? monthlyNowMs() : ms);
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit" }).formatToParts(d);
+  const y = parts.find((p) => p.type === "year")!.value;
+  const m = parts.find((p) => p.type === "month")!.value;
+  return `${y}-${m}`;
+}
+function lbMonthCounterKey(month: string, name: string, stat: "games" | "wins" | "pts"): Deno.KvKey {
+  return ["lbmonth", month, name, stat];
+}
+function lbMonthIndexKey(month: string): Deno.KvKey { return ["lbmonthidx", month]; }
+// Deletes ONLY months falling off the trailing-13-month window - runs after every write, but is
+// a no-op (one small kv.list over the tiny index prefix) on every call except the rare one where
+// a brand-new month just appeared and pushed the count over 13.
+async function pruneMonthlyHistory(): Promise<void> {
+  const months: string[] = [];
+  for await (const e of kv.list<boolean>({ prefix: ["lbmonthidx"] })) months.push(String(e.key[1]));
+  months.sort();
+  while (months.length > MONTHLY_MAX_MONTHS) {
+    const oldest = months.shift()!;
+    for await (const e of kv.list({ prefix: ["lbmonth", oldest] })) await kv.delete(e.key);
+    await kv.delete(lbMonthIndexKey(oldest));
+  }
+}
+/* Called from applyLeaderboardEntry()/applyAccountLeaderboardEntry() - the SAME two functions
+   BOTH the online path (finishGame) and the offline path (handleSoloResult) already funnel
+   every finished game's per-player delta through, so hooking in here covers both without a
+   second call site. `keys` is the already-validated, already-sanitized delta. Twin of
+   server.js's recordMonthlyResult(). */
+async function recordMonthlyResult(name: string, keys: Record<string, number>): Promise<void> {
+  if (!name) return;
+  const hasGame = Object.keys(keys).some((k) => /^hg[46][st]$/.test(k));
+  if (!hasGame) return; // every real delta carries exactly one of these; defensive, not expected
+  const won = Object.keys(keys).some((k) => /^hw[46][st]$/.test(k));
+  const pts = (keys.hptsS || 0) + (keys.hptsT || 0);
+  const month = chicagoMonthKey();
+  await kv.set(lbMonthIndexKey(month), true);
+  await kv.atomic().sum(lbMonthCounterKey(month, name, "games"), 1n).commit();
+  if (won) await kv.atomic().sum(lbMonthCounterKey(month, name, "wins"), 1n).commit();
+  if (pts > 0) await kv.atomic().sum(lbMonthCounterKey(month, name, "pts"), BigInt(pts)).commit();
+  await pruneMonthlyHistory();
+}
+type MonthlyPlayerRow = { games: number; wins: number; losses: number; pts: number };
+async function monthlyLeaderboardView(month: string): Promise<Record<string, MonthlyPlayerRow>> {
+  const raw: Record<string, { games: number; wins: number; pts: number }> = {};
+  for await (const e of kv.list<Deno.KvU64>({ prefix: ["lbmonth", month] })) {
+    const name = String(e.key[2]);
+    const stat = String(e.key[3]);
+    const r = raw[name] = raw[name] || { games: 0, wins: 0, pts: 0 };
+    const v = Number(e.value.value);
+    if (stat === "games") r.games = v;
+    else if (stat === "wins") r.wins = v;
+    else if (stat === "pts") r.pts = v;
+  }
+  const players: Record<string, MonthlyPlayerRow> = {};
+  for (const name of Object.keys(raw)) {
+    const r = raw[name];
+    players[name] = { games: r.games, wins: r.wins, losses: r.games - r.wins, pts: r.pts };
+  }
+  return players;
+}
+const MONTH_PARAM_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+// GET /leaderboard/monthly - public, no auth. A month with no data (including every month before
+// this feature deployed) answers 200 with an empty players object, never a 404 or an error - twin
+// of server.js's sendMonthlyLeaderboard().
+async function jsonMonthlyLeaderboard(status: number, monthParam: string | null): Promise<Response> {
+  const month = (monthParam && MONTH_PARAM_RE.test(monthParam)) ? monthParam : chicagoMonthKey();
+  const players = await monthlyLeaderboardView(month);
+  return new Response(JSON.stringify({ month, players }), {
+    status,
+    headers: { "content-type": "application/json", ...CORS_HEADERS },
   });
 }
 
@@ -898,6 +994,10 @@ type AccountRecord = {
   walletSpent?: number;
   walletOwned?: string[];
   walletNamechangeCredits?: number;
+  // 2026-07-28 § POINTS WALLET ADMIN GRANT - twin of server.js's: which currently-owned ids
+  // arrived via POST /admin/wallet/grantall rather than a real purchase, so a later revoke can
+  // undo EXACTLY what it granted and never touch anything genuinely bought.
+  walletGrantedItems?: string[];
 };
 type SessionRecord = { uid: string; exp: number };
 type EmailChallenge = { hash: string; exp: number; attempts: number; sentAt: number; sentToday: number; dayStart: number };
@@ -1463,6 +1563,7 @@ async function applyAccountLeaderboardEntry(uid: string, name: unknown, delta: u
   for (const key of Object.keys(s.keys)) {
     await kv.atomic().sum(acctBoardKey(uid, key), BigInt(Math.round(s.keys[key]))).commit();
   }
+  await recordMonthlyResult(s.clean, s.keys);   // 2026-07-28 § MONTHLY RANKING - additive, see that block
 }
 type BoardDetailRow = { name: string; stats: Record<string, number>; account: boolean; frozen: boolean };
 async function boardRowsForDisplay(): Promise<{ flat: Record<string, Record<string, number>>; detail: BoardDetailRow[] | null }> {
@@ -3196,6 +3297,70 @@ async function handleAdminRoute(req: Request, url: URL): Promise<Response> {
     if (!r.ok) return json(404, { error: r.error });
     return json(200, r);
   }
+  /* -------------------------------------------------------------------------------------
+   * 2026-07-28 § POINTS WALLET ADMIN GRANT - twin of server.js's, see that file's comment for
+   * the full reasoning (why earned/spent must never move, only walletOwned/walletNamechangeCredits).
+   * CAS retry loop instead of Node's single-thread guarantee, same convention as
+   * /account/purchase above - Deno Deploy runs many isolates, so even an admin-only action gets
+   * the same race protection every account mutation in this file already has.
+   * ----------------------------------------------------------------------------------- */
+  if (ACCOUNTS_ENABLED && parts.length === 3 && parts[1] === "wallet" && parts[2] === "grantall" && req.method === "POST") {
+    const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+    let uid = typeof body.uid === "string" ? body.uid : "";
+    if (!uid && typeof body.name === "string" && body.name) {
+      const folded = leaderboardNameKey(cleanName(body.name, ""));
+      uid = (await accountOwningFoldedName(folded)) || "";
+    }
+    if (!uid) return json(404, { error: "no such account" });
+    const creditAmount = typeof body.namechangeCredits === "number" && Number.isFinite(body.namechangeCredits) && body.namechangeCredits >= 0
+      ? Math.round(body.namechangeCredits) : 2;
+    const revoke = body.revoke === true;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const cur = await kv.get<AccountRecord>(accountKey(uid));
+      const acct = cur.value;
+      if (!acct) return json(404, { error: "no such account" });
+      const owned = Array.isArray(acct.walletOwned) ? acct.walletOwned : [];
+      const grantedTracked = Array.isArray(acct.walletGrantedItems) ? acct.walletGrantedItems : [];
+      let updated: AccountRecord;
+      let respBody: Record<string, unknown>;
+      if (revoke) {
+        // Removes EXACTLY the ids this route previously granted, never an item that was
+        // genuinely purchased - see AccountRecord.walletGrantedItems's own comment.
+        const grantedSet = new Set(grantedTracked);
+        const kept = owned.filter((id) => !grantedSet.has(id));
+        const removedItemIds = owned.filter((id) => grantedSet.has(id));
+        updated = {
+          ...acct, walletOwned: kept, walletGrantedItems: [],
+          walletNamechangeCredits: Math.max(0, (Number(acct.walletNamechangeCredits) || 0) - creditAmount),
+        };
+        respBody = { ok: true, uid, revokedItems: removedItemIds.length, revokedItemIds: removedItemIds, revokedCredits: creditAmount, wallet: await walletView(updated) };
+      } else {
+        let grantedItems = 0;
+        const grantedItemIds: string[] = [];
+        const nextOwned = owned.slice();
+        const nextTracked = grantedTracked.slice();
+        for (const item of SHOP_CATALOG) {
+          if (item.consumable) continue;   // namechange credits are granted separately, below
+          if (!nextOwned.includes(item.id)) {
+            nextOwned.push(item.id);
+            if (!nextTracked.includes(item.id)) nextTracked.push(item.id);
+            grantedItems++;
+            grantedItemIds.push(item.id);
+          }
+        }
+        updated = {
+          ...acct, walletOwned: nextOwned, walletGrantedItems: nextTracked,
+          walletNamechangeCredits: Math.max(0, Number(acct.walletNamechangeCredits) || 0) + creditAmount,
+        };
+        respBody = { ok: true, uid, grantedItems, grantedItemIds, grantedCredits: creditAmount, wallet: await walletView(updated) };
+      }
+      const ok = await kv.atomic().check(cur).set(accountKey(uid), updated).commit();
+      if (!ok.ok) continue;   // lost the race - retry from the top
+      log(revoke ? "admin revoked granted wallet items" : "admin granted every wallet item", uid);
+      return json(200, respBody);
+    }
+    return json(500, { error: "server error" });
+  }
   return json(404, { error: "no such admin route" });
 }
 
@@ -4108,6 +4273,11 @@ async function handler(req: Request, info: Deno.ServeHandlerInfo): Promise<Respo
   if (url.pathname === "/leaderboard") {
     // v0.13: also reports the current leaderboard epoch via header, see "§ LEADERBOARD EPOCH".
     return await jsonLeaderboard(200);
+  }
+  // 2026-07-28 § MONTHLY RANKING - public, no auth, ungated by ACCOUNTS_ENABLED (not an accounts
+  // feature - works off the same name-keyed rows /leaderboard always has). Twin of server.js's.
+  if (url.pathname === "/leaderboard/monthly") {
+    return await jsonMonthlyLeaderboard(200, url.searchParams.get("month"));
   }
   if (url.pathname.startsWith("/admin/")) {
     try { return await handleAdminRoute(req, url); }

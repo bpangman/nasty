@@ -15,6 +15,7 @@ const ROOMS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "nasty-test-rooms-"));
 const ADMIN_FILE = path.join(ROOMS_DIR, "admin-token.txt");
 const LB_FILE = path.join(ROOMS_DIR, "leaderboard.json");
 const LB_EPOCH_FILE = path.join(ROOMS_DIR, "leaderboard-epoch.json");
+const MONTHLY_FILE = path.join(ROOMS_DIR, "monthly-leaderboard.json"); // 2026-07-28 § MONTHLY RANKING
 const SOLO_IDS_FILE = path.join(ROOMS_DIR, "solo-ids.json");
 
 function log(...a) { console.log("[test]", ...a); }
@@ -24,7 +25,7 @@ function startServer() {
     cwd: "/Users/jarvis/nasty-game/server",
     env: Object.assign({}, process.env, {
       NASTY_PORT: String(PORT), NASTY_ROOMS_DIR: ROOMS_DIR, NASTY_ADMIN_TOKEN_FILE: ADMIN_FILE,
-      NASTY_LEADERBOARD_FILE: LB_FILE, NASTY_LEADERBOARD_EPOCH_FILE: LB_EPOCH_FILE,
+      NASTY_LEADERBOARD_FILE: LB_FILE, NASTY_LEADERBOARD_EPOCH_FILE: LB_EPOCH_FILE, NASTY_MONTHLY_HISTORY_FILE: MONTHLY_FILE,
       NASTY_SOLO_IDS_FILE: SOLO_IDS_FILE,
     }),
     stdio: ["ignore", "pipe", "pipe"],

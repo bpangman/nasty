@@ -37,6 +37,7 @@ function startServer() {
         NASTY_LEADERBOARD_FILE: path.join(SCRATCH, "leaderboard.json"),
         NASTY_LEADERBOARD_EPOCH_FILE: path.join(SCRATCH, "leaderboard-epoch.json"),
         NASTY_SOLO_IDS_FILE: path.join(SCRATCH, "solo-ids.json"),
+        NASTY_MONTHLY_HISTORY_FILE: path.join(SCRATCH, "monthly-leaderboard.json"), // 2026-07-28 § MONTHLY RANKING
       }),
       stdio: ["ignore", "pipe", "pipe"],
     });
