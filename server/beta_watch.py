@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '11fdef47-1d73-4da4-9042-5a3508c343a6'
+BUILD_SUBMISSION_ID = '69ca3931-b270-423d-a926-c3054255331e'
 
 
 def current_build():
@@ -103,9 +103,9 @@ try:
 <p>Apple approved the beta - everyone can install the real app right now.</p>
 <p>What is in this one:</p>
 <ul>
-<li><b>The Shop is here.</b> Spend the points you earn from wins on new board color palettes, table felt colors, leaderboard titles, and name change tokens.</li>
-<li><b>The menu got a refresh.</b> All six buttons (Start game, Online play, How to play, Leaderboard, Shop, Admin) are now the same size in a clean 2 by 3 grid, and the Admin page shows how many points you have earned and how many you have left to spend.</li>
-<li><b>Signing out mid game now asks first.</b> If you have a game in progress, it warns you that the game will still count for you even after you sign out, instead of staying silent about it.</li>
+<li><b>Pinch to zoom on the board.</b> Use two fingers to zoom in on a spot and drag to move around while zoomed. Double-tap to reset.</li>
+<li><b>A new Monthly tab on the leaderboard.</b> Shows wins and losses for just this month, alongside the existing Solo, Teams, Total and KOs tabs. The Admin page also got a section to switch between the board colors, felt and titles you own from the Shop.</li>
+<li><b>A handful of fixes from your own testing:</b> the leaderboard is just called the leaderboard now, titles you have bought show as a small badge instead of crowding your name, the Shop shows each price once on the right, and the Nickname Change token is now easy to find and use from the Admin rename screen.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -120,7 +120,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - a new Shop to spend your points', body], check=True)
+                    f'NASTY: build {BUILD} is live - pinch to zoom and a Monthly leaderboard', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
