@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '39897271-a507-4440-a48d-bbb81bfbc5b8'
+BUILD_SUBMISSION_ID = '11fdef47-1d73-4da4-9042-5a3508c343a6'
 
 
 def current_build():
@@ -101,11 +101,11 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p>This one is a fix from your own feedback.</p>
 <p>What is in this one:</p>
 <ul>
-<li><b>A new Total tab on the leaderboard.</b> It combines your Solo and Teams stats into one combined ranking, right between the Teams and KOs tabs.</li>
-<li><b>The coming soon page on the website got a small polish.</b> "Est. 1993" no longer overlaps the NASTY sign, and there is more breathing room between the QR code and its caption.</li>
+<li><b>The Shop is here.</b> Spend the points you earn from wins on new board color palettes, table felt colors, leaderboard titles, and name change tokens.</li>
+<li><b>The menu got a refresh.</b> All six buttons (Start game, Online play, How to play, Leaderboard, Shop, Admin) are now the same size in a clean 2 by 3 grid, and the Admin page shows how many points you have earned and how many you have left to spend.</li>
+<li><b>Signing out mid game now asks first.</b> If you have a game in progress, it warns you that the game will still count for you even after you sign out, instead of staying silent about it.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -120,7 +120,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - a new Total leaderboard tab', body], check=True)
+                    f'NASTY: build {BUILD} is live - a new Shop to spend your points', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
