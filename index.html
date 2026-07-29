@@ -221,6 +221,10 @@
                         useNameCreditNow(), right next to saveAccountName() - both replace the
                         v0.50 version of this that only ever built the offer inside the 429
                         handler below.
+                    v0.53: #acctEquip's catalog no longer auto-opens (Blake: "it dominates the
+                        admin page") - see the § SHOP CODE MAP entry's own v0.53 note for the full
+                        collapse/expand mechanism (openAccountPanel() here is what forces it closed
+                        on every opening).
     § ACCOUNT SIGN-IN ... Sign in with Apple (iPhone app only). v0.42: a BRAND-NEW account is
                     blocked on a mandatory nickname right here - bindAccountName() opens a
                     full-screen prompt (openNicknameGate()) that cannot be skipped or dismissed
@@ -308,6 +312,27 @@
                         applyEquippedFelt(), for the full diagnosis (confirmed by reading
                         @capacitor/status-bar's iOS source directly) and why no new native build is
                         required - this only calls a plugin method the app already ships.
+                    v0.53 (2026-07-29), two more of Blake's own build-68 reports:
+                      - The Admin panel's equip section (#acctEquip, added v0.51 just above) no
+                        longer renders its catalog expanded by default - Blake: "don't have the shop
+                        stuff auto open in the admin page... otherwise it dominates the admin page."
+                        It's now a real, keyboard-operable <button> (#acctEquipToggleBtn, correct
+                        aria-expanded, no focus trap) that shows/hides #acctEquipBody - collapsed is
+                        forced again every time openAccountPanel() runs (never remembered between
+                        openings), but NOT re-collapsed by refreshAcctEquip()'s other callers
+                        (acctEquipToggle()/acctEquipReset(), an in-panel equip action) - see
+                        openAccountPanel()'s own comment, § ACCOUNT, for exactly why the reset lives
+                        there and not inside refreshAcctEquip() itself.
+                      - syncNativeStatusBarColor()'s color CORRECTED - Blake: "why is [the top
+                        strip] soft tinted... make that top portion look exactly like everything
+                        else?" It was sending the felt's DARK end, which is nowhere near what the
+                        page's own gradient actually paints at the top of the screen (see
+                        feltTopEdgeColor(), right above applyEquippedFelt(), for the geometry and
+                        the Playwright pixel-sampling proof). capacitor.config.json's static
+                        `StatusBar.backgroundColor` updated to match for the very first frame too -
+                        see that function's own header comment for whether a native rebuild is
+                        needed for that static value (yes) vs. the runtime call itself (no, same as
+                        v0.52).
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -2479,10 +2504,22 @@ button{font:inherit;cursor:pointer}
    Shop's own .shopItem/.shopItemInfo/.shopItemName/.shopItemMeta/.shopSwatchRow/.shopSwatch/
    .shopCatHead row styling (below) rather than a second near-identical set of rules - an owned
    item reads the same way whether you're switching it here or in the Shop, by construction. Only
-   what's genuinely new to THIS panel gets its own class. */
+   what's genuinely new to THIS panel gets its own class.
+   v0.53 (Blake: "don't have the shop stuff auto open in the admin page... make it something they
+   have to click and then it opens"): the header is now a real tappable row (.acctEquipToggle,
+   reusing .acctRow's own ghost-pill look so it reads exactly like every other row in this panel)
+   instead of a plain label - #acctEquipBody starts (and is reset to) `hidden` every time the panel
+   opens, see refreshAcctEquip()'s own comment, § SHOP. */
 .acctEquip{margin:0 0 14px;padding:12px;border-radius:12px;background:rgba(255,255,255,.04);
   border:1px solid rgba(255,255,255,.1)}
 .acctEquipHead{font-size:13.5px;font-weight:800;color:var(--cream);margin-bottom:6px}
+.acctEquipToggle{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:10px 12px}
+.acctEquipToggle .acctEquipHead{margin:0}
+.acctEquipChevron{flex:0 0 auto;font-size:12px;line-height:1;color:#a9d2b5;
+  transition:transform .15s ease}
+.acctEquipToggle[aria-expanded="true"] .acctEquipChevron{transform:rotate(180deg)}
+#acctEquipBody{margin-top:10px}
 .acctEquipMsg{font-size:13px;color:#a9d2b5;line-height:1.5}
 .acctEquipCatHead{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#a9d2b5;
   margin:10px 2px 4px;font-weight:700}
@@ -2684,7 +2721,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.52</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.53</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -3239,10 +3276,23 @@ button{font:inherit;cursor:pointer}
          inside the Shop itself - this is a second door onto the exact same EQUIP/equipToggle()
          mechanism (§ SHOP), not a second implementation. Hidden entirely for a guest (there is
          nothing owned to switch between). Filled in by refreshAcctEquip(), § SHOP, called from
-         openAccountPanel() every time this panel opens, same as #acctWallet above. -->
+         openAccountPanel() every time this panel opens, same as #acctWallet above.
+         2026-07-29 (v0.53, Blake: "don't have the shop stuff auto open in the admin page... make
+         it something they have to click and then it opens - otherwise it dominates the admin
+         page"). This used to render the full catalog body open every time. It is now a real
+         <button> (keyboard-operable for free, no custom key handling needed) that toggles
+         #acctEquipBody's `hidden` class and its own aria-expanded - nothing else on the page reacts
+         to it, so it can never trap focus. refreshAcctEquip() (§ SHOP) forces it back to collapsed
+         at the TOP of every call - and it is called every single time this panel opens
+         (openAccountPanel()) - so collapsed is the only state a fresh opening of this panel can
+         ever show, exactly matching Blake's ask that it never remember being left open. -->
     <div class="acctEquip hidden" id="acctEquip">
-      <div class="acctEquipHead">Your board settings</div>
-      <div id="acctEquipBody"></div>
+      <button type="button" class="btn ghost acctRow acctEquipToggle" id="acctEquipToggleBtn"
+        aria-expanded="false" aria-controls="acctEquipBody">
+        <span class="acctEquipHead">Your board settings</span>
+        <span class="acctEquipChevron" aria-hidden="true">&#9662;</span>
+      </button>
+      <div id="acctEquipBody" class="hidden"></div>
     </div>
     <!-- 2026-07-26 (v0.36 item 3): THE ONE-TIME NAME CLAIM. Hidden unless the server says the
          window is open AND there really is history sitting under this account's name. Blake:
@@ -11408,6 +11458,18 @@ function openAccountPanel(){
   // 2026-07-28 (v0.50): the points-earned/points-remaining box - see refreshAcctWallet(), § SHOP.
   try{ refreshAcctWallet(); }catch(e){}
   // 2026-07-28 (v0.51): the equip section - see refreshAcctEquip(), § SHOP.
+  // 2026-07-29 (v0.53, Blake: "don't have the shop stuff auto open in the admin page... make it
+  // something they have to click and then it opens"). Forced back to COLLAPSED right here, every
+  // single time this panel opens, before refreshAcctEquip() even starts its (async) fetch - so a
+  // section left expanded from earlier in the same visit never carries forward into a fresh
+  // opening. Deliberately NOT inside refreshAcctEquip() itself: that function is also called after
+  // an in-panel equip/unequip action (acctEquipToggle()/acctEquipReset()) while the section is
+  // already open and the player is actively using it - re-collapsing THEN would be a bug, not a
+  // fix. See acctEquipToggleBtn's own click handler, § SHOP, for the other half.
+  const eqToggle=$('acctEquipToggleBtn');
+  if(eqToggle)eqToggle.setAttribute('aria-expanded','false');
+  const eqBody=$('acctEquipBody');
+  if(eqBody)eqBody.classList.add('hidden');
   try{ refreshAcctEquip(); }catch(e){}
 }
 $('btnAccount').onclick=openAccountPanel;
@@ -12176,6 +12238,36 @@ function applyEquippedPalette(){
   COLORS6=(p&&Array.isArray(p.colors6)&&p.colors6.length)?p.colors6:DEFAULT_COLORS6;
   if(G&&Array.isArray(G.seats))repaintSeatColors();
 }
+// v0.53 (Blake: "why is [the top strip] soft tinted... make that top portion look exactly like
+// everything else?"). The color the page's own felt gradient (§ STYLE) ACTUALLY paints at the top
+// edge of the screen, for a given felt (or the default when `f` is falsy) - fed to the native
+// status bar strip by syncNativeStatusBarColor() below instead of the felt's dark end, so the
+// strip is seamless with the web content immediately underneath it rather than a visibly darker,
+// duller band.
+//   body's background: radial-gradient(120% 95% at 50% 28%, var(--felt1), var(--felt2) 78%)
+// This is an ellipse (explicit size 120% width / 95% height of the page box) centered 28% of the
+// way down the screen. On the vertical line through that center (x = 50%, which is where the
+// status bar strip's color reads as "the" color of the top edge), the horizontal radius never
+// enters the math at all - only how far y=0 (the top edge) sits from the center, as a fraction of
+// the ellipse's OWN vertical radius:
+//   T_TOP = 0.28 / 0.95   (~0.2947) - note both numbers scale with screen height, so height
+//                          cancels out completely: this ratio is the SAME on every device.
+// felt2 itself doesn't fully take over until 78% of the way to the ellipse's edge, so the LOCAL
+// fraction between felt1 and felt2 at the top edge is:
+//   F_TOP = T_TOP / 0.78  (~0.37787)
+// VERIFIED against real rendered pixels, not assumed: a Playwright probe rendered this exact
+// gradient for the default felt and all 4 shop felts, at three viewport sizes (390x844, 320x568,
+// 430x932), and sampled the actual top-edge pixel with getImageData() - it matched this formula's
+// output to within 1/255 per channel (antialiasing noise) on every single felt and every single
+// screen size. See HANDOFF.md "v0.53" for the full sampled-vs-computed number pairs.
+function feltTopEdgeColor(f){
+  const F_TOP=0.28/0.95/0.78;
+  const c1=f?f.c:DEFAULT_FELT.c, c2=f?f.dark:DEFAULT_FELT.dark;
+  const hx=h=>{ h=h.replace('#',''); return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)]; };
+  const a=hx(c1), b=hx(c2);
+  const blend=a.map((v,i)=>Math.round(v+(b[i]-v)*F_TOP));
+  return '#'+blend.map(v=>Math.max(0,Math.min(255,v)).toString(16).padStart(2,'0')).join('');
+}
 // The felt is just two CSS custom properties - body's own background (and .overlay.solid's) read
 // them live, so this takes effect everywhere INCLUDING a game already on screen, immediately.
 function applyEquippedFelt(){
@@ -12197,24 +12289,34 @@ function applyEquippedFelt(){
 // v0.13.1 boot-slam investigation already found and measured via `screen.height-innerHeight`, see
 // § CAPACITOR - that whole missing-strip height IS this native view). The only way to keep it in
 // sync is to call the plugin's own `setBackgroundColor()` at runtime, every time the felt changes.
-// Uses the felt's DARK end (`f.dark`/`DEFAULT_FELT.dark`) rather than inventing a new shade - that
-// matches the exact relationship capacitor.config.json's own static default already had (its
-// `StatusBar.backgroundColor` of `#0e3421` IS `DEFAULT_FELT.dark`), just kept in sync instead of
-// frozen. IS_APP-gated AND try/catch'd, same pattern as every other `CAP.Plugins` call in this file
+// IS_APP-gated AND try/catch'd, same pattern as every other `CAP.Plugins` call in this file
 // (§ CAPACITOR) - a plain browser (CAP undefined), an older native build without this plugin
 // method, or any other native hiccup degrades silently, never throws. Called from
 // applyEquippedFelt() itself (so both the boot-time `applyEquipped()` call and every later
 // equip/unequip already cover this for free, no second call site to keep in sync) - see that
 // function's own CODE MAP entry, § SHOP, for the boot/live-update story.
-// NO NATIVE REBUILD REQUIRED: this only ever calls the ALREADY-SHIPPED @capacitor/status-bar
-// plugin at runtime - capacitor.config.json's own static `backgroundColor` value is untouched
-// (still the correct default-felt color for the very first frame before this script runs), so
-// build 67 does not need a new native build for this fix - the existing app binary already ships
-// everything this code calls. (It DOES need the next TestFlight build to actually GET this fix,
-// same as any other client-only change - see the standing "ships to both" rule.)
+//
+// v0.53 BUG FIX (Blake: "why is [the top strip] soft tinted in the color instead of just full
+// board... can we make that top portion look exactly like everything else?"). CORRECTED DIAGNOSIS
+// - the v0.52 comment above (since edited) had this wrong: it sent the felt's DARK end (`f.dark`),
+// reasoning that matched capacitor.config.json's own static default. It does match that default,
+// but the default itself was never the right target. The PAGE underneath this strip is painted by
+// (§ STYLE, body's own background):
+//   radial-gradient(120% 95% at 50% 28%, var(--felt1), var(--felt2) 78%)
+// - an ellipse centered 28% of the way DOWN the screen, and felt2 does not fully "arrive" until
+// 78% of the way to that ellipse's own edge. At the very TOP of the screen, nowhere near either of
+// those, the gradient is nowhere close to felt2 - so sending `f.dark` painted the strip a visibly
+// darker, duller color than the page immediately below it. That gap WAS the "soft tinted" seam.
+// See feltTopEdgeColor() above for the fix - it computes the color this exact gradient actually
+// paints at the top edge, and this now sends THAT instead of the dark end, for every felt. Also
+// updated capacitor.config.json's static `StatusBar.backgroundColor` (was `#0e3421`, DEFAULT_FELT's
+// dark end - now the default felt's computed top-edge color, `#1c5638`) so the very first frame
+// (before this script runs) matches too, not just every frame after boot - see HANDOFF.md "v0.53"
+// for whether that static change needs a native rebuild (short answer: yes, for the STATIC value
+// itself; this runtime call needed none, same as v0.52 - see that entry).
 function syncNativeStatusBarColor(f){
   if(!IS_APP)return;
-  try{ CAP.Plugins.StatusBar.setBackgroundColor({color:(f&&f.dark)?f.dark:DEFAULT_FELT.dark}); }catch(e){}
+  try{ CAP.Plugins.StatusBar.setBackgroundColor({color:feltTopEdgeColor(f)}); }catch(e){}
 }
 function applyEquipped(){ applyEquippedPalette(); applyEquippedFelt(); }
 // Titles are shown next to a name (leaderboard rows, the you card) but the equip choice is LOCAL
@@ -12577,6 +12679,17 @@ $('acctEquipBody').addEventListener('click',e=>{
   if(eqBtn){ acctEquipToggle(eqBtn.dataset.id); return; }
   const resetBtn=e.target.closest('.acctEquipResetBtn');
   if(resetBtn){ acctEquipReset(resetBtn.dataset.cat); return; }
+});
+// v0.53 (Blake: "make it something they have to click and then it opens"). A real <button> - free
+// keyboard operability (Enter/Space), no custom key handling needed. Only ever toggles its own
+// aria-expanded + #acctEquipBody's `hidden` class - nothing else on the page reacts to either of
+// those, so this can never trap focus or affect anything outside this one box. Collapsed is forced
+// again every time the panel (re)opens - see openAccountPanel()'s own comment, § ACCOUNT, not here.
+$('acctEquipToggleBtn').addEventListener('click',()=>{
+  const btn=$('acctEquipToggleBtn'), body=$('acctEquipBody');
+  const expanded=btn.getAttribute('aria-expanded')==='true';
+  btn.setAttribute('aria-expanded',expanded?'false':'true');
+  body.classList.toggle('hidden',expanded);
 });
 // requestId is fresh per logical purchase ATTEMPT (a genuine retry after a real failure is a new
 // attempt) - the guard against a DOUBLE-TAP of the same attempt is SHOP_BUSY, checked and set
