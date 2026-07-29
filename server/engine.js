@@ -11,7 +11,11 @@ const rand=a=>a[Math.floor(Math.random()*a.length)];
 
 function createEngine(){
   /* ============================= § LAYOUT ============================= */
-  const COLORS4=[
+  // 2026-07-28 (v0.50): renamed DEFAULT_COLORS4/6 (the standard board, never mutated) - COLORS4/
+  // COLORS6 below are `let` now, and an equipped shop palette (§ SHOP) reassigns THEM wholesale.
+  // See the CODE MAP's § LAYOUT entry (top of file) for why every existing call site is already
+  // safe (they all read COLORS4/COLORS6 at call time, never capture the array once at parse time).
+  const DEFAULT_COLORS4=[
     {name:'Green', c:'#2f8f5b',dark:'#1b5637'},
     {name:'Navy',  c:'#41598f',dark:'#273757'},
     {name:'Pink',  c:'#e56aa5',dark:'#a53a72'},
@@ -22,7 +26,7 @@ function createEngine(){
   // that doesn't sit near ANY of the other five (Green/Navy/Red/White/Yellow) or the card
   // preview's red landing/kill fill (§ UTIL's showPaths CSS) - verified in a browser/sim
   // screenshot of a real 6P game, see PLANNING.md.
-  const COLORS6=[
+  const DEFAULT_COLORS6=[
     {name:'Green', c:'#2f8f5b',dark:'#1b5637'},
     {name:'Navy',  c:'#41598f',dark:'#273757'},
     {name:'Red',   c:'#c6444a',dark:'#7e2429'},
@@ -30,6 +34,7 @@ function createEngine(){
     {name:'Purple',c:'#8859c9',dark:'#4f3070'},
     {name:'Yellow',c:'#f0c419',dark:'#a37c0a'},
   ];
+  let COLORS4=DEFAULT_COLORS4, COLORS6=DEFAULT_COLORS6;   // reassigned by applyEquippedPalette(), § SHOP
   const SCHEDULES={4:[5,4,4],6:[4,4]};   // deal-round sizes; deck reshuffles after the last round
   const HOME_N=5;
   let LAY=null;

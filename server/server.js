@@ -1229,6 +1229,32 @@ function accountsOnlyBoard() { return ACCOUNTS_ENABLED && LEADERBOARD_ACCOUNTS_O
  * item is a stackable credit, not a one-time unlock - it is never "already owned" and can be
  * bought again. Every other category is a permanent, one-time cosmetic unlock.
  * ===================================================================================== */
+/* ---------------------------------------------------------------------------------------
+ * 2026-07-29 § ONLINE ACCESS (monthly online-play entitlement) - Blake's ask: online play
+ * becomes a monthly, credit-purchased entitlement. No real money involved anywhere in this -
+ * purely spent out of the existing points wallet above, through the SAME /account/purchase
+ * flow as every other shop item (it just happens to grant a month of access instead of a
+ * cosmetic). Full design lives with the rest of the entitlement logic right after walletView()
+ * below; these two constants are pulled up here because SHOP_CATALOG needs the cost at
+ * definition time.
+ *
+ * EASY RETUNING - Blake may well retune both of these once he sees it in use. They are the ONLY
+ * two places these numbers live:
+ *   ONLINE_ACCESS_COST       - price of one month of online access, in points. Currently 50.
+ *   ONLINE_FREE_EXTRA_MONTHS - how many complete calendar months AFTER the signup month are
+ *                              free, on top of the (always free) signup month itself. Currently
+ *                              1 - i.e. "free through the end of the first full calendar month
+ *                              after signup" (Blake's confirmed rule, 2026-07-29).
+ * ------------------------------------------------------------------------------------- */
+const ONLINE_ACCESS_ITEM_ID = "online_month";
+const ONLINE_ACCESS_COST = 50;
+const ONLINE_FREE_EXTRA_MONTHS = 1;
+// Real enforcement kill switch, same convention as every other feature flag in this file
+// (ACCOUNTS_ENABLED, NASTY_LEADERBOARD_ACCOUNTS_ONLY): "1" (default) genuinely blocks an
+// unentitled account at host/join; "0" turns the gate off (the entitlement bookkeeping, shop
+// item, and status endpoint all keep working either way - this only controls whether host/join
+// actually refuse anyone). See HANDOFF.md for why this exists and what it affects.
+const ONLINE_ENTITLEMENT_ENFORCED = accountsEnvFlagOn(process.env.NASTY_ONLINE_ENTITLEMENT_ENFORCED, "1");
 const SHOP_CATALOG = [
   // palette - alternate FULL-BOARD color palettes. The headline item, Blake's own call over
   // per-player peg colors: the SEAT color identifies the player, and free-pick colors would
@@ -1335,6 +1361,12 @@ const SHOP_CATALOG = [
   // namechange - a one-shot credit that lets a player change their nickname despite the existing
   // 30-day cooldown. Consumable/stackable, not a one-time unlock - see /account/name below.
   { id: "namechange_credit", category: "namechange", name: "Name Change Token", cost: 25, consumable: true },
+  // online - a month of online-play entitlement. Consumable/stackable exactly like the
+  // namechange credit above (never "alreadyowned" - see § ONLINE ACCESS below, right after
+  // walletView()), not a one-time unlock. Buying it grants the earliest calendar month the
+  // account isn't already entitled to, starting with the current month - repeat purchases stack
+  // forward into future months rather than being wasted.
+  { id: ONLINE_ACCESS_ITEM_ID, category: "online", name: "Online Access (1 month)", cost: ONLINE_ACCESS_COST, consumable: true },
 ];
 function shopItemById(id) { return SHOP_CATALOG.find((it) => it.id === id) || null; }
 
@@ -2146,6 +2178,157 @@ function walletView(acct) {
     namechangeCredits: Math.max(0, Number(acct.walletNamechangeCredits) || 0),
   };
 }
+
+/* =======================================================================================
+ * 2026-07-29 § ONLINE ACCESS - continued from the SHOP_CATALOG block above (ONLINE_ACCESS_COST/
+ * ONLINE_ACCESS_ITEM_ID/ONLINE_FREE_EXTRA_MONTHS/ONLINE_ENTITLEMENT_ENFORCED live there).
+ *
+ * ENTITLEMENT STATE: which calendar months (chicagoMonthKey()-shaped "YYYY-MM" strings) an
+ * account may play online. FREE months are DERIVED, never stored - onlineFreeMonths() reads
+ * straight off acct.created, so there is nothing to keep in sync and nothing that can drift.
+ * PURCHASED months ARE stored, on the account record, in acct.walletOnlineMonths (a plain array
+ * of "YYYY-MM" strings, mirroring walletOwned's own storage convention) - defaults to [] and is
+ * read with Array.isArray(...) everywhere, so an account record written before this feature
+ * existed still parses correctly (same house convention as every other wallet field).
+ *
+ * THE ACCOUNT-CREATION-DATE QUESTION (this session was told to check, and did): every account
+ * record has ALWAYS carried a real `created: Date.now()` timestamp - newAccountRecord() has
+ * stamped it on every account since the very first commit that introduced accounts at all
+ * (3fb8f18, "Accounts stage 1: Sign in with Apple server plumbing, dormant"), and an account is
+ * ONLY EVER constructed by newAccountRecord() (checked directly - every accounts[uid]=... /
+ * kv.set(accountKey,...) write in both servers assigns a record built there, never a
+ * hand-rolled shape). So there is no "accounts predate this field" problem to solve, no
+ * backfill needed, and no special-casing required for Blake's family's accounts - they were
+ * created 2026-07-26/2026-07-27 and their real `created` timestamps already say so. This is
+ * reported, not assumed: grep the git history yourself
+ * (`git log --all -p -- server/server.js | grep 'created: now'`) before ever "fixing" this
+ * again. The `|| Date.now()` fallbacks below are pure defensive belt-and-suspenders for a
+ * hypothetically malformed record, not a real gap - they resolve to "treated as brand new
+ * today" (i.e. free), never a crash.
+ *
+ * TIMEZONE: month boundaries are America/Chicago, exactly like § MONTHLY RANKING above -
+ * chicagoMonthKey() (defined there) is reused verbatim, not reimplemented, per Blake's explicit
+ * instruction. nextMonthKey()/chicagoMonthStartMs() below are the only NEW date math this
+ * feature needed, and both operate purely on "YYYY-MM" keys or calendar y/m pairs - neither
+ * reimplements the Chicago-local "what calendar month is it right now" question, which stays
+ * chicagoMonthKey()'s job alone.
+ *
+ * THE SIGNUP-DAY BOUNDARY CASE, STATED EXPLICITLY: someone who signs up on the LAST calendar day
+ * of a month still gets that (nearly-over) month free PLUS the whole next month, because
+ * onlineFreeMonths() only ever looks at the CALENDAR MONTH chicagoMonthKey(acct.created)
+ * resolves to - the day-of-month is never consulted. This is intended, per Blake, not an
+ * oversight to "fix" by prorating.
+ * ===================================================================================== */
+function nextMonthKey(key) {
+  const parts = String(key).split("-");
+  const y = Number(parts[0]), m = Number(parts[1]);
+  const y2 = m >= 12 ? y + 1 : y;
+  const m2 = m >= 12 ? 1 : m + 1;
+  return y2 + "-" + String(m2).padStart(2, "0");
+}
+// The exact UTC instant that reads as local midnight on the 1st of `month` (1-12) in `year`, in
+// America/Chicago - used only to compute the precise "access lapses at" timestamp the status
+// endpoint reports. Correct across any DST transition: instead of assuming a fixed UTC offset,
+// it asks Intl what a guessed UTC instant actually READS AS in Chicago, then corrects the guess
+// by the difference - the same "ask real tzdata, don't hand-roll DST" philosophy chicagoMonthKey
+// already uses, just inverted (wall time -> UTC instant instead of UTC instant -> wall time).
+// Converges in at most 2 passes (the offset is piecewise constant); 3 run defensively.
+function chicagoMonthStartMs(year, month) {
+  let guess = Date.UTC(year, month - 1, 1, 6, 0, 0); // seed assuming CST (UTC-6)
+  for (let i = 0; i < 3; i++) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+    }).formatToParts(new Date(guess));
+    const g = {}; for (const p of parts) g[p.type] = p.value;
+    const wallMs = Date.UTC(Number(g.year), Number(g.month) - 1, Number(g.day), Number(g.hour), Number(g.minute), Number(g.second));
+    const targetMs = Date.UTC(year, month - 1, 1, 0, 0, 0);
+    const diff = targetMs - wallMs;
+    if (diff === 0) break;
+    guess += diff;
+  }
+  return guess;
+}
+// Signup month + ONLINE_FREE_EXTRA_MONTHS following complete calendar months, always in that
+// order (soonest first) - e.g. today's default (1 extra month) for a 2026-07-26 signup returns
+// ["2026-07","2026-08"].
+function onlineFreeMonths(acct) {
+  const months = [];
+  let m = chicagoMonthKey((acct && acct.created) || Date.now());
+  months.push(m);
+  for (let i = 0; i < ONLINE_FREE_EXTRA_MONTHS; i++) { m = nextMonthKey(m); months.push(m); }
+  return months;
+}
+function onlinePurchasedMonths(acct) {
+  return Array.isArray(acct && acct.walletOnlineMonths) ? acct.walletOnlineMonths.slice() : [];
+}
+function onlineEntitledMonthSet(acct) {
+  return new Set(onlineFreeMonths(acct).concat(onlinePurchasedMonths(acct)));
+}
+function isOnlineEntitledForMonth(acct, monthKey) { return onlineEntitledMonthSet(acct).has(monthKey); }
+function onlineEntitledNow(acct) { return isOnlineEntitledForMonth(acct, chicagoMonthKey()); }
+// The earliest month, starting at (and possibly equal to) fromMonthKey, this account is NOT
+// already entitled to - i.e. exactly which month a purchase right now should grant. Scanning
+// forward from the CURRENT month (never from the account's last-purchased month) is what makes
+// repeat purchases stack into the future without ever wasting one on a month already covered.
+function nextUnentitledOnlineMonth(acct, fromMonthKey) {
+  const set = onlineEntitledMonthSet(acct);
+  let cursor = fromMonthKey;
+  while (set.has(cursor)) cursor = nextMonthKey(cursor);
+  return cursor;
+}
+// What GET-shaped status a client renders a countdown from. See HANDOFF.md for the full shape
+// contract; kept here as the single source of truth for both the dedicated status endpoint and
+// the extra field folded into a successful /account/purchase response.
+function onlineAccessView(acct) {
+  const month = chicagoMonthKey();
+  const set = onlineEntitledMonthSet(acct);
+  const freeMonths = onlineFreeMonths(acct);
+  let run = 0, cursor = month;
+  while (set.has(cursor)) { run++; cursor = nextMonthKey(cursor); }
+  const entitled = run > 0;
+  const reason = !entitled ? "none" : (freeMonths.indexOf(month) >= 0 ? "free" : "purchased");
+  const [cy, cm] = cursor.split("-").map(Number);
+  return {
+    uid: acct.uid,
+    month,                                              // current Chicago calendar month, "YYYY-MM"
+    entitled,                                            // may this account play online RIGHT NOW
+    reason,                                              // "free" | "purchased" | "none"
+    accessUntil: entitled ? chicagoMonthStartMs(cy, cm) : null,  // exact ms timestamp access lapses, or null if not entitled
+    freeThroughMonth: freeMonths[freeMonths.length - 1], // last month key covered by the free period
+    monthsAheadCovered: entitled ? run - 1 : 0,          // how many FUTURE months beyond the current one are already banked
+    tokenCost: ONLINE_ACCESS_COST,
+    itemId: ONLINE_ACCESS_ITEM_ID,
+  };
+}
+const ONLINE_SIGNIN_MESSAGE = "Sign in with your NASTY account to play online.";
+function onlineAccessDeniedMessage() {
+  return "Your free online period has ended. Buy an Online Access token in the Shop (" + ONLINE_ACCESS_COST + " points) to keep playing online this month.";
+}
+// The front-door gate - called from the "host" and "join" cases ONLY (never rejoin/reclaim; see
+// HANDOFF.md's mid-game-rollover reasoning). Returns null when the connecting player may
+// proceed; otherwise a plain object carrying a machine-readable `reason` AND a human sentence,
+// both forwarded verbatim to the client via the SAME generic {type:'error'}/{type:'joinError'}
+// messages this file already uses for every other host/join rejection - so an OLDER client that
+// has never heard of any of this still shows the plain-language `message` exactly like it
+// already does for "Too many rooms created from here" or "Pick a nicer name," never a silent
+// hang or a cryptic failure.
+function onlineAccessGate(accountId) {
+  if (!ONLINE_ENTITLEMENT_ENFORCED) return null;
+  const acct = accountId ? accounts[accountId] : null;
+  if (!acct) return { reason: "signInRequired", message: ONLINE_SIGNIN_MESSAGE };
+  if (!onlineEntitledNow(acct)) {
+    return {
+      reason: "onlineAccessRequired",
+      message: onlineAccessDeniedMessage(),
+      tokenCost: ONLINE_ACCESS_COST,
+      itemId: ONLINE_ACCESS_ITEM_ID,
+      onlineAccess: onlineAccessView(acct),
+    };
+  }
+  return null;
+}
+
 /* Idempotency for a double-submitted/retried purchase - twin of the existing solo-result
    `soloSeen` gameId dedupe (see "§ SOLO RESULTS" below): a client-supplied `requestId` is
    remembered against the FULL response body it got the first time, so a retry (a double-tap, or
@@ -2409,6 +2592,15 @@ async function handleAccountRoute(req, res, url) {
     return;
   }
 
+  // 2026-07-29 § ONLINE ACCESS - what the client renders a countdown from. Same auth convention
+  // as /account/wallet; a guest has no online-access state, same clean 401.
+  if (p === "/account/online-status") {
+    const me = resolveSession(body.auth);
+    if (!me) { sendJson(res, 401, SIGNED_OUT_BODY); return; }
+    sendJson(res, 200, onlineAccessView(me.account));
+    return;
+  }
+
   if (p === "/account/purchase") {
     const me = resolveSession(body.auth);
     if (!me) { sendJson(res, 401, SIGNED_OUT_BODY); return; }
@@ -2445,10 +2637,27 @@ async function handleAccountRoute(req, res, url) {
     // it - so two "simultaneous" purchases for the same account can never interleave here; Node
     // processes them one after the other, and the second one sees the first one's result.
     acct.walletSpent = spentSoFar + item.cost;
-    if (item.consumable) acct.walletNamechangeCredits = Math.max(0, Number(acct.walletNamechangeCredits) || 0) + 1;
-    else owned.push(item.id);
+    // 2026-07-29 § ONLINE ACCESS: a distinct third branch, same shape as the namechange credit's
+    // (consumable, stacks) but grants a MONTH rather than incrementing a flat counter - computed
+    // BEFORE the mutation below touches walletOnlineMonths, from the pre-purchase entitlement set,
+    // so it always lands on the earliest month not already covered (free or previously purchased).
+    if (item.id === ONLINE_ACCESS_ITEM_ID) {
+      if (!Array.isArray(acct.walletOnlineMonths)) acct.walletOnlineMonths = [];
+      const grantMonth = nextUnentitledOnlineMonth(acct, chicagoMonthKey());
+      acct.walletOnlineMonths.push(grantMonth);
+      acct.walletOnlineMonths.sort();
+    } else if (item.consumable) {
+      acct.walletNamechangeCredits = Math.max(0, Number(acct.walletNamechangeCredits) || 0) + 1;
+    } else {
+      owned.push(item.id);
+    }
     scheduleAccountStorePersist(STORE_ACCOUNTS);
-    const okBody = { ok: true, purchased: item.id, wallet: walletView(acct) };
+    const okBody = {
+      ok: true, purchased: item.id, wallet: walletView(acct),
+      // Additive - lets the client refresh its online-access countdown after a purchase without
+      // a second round trip. Ignored by any client that doesn't know about it.
+      onlineAccess: onlineAccessView(acct),
+    };
     if (requestId) { purchaseSeen[purchaseIdemKey(acct.uid, requestId)] = { status: 200, body: okBody, ts: Date.now() }; schedulePurchaseSeenPersist(); }
     sendJson(res, 200, okBody);
     return;
@@ -3793,12 +4002,22 @@ wss.on("connection", (ws, req) => {
           return;
         }
         if (isBadName(msg.name)) { send(ws, { type: "error", message: "Pick a nicer name and try hosting again." }); return; }
+        // 2026-07-29 § ONLINE ACCESS - the front door. Resolved once, reused below (host's own
+        // account, if any), and gated BEFORE any room is created - see onlineAccessGate() for the
+        // full reasoning (guest vs unentitled messages, why rejoin/reclaim are never gated here).
+        const hostAcctId = resolveAcctField(msg);
+        const hostGate = onlineAccessGate(hostAcctId);
+        if (hostGate) {
+          send(ws, { type: "error", message: hostGate.message, reason: hostGate.reason, tokenCost: hostGate.tokenCost, itemId: hostGate.itemId, onlineAccess: hostGate.onlineAccess });
+          log("online access denied at host", hostGate.reason, "ip="+ip);
+          return;
+        }
         const code = newCode();
         const room = makeRoom(code);
         const playerId = room.nextPlayerId++;
         const token = newToken();
         room.hostPlayerId = playerId;
-        room.players.set(playerId, { id: playerId, token, name: cleanName(msg.name, "Host"), ws, connected: true, isHost: true, accountId: resolveAcctField(msg) });
+        room.players.set(playerId, { id: playerId, token, name: cleanName(msg.name, "Host"), ws, connected: true, isHost: true, accountId: hostAcctId });
         const seats = Array.isArray(msg.seats) ? msg.seats.map(s => ({
           name: isBadName(s.name) ? cleanName("", "Player") : cleanName(s.name, ""),
           type: s.type === "cpu" ? "cpu" : "human", diff: s.diff || "medium", claimedBy: null,
@@ -3827,9 +4046,20 @@ wss.on("connection", (ws, req) => {
         if (!room) { send(ws, { type: "joinError", message: "That room code doesn't exist. Double check it with the host." }); return; }
         if (room.started) { send(ws, { type: "joinError", message: "That game already started. Ask the host to send a new code, or reconnect if you were already playing.", reason: "started" }); return; }
         if (isBadName(msg.name)) { send(ws, { type: "joinError", message: "Pick a nicer name." }); return; }
+        // 2026-07-29 § ONLINE ACCESS - same front-door gate as "host" above, for the JOINING
+        // player's own account. A game already `started` was already turned away above (existing
+        // check), so by construction this only ever gates a brand-new seat in a lobby that hasn't
+        // started - never an in-progress game (that's rejoin/reclaim, neither of which is gated).
+        const joinAcctId = resolveAcctField(msg);
+        const joinGate = onlineAccessGate(joinAcctId);
+        if (joinGate) {
+          send(ws, { type: "joinError", message: joinGate.message, reason: joinGate.reason, tokenCost: joinGate.tokenCost, itemId: joinGate.itemId, onlineAccess: joinGate.onlineAccess });
+          log("online access denied at join", joinGate.reason, "ip="+ip);
+          return;
+        }
         const playerId = room.nextPlayerId++;
         const token = newToken();
-        room.players.set(playerId, { id: playerId, token, name: cleanName(msg.name, "Player"), ws, connected: true, isHost: false, accountId: resolveAcctField(msg) });
+        room.players.set(playerId, { id: playerId, token, name: cleanName(msg.name, "Player"), ws, connected: true, isHost: false, accountId: joinAcctId });
         identify(room, playerId);
         touch(room);
         send(ws, { type: "joined", code, playerId, token, lobby: lobbySnapshot(room), protocolVersion: PROTOCOL_VERSION });

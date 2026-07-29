@@ -880,6 +880,22 @@ type ShopItem = {
   id: string; category: string; name: string; cost: number; consumable?: boolean;
   colors4?: SeatColor[]; colors6?: SeatColor[]; c?: string; dark?: string;
 };
+/* 2026-07-29 § ONLINE ACCESS - see server.js's matching comment block (right before its
+ * SHOP_CATALOG) for the full design writeup; twin of it. Pulled up here because SHOP_CATALOG
+ * needs the cost at definition time. EASY RETUNING - the only two places these numbers live:
+ *   ONLINE_ACCESS_COST       - price of one month of online access, in points. Currently 50.
+ *   ONLINE_FREE_EXTRA_MONTHS - complete calendar months free AFTER the signup month, on top of
+ *                              the signup month itself. Currently 1 (Blake's confirmed rule,
+ *                              2026-07-29: free through the end of the first full calendar
+ *                              month after signup). */
+const ONLINE_ACCESS_ITEM_ID = "online_month";
+const ONLINE_ACCESS_COST = 50;
+const ONLINE_FREE_EXTRA_MONTHS = 1;
+// Real enforcement kill switch, twin of server.js's - same convention as ACCOUNTS_ENABLED/
+// NASTY_LEADERBOARD_ACCOUNTS_ONLY. "1" (default) genuinely blocks an unentitled account at
+// host/join; "0" turns the gate off without touching the entitlement bookkeeping/shop item/
+// status endpoint at all.
+const ONLINE_ENTITLEMENT_ENFORCED = accountsEnvFlagOn(Deno.env.get("NASTY_ONLINE_ENTITLEMENT_ENFORCED"), "1");
 const SHOP_CATALOG: ShopItem[] = [
   {
     id: "palette_sunset", category: "palette", name: "Sunset", cost: 40,
@@ -975,6 +991,10 @@ const SHOP_CATALOG: ShopItem[] = [
   { id: "title_legend", category: "title", name: "Legend", cost: 60 },
   { id: "title_nasty", category: "title", name: "Certified Nasty", cost: 90 },
   { id: "namechange_credit", category: "namechange", name: "Name Change Token", cost: 25, consumable: true },
+  // online - a month of online-play entitlement. Consumable/stackable exactly like the
+  // namechange credit above (never "alreadyowned" - see § ONLINE ACCESS below), not a one-time
+  // unlock. Twin of server.js's.
+  { id: ONLINE_ACCESS_ITEM_ID, category: "online", name: "Online Access (1 month)", cost: ONLINE_ACCESS_COST, consumable: true },
 ];
 function shopItemById(id: string): ShopItem | null { return SHOP_CATALOG.find((it) => it.id === id) || null; }
 
@@ -998,6 +1018,11 @@ type AccountRecord = {
   // arrived via POST /admin/wallet/grantall rather than a real purchase, so a later revoke can
   // undo EXACTLY what it granted and never touch anything genuinely bought.
   walletGrantedItems?: string[];
+  // 2026-07-29 § ONLINE ACCESS - twin of server.js's. Purchased calendar months ("YYYY-MM"
+  // strings) of online-play entitlement, on top of the (never-stored, always-derived) free
+  // months. Optional/defaulted with Array.isArray(...) exactly like walletOwned, so an account
+  // record written before this feature existed still parses correctly.
+  walletOnlineMonths?: string[];
 };
 type SessionRecord = { uid: string; exp: number };
 type EmailChallenge = { hash: string; exp: number; attempts: number; sentAt: number; sentToday: number; dayStart: number };
@@ -1643,6 +1668,121 @@ async function walletView(acct: AccountRecord): Promise<WalletView> {
     namechangeCredits: Math.max(0, Number(acct.walletNamechangeCredits) || 0),
   };
 }
+
+/* =======================================================================================
+ * 2026-07-29 § ONLINE ACCESS - twin of server.js's block of the same name (see there for the
+ * full design writeup: the account-creation-date investigation, the signup-day boundary case,
+ * why free months are derived and purchased months stored, and why only host/join are gated).
+ * Deno-specific difference: there is no in-memory `accounts` map here, so the gate is async and
+ * reads the account record straight from KV.
+ * ===================================================================================== */
+function nextMonthKey(key: string): string {
+  const parts = key.split("-");
+  const y = Number(parts[0]), m = Number(parts[1]);
+  const y2 = m >= 12 ? y + 1 : y;
+  const m2 = m >= 12 ? 1 : m + 1;
+  return y2 + "-" + String(m2).padStart(2, "0");
+}
+// Twin of server.js's chicagoMonthStartMs() - see that comment for the DST-correctness
+// reasoning. The exact UTC instant that reads as local midnight on the 1st of `month` (1-12) in
+// `year`, in America/Chicago.
+function chicagoMonthStartMs(year: number, month: number): number {
+  let guess = Date.UTC(year, month - 1, 1, 6, 0, 0); // seed assuming CST (UTC-6)
+  for (let i = 0; i < 3; i++) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+    }).formatToParts(new Date(guess));
+    const g: Record<string, string> = {};
+    for (const p of parts) g[p.type] = p.value;
+    const wallMs = Date.UTC(Number(g.year), Number(g.month) - 1, Number(g.day), Number(g.hour), Number(g.minute), Number(g.second));
+    const targetMs = Date.UTC(year, month - 1, 1, 0, 0, 0);
+    const diff = targetMs - wallMs;
+    if (diff === 0) break;
+    guess += diff;
+  }
+  return guess;
+}
+function onlineFreeMonths(acct: AccountRecord): string[] {
+  const months: string[] = [];
+  let m = chicagoMonthKey((acct && acct.created) || Date.now());
+  months.push(m);
+  for (let i = 0; i < ONLINE_FREE_EXTRA_MONTHS; i++) { m = nextMonthKey(m); months.push(m); }
+  return months;
+}
+function onlinePurchasedMonths(acct: AccountRecord): string[] {
+  return Array.isArray(acct.walletOnlineMonths) ? acct.walletOnlineMonths.slice() : [];
+}
+function onlineEntitledMonthSet(acct: AccountRecord): Set<string> {
+  return new Set(onlineFreeMonths(acct).concat(onlinePurchasedMonths(acct)));
+}
+function isOnlineEntitledForMonth(acct: AccountRecord, monthKey: string): boolean {
+  return onlineEntitledMonthSet(acct).has(monthKey);
+}
+function onlineEntitledNow(acct: AccountRecord): boolean {
+  return isOnlineEntitledForMonth(acct, chicagoMonthKey());
+}
+// The earliest month, starting at fromMonthKey, this account is NOT already entitled to - see
+// server.js's matching comment for why scanning forward from the CURRENT month is what makes
+// repeat purchases stack into the future without ever wasting one.
+function nextUnentitledOnlineMonth(acct: AccountRecord, fromMonthKey: string): string {
+  const set = onlineEntitledMonthSet(acct);
+  let cursor = fromMonthKey;
+  while (set.has(cursor)) cursor = nextMonthKey(cursor);
+  return cursor;
+}
+type OnlineAccessView = {
+  uid: string; month: string; entitled: boolean; reason: "free" | "purchased" | "none";
+  accessUntil: number | null; freeThroughMonth: string; monthsAheadCovered: number;
+  tokenCost: number; itemId: string;
+};
+function onlineAccessView(acct: AccountRecord): OnlineAccessView {
+  const month = chicagoMonthKey();
+  const set = onlineEntitledMonthSet(acct);
+  const freeMonths = onlineFreeMonths(acct);
+  let run = 0, cursor = month;
+  while (set.has(cursor)) { run++; cursor = nextMonthKey(cursor); }
+  const entitled = run > 0;
+  const reason: "free" | "purchased" | "none" = !entitled ? "none" : (freeMonths.indexOf(month) >= 0 ? "free" : "purchased");
+  const [cy, cm] = cursor.split("-").map(Number);
+  return {
+    uid: acct.uid,
+    month,
+    entitled,
+    reason,
+    accessUntil: entitled ? chicagoMonthStartMs(cy, cm) : null,
+    freeThroughMonth: freeMonths[freeMonths.length - 1],
+    monthsAheadCovered: entitled ? run - 1 : 0,
+    tokenCost: ONLINE_ACCESS_COST,
+    itemId: ONLINE_ACCESS_ITEM_ID,
+  };
+}
+const ONLINE_SIGNIN_MESSAGE = "Sign in with your NASTY account to play online.";
+function onlineAccessDeniedMessage(): string {
+  return "Your free online period has ended. Buy an Online Access token in the Shop (" + ONLINE_ACCESS_COST + " points) to keep playing online this month.";
+}
+type OnlineAccessDenial = {
+  reason: "signInRequired" | "onlineAccessRequired"; message: string;
+  tokenCost?: number; itemId?: string; onlineAccess?: OnlineAccessView;
+};
+// The front-door gate - twin of server.js's, called from "host"/"join" only (never rejoin/
+// reclaim). Reads the account straight from KV since there is no in-memory accounts map here.
+async function onlineAccessGate(accountId: string | null): Promise<OnlineAccessDenial | null> {
+  if (!ONLINE_ENTITLEMENT_ENFORCED) return null;
+  const acct = accountId ? (await kv.get<AccountRecord>(accountKey(accountId))).value : null;
+  if (!acct) return { reason: "signInRequired", message: ONLINE_SIGNIN_MESSAGE };
+  if (!onlineEntitledNow(acct)) {
+    return {
+      reason: "onlineAccessRequired",
+      message: onlineAccessDeniedMessage(),
+      tokenCost: ONLINE_ACCESS_COST,
+      itemId: ONLINE_ACCESS_ITEM_ID,
+      onlineAccess: onlineAccessView(acct),
+    };
+  }
+  return null;
+}
+
 /* Idempotency for a double-submitted/retried purchase - twin of the Node solo-result `soloSeen`
    gameId dedupe. A client-supplied `requestId` is remembered (native KV expiry, 24h) against the
    FULL response body it got the first time, so a retry gets back the exact same answer instead of
@@ -1843,6 +1983,14 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
     return json(200, await walletView(me.account));
   }
 
+  // 2026-07-29 § ONLINE ACCESS - what the client renders a countdown from. Twin of server.js's;
+  // same auth convention, same clean 401 for a guest.
+  if (p === "/account/online-status") {
+    const me = await resolveSession(body.auth);
+    if (!me) return json(401, SIGNED_OUT_BODY);
+    return json(200, onlineAccessView(me.account));
+  }
+
   if (p === "/account/purchase") {
     const me = await resolveSession(body.auth);
     if (!me) return json(401, SIGNED_OUT_BODY);
@@ -1888,9 +2036,23 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
         return json(409, failBody);
       }
       const updated: AccountRecord = { ...acct, walletSpent: spentSoFar + item.cost };
-      if (item.consumable) updated.walletNamechangeCredits = Math.max(0, Number(acct.walletNamechangeCredits) || 0) + 1;
-      else updated.walletOwned = [...owned, item.id];
-      const okBody = { ok: true, purchased: item.id, wallet: await walletView(updated) };
+      // 2026-07-29 § ONLINE ACCESS: a distinct third branch, twin of server.js's - computed from
+      // the PRE-purchase entitlement set (via `acct`, not `updated`), so it always lands on the
+      // earliest month not already covered.
+      if (item.id === ONLINE_ACCESS_ITEM_ID) {
+        const grantMonth = nextUnentitledOnlineMonth(acct, chicagoMonthKey());
+        updated.walletOnlineMonths = [...onlinePurchasedMonths(acct), grantMonth].sort();
+      } else if (item.consumable) {
+        updated.walletNamechangeCredits = Math.max(0, Number(acct.walletNamechangeCredits) || 0) + 1;
+      } else {
+        updated.walletOwned = [...owned, item.id];
+      }
+      const okBody = {
+        ok: true, purchased: item.id, wallet: await walletView(updated),
+        // Additive - lets the client refresh its online-access countdown after a purchase
+        // without a second round trip. Ignored by any client that doesn't know about it.
+        onlineAccess: onlineAccessView(updated),
+      };
       let txn = kv.atomic().check(cur).set(accountKey(me.uid), updated);
       if (requestId) {
         // The account CAS and the requestId claim are ONE atomic commit - either both land or
@@ -3398,6 +3560,15 @@ function handleWsUpgrade(req: Request, ip: string): Response {
           return;
         }
         if (isBadName(msg.name)) { send(socket, { type: "error", message: "Pick a nicer name and try hosting again." }); return; }
+        // 2026-07-29 § ONLINE ACCESS - the front door. Resolved once, reused below, gated BEFORE
+        // any room is created - see onlineAccessGate() for the full reasoning.
+        const hostAcctId = await resolveAcctField(msg);
+        const hostGate = await onlineAccessGate(hostAcctId);
+        if (hostGate) {
+          send(socket, { type: "error", message: hostGate.message, reason: hostGate.reason, tokenCost: hostGate.tokenCost, itemId: hostGate.itemId, onlineAccess: hostGate.onlineAccess });
+          log("online access denied at host", hostGate.reason, "ip=" + ip);
+          return;
+        }
         const code = await newUniqueCode();
         const playerId = 1;
         const token = newToken();
@@ -3415,7 +3586,7 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         const meta: RoomMeta = {
           code, createdAt: Date.now(), lastActivity: Date.now(),
           hostPlayerId: playerId, nextPlayerId: 2,
-          players: [{ id: playerId, token, name: hostName, isHost: true, connected: true, accountId: await resolveAcctField(msg) }],
+          players: [{ id: playerId, token, name: hostName, isHost: true, connected: true, accountId: hostAcctId }],
           lobby: { n: msg.n === 6 ? 6 : 4, teams: !!msg.teams, seats },
           started: false, seatOwners: null, ready: [], paused: false, logCount: 0,
           G: null, tableSpeed: seededSpeed, recorded: false, nextSeq: 0,
@@ -3442,6 +3613,16 @@ function handleWsUpgrade(req: Request, ip: string): Response {
         // 2026-07-25 § ACCOUNTS: resolved BEFORE touchRoom, never inside its mutate callback -
         // that callback is re-run on contention and must stay a pure, synchronous edit of meta.
         const joinAccountId = await resolveAcctField(msg);
+        // 2026-07-29 § ONLINE ACCESS - same front-door gate as "host" above, for the JOINING
+        // player's own account. The `started` check above already turned away an in-progress
+        // game (that's rejoin/reclaim, neither of which is gated), so this only ever gates a
+        // brand-new seat in a lobby that hasn't started.
+        const joinGate = await onlineAccessGate(joinAccountId);
+        if (joinGate) {
+          send(socket, { type: "joinError", message: joinGate.message, reason: joinGate.reason, tokenCost: joinGate.tokenCost, itemId: joinGate.itemId, onlineAccess: joinGate.onlineAccess });
+          log("online access denied at join", joinGate.reason, "ip=" + ip);
+          return;
+        }
         const r = await touchRoom(code, (meta) => {
           if (meta.started) return false;
           const playerId = meta.nextPlayerId++;
