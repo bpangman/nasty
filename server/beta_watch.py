@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '2af432c6-1f66-44aa-821d-b19e660968bd'
+BUILD_SUBMISSION_ID = 'fcad8e03-4fd1-47ba-83ec-37bc47d14609'
 
 
 def current_build():
@@ -101,10 +101,12 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p>What is in this one - two fixes on top of the Online Access token from the last build:</p>
+<p>What is in this one - the big Shop money update, plus the board and pop-up polish:</p>
 <ul>
-<li><b>The Online Access token now actually shows up in the Shop.</b> It was ready to buy on the server the whole time, it just wasn't showing up in the store list - now it does, and it sits right at the top next to the Nickname Change token since those two are the most important ones.</li>
-<li><b>The "before you play online" pop-up is centered now.</b> It was showing up too high on the screen, pinned right under the X button - now it sits centered like every other pop-up in the app.</li>
+<li><b>The Shop takes real money now.</b> Everything is priced in credits (10 credits = $1), and there are credit packs you can buy through Apple - so anything in the Shop can be bought outright, even before you have earned enough. One heads up: the buy buttons switch on once the App Store paperwork on your end is done; earning credits by winning works exactly as always.</li>
+<li><b>Nickname changes are clearer.</b> Two buttons now, a heads up before your one free change (it locks your name for 30 days), and a clear confirmation before a token is ever redeemed. You can also buy nickname and online tokens right inside Shop Customizations on the Admin page.</li>
+<li><b>Name changes land instantly - even mid game.</b> Change your nickname and everyone at the table sees it right away, on the board itself.</li>
+<li><b>Board and pop-up polish.</b> Drag the board around with one finger while zoomed in, every pop-up is centered again with its X pinned to the window, and the four titles finally each look different.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -119,7 +121,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - Online Access token in the Shop, and a centered pop-up', body], check=True)
+                    f'NASTY: build {BUILD} is live - the Shop takes real money now, plus clearer nickname changes', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
