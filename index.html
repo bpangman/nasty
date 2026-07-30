@@ -65,10 +65,22 @@
                     Every tee/card is a real DOM element with its own native click listener, so
                     taps land correctly at any zoom/pan by construction - the browser's own hit
                     testing already accounts for however many transforms sit above an element,
-                    same as it always has for fitBoard()'s own scale(s). Only ever acts on a
-                    SECOND simultaneous pointer (boardPointers.size===2) - a single finger's
-                    pointerdown/move/up never calls preventDefault/stopPropagation, so ordinary
-                    taps on tees/cards are provably untouched by this feature.
+                    same as it always has for fitBoard()'s own scale(s). At boardZoom===1, a single
+                    finger's pointerdown/move/up never calls preventDefault/stopPropagation, so
+                    ordinary taps on tees/cards are provably untouched by this feature - two-finger
+                    gestures (boardPointers.size===2) act unconditionally, same as always.
+                    v0.58 (2026-07-30, Blake: "once you zoom in on the board it doesn't let you
+                    drag around... you have to zoom out/in again... change this"): ONE finger now
+                    ALSO pans, but ONLY once boardZoom>1 AND only after crossing a small
+                    (10px, BOARD_PAN_SLOP) movement threshold - below that threshold, or at
+                    boardZoom===1, single-finger behavior is completely unchanged from v0.51. Once
+                    a one-finger drag crosses the threshold it does call preventDefault() for the
+                    rest of that gesture (so page scroll doesn't fight it) and a capture-phase
+                    `click` listener swallows the one resulting phantom click on release, so a
+                    look-around drag can never accidentally land a move - see § BOARD ZOOM's own
+                    header comment (point 7) for the full design and HANDOFF.md "v0.58" for the
+                    real Playwright proof (pan changes boardPanX/Y with no move played; a genuine
+                    tap still lands a legal move at 1x AND while zoomed).
                     v0.52: repaintSeatColors() (right after § BOARD ZOOM, called from
                     applyEquippedPalette(), § SHOP) recolors a LIVE game's tees/safe-rows/holes/
                     plaques/played-cards the instant a palette is equipped - see its own header
@@ -464,6 +476,39 @@
                         purchased Online Access token can never wrongly appear in the Personalizations
                         equip list. Both read the exact `consumable` field the server already sends -
                         no new field needed anywhere. `#verTap` bumped `v0.56` -> `v0.57`.
+                    v0.58 (2026-07-30, Blake, item 5: "for the shark and nasty titles, the first
+                        initial for the designation are the same letter... and even though the
+                        designations are different, the visual representation currently doesn't
+                        reflect it"). ROOT CAUSE: titledNameHtml()'s badge letter was always
+                        `t.trim().charAt(0)` off the DISPLAY NAME ("Card Shark"/"Certified Nasty"
+                        both start with C) and .lbTitleBadge's own CSS was ONE fixed rule
+                        (var(--gold), same for every title) - none of the four titles was visually
+                        distinct, the letter collision was just the most visible symptom. FIX: a new
+                        TITLE_BADGE_STYLES lookup (right above titledNameHtml()) keyed by
+                        EQUIP.title.id (title_rookie/title_shark/title_legend/title_nasty - the
+                        server's own catalog ids, never the display name) gives each title its own
+                        letter (R/S/L/N) and felt-appropriate color (bronze/pewter/deep purple/
+                        black-and-crimson, a rising-rarity feel matching the 10/30/60/90-credit cost
+                        ladder) via titleBadgeStyle() - reused, scaled up, for BOTH the small
+                        leaderboard badge (.lbTitleBadge, § STYLE, now reads --titleBg/--titleInk/
+                        --titleRing custom properties instead of one hardcoded gold) and a brand new
+                        large panel on the you card (.youTitlePanel, see renderYouCard()'s own v0.58
+                        comment, § MENU) - one lookup, two renderings, so the two can never disagree
+                        about what a title looks like. A future 5th title with no entry in the table
+                        falls back to the original v0.51 gold-circle/first-letter behavior rather
+                        than breaking. SEPARATE BUG FIX, same report's item 5(b) ("the badge should
+                        sit immediately next to the name"): .lbNameText's `flex:1 1 auto` (§ STYLE,
+                        near .lbTable td:first-child) made the name span GROW to fill the whole
+                        column, pushing the badge to the column's far right edge instead of right
+                        after the name - worst on the KOs tab's 38%-wide first column. Changed to
+                        `flex:0 1 auto` (shrink-only) - the v0.51 truncation fix right above it
+                        (min-width:0/overflow:hidden/ellipsis) is untouched and reverified working
+                        with a full 10-char NAME_MAX name. The you card's own name line drops its
+                        small inline badge now (titledNameHtml(name,false)) since the new
+                        .youTitlePanel already shows the same title far more prominently right next
+                        to it - showing it twice on one card read as clutter, not reinforcement; see
+                        HANDOFF.md "v0.58" for the full reasoning and every leaderboard-tab
+                        screenshot. `#verTap` bumped `v0.57` -> `v0.58`.
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -528,6 +573,45 @@
                     from center on a normal/tall screen, but it still guarantees a minimum gap below
                     the X on the very shortest screens. A single surgical carve-out, not a new
                     mechanism.
+                    v0.58 (2026-07-30, Blake verbatim - item 3: "on the new 'x' buttons... can you
+                    make it be on the top right corner of the actual window pinned there? I think
+                    you currently have it floating off to the top right away from the actual
+                    window. It should overlap with the corner of the window and stay there as you
+                    scroll" - item 4: "move all windows to be centered like the 'before you play'
+                    popup... a lot of them are suddenly pinned to the top of the screen"). ROOT
+                    CAUSE: the v0.54 design pinned the X to the SCREEN's own corner (a sibling of
+                    .overlay, position:absolute off .overlay itself) - on any screen wider than a
+                    card's own max-width it visibly detached from a narrower centered card ("floating
+                    off... away from the actual window"), and separately every X-bearing card was
+                    force-pinned near the top just so its OWN X never looked orphaned, which is what
+                    read as "pinned to the top of the screen" for item 4. FIX: every .overlayXBtn
+                    (20 of them, grep class="overlayXBtn") moved from being a SIBLING of
+                    .modalCard/.confirmCard to being the FIRST CHILD INSIDE it - now the X is
+                    positioned relative to the CARD, never the screen, so it can't detach from a
+                    narrower card, and the v0.54/v0.57 padding-top/margin-top:0 rules that existed
+                    ONLY to keep a card near its screen-pinned X are DELETED ENTIRELY (not just
+                    carved out further) - the base `.overlay>.confirmCard,.overlay>.modalCard
+                    {margin:auto}` rule centers every one of these cards again for free, which is
+                    item 4 satisfied as a side effect of fixing item 3, not a second change. TWO
+                    positioning mechanisms, not one: .confirmCard>.overlayXBtn stays
+                    position:absolute (confirmCard never scrolls its own content, so an absolute
+                    child anchored to it moves in lockstep no matter how far the OUTER .overlay
+                    scrolls it around); .modalCard>.overlayXBtn is position:sticky (modalCard DOES
+                    scroll its own content, max-height:82vh+overflow-y:auto - a plain absolute child
+                    there would scroll away WITH that content, reproducing the exact "floats away"
+                    bug this pass fixes - sticky is what keeps it pinned to modalCard's own
+                    scrollport as the card's content scrolls underneath, proven with a real
+                    scroll-to-bottom Playwright measurement on #rulesOverlay, the longest card in
+                    the app). #btnWinClose (winOverlay) is UNCHANGED - checked, not assumed:
+                    winOverlay has no .modalCard/.confirmCard wrapper to move the X into (see
+                    .overlayXBtn's own CSS comment, § STYLE, for the full reasoning and why that was
+                    judged not worth a markup restructure). See that CSS comment (right after
+                    .winCloseBtn/.overlayXBtn, § STYLE) for the complete design, and HANDOFF.md
+                    "v0.58" for every measurement (space-above/space-below numbers for the centered
+                    popups, pixel-identical X rects before/after scroll, the h3-vs-X text-overlap
+                    check). Every OVERLAY_X_WIRING entry re-verified to still find its button and
+                    fire the identical safe button - only WHERE each X lives in the DOM and HOW it's
+                    positioned changed, never what it's bound to. `#verTap` bumped `v0.57` -> `v0.58`.
     Autotest: open with #autotest (4p FFA all-CPU) or #autotest6 (6p teams) - fast-forwards a full game.
     Preview the real site while the gate is up: append ?preview=1 to the URL (v0.43).
 
@@ -1158,6 +1242,33 @@ button{font:inherit;cursor:pointer}
    spinner, not an error) unless/until fetchGlobalLeaderboard() actually answers - see
    paintYouCardStats()'s header comment, § MENU, for why that is a deliberate silence, not a bug. */
 .youRank{font-size:12.5px;color:var(--gold);font-weight:700;margin-top:4px;min-height:15px}
+/* 2026-07-30 (v0.58, Blake, item 5(c): "the you card's badge should be large and fill the entire
+   right panel of the card"). The third column of .youCardRow (avatar / .youWho / this), rendered
+   ONLY when EQUIP.title is truthy - renderYouCard() (§ MENU) builds this markup as the empty
+   string otherwise, which is what actually guarantees "no empty box, no dead flex gap" for the
+   everyday no-title case: an EMPTY STRING contributes nothing to .youCardRow's flex layout at all
+   (as opposed to a hidden/zero-size div, which can still leave stray gap-driven spacing depending
+   on the browser's gap implementation) - the row silently reverts to exactly its original two-
+   column avatar+youWho shape, confirmed with a real screenshot (see HANDOFF.md "v0.58").
+   align-self:stretch (overriding .youCardRow's own align-items:center just for this one child) is
+   what makes it "fill the available height of the card" - it grows to match however tall .youWho
+   ends up (name + stats + KO + note + rank lines stacked), rather than sitting pinned to a fixed
+   height the way a small icon would. 52px wide - deliberately a bit MORE than .acctAvatar's 46px
+   ("comparable prominence... or bigger") - and a rounded RECTANGLE, not a circle, so it reads as
+   its own genuine panel rather than a bigger copy of the small round leaderboard badge sharing the
+   same corner of the eye. Colors are the exact --titleBg/--titleInk/--titleRing custom properties
+   titleBadgeStyle() (§ SHOP) already computes for the small badge - one lookup table, two scaled
+   renderings, so the you card and the leaderboard can never show a different color for the same
+   title. Verified legible at 320px width with a real signed-in name + stats present (the you card
+   already has avatar+name+stats to fit in a narrow row before this - see HANDOFF.md "v0.58" for
+   the actual measurement, not just an assumption that shrinking .youWho's available width still
+   works). */
+.youTitlePanel{flex:0 0 52px;align-self:stretch;min-height:52px;border-radius:14px;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--titleBg,var(--gold));color:var(--titleInk,#3a2c05);
+  border:2px solid var(--titleRing,rgba(255,255,255,.35));
+  font-weight:900;font-size:26px;text-transform:uppercase;line-height:1;
+  box-shadow:0 4px 12px rgba(0,0,0,.35),inset 0 2px 0 rgba(255,255,255,.2)}
 /* v0.45: the guest card is now a tap target too (same Admin destination as the signed-in card
    above) - cursor:pointer says so; the Sign in button inside stops its own click from bubbling up
    to it (see renderYouCard()'s guest branch). */
@@ -2043,7 +2154,9 @@ button{font:inherit;cursor:pointer}
    not fill the whole screen either") - max-height only ever CAPS, it doesn't stretch anything.
    fitConfirmCard() (§ UTIL) is kept as a harmless no-op (just clears any transform a pre-fix
    session might have left behind) so none of the ~15 existing call sites needed to change. */
-.confirmCard{width:100%;max-width:440px;display:flex;
+/* 2026-07-30 (v0.58): position:relative added, same reason and same pairing as .modalCard's own
+   v0.58 comment above - the containing block .overlayXBtn now anchors to. */
+.confirmCard{position:relative;width:100%;max-width:440px;display:flex;
   flex-direction:column;align-items:center;padding:2px;transform-origin:center center;
   overflow:visible}
 /* 2026-07-25 (item F of the UI polish batch): a confirm dialog's buttons are now a single
@@ -2214,79 +2327,120 @@ button{font:inherit;cursor:pointer}
 @media (max-height:660px){
   #winOverlay .sign b,#passOverlay .sign b{font-size:clamp(18px,5.6vw,30px)}
 }
-/* The X close button - originally win-popup-only (closeWinOverlay(), § TURNS: dismisses without
-   any consequence, the game already finished and was already recorded by recordWin()/the server,
-   reveals the finished board underneath - "post-game review mode", see onPlaqueClick()/
-   renderPostGameReveal()). Positioned top-right of the OVERLAY itself, never inside .sign/
-   .modalCard/.confirmCard, so it can never be mistaken for part of a badge or scroll away with a
-   card's own internal content - .overlay is position:fixed and (per the § SHOP/§ ACCOUNT/etc.
-   cards' own max-height:82vh+overflow-y:auto, or confirmCard's short natural content) never
-   itself needs to scroll, so this absolute child stays pinned to the real screen corner exactly,
-   safe-area aware, regardless of how far the CARD's own inner content is scrolled.
-   2026-07-29 (v0.54, Blake: "for the shop pop-up and the rules pop-up and leaderboard...
-   basically anything with a pop-up... add an X in the top right corner... instead of having to
-   scroll to the bottom and press a close button"). GENERALIZED from the win-only .winCloseBtn to
-   .overlayXBtn, reused verbatim (byte-for-byte position/backdrop/border look - the app's existing
-   close-button visual language, not a new style) on every other overlay that gets an X - see
-   HANDOFF.md "v0.54" for the full bucket-by-bucket list of which overlays did and did not get
-   one. Bumped 38x38 -> 44x44 to clear this app's own 44px tap-target floor (every other button in
-   the file already holds to that; this one predates it). #btnWinClose keeps the old class name
-   too (below) so nothing about the win popup's own markup needed touching. */
-.winCloseBtn,.overlayXBtn{position:absolute;top:calc(env(safe-area-inset-top) + 14px);right:16px;
-  width:44px;height:44px;border-radius:50%;border:1px solid rgba(255,255,255,.3);
+/* The X close button.
+   2026-07-30 (v0.58, Blake verbatim - item 3: "on the new 'x' buttons you added to x things out,
+   can you make it be on the top right corner of the actual window pinned there? I think you
+   currently have it floating off to the top right away from the actual window. It should overlap
+   with the corner of the window and stay there as you scroll." - and item 4, the SAME session,
+   same root cause: "move all windows to be centered like the 'before you play' popup. Right now
+   I'm noticing a lot that are suddenly pinned to the top of the screen... Just make them all be
+   centered.").
+   ROOT CAUSE (both items, one cause): v0.54 put the X as a DIRECT CHILD of .overlay itself
+   (position:absolute, pinned to the physical SCREEN corner), then pinned every X-bearing card
+   flush under it (the padding-top/margin-top:0 rules this comment used to sit above, now deleted -
+   see below). That combination had two separate visible symptoms: (1) on any screen wider than a
+   card's own max-width (.modalCard tops out at 520px), the X sat in the SCREEN's corner while a
+   centered-width card sat narrower in the middle - the X visibly detached from the card into the
+   empty margin, exactly "floating off... away from the actual window;" (2) EVERY X-bearing card
+   was force-pinned near the screen top so its own X never looked orphaned, which is what made
+   "the setup your online game window" (#hostSpeedOverlay, "Set up your online game" - the screen
+   between tapping Host and the room actually opening, picked over #roomOverlay/#joinOverlay
+   because "setup" is literally that screen's own heading) and "the play online popup"
+   (#onlineOverlay) read as pinned to the top instead of centered.
+   FIX, addressing both symptoms at their shared source: the X moved from being a SIBLING of
+   .modalCard/.confirmCard to being the FIRST CHILD INSIDE it (see every X's markup - each one
+   moved this pass, grep class="overlayXBtn"). Once the X's position is relative to the CARD
+   instead of the SCREEN, it can never detach from a narrower centered card again - and because it
+   no longer needs a screen-relative safe-area offset to find the card, the padding-top/margin-top
+   rules that existed ONLY to keep the card near the X (see their own deleted comment, restored
+   below in git history) serve no purpose anymore: the base `.overlay>.confirmCard,
+   .overlay>.modalCard{margin:auto}` rule (above) now centers every one of these cards for free,
+   directly satisfying item 4 as a side effect of fixing item 3, not a second change.
+   TWO DIFFERENT POSITIONING MECHANISMS ARE NEEDED, not one - verified by testing both, not
+   assumed (per this session's own instructions):
+     - .confirmCard never scrolls its OWN content (overflow:visible - see that class's own
+       comment, above; the OUTER .overlay is what scrolls a tall confirmCard around). A plain
+       position:absolute child, anchored to .confirmCard (now position:relative, see that rule's
+       own v0.58 comment), moves in perfect lockstep with the card no matter how far .overlay
+       scrolls it around - .confirmCard>.overlayXBtn below.
+     - .modalCard DOES scroll its OWN content (max-height:82vh;overflow-y:auto, below) - a plain
+       position:absolute child of modalCard would be PART of that scrolling content (its containing
+       block IS the element that's scrolling) and would scroll away with it, reproducing a NEW
+       version of the exact "floats away" complaint this pass exists to fix - reasoned through
+       before writing any code, then PROVEN with a real Playwright scroll-to-bottom measurement on
+       #rulesOverlay (the longest card in the app) against the actual sticky rule below, not just
+       assumed correct because the theory sounded right - see HANDOFF.md "v0.58" for the real
+       before/after getBoundingClientRect() numbers. position:sticky is the fix:
+       .modalCard>.overlayXBtn below is a NORMAL-FLOW first child (sticky requires that - it
+       cannot itself be position:absolute) with top:8px, so it sticks to the top of modalCard's OWN
+       scrollport as the rules text (etc.) scrolls underneath, and never detaches to the screen
+       corner the way the old position:absolute-off-.overlay design did. margin:0 8px -44px auto:
+       margin-left:auto right-aligns this block-level flex box within modalCard's content width (no
+       `right` offset needed - sticky's resting position comes from normal flow + this auto margin);
+       margin-bottom:-44px cancels the 44px it would otherwise add to the flow (its own height) so
+       it overlaps the card's corner/title instead of pushing the title down a whole row - the
+       standard "sticky corner badge over scrolling content" CSS trick. 8px (not a bigger number)
+       is deliberately small: modalCard's own overflow-y:auto FORCES overflow-x:auto too (the same
+       fact the .confirmCard .sign comment, above, already documents for that class) - so a
+       NEGATIVE margin here to pull the button flush against modalCard's actual BORDER (as
+       .confirmCard's tiny 2px padding lets item 3's ask do more literally) would get CLIPPED by
+       that same overflow, not render floating outside it. 8px is the smallest inset that stays
+       safely inside modalCard's own 22px padding box while still visually reading as "the card's
+       corner," not "the middle of the card."
+     - #btnWinClose (winOverlay) is UNCHANGED - still position:absolute off .overlay itself, own
+       rule below. Checked, not assumed: winOverlay has no .modalCard/.confirmCard wrapper at all
+       (its .sign/p/#winKoWrap/.bigBtns are direct .overlay children, same as v0.54 found when it
+       deliberately left this overlay out of the original X-inside-a-card design) - a real end-of-
+       game win screen's content (name, win text, points, a per-seat KO table, two buttons) reliably
+       fills enough of the screen that it does not exhibit the "short card, X floats far above it"
+       bug the modalCard/confirmCard cards had (verified with a real screenshot, see HANDOFF.md
+       "v0.58" testing section) - and restructuring winOverlay to add a wrapping card, purely to
+       reuse this mechanism, was judged not worth the risk to the #winKoWrap width-in-flex-column
+       layout its own CSS comment (right below) already depends on, for an overlay Blake did not
+       name as broken.
+   #btnWinClose keeps the old class name too (below) so nothing about the win popup's own markup
+   needed touching, same as v0.54 already established. */
+.winCloseBtn,.overlayXBtn{width:44px;height:44px;border-radius:50%;border:1px solid rgba(255,255,255,.3);
   background:rgba(0,0,0,.35);color:var(--cream);font-size:19px;line-height:1;
   display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:2}
+.winCloseBtn{position:absolute;top:calc(env(safe-area-inset-top) + 14px);right:16px}
+.modalCard>.overlayXBtn{position:sticky;top:8px;margin:0 8px -44px auto}
+.confirmCard>.overlayXBtn{position:absolute;top:8px;right:8px}
 /* v0.54: reserve room in every X-bearing modalCard's own title so the title's text can never
    grow into the X's corner at any width, including 320px - measured directly (Playwright,
    test_x_overlap.js) rather than assumed. Scoped by ID (this codebase's usual pattern for a
    handful of specific overlays, see the .confirmCard .sign overrides above) to exactly the
    modalCard overlays that got an X - every OTHER modalCard (speed pickers, the nickname gate,
    reclaim/pause) is untouched. confirmCard overlays don't need this: their heading (.sign) is a
-   short, centered badge nowhere near the right edge (checked, not assumed - see HANDOFF.md). */
+   short, centered badge nowhere near the right edge (checked, not assumed - see HANDOFF.md).
+   2026-07-30 (v0.58): value re-verified, not just carried forward, now that the X sits INSET INTO
+   the card instead of fixed to the screen edge (see .overlayXBtn's own comment above) - the number
+   still works and is unchanged: .modalCard>.overlayXBtn's own margin-right (8px) plus its width
+   (44px) reach exactly 52px in from the card's content-box right edge, the identical distance this
+   padding-right already reserves, so the title and the X's own left edge land flush with zero
+   overlap by construction, not by coincidence - reconfirmed with real getBoundingClientRect()
+   measurements at 320px width on every overlay in this list (see HANDOFF.md "v0.58"). */
 #rulesOverlay h3,#lbOverlay h3,#shopOverlay h3,#accountOverlay h3,#adminOverlay h3,
 #onlineRulesOverlay h3,#onlineOverlay h3,#roomOverlay h3,#joinOverlay h3,
 #offlineSeatOverlay h3,#hostSpeedOverlay h3,#welcomeOverlay h3,#reunionOverlay h3
   {padding-right:52px}
-/* v0.54 (measured, not assumed - a real gap this session actually caught with a screenshot, not
-   just reasoned about): .overlay centers a short .modalCard/.confirmCard vertically (margin:auto,
-   see that shared rule's own comment above) - a SHORT card (the Shop's "couldn't reach it" state,
-   the locked God-mode token screen, "Play online", etc.) can land 150-260px below the X, which is
-   fixed near the very top of the SCREEN, not the card - reading as the X belonging to nothing.
-   Fix, scoped to exactly the 18 overlay ids that got an X (every other overlay's card keeps
-   centering, untouched): pin the card's own top margin to 0 and give the OVERLAY a fixed
-   safe-area-aware top padding sized to clear the X itself (same safe-area+14px start, 44px tall,
-   plus a 14px breathing gap = safe-area+72px) - so the card always begins at the same predictable
-   spot right under the X, on every screen, regardless of how tall its own content is. A genuinely
-   TALL card (the rules panel, a long Shop catalog) is completely unaffected either way - it was
-   already flush against the top before this rule and remains exactly as flush now.
-   2026-07-29 (v0.57): #onlineCaveatOverlay STAYS in this padding-top rule even though it was
-   carved OUT of the margin-top:0 rule right below - Blake: "the pop up... is way too high on the
-   screen... make sure you... [it's] centered where we usually have these pop ups." Once the card
-   centers again (margin:auto wins back, see the carve-out's own comment below), this padding-top
-   can never PUSH the card away from center on a normal/tall screen - centering always wins there -
-   but it becomes a pure FLOOR that stops the centered card from sliding up underneath the fixed X
-   button on the very shortest screens. A safety minimum, not a positioning mechanism anymore. */
-#rulesOverlay,#lbOverlay,#shopOverlay,#accountOverlay,#adminOverlay,#onlineRulesOverlay,
-#onlineOverlay,#roomOverlay,#joinOverlay,#offlineSeatOverlay,#hostSpeedOverlay,#welcomeOverlay,
-#reunionOverlay,#signOutWarnOverlay,#leaveConfirmOverlay,#surrenderConfirmOverlay,
-#overwriteWarnOverlay,#slotReplaceOverlay,#onlineCaveatOverlay,#onlineAccessBlockedOverlay
-  {padding-top:calc(env(safe-area-inset-top) + 72px)}
-/* 2026-07-29 (v0.57, Blake, verbatim: "the pop up that comes up before joining an online game
-   (before you play)... is way too high on the screen... make sure you... [it's] centered where we
-   usually have these pop ups"). #onlineCaveatOverlay>.confirmCard removed from this list, ALONE -
-   every other overlay here keeps margin-top:0 exactly as before. Removing it lets the base
-   `.overlay>.confirmCard,.overlay>.modalCard{margin:auto}` rule (above) win again for this one
-   card, so it centers vertically like a normal short popup instead of being pinned under the X.
-   The padding-top rule just above still lists #onlineCaveatOverlay on purpose - see its own
-   comment for why that's now a floor, not a conflict. */
-#rulesOverlay>.modalCard,#lbOverlay>.modalCard,#shopOverlay>.modalCard,
-#accountOverlay>.modalCard,#adminOverlay>.modalCard,#onlineRulesOverlay>.modalCard,
-#onlineOverlay>.modalCard,#roomOverlay>.modalCard,#joinOverlay>.modalCard,
-#offlineSeatOverlay>.modalCard,#hostSpeedOverlay>.modalCard,#welcomeOverlay>.modalCard,
-#reunionOverlay>.modalCard,#signOutWarnOverlay>.confirmCard,#leaveConfirmOverlay>.confirmCard,
-#surrenderConfirmOverlay>.confirmCard,#overwriteWarnOverlay>.confirmCard,
-#slotReplaceOverlay>.confirmCard,
-#onlineAccessBlockedOverlay>.confirmCard{margin-top:0}
+/* 2026-07-30 (v0.58): the v0.54 padding-top rule and the v0.54/v0.57 margin-top:0 rule that used
+   to live here (both scoped to the same ~19 X-bearing overlay ids) are DELETED ENTIRELY, not just
+   carved out further - see the .overlayXBtn header comment above for why: now that the X moves
+   WITH the card (first child, not a screen-pinned sibling), there is no longer any reason a
+   centered card needs to be artificially pinned near the top just to stay near its X - the X is
+   attached to wherever the card naturally centers, always. The base
+   `.overlay>.confirmCard,.overlay>.modalCard{margin:auto}` rule (above, untouched) now centers
+   every one of these cards again for free - directly satisfying Blake's item 4 ask ("move all
+   windows to be centered... don't [leave them] glued to the top of the screen"), the same way
+   v0.57 already special-cased #onlineCaveatOverlay alone; this pass generalizes that fix to every
+   remaining overlay in the old list instead of adding more one-off carve-outs. A genuinely TALL
+   card (the rules panel, a long Shop catalog) is unaffected either way - max-height:82vh plus the
+   base centering rule already guarantee it reads exactly as full/flush as it always has (confirmed
+   with a real screenshot, not assumed - see HANDOFF.md "v0.58"). No exceptions were needed this
+   pass - every overlay that used to be in this list was re-screenshotted after the deletion and
+   reads correctly centered, so unlike v0.57's #onlineCaveatOverlay carve-out, there is no single
+   remaining overlay that still needs the old padding/margin rule kept for it. */
 /* The per-game KO scoreboard (buildGameKoTableHtml(), § TURNS) reuses the leaderboard KOs tab's
    own .lbTable.lbKo styling verbatim (same column widths/font sizing) so the two tables read as
    one consistent design language - only the wrapper needs its own width here, since #winOverlay
@@ -2299,7 +2453,11 @@ button{font:inherit;cursor:pointer}
    applySurfaceTokens() (§ SHOP) for why this is now the one card background every popup
    (rules/leaderboard/shop/admin/online/welcome/etc.) shares, and why it still renders this exact
    color for a player with no felt equipped. */
-.modalCard{background:var(--feltSurface);border:1px solid rgba(255,255,255,.18);border-radius:18px;max-width:520px;
+/* 2026-07-30 (v0.58): position:relative added - the containing block for .overlayXBtn now that
+   the X lives INSIDE the card (see that rule's own header comment, right after .winCloseBtn/
+   .overlayXBtn below, for the full story). Doesn't change layout at all on its own (no top/left
+   set here) - it only gives an absolutely/stickily positioned child something to anchor to. */
+.modalCard{position:relative;background:var(--feltSurface);border:1px solid rgba(255,255,255,.18);border-radius:18px;max-width:520px;
   width:100%;max-height:82vh;overflow-y:auto;padding:22px;text-align:left}
 .modalCard h3{margin:2px 0 12px;font-size:21px}
 .modalCard h4{margin:16px 0 4px;color:var(--gold);font-size:15px}
@@ -2622,7 +2780,24 @@ button{font:inherit;cursor:pointer}
    WRAPPER (.lbNameRow) goes INSIDE it, so the flex layout only governs the name-vs-badge split
    within the cell's own already-correct width, never the cell's own sizing in the table. */
 .lbNameRow{display:flex;align-items:center;gap:2px;max-width:100%;overflow:hidden}
-.lbNameText{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto}
+/* 2026-07-30 (v0.58 BUG FIX, Blake's item 5(b): "the badge should sit immediately next to the
+   name"). Root cause, measured directly before fixing (not assumed): flex:1 1 auto on
+   .lbNameText made the TEXT SPAN grow to fill the whole row/column width - since the row's own
+   max-width is the table cell's width (26% of the table, 38% on the KOs tab specifically, see
+   .lbTable.lbKo th:first-child below), a SHORT name plus a badge ended up with the name hugging
+   the cell's left edge and the badge pushed all the way to the cell's RIGHT edge, nowhere near the
+   name it belongs to - worse the wider the column (the 38%-wide KO tab was the clearest case, but
+   every tab showed the same gap to a smaller degree). Fix: flex:1 1 auto -> flex:0 1 auto - the
+   text no longer GROWS to claim leftover row width, it only ever shrinks (flex-shrink:1, unchanged)
+   when there truly isn't room for both the full name and the badge - the badge (flex:0 0 auto,
+   .lbTitleBadge above) now sits immediately after whatever width the name actually renders at,
+   with the row's existing 2px gap between them, exactly like an inline badge next to text should.
+   THE v0.51 TRUNCATION FIX (the comment above this one) is UNCHANGED and still verified working:
+   min-width:0 + overflow:hidden + text-overflow:ellipsis are all untouched, so a name long enough
+   to compete with the badge for room still truncates with an ellipsis (via flex-shrink) instead of
+   overflowing the column or pushing the badge out of view - reverified with a real 10-character
+   NAME_MAX name plus an equipped title at 320px on every leaderboard tab, see HANDOFF.md "v0.58". */
+.lbNameText{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:0 1 auto}
 .lbTable th:nth-child(2),.lbTable td:nth-child(2){width:19%}
 .lbTable th:nth-child(3),.lbTable td:nth-child(3){width:16%}
 .lbTable th:nth-child(4),.lbTable td:nth-child(4){width:18%}
@@ -2863,8 +3038,16 @@ button{font:inherit;cursor:pointer}
    the same tight space the name already has. Equip state is LOCAL to this phone (§ SHOP), so this
    can only ever show next to the CURRENT SIGNED-IN account's own row - there is no way for this
    device to know what title anyone else has equipped on theirs. */
+/* 2026-07-30 (v0.58): background/color are now var(--titleBg)/var(--titleInk) with a per-title
+   border (var(--titleRing)) - titledNameHtml() (§ SHOP) sets all three as inline custom properties
+   per badge (see titleBadgeStyle()) so the four titles finally look distinct from one another, not
+   just carry a different letter on an identical gold circle. The var() fallbacks (var(--gold)/
+   #3a2c05/a plain light ring) reproduce the exact original v0.51 look for anything that renders
+   this class with no inline vars set (there is no such call site today, but this keeps the rule
+   itself correct in isolation rather than silently depending on JS always setting them). */
 .lbTitleBadge{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
-  width:14px;height:14px;border-radius:50%;background:var(--gold);color:#3a2c05;
+  width:14px;height:14px;border-radius:50%;background:var(--titleBg,var(--gold));
+  color:var(--titleInk,#3a2c05);border:1px solid var(--titleRing,rgba(255,255,255,.35));
   font-size:9px;font-weight:800;line-height:1;vertical-align:1px;margin-left:4px;cursor:pointer}
 </style>
 
@@ -3017,7 +3200,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.57</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.58</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -3182,8 +3365,8 @@ button{font:inherit;cursor:pointer}
   <!-- 2026-07-29 (v0.54): Bucket A - always safe to leave, browsable rules. X + Escape both
        reuse btnRulesClose's own click (closeOverlay('rulesOverlay')) - see § UTIL's overlayXWire()
        for the shared wiring, and HANDOFF.md "v0.54" for the full inventory. -->
-  <button id="btnRulesX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
+    <button id="btnRulesX" class="overlayXBtn" aria-label="Close">✕</button>
     <h3>How to play Nasty</h3>
     <p>Get all <b>5 of your tees</b> from your base, once around the board clockwise, and into your <b>home row</b> before anyone else. Teams: you and the player straight across win together.</p>
     <h4>Getting out</h4>
@@ -3221,8 +3404,8 @@ button{font:inherit;cursor:pointer}
 
 <div id="lbOverlay" class="overlay hidden">
   <!-- 2026-07-29 (v0.54): Bucket A. See rulesOverlay's own comment above for the pattern. -->
-  <button id="btnLbX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
+    <button id="btnLbX" class="overlayXBtn" aria-label="Close">✕</button>
     <h3>Leaderboard</h3>
     <!-- 2026-07-24 (Blake's item 9): 3rd tab, "KOs" - lifetime knockouts dealt/suffered, see
          renderLbKo() below. Same .seg visual style as Solo/Teams, just one more button in the
@@ -3265,8 +3448,8 @@ button{font:inherit;cursor:pointer}
        pop-up"), and its catalog is the longest-scrolling content in the app, so this is the
        button that actually proves the "stays visible while scrolling" requirement - see
        test_shop_scroll.js. -->
-  <button id="btnShopX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
+    <button id="btnShopX" class="overlayXBtn" aria-label="Close">✕</button>
     <h3>Shop</h3>
     <div class="shopBalanceBox" id="shopBalanceBox"></div>
     <div id="shopBody"></div>
@@ -3277,8 +3460,8 @@ button{font:inherit;cursor:pointer}
 <div id="onlineOverlay" class="overlay hidden">
   <!-- 2026-07-29 (v0.54): Bucket A - a plain Host/Join choice screen, already closeable via
        btnOnlineClose with zero side effects; X reuses that same click. -->
-  <button id="btnOnlineX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
+    <button id="btnOnlineX" class="overlayXBtn" aria-label="Close">✕</button>
     <h3>Play online</h3>
     <p>Host a game - you'll get a link to text around so everyone plays from their own phone - or join a game someone else started.</p>
     <!-- 2026-07-29 (v0.56, NEW - Blake: "a countdown clock of when they'll need to buy the token
@@ -3311,8 +3494,8 @@ button{font:inherit;cursor:pointer}
   <!-- Bucket A - purely informational, nothing to confirm. X does exactly what "Got it" does
        (proceeds into the game) - dismissing this must never cancel starting the online game,
        it only ever skips ahead past the one-time notice. -->
-  <button id="btnOnlineCaveatX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="confirmCard">
+    <button id="btnOnlineCaveatX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b>BEFORE YOU PLAY</b></div>
     <p id="onlineCaveatText"></p>
     <div class="bigBtns"><button class="btn primary" id="btnOnlineCaveatOk">Got it, let's play</button></div>
@@ -3329,8 +3512,8 @@ button{font:inherit;cursor:pointer}
 <div id="onlineAccessBlockedOverlay" class="overlay hidden">
   <!-- Bucket A - X reuses btnOnlineBlockedOk's own click, the plain "I've seen this" dismissal -
        there is no destructive action anywhere on this card. -->
-  <button id="btnOnlineBlockedX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="confirmCard">
+    <button id="btnOnlineBlockedX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b>CAN'T START THAT GAME</b></div>
     <p id="onlineBlockedText"></p>
     <div class="bigBtns">
@@ -3345,8 +3528,8 @@ button{font:inherit;cursor:pointer}
   <!-- 2026-07-29 (v0.54): Bucket A - X reuses btnRoomCancel's own click (leaveOnlineToMenu()),
        the exact same cleanup the existing Cancel button already does (closes the socket, clears
        online state, lands on the menu) - never a new/parallel exit path. -->
-  <button id="btnRoomX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
+    <button id="btnRoomX" class="overlayXBtn" aria-label="Close">✕</button>
     <h3>Your room is open!</h3>
     <p>Tell everyone this code, or just text them the link - it fills in the code for them.</p>
     <div style="text-align:center;margin:14px 0">
@@ -3376,8 +3559,8 @@ button{font:inherit;cursor:pointer}
   <!-- 2026-07-29 (v0.54): Bucket A - X reuses btnJoinClose's own click, which already means "I am
        done with this, put me on the menu" on EVERY step of this overlay (code entry or seat
        picked) - see that handler's own v0.37 comment for why it was hardened this way. -->
-  <button id="btnJoinX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
+    <button id="btnJoinX" class="overlayXBtn" aria-label="Close">✕</button>
     <h3>Join a game</h3>
     <div id="joinCodeStep">
       <p>Enter the 4-letter room code your host sent you.</p>
@@ -3425,8 +3608,8 @@ button{font:inherit;cursor:pointer}
        acknowledgment button; X reuses btnOnlineRulesOk's own click (same continuation - hands
        the join/room screen back, maybeSendSeated(), maybeRequestPushPermission() - identical to
        tapping "Got it", never a shortcut around it). -->
-  <button id="btnOnlineRulesX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
+    <button id="btnOnlineRulesX" class="overlayXBtn" aria-label="Close">✕</button>
     <h3>Online games work a little differently</h3>
     <ul style="text-align:left;font-size:14.5px;line-height:1.6;padding-left:22px;margin:12px 0">
       <li>No Skip button - everyone watches the same game at the same speed.</li>
@@ -3460,8 +3643,8 @@ button{font:inherit;cursor:pointer}
        (closeOverlay('offlineSeatOverlay')), backing out to the setup screen exactly like Cancel
        already does. NOT the same category as the nickname gate/speed picker below (§ NEXT) -
        this one already has a safe way out. -->
-  <button id="btnOfflineSeatX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
+    <button id="btnOfflineSeatX" class="overlayXBtn" aria-label="Close">✕</button>
     <h3>Pick your seat</h3>
     <!-- 2026-07-27 (v0.44, Blake: "you still have them there to decide the CPU difficulty. This
          should be done where you select your player, and pick the difficulty for each CPU right
@@ -3535,8 +3718,8 @@ button{font:inherit;cursor:pointer}
        already has a real Cancel (btnHostSpeedCancel) and no online room exists yet at this point
        (host picks speed BEFORE the room is created, per this comment's own opening line), so
        backing out has zero side effects. X reuses that same click. -->
-  <button id="btnHostSpeedX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
+    <button id="btnHostSpeedX" class="overlayXBtn" aria-label="Close">✕</button>
     <h3>Set up your online game</h3>
     <!-- 2026-07-24 (Blake's item 14): "can you set it up so I can choose to play a team game
          online as well?" - Players + Game type were already fully wired end to end (the SAME
@@ -3574,8 +3757,8 @@ button{font:inherit;cursor:pointer}
        background": stays connected, declares nothing, resumes on its own once everyone's ready) -
        deliberately NOT wired to btnReunionResume ("I'm ready"), which commits this player as
        present/ready and is the one choice on this screen that is not a plain "leave". -->
-  <button id="btnReunionX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
+    <button id="btnReunionX" class="overlayXBtn" aria-label="Close">✕</button>
     <h3>Getting the table back together</h3>
     <p>Tap Ready up when you're at the table - play picks back up on its own once everyone connected is ready. Missing someone? Send them a rejoin link, or hand their seat to a CPU.</p>
     <!-- 2026-07-24 (Blake's item 14): if this game is Teams, say so - a rejoin already
@@ -3639,8 +3822,8 @@ button{font:inherit;cursor:pointer}
        no-strings-attached way out already (chooseGuest(), "Continue as a guest" - drops the
        pending online action for good, per that function's own comment). X reuses that exact
        click - never the Sign in with Apple button. -->
-  <button id="btnWelcomeX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
+    <button id="btnWelcomeX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b>NASTY</b></div>
     <h3 id="welcomeTitle">Sign in to play online</h3>
     <p class="welcomeNote" id="welcomeNote">Online games need an account, so your wins, points and leaderboard spot are all yours. Sign in with Apple, or keep playing offline as a guest.</p>
@@ -3687,8 +3870,8 @@ button{font:inherit;cursor:pointer}
        the section that actually got renamed, and HANDOFF.md "v0.56" for the corrected story. This
        is NOT the god-mode #adminOverlay (§ ADMIN, reached by tapping the version number 7 times),
        a completely separate developer-only tool that keeps its own name untouched either way. -->
-  <button id="btnAcctX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="modalCard">
+    <button id="btnAcctX" class="overlayXBtn" aria-label="Close">✕</button>
     <!-- 2026-07-26 (v0.36 item 2): the button that opens this panel says ADMIN, so the panel says
          Admin too - a player who taps a button called ADMIN and lands on an untitled page has no
          way to know they arrived. The coloured initial that used to be the top-bar circle is the
@@ -3868,8 +4051,8 @@ button{font:inherit;cursor:pointer}
   <!-- 2026-07-29 (v0.54): Bucket C - X reuses btnSignOutCancel's own click, the unambiguous safe
        choice (hands #accountOverlay back, never signs out). NEVER wired to the destructive
        "Sign out anyway" button. -->
-  <button id="btnSignOutX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="confirmCard">
+    <button id="btnSignOutX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b>SIGN OUT?</b></div>
     <p id="signOutWarnText"></p>
     <div class="bigBtns">
@@ -3930,8 +4113,8 @@ button{font:inherit;cursor:pointer}
   <!-- 2026-07-29 (v0.54): Bucket C - X reuses btnLeaveCancel's own click ("Return to game" - the
        first, primary-styled, explicitly safe option on this sheet, per its own v0.27.1 comment
        above). NEVER wired to Save & leave / Leave without saving / Hand my seat to a CPU. -->
-  <button id="btnLeaveX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="confirmCard">
+    <button id="btnLeaveX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b>PAUSED</b></div>
     <p id="leaveConfirmText">Your game is holding right here. Jump back in, or step away for now.</p>
     <div class="bigBtns">
@@ -3963,8 +4146,8 @@ button{font:inherit;cursor:pointer}
        first, primary, the explicitly safe option per the item-E comment above). NEVER wired to
        "Save & leave instead" or "Concede"/"Leave" (the no-fault-exit variant) - both of those end
        the game; only Cancel does not. -->
-  <button id="btnSurrenderX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="confirmCard">
+    <button id="btnSurrenderX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b id="surrenderConfirmHeading">CONCEDE?</b></div>
     <p id="surrenderConfirmText">Are you sure you want to concede? This will count as a loss on the leaderboard.</p>
     <!-- 2026-07-25 (item E of the UI polish batch), two changes:
@@ -4002,8 +4185,8 @@ button{font:inherit;cursor:pointer}
 <div id="overwriteWarnOverlay" class="overlay hidden">
   <!-- 2026-07-29 (v0.54): Bucket C - X reuses btnOverwriteCancel's own click. NEVER wired to
        "Go ahead" (which replaces the existing online game). -->
-  <button id="btnOverwriteX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="confirmCard">
+    <button id="btnOverwriteX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b>REPLACE GAME?</b></div>
     <p>You have an online game you can still get back into - starting another online game will replace it. Go ahead?</p>
     <div class="bigBtns">
@@ -4028,8 +4211,8 @@ button{font:inherit;cursor:pointer}
 <div id="slotReplaceOverlay" class="overlay hidden">
   <!-- 2026-07-29 (v0.54): Bucket C - X reuses btnReplaceCancel's own click. NEVER wired to either
        "Replace slot" button (both give up a saved game for good). -->
-  <button id="btnSlotReplaceX" class="overlayXBtn" aria-label="Close">✕</button>
   <div class="confirmCard">
+    <button id="btnSlotReplaceX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b>REPLACE A SAVE?</b></div>
     <p>Both save spots are full. Starting a new game means giving up one of your saved games for good - that counts as conceding (a loss on the leaderboard) for whoever was playing it. Pick which one to give up, or cancel to keep both.</p>
     <div class="bigBtns">
@@ -4047,10 +4230,13 @@ button{font:inherit;cursor:pointer}
      token/session cleanup happens on close either way, so there is nothing state-dependent to
      get wrong here). -->
 <div id="adminOverlay" class="overlay hidden">
-  <!-- 2026-07-29 (v0.54): kept OUTSIDE .modalCard on purpose, same reasoning as every other
-       overlay's X - see the .overlayXBtn CSS comment, § STYLE. -->
-  <button id="btnAdminX" class="overlayXBtn" aria-label="Close">✕</button>
+  <!-- 2026-07-30 (v0.58): moved INSIDE .modalCard (first child, was a direct .overlay child
+       before this) - see the .overlayXBtn CSS comment, § STYLE, for why every X moved off the
+       screen corner and onto the card's own corner this pass (Blake: "make it be on the top
+       right corner of the actual window... it should overlap with the corner of the window and
+       stay there as you scroll"). -->
   <div class="modalCard" style="max-width:560px">
+    <button id="btnAdminX" class="overlayXBtn" aria-label="Close">✕</button>
     <!-- 2026-07-26 (v0.36 item 2): retitled "God mode". The player-facing settings panel is
          called Admin now (Blake's word, on his own button), and two different pages both headed
          "Admin" would be genuinely confusing for the one person who ever sees both. Nothing else
@@ -6912,15 +7098,17 @@ addEventListener('resize',fitBoard);
    board in certain spots." Two-finger pinch to zoom, two-finger drag to pan while zoomed,
    double-tap to reset - see the risk list this was written against, all satisfied by the design:
 
-   1. NEVER interferes with ordinary single-finger taps. This is the whole reason the gesture
-      handling below only ever DOES anything (preventDefault, mutate zoom/pan state) once a
-      SECOND pointer is down (boardPointers.size===2). A single finger's pointerdown/move/up
-      sequence runs through this code and changes NOTHING except a passive double-tap timestamp
-      (see onBoardPointerDown's `size===1` branch) - it never calls preventDefault or
-      stopPropagation, so the tee/card elements' own native `click` listeners (§ RENDER/UI, e.g.
-      `d.addEventListener('click',()=>onTeeClick(...))`) fire exactly as they always have. This
-      is provable, not just claimed - see HANDOFF.md's testing section for a real Playwright tap
-      that still lands a legal move at 1x with this feature installed.
+   1. NEVER interferes with ordinary single-finger taps AT 1x, and never preventDefaults a single
+      finger's tap-sized movement even while zoomed. Below BOARD_ZOOM_MIN (i.e. boardZoom===1) a
+      single finger's pointerdown/move/up sequence runs through this code and changes NOTHING
+      except a passive double-tap timestamp (see onBoardPointerDown's `size===1` branch) - it
+      never calls preventDefault or stopPropagation, so the tee/card elements' own native `click`
+      listeners (§ RENDER/UI, e.g. `d.addEventListener('click',()=>onTeeClick(...))`) fire exactly
+      as they always have. This is provable, not just claimed - see HANDOFF.md's testing section
+      for a real Playwright tap that still lands a legal move at 1x with this feature installed.
+      2026-07-30 (v0.58): this guarantee is now precisely "at 1x, or below the slop threshold" -
+      see point 7 below for the ONE new case where a single finger DOES call preventDefault (a
+      real drag past BOARD_PAN_SLOP, only possible once already zoomed in).
    2. Taps still land on the right hole/card when zoomed and panned. This works BY CONSTRUCTION,
       not by any coordinate math this code has to get right: #boardZoom (§ STYLE) is a pure CSS
       transform on a wrapper OUTSIDE #boardScale, and every tee/card is a real DOM element with
@@ -6932,7 +7120,10 @@ addEventListener('resize',fitBoard);
    3. Pan is only possible once zoomed - clampBoardPan() forces panX/panY to exactly 0 whenever
       boardZoom===1 (the allowed range collapses to a single point: `w*(1-1)=0`), so "the board
       sits where it always has" at 1x is true by the same clamp that bounds panning at any other
-      zoom level, not a separate special case.
+      zoom level, not a separate special case. 2026-07-30 (v0.58): this is now true of BOTH pan
+      mechanisms below (the original two-finger drag, and the new one-finger drag, point 7) -
+      neither one ever arms itself (boardPinchStart / boardOnePanStart) at boardZoom===1, so this
+      guarantee holds identically for both, not just the older of the two.
    4. Double-tap resets. A second tap within 350ms and 30px of the first (tracked passively on
       every single-finger pointerdown, see point 1) sets zoom/pan back to the default - but ONLY
       acts (resetBoardZoom()) when boardZoom!==1, so at the default zoom two ordinary quick taps
@@ -6943,9 +7134,69 @@ addEventListener('resize',fitBoard);
       part of the board always covers the full wrap, the same "cover" clamp an image viewer uses.
    6. #autotest/#autotest6 are untouched - they drive the game by calling functions directly
       (see AUTOTEST_HASH's own comment), never by dispatching pointer events, so none of this
-      code path is ever reached during a soak test either way. */
+      code path is ever reached during a soak test either way.
+   7. NEW (2026-07-30, v0.58, Blake verbatim - item 1: "Once you zoom in on the board it doesn't
+      let you drag around (while zoomed) to see things. You have to zoom out/in again to move
+      where you're zoomed in at. Change this."). Confirmed by direct reading before writing any
+      code: panning ONLY ever happened once a SECOND pointer was down (point 3's own clamp is
+      shared, but nothing before this pass ever wrote to boardPanX/Y from a single pointer) - a
+      one-finger drag while zoomed did nothing but silently re-arm the double-tap timestamp, so
+      the ONLY way to look around a zoomed-in board was to zoom back out and re-pinch somewhere
+      else, exactly Blake's complaint.
+      ONE-FINGER PAN, ONLY WHILE ALREADY ZOOMED (boardZoom>1): armed on pointerdown (right after
+      the existing double-tap bookkeeping, so a double-tap-triggered resetBoardZoom() - which sets
+      boardZoom back to 1 - correctly leaves it UNARMED for that same pointerdown, per point 3
+      above). It starts as a CANDIDATE only, never touching preventDefault/state, until the
+      pointer has moved BOARD_PAN_SLOP=10 CSS px from its start (boardOnePanActive flips true
+      exactly once, in onBoardPointerMove) - below that distance it is indistinguishable from an
+      ordinary tap-in-progress, satisfying point 1's "never interferes below the threshold"
+      promise. 10px was chosen as a small-but-real slop: big enough that a stationary finger's
+      natural micro-jitter during a deliberate tap (a few px, measured against how this app's own
+      existing double-tap radius already uses 30px as "still basically the same spot") never
+      false-triggers a pan and swallows a legal move, small enough that an actual drag gesture is
+      recognized almost immediately, not after a noticeable dead zone.
+      ONCE ARMED (boardOnePanActive===true): every subsequent pointermove for that same pointerId
+      calls preventDefault() (same reasoning as the existing two-finger branch: stop the page's
+      own scroll from fighting the gesture, touch-action:none is still the primary guard), updates
+      boardPanX/boardPanY by the pointer's own movement delta since pointerdown, then calls the
+      EXISTING clampBoardPan() (never a second clamp - same "cover" math point 5 already
+      describes) and applyBoardZoomTransform().
+      SUPPRESSING THE PHANTOM CLICK: crossing the slop sets boardSuppressNextClick=true. A single
+      capture-phase `click` listener on `document` (installed once, right after
+      initBoardZoomGestures() below) checks that flag on EVERY click in the app, and if set,
+      calls stopPropagation()+preventDefault() and clears it - since capture fires before the
+      tee/card's own bubble-phase click listener ever sees the event, the drag-release can never
+      land a phantom move. Deliberately a ONE-SHOT, defensively cleared (not just consumed by a
+      click): boardOnePanStart/boardOnePanActive/boardSuppressNextClick are all reset the instant
+      a BRAND NEW gesture begins (boardPointers.size===0 at the top of onBoardPointerDown) - this
+      is what stops a suppression flag from ever bleeding into and silently eating a LATER,
+      unrelated tap's click on the rare device/gesture where the browser's own preventDefault()
+      already suppressed the click before our listener ever got a chance to see and clear it.
+      TWO-FINGER TAKEOVER: if a second finger lands mid one-finger-pan, boardPointers.size becomes
+      2 and the EXISTING pinch branch (unchanged, still keyed on size===2) takes over on the very
+      next pointerdown/pointermove - onBoardPointerDown's size===2 branch also clears
+      boardOnePanStart/boardOnePanActive right there, so the one-finger pan's own move-handling
+      branch can never run again this gesture (boardPointers.size is 2 now anyway) and a later
+      pointerup for that original finger can't re-arm anything stale.
+      TESTED, not just reasoned about (HANDOFF.md "v0.58" has the full Playwright detail): a
+      one-finger drag past the slop while zoomed pans (boardPanX/Y change, no move played); a
+      one-finger tap (no meaningful movement) still lands a legal move, both at 1x AND while
+      zoomed; the existing two-finger pinch/pan and double-tap-to-reset are unchanged. */
 let boardZoom=1,boardPanX=0,boardPanY=0;
 const BOARD_ZOOM_MIN=1,BOARD_ZOOM_MAX=3;
+// v0.58: one-finger-pan-while-zoomed state - see point 7 of the header comment above.
+// boardOnePanStart: {id,x,y,panX0,panY0} set on pointerdown when a single finger goes down AND
+//   boardZoom>1 - a CANDIDATE only, never null-checked as "is panning", see boardOnePanActive.
+// boardOnePanActive: true only once that same pointer has moved BOARD_PAN_SLOP px - this is the
+//   actual "a real drag is in progress" flag, and the ONLY thing gated on it is preventDefault()/
+//   mutating boardPanX/Y (never boardOnePanStart's mere existence, which a stationary tap also
+//   briefly has).
+// boardSuppressNextClick: set true the instant boardOnePanActive flips true; consumed (and
+//   cleared) by the capture-phase document click listener below, and defensively cleared again at
+//   the start of every brand-new gesture (see onBoardPointerDown) so it can never outlive the one
+//   click it exists to swallow.
+let boardOnePanStart=null, boardOnePanActive=false, boardSuppressNextClick=false;
+const BOARD_PAN_SLOP=10;   // CSS px - see point 7 above for why this exact number
 function applyBoardZoomTransform(){
   const el=$('boardZoom'); if(!el)return;
   el.style.transform=`matrix(${boardZoom},0,0,${boardZoom},${boardPanX},${boardPanY})`;
@@ -6977,11 +7228,25 @@ function pointerDist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y); }
 function pointerMid(a,b){ return {x:(a.x+b.x)/2,y:(a.y+b.y)/2}; }
 function onBoardPointerDown(ev){
   if(ev.pointerType==='mouse'&&ev.button!==0)return;
+  if(boardPointers.size===0){
+    // v0.58: defensive reset for a BRAND-NEW gesture - clears any one-finger-pan bookkeeping left
+    // over from a PREVIOUS gesture whose pointerup's click never actually fired (e.g. the browser
+    // itself suppressed it because pointermove called preventDefault during the drag), so it can
+    // never bleed into and wrongly swallow an unrelated LATER tap's click. Safe to do here: by the
+    // time boardPointers is genuinely empty again, the user has released every finger, so any
+    // click that WAS going to fire for the gesture that just ended has already had its chance.
+    boardOnePanStart=null; boardOnePanActive=false; boardSuppressNextClick=false;
+  }
   boardPointers.set(ev.pointerId,boardWrapPoint(ev));
   if(boardPointers.size===2){
     const pts=[...boardPointers.values()];
     boardPinchStart={d0:pointerDist(pts[0],pts[1]),z0:boardZoom,panX0:boardPanX,panY0:boardPanY,
       mid0:pointerMid(pts[0],pts[1])};
+    // v0.58: a 2nd finger landing supersedes any in-progress 1-finger pan candidate - see point 7
+    // of the header comment above ("TWO-FINGER TAKEOVER"). Clearing this here (rather than only
+    // in onBoardPointerUp) means onBoardPointerMove's size===1 branch can never fire again for the
+    // ORIGINAL finger even for a stray event ordering, since there is nothing left for it to act on.
+    boardOnePanStart=null; boardOnePanActive=false;
   }else if(boardPointers.size===1){
     // Passive double-tap bookkeeping ONLY - see point 1/4 above. Never preventDefault/
     // stopPropagate here, so a single tap's own click handler is completely untouched.
@@ -6991,6 +7256,18 @@ function onBoardPointerDown(ev){
       boardLastTapAt=0;   // consumed - a 3rd rapid tap starts a fresh pair, not a re-trigger
     }else{
       boardLastTapAt=now; boardLastTapX=p.x; boardLastTapY=p.y;
+    }
+    // v0.58 (point 7 above): arm a one-finger-pan CANDIDATE only when already zoomed in - at
+    // boardZoom===1 boardOnePanStart stays null for this whole gesture, so onBoardPointerMove's
+    // new branch below never does anything and point 1's "1x is completely untouched" guarantee
+    // holds exactly as before. Read boardZoom AFTER the double-tap check above on purpose: if this
+    // pointerdown just resolved a double-tap-reset, boardZoom is already back to 1 by this line,
+    // so a double-tap's second touch correctly never arms a pan candidate either.
+    if(boardZoom>1){
+      boardOnePanStart={id:ev.pointerId,x:p.x,y:p.y,panX0:boardPanX,panY0:boardPanY};
+      boardOnePanActive=false;
+    }else{
+      boardOnePanStart=null;
     }
   }
 }
@@ -7014,11 +7291,34 @@ function onBoardPointerMove(ev){
     boardPanY=mid1.y-z*ly;
     clampBoardPan();
     applyBoardZoomTransform();
+  }else if(boardPointers.size===1&&boardOnePanStart&&boardOnePanStart.id===ev.pointerId){
+    // v0.58 (point 7 above): one-finger pan while already zoomed in.
+    const p=boardWrapPoint(ev);
+    const dx=p.x-boardOnePanStart.x, dy=p.y-boardOnePanStart.y;
+    if(!boardOnePanActive){
+      // Still just a tap-in-progress below the slop - do NOTHING (no preventDefault, no state
+      // change) so it stays indistinguishable from an ordinary tap, same as point 1 promises.
+      if(Math.hypot(dx,dy)<BOARD_PAN_SLOP)return;
+      boardOnePanActive=true;
+      boardSuppressNextClick=true;   // consumed by the capture-phase click listener below
+    }
+    ev.preventDefault();   // same reasoning as the two-finger branch above - stop page scroll fighting the drag
+    boardPanX=boardOnePanStart.panX0+dx;
+    boardPanY=boardOnePanStart.panY0+dy;
+    clampBoardPan();   // the SAME existing clamp the two-finger branch uses - never a second one
+    applyBoardZoomTransform();
   }
 }
 function onBoardPointerUp(ev){
   boardPointers.delete(ev.pointerId);
   if(boardPointers.size<2)boardPinchStart=null;
+  if(boardOnePanStart&&boardOnePanStart.id===ev.pointerId){
+    // v0.58: the panning finger itself lifted - clear the candidate/active state (but NOT
+    // boardSuppressNextClick, if it's set: that flag has to survive long enough for the capture-
+    // phase click listener, right below, to actually see and consume the click this same
+    // pointerup is about to generate - see that listener's own comment for the one-shot contract).
+    boardOnePanStart=null; boardOnePanActive=false;
+  }
 }
 (function initBoardZoomGestures(){
   const bz=$('boardZoom'); if(!bz)return;
@@ -7028,6 +7328,23 @@ function onBoardPointerUp(ev){
   bz.addEventListener('pointercancel',onBoardPointerUp,{passive:true});
   bz.addEventListener('pointerleave',onBoardPointerUp,{passive:true});
 })();
+// v0.58 (point 7 of the header comment above): swallows the phantom click a one-finger PAN (past
+// the slop) would otherwise fire on release, so a look-around drag while zoomed can never
+// accidentally land a move on whatever tee/card happens to be under the finger when it lifts -
+// Blake called this out explicitly as a "genuinely bad real-game bug" risk. Capture-phase on
+// `document` (not just #boardZoom) so it runs BEFORE any tee/card's own bubble-phase `click`
+// listener ever sees the event - stopPropagation() here means the target's own listener never
+// fires at all, not just that it fires with a preventable event. One-shot: the flag is set exactly
+// once (onBoardPointerMove, the instant the drag crosses BOARD_PAN_SLOP) and cleared here the
+// first time it's seen - see onBoardPointerDown's own top-of-gesture reset for the defensive
+// second clear that catches the case where a click never fires at all (browsers can suppress the
+// synthetic click entirely once pointermove has called preventDefault on the same touch).
+document.addEventListener('click',function(ev){
+  if(!boardSuppressNextClick)return;
+  boardSuppressNextClick=false;
+  ev.preventDefault();
+  ev.stopPropagation();
+},true);
 // Re-clamp (never reset - a resize/orientation change shouldn't throw away a deliberate zoom)
 // against the freshly-measured #boardWrap size every time fitBoard() itself re-measures it.
 addEventListener('resize',()=>{ clampBoardPan(); applyBoardZoomTransform(); });
@@ -11466,9 +11783,30 @@ function renderYouCard(){
   if(isAccountReady()){
     const name=ACCT.gameName;
     const letter=accountInitial(name), colors=accountColors();
+    // v0.58 (2026-07-30, Blake, item 5(c): "the you card's badge should be large and fill the
+    // entire right panel of the card"). .youCardRow had exactly two columns before this - the
+    // avatar (left) and .youWho (everything else, flex:1) - there was no third "right panel"
+    // element at all. NEW: .youTitlePanel, a genuine focal element (not a small icon - see its own
+    // CSS, § STYLE, right after .youWho's rules) showing the SAME per-title letter/color treatment
+    // titleBadgeStyle() just built for the small leaderboard badge (§ SHOP), scaled up - one
+    // lookup, two renderings, never two competing definitions of what each title looks like.
+    // DEFAULT CASE, checked directly rather than assumed: most players (new/guest/anyone who
+    // hasn't bought a title) have EQUIP.title falsy - titleHtml is the empty string for them, so
+    // .youCardRow silently falls back to exactly the two-column avatar+youWho layout this card has
+    // always had (no empty box, no dead flex gap - see .youTitlePanel's own CSS comment for why an
+    // empty string, not a hidden div, is what guarantees that). Screenshotted BOTH states (with a
+    // title equipped, and without) at 320x568 to confirm neither is broken - see HANDOFF.md "v0.58".
+    // The name line's own small inline badge is DELIBERATELY dropped here (titledNameHtml(name,
+    // false)) - showing the same title twice on one card (a tiny inline badge AND this big panel)
+    // read as redundant clutter, not reinforcement; item 5(b)'s "sits immediately next to the
+    // name" fix is aimed at the leaderboard rows specifically (the only place Blake described that
+    // bug), which have no big panel of their own and keep the small badge exactly as before.
+    const st=EQUIP.title?titleBadgeStyle(EQUIP.title):null;
+    const titleHtml=st?`<div class="youTitlePanel" style="--titleBg:${esc(st.bg)};--titleInk:${esc(st.ink)};--titleRing:${esc(st.ring)}" aria-label="Equipped title: ${esc(EQUIP.title.name)}">${esc(st.letter)}</div>`:'';
     box.innerHTML=`<div class="youCardRow" id="youCardTap" role="button" tabindex="0" aria-label="Open Admin settings">
         <div class="acctAvatar" style="--acctBg:${colors.bg};--acctInk:${colors.ink}">${esc(letter)}</div>
-        <div class="youWho"><b>${titledNameHtml(name)}</b><div class="youStats" id="youStats"></div><div class="youKo" id="youKo"></div><div class="youStatsNote" id="youStatsNote"></div><div class="youRank" id="youRank"></div></div>
+        <div class="youWho"><b>${titledNameHtml(name,false)}</b><div class="youStats" id="youStats"></div><div class="youKo" id="youKo"></div><div class="youStatsNote" id="youStatsNote"></div><div class="youRank" id="youRank"></div></div>
+        ${titleHtml}
       </div>`;
     const tap=$('youCardTap');
     // 2026-07-27 (v0.45, Blake: "when you're signed in and you click your name plate at the top
@@ -13054,11 +13392,56 @@ function applyEquipped(){ applyEquippedPalette(); applyEquippedFelt(); }
 // JUST the name and leave the badge always fully painted - see that CSS comment for the full
 // root-cause writeup (a 320px screenshot review during this session's own testing caught the
 // badge disappearing entirely behind the name's ellipsis before this fix).
-function titledNameHtml(n){
-  if(!(isAccountReady()&&EQUIP.title&&n===ACCT.gameName))return `<span class="lbNameRow"><span class="lbNameText">${esc(n)}</span></span>`;
+// v0.58 (2026-07-30, Blake, item 5: "for the shark and nasty titles, the first initial for the
+// designation are the same letter... and even though the designations are different, the visual
+// representation currently doesn't reflect it"). Confirmed by direct reading before touching
+// anything: the badge letter was always `t.trim().charAt(0)` off the DISPLAY NAME ("Card Shark"
+// and "Certified Nasty" both start with C - a real collision) and .lbTitleBadge's own CSS (right
+// below) was ONE fixed rule (var(--gold) background, same for every title) - so the deeper bug
+// Blake's report points at is that none of the four titles was visually distinct from any other,
+// the letter collision is just the one place that was impossible to miss. Fix: keyed off
+// EQUIP.title.id (the server's own catalog ids, server/server.js - title_rookie/title_shark/
+// title_legend/title_nasty - never derived from the display-name string, so a future title can
+// never re-collide by accident the way two names starting with the same letter did here) rather
+// than deriving anything from `t`. A rising-rarity palette matching the shop's own cost ladder
+// (10/30/60/90 credits) - felt-and-gold-appropriate tones (bronze/pewter/deep purple/black-and-
+// crimson), not saturated app-UI colors - reusing the exact "small round badge, initial letter"
+// idiom .acctAvatar (§ STYLE/§ ACCOUNT SIGN-IN) already uses, including its own inkFor() contrast
+// helper for the two tiers that don't need a hand-picked ink color. New letters too (R/S/L/N,
+// not derived from the name) since Card Shark and Certified Nasty share a first letter no matter
+// what - S/N read clearly on their own and were judged better than leaving two badges sharing "C"
+// and relying on color alone to tell them apart. A future 5th title with no entry in this table
+// falls back to the ORIGINAL v0.51 behavior (derive the letter from the name, gold circle) - see
+// the `||` fallback below - so an unmapped title degrades gracefully instead of breaking.
+const TITLE_BADGE_STYLES={
+  title_rookie:{letter:'R',bg:'#8a5a2b',ring:'rgba(255,255,255,.32)'},      // bronze - humblest tier (10pts)
+  title_shark:{letter:'S',bg:'#93a1ac',ring:'rgba(255,255,255,.5)'},        // pewter/steel (30pts)
+  title_legend:{letter:'L',bg:'#6a3fa0',ring:'rgba(244,197,66,.55)'},       // deep purple, gold-tinted ring (60pts)
+  title_nasty:{letter:'N',bg:'#1c1114',ring:'#c81e3a',ink:'#ff6b7f'}        // black-and-crimson - most striking (90pts)
+};
+// title: an EQUIP.title-shaped object ({id,name,...}) or falsy. Returns {letter,bg,ink,ring} -
+// ink is looked up per-title above only where the default light/dark contrast pick (inkFor(),
+// § ACCOUNT SIGN-IN) wouldn't read as the intended tier (title_nasty's crimson-on-black is a
+// deliberate special case, not a contrast fix).
+function titleBadgeStyle(title){
+  const known=title&&TITLE_BADGE_STYLES[title.id];
+  if(known)return {letter:known.letter,bg:known.bg,ink:known.ink||inkFor(known.bg),ring:known.ring};
+  const t=(title&&title.name)||'';
+  return {letter:(t.trim().charAt(0)||'?').toUpperCase(),bg:'var(--gold)',ink:'#3a2c05',ring:'rgba(255,255,255,.35)'};
+}
+// v0.58: 2nd param, showBadge (default true) - the you card (renderYouCard(), § MENU) passes
+// false so its name line stays plain text; the you card shows the SAME title much larger via its
+// own new .youTitlePanel instead (see renderYouCard()'s own comment for why showing it twice on
+// that one card - once tiny inline, once as the big panel - was judged redundant clutter rather
+// than kept "for consistency" with the leaderboard rows, which have no such big panel of their
+// own and still need the small inline badge exactly as before). Every leaderboard call site is
+// unchanged (they never pass the 2nd argument, so showBadge stays true).
+function titledNameHtml(n,showBadge){
+  if(showBadge===undefined)showBadge=true;
+  if(!showBadge||!(isAccountReady()&&EQUIP.title&&n===ACCT.gameName))return `<span class="lbNameRow"><span class="lbNameText">${esc(n)}</span></span>`;
   const t=EQUIP.title.name;
-  const letter=esc((t.trim().charAt(0)||'?').toUpperCase());
-  return `<span class="lbNameRow"><span class="lbNameText">${esc(n)}</span><span class="lbTitleBadge" tabindex="0" role="button" aria-label="Title: ${esc(t)}" data-title="${esc(t)}">${letter}</span></span>`;
+  const st=titleBadgeStyle(EQUIP.title);
+  return `<span class="lbNameRow"><span class="lbNameText">${esc(n)}</span><span class="lbTitleBadge" tabindex="0" role="button" aria-label="Title: ${esc(t)}" data-title="${esc(t)}" style="--titleBg:${esc(st.bg)};--titleInk:${esc(st.ink)};--titleRing:${esc(st.ring)}">${esc(st.letter)}</span></span>`;
 }
 // Capture-phase (not the usual bubble phase) is the part that matters: it runs BEFORE the you
 // card's own #youCardTap onclick (§ MENU) or a future ancestor handler ever sees the click, so
