@@ -14,6 +14,7 @@
 		A11CE0032026072500000002 /* AppleSignInPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CE0022026072500000002 /* AppleSignInPlugin.swift */; };
 		A11CE0012026072500000001 /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CE0002026072500000001 /* ViewController.swift */; };
 		A11CE0032026072500000002 /* AppleSignInPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CE0022026072500000002 /* AppleSignInPlugin.swift */; };
+		A11CE0052026073000000003 /* IAPPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CE0042026073000000003 /* IAPPlugin.swift */; };
 		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
@@ -30,6 +31,7 @@
 		A11CE0022026072500000002 /* AppleSignInPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSignInPlugin.swift; sourceTree = "<group>"; };
 		A11CE0002026072500000001 /* ViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewController.swift; sourceTree = "<group>"; };
 		A11CE0022026072500000002 /* AppleSignInPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSignInPlugin.swift; sourceTree = "<group>"; };
+		A11CE0042026073000000003 /* IAPPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IAPPlugin.swift; sourceTree = "<group>"; };
 		504EC30C1FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		504EC30E1FED79650016851F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		504EC3111FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -87,6 +89,7 @@
 				A11CE0022026072500000002 /* AppleSignInPlugin.swift */,
 				A11CE0002026072500000001 /* ViewController.swift */,
 				A11CE0022026072500000002 /* AppleSignInPlugin.swift */,
+				A11CE0042026073000000003 /* IAPPlugin.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -226,6 +229,7 @@
 				A11CE0032026072500000002 /* AppleSignInPlugin.swift in Sources */,
 				A11CE0012026072500000001 /* ViewController.swift in Sources */,
 				A11CE0032026072500000002 /* AppleSignInPlugin.swift in Sources */,
+				A11CE0052026073000000003 /* IAPPlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -113,23 +113,25 @@ async function main() {
       const r = await buy(wally.sessionToken, "felt_burgundy");
       check(r.status === 200 && r.body.ok === true && r.body.purchased === "felt_burgundy",
         "W3 buying an affordable item succeeds: " + JSON.stringify(r.body));
-      check(r.body.wallet.spent === 15 && r.body.wallet.balance === 185,
-        "W3b spent/balance are exactly right (cost 15 of 200): " + JSON.stringify(r.body.wallet));
+      check(r.body.wallet.spent === 20 && r.body.wallet.balance === 180,
+        "W3b spent/balance are exactly right (cost 20 of 200, 2026-07-30 reprice): " + JSON.stringify(r.body.wallet));
       check(r.body.wallet.owned.includes("felt_burgundy"), "W3c ownership is recorded");
       const w = await wallet(wally.sessionToken);
-      check(w.body.spent === 15 && w.body.balance === 185 && w.body.owned.includes("felt_burgundy"),
+      check(w.body.spent === 20 && w.body.balance === 180 && w.body.owned.includes("felt_burgundy"),
         "W3d a fresh GET /account/wallet agrees with the purchase response");
       wBefore = w.body;
     }
 
     /* ===================== W4: an unaffordable purchase changes NOTHING ===================== */
     {
-      // palette_midnight costs 130; Wally's balance is 185, so buy one more affordable thing to
-      // bring the balance below it first (185 -> spend on title_nasty, cost 90 -> balance 95).
-      const first = await buy(wally.sessionToken, "title_nasty");
-      check(first.status === 200, "setup: a second real purchase to bring the balance below the next one being tested");
+      // 2026-07-30 reprice: palette_midnight costs 250 and Wally's balance is already below it
+      // (180), but a second real purchase is still made first so this case keeps proving a
+      // rejection AFTER a normal multi-purchase history (180 -> spend on title_rookie, cost 20
+      // -> balance 160).
+      const first = await buy(wally.sessionToken, "title_rookie");
+      check(first.status === 200, "setup: a second real purchase before the rejection being tested");
       const before = await wallet(wally.sessionToken);
-      const r = await buy(wally.sessionToken, "palette_midnight");   // costs 130, balance is 95
+      const r = await buy(wally.sessionToken, "palette_midnight");   // costs 250, balance is 160
       check(r.status === 409 && r.body.error === "cantafford",
         "W4 an unaffordable purchase is rejected: " + JSON.stringify(r.body));
       const after = await wallet(wally.sessionToken);
@@ -152,7 +154,7 @@ async function main() {
     {
       const before = await wallet(wally.sessionToken);
       const reqId = "retry-test-" + Date.now();
-      // Fired CONCURRENTLY, same requestId, same never-before-bought item (title_shark, cost 30) -
+      // Fired CONCURRENTLY, same requestId, same never-before-bought item (title_shark, cost 50) -
       // exactly a UI double-tap or a client retrying after a dropped reply.
       const [r1, r2] = await Promise.all([
         buy(wally.sessionToken, "title_shark", { requestId: reqId }),
@@ -162,8 +164,8 @@ async function main() {
       const oks = [r1, r2].filter((r) => r.status === 200 && r.body.ok === true);
       check(oks.length >= 1, "W6b and every 200 response reports the same purchase");
       const after = await wallet(wally.sessionToken);
-      check(after.body.spent === before.body.spent + 30,
-        "W6c the balance moved by EXACTLY one purchase's cost (30), not two: before=" + before.body.spent + " after=" + after.body.spent);
+      check(after.body.spent === before.body.spent + 50,
+        "W6c the balance moved by EXACTLY one purchase's cost (50), not two: before=" + before.body.spent + " after=" + after.body.spent);
       check(after.body.owned.filter((id) => id === "title_shark").length === 1, "W6d and title_shark is owned exactly once, not duplicated in the list");
       // A THIRD, separate call with the SAME requestId after the fact must also not re-charge.
       const r3 = await buy(wally.sessionToken, "title_shark", { requestId: reqId });
@@ -191,7 +193,7 @@ async function main() {
       const boardAfter = await board();
       const wallyEarnedAfter = boardAfter.Wally.hptsS + (boardAfter.Wally.hptsT || 0);
       const eeyoreEarnedAfter = boardAfter.Eeyore.hptsS + (boardAfter.Eeyore.hptsT || 0);
-      check(wallyEarnedAfter === wallyEarnedBefore, "W7c Wally's EARNED leaderboard total is byte-identical after spending 45 more points: still " + wallyEarnedAfter);
+      check(wallyEarnedAfter === wallyEarnedBefore, "W7c Wally's EARNED leaderboard total is byte-identical after spending 50 more points: still " + wallyEarnedAfter);
       check(eeyoreEarnedAfter === eeyoreEarnedBefore, "W7d and Eeyore's is untouched too (spending is per-account, obviously, but proven anyway)");
       check(JSON.stringify(boardBefore.Wally) === JSON.stringify(boardAfter.Wally),
         "W7e the ENTIRE leaderboard row for Wally (games/wins/points) is byte-identical before and after spending - spending never touches /leaderboard at all");
@@ -210,7 +212,7 @@ async function main() {
 
     /* ===================== W9: the namechange credit - consumable, and bypasses the cooldown once ===================== */
     {
-      // Give Eeyore enough points to buy two namechange credits (25 each), and prove buying the
+      // Give Eeyore enough points to buy two namechange credits (30 each), and prove buying the
       // SAME consumable item twice is allowed and stacks - unlike every other category (W5 above).
       await seed("Eeyore", { hg4t: 1, hptsT: 60 });
       const c1 = await buy(eeyore.sessionToken, "namechange_credit");

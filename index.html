@@ -509,6 +509,55 @@
                         to it - showing it twice on one card read as clutter, not reinforcement; see
                         HANDOFF.md "v0.58" for the full reasoning and every leaderboard-tab
                         screenshot. `#verTap` bumped `v0.57` -> `v0.58`.
+                    v0.59 (2026-07-30, Blake verbatim: "Now is the time! please add functionality
+                        for people to purchase things outright with real money (CC transaction) if
+                        they don't have enough credits earned or would simply just rather purchase
+                        instead of earning the credits. Make 10 credits be $1..." plus his items 2
+                        and 6 - see each site's own comment). THE REAL-MONEY RELEASE, five parts:
+                        - § REAL MONEY (new block right after findShopItem()): Apple In-App
+                          Purchase credit packs, iPhone app only (Apple forbids card/Stripe
+                          checkout for digital goods in-app - guideline 3.1.1; the website stays
+                          earning-only with one honest sentence). Consumable packs (50/$4.99,
+                          110/$9.99 +10%, 280/$24.99 +12%, 600/$49.99 +20% - all on Blake's own
+                          10-credits-per-dollar anchor) are the ONLY App Store products; "buy this
+                          item outright" offers the smallest pack covering the shortfall, buys it
+                          through Apple's sheet, the server verifies the SIGNED transaction
+                          (/account/iap/verify - nothing the client claims is trusted), and the
+                          ordinary credit purchase completes immediately; leftovers stay. The
+                          native side is app/ios/App/App/IAPPlugin.swift (window.Capacitor.Plugins
+                          .NastyIAP - probe-the-plugin pattern, same as AppleSignIn). THE FINISH
+                          DISCIPLINE (money-safety): a transaction is only finish()ed after the
+                          server confirms crediting; iapResubmitPending() (boot + Shop open +
+                          Admin-panel open) re-sends never-finished ones until it does - safe
+                          forever because the server's replay ledger credits each transaction
+                          exactly once. Money buttons are gold (.shopMoneyBtn) and always carry
+                          Apple's own localized displayPrice.
+                        - CREDITS EVERYWHERE (Blake's decision): every user-visible money-like
+                          "points"/"pts" string is now "credits" (wallet box, shop balance/buttons/
+                          confirms, cantafford toasts, guest note) - but LEADERBOARD standing
+                          language deliberately stays "points" (it measures earned game
+                          performance; money can never touch it - the win screen, rank lines,
+                          lbCaption and claim summaries are unchanged on purpose). The wallet box
+                          gains a "Credits bought" row, shown only once nonzero.
+                        - Item 2: #acctEquip's header is "Shop Customizations" (was
+                          "Personalizations") and refreshAcctEquip() now leads with the two
+                          consumable tokens (Nickname Change, Online Access) as REAL buyable rows -
+                          the same catItemRow()/shopRowClickHandler() machinery the Shop uses, plus
+                          a held-count line for the nickname token (opts.showHeld).
+                        - Item 6: the change-name flow is TWO buttons (Change name / Cancel; the
+                          standalone redeem button is deleted). Every rename needs an explicit
+                          accept: a lighter free-change heads-up (Blake's follow-up decision - the
+                          free change silently starts the 30-day lock), the verbatim-shaped
+                          token-redeem confirmation, or the buy-a-token offer (credits if
+                          affordable, real money on iPhone if not) - all staged into
+                          #acctNameConfirm; see the long comment above attemptAccountRename().
+                        - § LIVE RENAME (Blake: renames "take place right away - even mid game"):
+                          the server broadcasts an ADDITIVE playerRenamed on every successful
+                          rename (old clients ignore it via default:return - verified, and names
+                          are deliberately absent from gDigest() so no false resync is possible;
+                          PROTOCOL_VERSION unchanged); handleNetMessage's new case renames the
+                          live seat + plaque, and applyLocalRenameNow() does the same for an
+                          offline game on this phone. `#verTap` bumped `v0.58` -> `v0.59`.
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -2520,6 +2569,15 @@ button{font:inherit;cursor:pointer}
    treatment .acctWallet already uses (§ ACCOUNT) - a held token is good news, not a warning. */
 .acctNameCreditNote{font-size:12.5px;color:#e9f4ec;line-height:1.5;padding:8px 10px;
   border-radius:10px;background:rgba(244,197,66,.1);border:1px solid rgba(244,197,66,.2)}
+/* 2026-07-30 (v0.59, Blake's item 6): the change-name flow's staged in-place confirmations (the
+   free-change heads-up, the explicit token-redeem confirm, and the buy-a-token offer) all render
+   into one #acctNameConfirm box - same soft-gold info-box language as the note right above, with
+   a button row. Painted entirely by JS (showAcctNameConfirm(), § SHOP area) - never static. */
+.acctNameConfirm{font-size:13px;color:#ffe9a8;line-height:1.5;padding:10px;margin-top:6px;
+  border-radius:10px;background:rgba(40,28,0,.4);border:1px solid rgba(244,197,66,.35);
+  display:flex;flex-direction:column;gap:8px}
+.acctNameConfirmBtns{display:flex;gap:8px}
+.acctNameConfirmBtns .btn{flex:1;padding:8px;font-size:13px}
 /* 2026-07-26 (v0.36 item 3): the one-time name claim. Blake is opening a short window so people
    who have been playing for months can attach the record they already have to their new account.
    His rule: "only allowed to do this once and claim 1 name - no going back."
@@ -3018,12 +3076,23 @@ button{font:inherit;cursor:pointer}
 .shopSwatchRow{display:flex;gap:2px;flex:0 0 auto}
 .shopSwatch{width:14px;height:14px;border-radius:50%;border:1px solid rgba(255,255,255,.3);flex:0 0 auto}
 .shopSwatchFelt{width:22px;height:22px;border-radius:6px}
-.shopItemAction{flex:0 0 auto}
+.shopItemAction{flex:0 0 auto;display:flex;flex-direction:column;gap:6px;align-items:stretch}
 .shopItemAction .btn{padding:8px 12px;font-size:13px;white-space:nowrap}
 .shopConfirmRow{flex-basis:100%;display:flex;flex-direction:column;gap:8px;margin-top:2px;
   padding:10px;border-radius:10px;background:rgba(0,0,0,.25);font-size:13px;color:#ffe9a8}
 .shopConfirmBtns{display:flex;gap:8px}
 .shopConfirmBtns .btn{flex:1;padding:8px;font-size:13px}
+/* 2026-07-30 (v0.59) § REAL MONEY: the money button an unaffordable item offers (and the credit
+   pack rows' own Buy buttons). Gold-tinted on purpose - visually distinct from every
+   credits-only button so a real-dollar action can never be mistaken for a credit spend; the
+   label always carries Apple's own localized price. .shopMoneyRow is the confirm step for
+   "buy the covering pack, then finish this purchase" - same in-place confirm idiom as
+   .shopConfirmRow above (Apple's payment sheet is the final, authoritative confirmation on top). */
+.shopMoneyBtn{border-color:rgba(244,197,66,.7)!important;color:#ffdf8a!important}
+.shopMoneyRow{flex-basis:100%;display:flex;flex-direction:column;gap:8px;margin-top:2px;
+  padding:10px;border-radius:10px;background:rgba(40,28,0,.4);border:1px solid rgba(244,197,66,.35);
+  font-size:13px;color:#ffe9a8}
+.shopPacksHint{font-size:12.5px;color:#a9d2b5;margin:2px 0 6px}
 
 /* ---- v0.51 (Blake: "for the designations (ie rookie) you can buy in the shop, don't make this
    something that goes next to your name in the leaderboard. Make it more like a badge icon or
@@ -3200,7 +3269,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.58</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.59</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -3886,10 +3955,17 @@ button{font:inherit;cursor:pointer}
          spend - that's just for them to know)"). Hidden entirely for a guest - there is no wallet
          to show. Filled in (and re-fetched) by refreshAcctWallet(), § SHOP, called from
          openAccountPanel() every time this panel opens - never hand-edited past this shell. -->
+    <!-- 2026-07-30 (v0.59, Blake's decision): the word is CREDITS everywhere money-like numbers
+         are shown - "points" stays ONLY for leaderboard standing, which measures earned game
+         performance and is a separate concept real money can never touch. The ids keep their
+         old Pts names on purpose (renaming ids buys nothing and risks breaking JS references).
+         The new bought row is hidden until the account has actually bought credits with real
+         money (Apple In-App Purchase, iPhone app only) - see paintAcctWalletNumbers(), § SHOP. -->
     <div class="acctWallet hidden" id="acctWallet">
-      <div class="acctWalletRow"><span>Points earned</span><b id="acctPtsEarned">0</b></div>
-      <div class="acctWalletRow"><span>Points remaining</span><b id="acctPtsRemaining">0</b></div>
-      <div class="acctWalletNote">Earned always matches the leaderboard and never goes down as you spend. Remaining is what's left to spend in the Shop.</div>
+      <div class="acctWalletRow"><span>Credits earned</span><b id="acctPtsEarned">0</b></div>
+      <div class="acctWalletRow hidden" id="acctPtsBoughtRow"><span>Credits bought</span><b id="acctPtsBought">0</b></div>
+      <div class="acctWalletRow"><span>Credits remaining</span><b id="acctPtsRemaining">0</b></div>
+      <div class="acctWalletNote">Earned credits match your leaderboard points and never go down as you spend. Remaining is what's left to spend in the Shop.</div>
     </div>
     <!-- 2026-07-29 (v0.56, NEW - Blake: "add a greyed out section on the board settings [...]
          that is a token you can buy to play online. Saying that it's free for the first full
@@ -3928,11 +4004,20 @@ button{font:inherit;cursor:pointer}
          this is the ONE thing that rename actually meant (this narrower section - palettes/felts/
          titles specifically), NOT the panel itself or the button that opens it, both of which stay
          "Admin" (see the #accountOverlay markup comment above for the corrected story and
-         HANDOFF.md "v0.56"). -->
+         HANDOFF.md "v0.56").
+         2026-07-30 (v0.59, Blake verbatim: "Change personalization's to 'Shop Customizations' and
+         make sure that within the customizations tab you also have the ability for people to buy
+         nickname changes (that take place right away - even mid game) and online access/tokens. I
+         only see these in the shop button from the menu."): renamed again per that ask, and
+         refreshAcctEquip() (§ SHOP) now renders the two consumable tokens as REAL buyable rows at
+         the top of this section's body - the same catItemRow() rows the Shop itself uses (same
+         confirm step, same can't-afford handling, same real-money branch on iPhone), never a
+         second implementation. The "right away - even mid game" half is § LIVE RENAME (server
+         playerRenamed broadcast + this file's handleNetMessage case + applyLocalRenameNow()). -->
     <div class="acctEquip hidden" id="acctEquip">
       <button type="button" class="btn ghost acctRow acctEquipToggle" id="acctEquipToggleBtn"
         aria-expanded="false" aria-controls="acctEquipBody">
-        <span class="acctEquipHead">Personalizations</span>
+        <span class="acctEquipHead">Shop Customizations</span>
         <span class="acctEquipChevron" aria-hidden="true">&#9662;</span>
       </button>
       <div id="acctEquipBody" class="hidden"></div>
@@ -3997,17 +4082,16 @@ button{font:inherit;cursor:pointer}
            one or more. -->
       <div class="acctNameCreditNote hidden" id="acctNameCreditNote"></div>
       <div class="acctWarn" id="acctNameWarn"></div>
-      <!-- 2026-07-28 (v0.50, reworked v0.51): shown proactively whenever this account holds at
-           least one Nickname Change (renamed from "Name Change Token" - same underlying server
-           item id, namechange_credit, untouched) - see refreshNameCreditInfo()/useNameCreditNow(),
-           § SHOP. Tapping it saves whatever's currently typed WITH useNamechangeCredit:true - the
-           server only actually spends the token if the 30-day lock would otherwise have refused
-           the rename (confirmed by the server's own tests, HANDOFF.md "Server: points wallet
-           backend" W9), so this is safe to offer even before anyone knows whether the lock is
-           currently active. Hidden/reset every time this box opens or closes. -->
-      <button class="btn ghost hidden" id="btnAcctNameUseCredit" style="margin-top:6px"></button>
+      <!-- 2026-07-30 (v0.59, Blake's item 6, verbatim: "you currently have 3 buttons for nickname
+           change (cancel, change name, and redeem token). Get rid of the token button and just
+           have the first 2"). The v0.50/v0.51 always-visible redeem button (#btnAcctNameUseCredit)
+           is DELETED, not hidden - the whole flow now runs off the ONE "Change name" button, with
+           every branch (the free-change heads-up, the explicit token-redeem confirmation, the
+           buy-a-token offer when none is held) staged into #acctNameConfirm below, each needing
+           an explicit accept - see $('btnAcctNameSave').onclick and its helpers, § SHOP area. -->
+      <div class="acctNameConfirm hidden" id="acctNameConfirm"></div>
       <div class="acctNameBtns">
-        <button class="btn primary" id="btnAcctNameSave">Save name</button>
+        <button class="btn primary" id="btnAcctNameSave">Change name</button>
         <button class="btn ghost" id="btnAcctNameCancel">Cancel</button>
       </div>
     </div>
@@ -10860,6 +10944,22 @@ function handleNetMessage(m){
       if(m.reason==='onlineAccessRequired'||m.reason==='signInRequired'){ handleOnlineAccessRejection(m); return; }
       if(m.message)toast(m.message,3200);
       return;
+    case 'playerRenamed':
+      /* 2026-07-30 (v0.59) § LIVE RENAME - the server-pushed half of Blake's "nickname changes
+         take place right away - even mid game". The server broadcasts this (ADDITIVE - an older
+         build's `default: return;` below ignores it harmlessly, verified before shipping) the
+         moment any player in this room successfully renames their account. The lobby phase needs
+         nothing here (the server broadcasts a fresh 'lobby' snapshot alongside, and the 'lobby'
+         case above already repaints seats); this case handles the STARTED game: the seat name in
+         G plus the one place that renders it persistently (the corner plaque - turn bubbles and
+         the win screen build their text fresh from G.seats each time, so they pick the new name
+         up on their own). Deliberately NO digest concern: names are not part of gDigest(). */
+      if(typeof m.seat==='number'&&m.seat>=0&&G&&Array.isArray(G.seats)&&G.seats[m.seat]&&typeof m.name==='string'&&m.name){
+        G.seats[m.seat].name=m.name;
+        const nm=document.querySelector('#plaque-'+m.seat+' .nm');
+        if(nm)nm.textContent=m.name;
+      }
+      return;
     default: return;
   }
 }
@@ -12419,6 +12519,10 @@ function openAccountPanel(){
   const eqBody=$('acctEquipBody');
   if(eqBody)eqBody.classList.add('hidden');
   try{ refreshAcctEquip(); }catch(e){}
+  // 2026-07-30 (v0.59) § REAL MONEY: quietly drain any never-finished Apple transaction (see
+  // iapResubmitPending(), § SHOP) - a cheap no-op on the website and on a phone with nothing
+  // pending, and the panel is one of the natural "the player is looking at their credits" spots.
+  try{ iapResubmitPending(); }catch(e){}
 }
 $('btnAccount').onclick=openAccountPanel;
 $('btnMenuAdmin').onclick=openAccountPanel;   // v0.50: the menu's own Admin button - same panel, second door
@@ -12467,10 +12571,23 @@ function setChosenName(name){
 // different account entirely) can never linger for the split second before the fresh async
 // wallet check (refreshNameCreditInfo()) answers.
 function hideNameCreditOffer(){
-  const b=$('btnAcctNameUseCredit');
-  if(b)b.classList.add('hidden');
+  // v0.59: the standalone redeem button is gone (Blake's item 6) - this now resets the info note
+  // AND whatever staged confirmation (#acctNameConfirm) was mid-flow, so reopening the box can
+  // never show a stale question from a previous attempt.
   const n=$('acctNameCreditNote');
   if(n)n.classList.add('hidden');
+  hideAcctNameConfirm();
+}
+function hideAcctNameConfirm(){
+  const c=$('acctNameConfirm');
+  if(c){ c.classList.add('hidden'); c.innerHTML=''; }
+}
+function showAcctNameConfirm(html,wire){
+  const c=$('acctNameConfirm');
+  if(!c)return;
+  c.innerHTML=html;
+  c.classList.remove('hidden');
+  if(wire)try{ wire(c); }catch(e){}
 }
 function closeAccountNameEdit(){
   ACCT_NAME_MODE='local';
@@ -12537,11 +12654,10 @@ async function saveAccountName(raw,useCredit){
    for the one small helper that makes this a display-only rename. */
 let ACCT_NAME_CREDITS=0;
 async function refreshNameCreditInfo(){
-  const note=$('acctNameCreditNote'), btn=$('btnAcctNameUseCredit');
-  if(!note||!btn)return;
+  const note=$('acctNameCreditNote');
+  if(!note)return;
   note.textContent='Changing your name locks it for 30 days before you can change it again.';
   note.classList.remove('hidden');
-  btn.classList.add('hidden');
   if(!isAccountReady())return;
   const wr=await fetchWalletResult();
   if(!isAccountReady())return;   // signed out while this was in flight
@@ -12551,81 +12667,184 @@ async function refreshNameCreditInfo(){
   const credits=wr.ok?Math.max(0,Number(wr.wallet.namechangeCredits)||0):0;
   ACCT_NAME_CREDITS=credits;
   if(credits>0){
-    note.textContent=`You have ${credits} Nickname Change${credits===1?'':'s'}. Changing your name normally locks it for 30 days - a Nickname Change skips that wait once, right now, and then the 30-day lock starts again from today.`;
-    btn.textContent=`Use a Nickname Change now (${credits} left)`;
-    btn.classList.remove('hidden');
+    note.textContent=`You have ${credits} Nickname Change token${credits===1?'':'s'}. Changing your name normally locks it for 30 days - a token skips that wait once, and then the 30-day lock starts again from today.`;
   }
 }
-// The obvious, always-available redeem action (once the account holds at least one Nickname
-// Change) - saves WHATEVER's currently typed with useNamechangeCredit:true. Safe to offer even
-// when no cooldown is actually active: the server only spends the credit if the lock would have
-// refused the rename anyway (confirmed by the server's own tests, see this section's header
-// comment), so tapping this on a name that would have saved for free just... saves it for free,
-// and usedNamechangeCredit in the response says which one actually happened (see the toast below).
-async function useNameCreditNow(){
-  const inp=$('acctNameInput'), warn=$('acctNameWarn'), btn=$('btnAcctNameUseCredit');
-  const raw=(inp.value||'').slice(0,NAME_MAX).trim();
-  if(!raw){ warn.textContent='Type a name first.'; return; }
-  if(isBadName(raw)){ warn.textContent='Pick a nicer name.'; return; }
-  if(btn)btn.disabled=true;
+/* ==================== v0.59 (2026-07-30): the two-button change-name flow ====================
+   Blake's item 6, verbatim: "Get rid of the token button and just have the first 2 - but if they
+   don't have a token the change name button (when pressed) would tell them that and ask them to
+   purchase one with credits (if they have enough) or say they don't have enough... On the other
+   hand, if they have a token, once they click 'change name' they would get a confirmation saying
+   'to confirm, you're about to redeem x tokens, you currently have x and will have x after this
+   transaction. go to the shop to purchase more' or something like that, but they need to
+   explicitly accept this confirmation to officially redeem."
+   Plus Blake's follow-up decision (relayed 2026-07-30): a FREE change gets its own lighter
+   heads-up too - a free rename silently starts the 30-day lock, and burning the one free change
+   on a typo then means a paid token, so nothing renames without an explicit accept (the one
+   exception: a pure capitalization edit, which the server treats as a free label edit that never
+   touches the lock - warning about a lock it won't start would be a lie).
+
+   HOW THE BRANCHES ARE PICKED. The 30-day lock itself is judged locally only as a HINT
+   (ACCT.nameChangedAt, which /account/me and every sign-in already send) to choose which
+   confirmation to lead with - the server stays the only enforcer, and every path converges on
+   attemptAccountRename(), whose 429 handling catches any case the local hint got wrong (stale
+   clock, count changed on another phone, admin grant mid-flow). A token is also never spent
+   except through the explicit redeem confirmation, and even then the server only actually
+   consumes it if the lock would have refused the rename (proven by its own W9 tests) - so a
+   confirmation shown off a wrong local hint can never silently waste a token. */
+const NAME_LOCK_MS=30*24*60*60*1000;   // display-side hint only - the server enforces the real lock
+function nameLockLikelyActive(){ return !!(ACCT&&ACCT.nameChangedAt&&(Date.now()-ACCT.nameChangedAt)<NAME_LOCK_MS); }
+async function attemptAccountRename(raw,useCredit){
+  const warn=$('acctNameWarn');
   warn.textContent='Saving...';
-  const r=await saveAccountName(raw,true);
-  if(btn)btn.disabled=false;
-  if(r.status!==200||!r.body||!r.body.gameName){
-    warn.textContent=(r.body&&r.body.message)||"That name couldn't be saved. Try another one.";
+  const r=await saveAccountName(raw,useCredit);
+  if(r.status===200&&r.body&&r.body.gameName){
+    const oldName=ACCT.gameName;
+    ACCT.gameName=r.body.gameName;
+    // Keep the local lock hint honest: a REAL rename (not a capitalization edit) restarts the
+    // 30-day lock server-side right now, so mirror that instant here too.
+    if(oldName&&oldName.toLowerCase()!==r.body.gameName.toLowerCase())ACCT.nameChangedAt=Date.now();
+    setChosenName(r.body.gameName);   // one name everywhere: the board, the setup screen, the circle
+    // § LIVE RENAME (Blake: "take place right away - even mid game"): a LOCAL game on screen
+    // renames its seat instantly; an ONLINE game hears the server's own playerRenamed broadcast
+    // (handleNetMessage, § NET), which covers this phone and everyone else's alike.
+    try{ applyLocalRenameNow(oldName,r.body.gameName); }catch(e){}
+    hideNameCreditOffer();
+    closeAccountNameEdit();
+    renderAccountPanel();
+    toast('You are '+ACCT.gameName+(r.body.usedNamechangeCredit?' on the leaderboard. (Nickname Change token used)':' on the leaderboard.'));
     return;
   }
-  ACCT.gameName=r.body.gameName;
-  setChosenName(r.body.gameName);
-  hideNameCreditOffer();
-  closeAccountNameEdit();
-  renderAccountPanel();
-  toast('You are '+ACCT.gameName+(r.body.usedNamechangeCredit?' on the leaderboard. (Nickname Change used)':' on the leaderboard.'));
+  if(r.status===429&&r.body&&r.body.error==='cooldown'){
+    // The lock refused a plain rename. The 429 carries its own authoritative token count, so
+    // whichever offer shows next can never show a stale number.
+    warn.textContent='';
+    const credits=Math.max(0,Number(r.body.namechangeCredits)||0);
+    ACCT_NAME_CREDITS=credits;
+    if(credits>0)showNameTokenConfirm(raw,credits);
+    else showNameTokenPurchaseOffer(raw,r.body.message||'');
+    return;
+  }
+  warn.textContent=(r.body&&r.body.message)||"That name couldn't be saved. Try another one.";
 }
-$('btnAcctNameUseCredit').onclick=useNameCreditNow;
+// Blake's confirmation, in his own requested shape - the ONLY place a token redeem is sent from,
+// and it never happens without this explicit accept.
+function showNameTokenConfirm(raw,credits){
+  showAcctNameConfirm(
+    `<span>To confirm: you're about to redeem 1 Nickname Change token. You have ${credits} and will have ${credits-1} after this change. You can get more in the Shop.</span>
+    <div class="acctNameConfirmBtns"><button class="btn primary" id="acctNameTokenYes">Redeem and change my name</button>
+      <button class="btn ghost" id="acctNameTokenNo">Never mind</button></div>`,()=>{
+    $('acctNameTokenYes').onclick=()=>{ hideAcctNameConfirm(); attemptAccountRename(raw,true); };
+    $('acctNameTokenNo').onclick=()=>hideAcctNameConfirm();
+  });
+}
+/* No token held. Three honest shapes, best first: buy one with credits (enough held), buy the
+   covering credit pack with real money (iPhone app, per Blake's item 7 answering item 6's own
+   "more on this last piece later"), or the plain "you earn credits by winning" sentence when
+   neither is possible. Every purchase path funnels BACK into showNameTokenConfirm() - buying a
+   token never silently redeems it; the explicit accept still happens. */
+async function showNameTokenPurchaseOffer(raw,serverMsg){
+  await fetchShopCatalog();
+  const item=findShopItem('namechange_credit');
+  const wr=await fetchWalletResult();
+  if($('acctNameEdit').classList.contains('hidden'))return;   // box closed while fetching
+  const bal=wr.ok?Math.max(0,Number(wr.wallet.balance)||0):0;
+  const cost=item?item.cost:30;
+  const lockLine=serverMsg?esc(serverMsg)+' ':'';
+  if(wr.ok&&item&&bal>=cost){
+    showAcctNameConfirm(
+      `<span>${lockLine}You don't have a Nickname Change token - one costs ${cost} credits, and you have ${bal}.</span>
+      <div class="acctNameConfirmBtns"><button class="btn primary" id="acctNameBuyYes">Buy one for ${cost} credits</button>
+        <button class="btn ghost" id="acctNameBuyNo">Never mind</button></div>`,()=>{
+      $('acctNameBuyYes').onclick=async()=>{
+        hideAcctNameConfirm();
+        await buyItem(item);   // the normal credit purchase - the exact same path the Shop uses
+        const w2=await fetchWalletResult();
+        const c2=w2.ok?Math.max(0,Number(w2.wallet.namechangeCredits)||0):0;
+        if(c2>0)showNameTokenConfirm(raw,c2);
+      };
+      $('acctNameBuyNo').onclick=()=>hideAcctNameConfirm();
+    });
+    return;
+  }
+  const pack=(item&&iapCanOfferPacks())?iapCoveringPack(cost-bal):null;
+  if(pack){
+    showAcctNameConfirm(
+      `<span>${lockLine}You don't have a Nickname Change token, and one costs ${cost} credits - you have ${bal}. Buy the ${pack.credits}-credit pack for ${esc(iapPackPrice(pack))} (a real-money purchase through Apple) and change your name right away? Leftover credits stay on your account.</span>
+      <div class="acctNameConfirmBtns"><button class="btn primary" id="acctNameMoneyYes">Buy for ${esc(iapPackPrice(pack))}</button>
+        <button class="btn ghost" id="acctNameMoneyNo">Never mind</button></div>`,()=>{
+      $('acctNameMoneyYes').onclick=()=>{
+        hideAcctNameConfirm();
+        buyCreditPack(pack,async()=>{
+          await buyItem(item);
+          const w2=await fetchWalletResult();
+          const c2=w2.ok?Math.max(0,Number(w2.wallet.namechangeCredits)||0):0;
+          if(c2>0)showNameTokenConfirm(raw,c2);
+        });
+      };
+      $('acctNameMoneyNo').onclick=()=>hideAcctNameConfirm();
+    });
+    return;
+  }
+  showAcctNameConfirm(
+    `<span>${lockLine}You don't have a Nickname Change token - one costs ${cost} credits, and you have ${bal}. You earn credits by winning games.${nastyIapPlugin()?'':' You can also buy credits in the iPhone app.'}</span>
+    <div class="acctNameConfirmBtns"><button class="btn ghost" id="acctNameOfferOk">OK</button></div>`,()=>{
+    $('acctNameOfferOk').onclick=()=>hideAcctNameConfirm();
+  });
+}
+/* v0.59 § LIVE RENAME - the LOCAL-game half of Blake's "take place right away - even mid game".
+   An offline/solo game on screen carries the account's name as a plain seat-name snapshot taken
+   at game start; this renames that seat (and its corner plaque) the instant the account rename
+   succeeds. Deliberately a no-op for an ONLINE game: there the server is authoritative and its
+   playerRenamed broadcast (handleNetMessage, § NET) updates this phone and everyone else's the
+   same way - doing it here too would just race the broadcast for no benefit. Matches on the OLD
+   name among human seats only: in a local game exactly one seat is the signed-in human (the
+   v0.42 seat-picker design), so this can never rename a CPU or someone else. */
+function applyLocalRenameNow(oldName,newName){
+  if(!newName||!oldName||NET.online)return;
+  if(!G||!Array.isArray(G.seats))return;
+  let touched=false;
+  for(let s=0;s<G.seats.length;s++){
+    const seat=G.seats[s];
+    if(seat&&seat.type==='human'&&seat.name===oldName){
+      seat.name=newName;
+      touched=true;
+      const nm=document.querySelector('#plaque-'+s+' .nm');
+      if(nm)nm.textContent=newName;
+    }
+  }
+  if(touched){ try{ scheduleSaveOffline(); }catch(e){} }
+}
 $('btnAcctNameSave').onclick=async ()=>{
   const inp=$('acctNameInput'), warn=$('acctNameWarn');
   const raw=(inp.value||'').slice(0,NAME_MAX).trim();
-  // v0.51: no longer hides the proactive Nickname Change note/button here - a plain Save attempt
-  // (this button) never touches that offer's visibility one way or the other; it's shown/hidden
-  // by refreshNameCreditInfo() on open and hideNameCreditOffer() on close, full stop.
   if(!raw){ warn.textContent='Type a name first.'; return; }
   // Same two rules the setup screen and the join screen already enforce - one implementation
   // (§ NAMES), so the account panel can never be a back door around them.
   if(isBadName(raw)){ warn.textContent='Pick a nicer name.'; return; }
   if(ACCT_NAME_MODE==='account'&&ACCT&&ACCT.token){
-    // Account names belong to the SERVER: it enforces "first claim wins" and the 30-day rename
-    // cooldown, and it answers in plain English. Whatever it says goes straight onto the warning
-    // line rather than being reworded here.
-    warn.textContent='Saving...';
-    const r=await saveAccountName(raw,false);
-    if(r.status===429&&r.body&&r.body.error==='cooldown'){
-      // 2026-07-28 (v0.50; reworded v0.51): the cooldown blocked a PLAIN rename. The Nickname
-      // Change offer itself is no longer built here - it is shown proactively the instant this
-      // box opened (refreshNameCreditInfo(), § SHOP) and its button (useNameCreditNow()) already
-      // works off whatever's currently typed. This branch's only job now is the honest reason on
-      // the warning line, plus a belt-and-suspenders refresh of the credit count/button in case
-      // the proactive check hadn't finished yet (or was itself unreachable) when Save was tapped -
-      // the 429 response carries its own namechangeCredits, so this can never show a stale count.
-      warn.textContent=r.body.message||"You can't change your name again yet.";
-      const credits=Math.max(0,Number(r.body.namechangeCredits)||0);
-      ACCT_NAME_CREDITS=credits;
-      const b=$('btnAcctNameUseCredit');
-      if(credits>0&&b){
-        b.textContent=`Use a Nickname Change now (${credits} left)`;
-        b.classList.remove('hidden');
-      }
+    warn.textContent='';
+    hideAcctNameConfirm();
+    // A pure capitalization edit never touches the 30-day lock (the server treats it as a free
+    // label edit) - warning about a lock it won't start would be wrong, so it just saves.
+    const sameFold=!!(ACCT.gameName&&raw.toLowerCase()===ACCT.gameName.toLowerCase());
+    if(sameFold){ attemptAccountRename(raw,false); return; }
+    if(nameLockLikelyActive()){
+      // The lock is (very likely) active - skip the free-change heads-up and lead with the right
+      // question. attemptAccountRename()'s own 429 handling still catches a wrong local hint.
+      if(ACCT_NAME_CREDITS>0)showNameTokenConfirm(raw,ACCT_NAME_CREDITS);
+      else attemptAccountRename(raw,false);
       return;
     }
-    if(r.status!==200||!r.body||!r.body.gameName){
-      warn.textContent=(r.body&&r.body.message)||"That name couldn't be saved. Try another one.";
-      return;
-    }
-    ACCT.gameName=r.body.gameName;
-    setChosenName(r.body.gameName);   // one name everywhere: the board, the setup screen, the circle
-    closeAccountNameEdit();
-    renderAccountPanel();
-    toast('You are '+ACCT.gameName+' on the leaderboard.');
+    // The lighter free-change heads-up (Blake's decision) - explicit accept, gentler tone than
+    // the token-redeem confirmation above.
+    showAcctNameConfirm(
+      `<span>This one is free, but you won't be able to change your name again for 30 days without a Nickname Change token.</span>
+      <div class="acctNameConfirmBtns"><button class="btn primary" id="acctNameFreeYes">Change my name</button>
+        <button class="btn ghost" id="acctNameFreeNo">Never mind</button></div>`,()=>{
+      $('acctNameFreeYes').onclick=()=>{ hideAcctNameConfirm(); attemptAccountRename(raw,false); };
+      $('acctNameFreeNo').onclick=()=>hideAcctNameConfirm();
+    });
     return;
   }
   // 2026-07-27 (v0.45 audit): everything from here down is the retired 'local' mode - dead code
@@ -13138,6 +13357,13 @@ if(accountsAvailableHere()&&loadAcctToken()){
     // under a build older than v0.42). See openNicknameGate(), § ACCOUNT SIGN-IN.
     try{ if(isSignedIn()&&!ACCT.gameName)openNicknameGate(); }catch(e){}
     try{ renderAccountRows(); updateAccountButton(); renderYouCard(); }catch(e){}
+    // 2026-07-30 (v0.59) § REAL MONEY: the boot-time pending-transaction drain - the third leg of
+    // the crash-recovery loop (Shop open and Admin-panel open are the other two). Deliberately
+    // AFTER the signed-in answer lands (a pending Apple transaction can only be credited to a
+    // signed-in account), fire-and-forget, and a total no-op on the website (no plugin) or with
+    // nothing pending. The shop catalog is needed for nothing here - the server reads everything
+    // from the signed transaction itself.
+    try{ iapResubmitPending(); }catch(e){}
   }).catch(()=>{ ACCT_BOOT_CHECKING=false; try{ renderYouCard(); }catch(e){} });
 }
 renderAccountRows();
@@ -13484,8 +13710,177 @@ async function fetchWalletResult(){
   return {unreachable:true};
 }
 function findShopItem(id){
-  const items=(SHOP_STATE&&SHOP_STATE.catalog&&SHOP_STATE.catalog.items)||[];
+  // v0.59: falls back to the shared catalog cache - purchases can start from the Admin panel's
+  // Shop Customizations section now, where SHOP_STATE may never have been filled in this session.
+  const items=(SHOP_STATE&&SHOP_STATE.catalog&&SHOP_STATE.catalog.items)
+    ||(SHOP_CATALOG_CACHE&&SHOP_CATALOG_CACHE.items)||[];
   return items.find(i=>i.id===id)||null;
+}
+
+/* ==================== 2026-07-30 (v0.59) § REAL MONEY - credit packs via Apple ====================
+   Blake's ask, verbatim: "Now is the time! please add functionality for people to purchase things
+   outright with real money (CC transaction) if they don't have enough credits earned or would
+   simply just rather purchase instead of earning the credits. Make 10 credits be $1..."
+
+   THE SHAPE. Real money on iPhone means Apple In-App Purchase (Apple forbids a card/Stripe
+   checkout inside an iOS app for digital goods - App Review Guideline 3.1.1), and the products
+   are a small fixed ladder of CONSUMABLE CREDIT PACKS (one App Store product per shop item would
+   mean an Apple review round trip every time Blake adds a felt). "Buy this item outright" is
+   presented exactly as Blake described anyway: an unaffordable item offers the smallest pack
+   that covers the shortfall, buys that pack through Apple's own payment sheet, the game server
+   verifies the SIGNED transaction and credits the wallet, and then the ordinary credit purchase
+   completes immediately. Leftover credits stay on the account. Credits bought with money ARE
+   just credits - they spend through the exact same buyItem()/buyOnlineAccess() paths as earned
+   ones; nothing about spending is forked.
+
+   WHERE IT WORKS. nastyIapPlugin() is the app's own local StoreKit 2 plugin
+   (app/ios/App/App/IAPPlugin.swift) - literally "is that plugin here", the same probe-the-plugin
+   pattern appleSignInPlugin() established, so the WEBSITE (no plugin) degrades to earning-only
+   with one honest sentence, and a browser test can stub window.Capacitor.Plugins.NastyIAP to
+   drive the whole flow. isAvailable() additionally reports Apple's canMakePayments (false under
+   parental controls), in which case no money UI is shown at all.
+
+   THE FINISH DISCIPLINE - the part that protects real money. purchase() deliberately does NOT
+   finish the Apple transaction; this file only calls finish() AFTER the game server confirms the
+   credits landed (ok or alreadyProcessed). If anything dies in between - app crash, dead network,
+   server hiccup - the transaction is still pending on this phone, and iapResubmitPending()
+   (called at boot, on Shop open, and on Admin-panel open) re-sends it until the server answers.
+   The server's replay ledger makes resubmission always safe: one transaction can credit exactly
+   once, ever, and a resubmission of an already-credited one answers alreadyProcessed so this
+   side knows finishing is safe. A double-tap can't double-buy either way (IAP_BUSY below, plus
+   Apple's own sheet).
+
+   PRICES SHOWN ARE APPLE'S OWN: getProducts() returns the localized displayPrice ("$4.99"),
+   which is what every money button shows - required by Apple, and the payment sheet itself is
+   the real confirmation step. The server-sent pack.usd is only the fallback label for the
+   split second before product data loads. */
+function nastyIapPlugin(){ return (CAP&&CAP.Plugins&&CAP.Plugins.NastyIAP)||null; }
+let IAP_AVAILABLE=null;    // null = not probed yet; true/false once isAvailable() has answered
+let IAP_PRODUCTS={};       // productId -> Apple's product info (displayPrice etc), cached for the session
+let IAP_BUSY=false;        // one money purchase in flight at a time - same idiom as SHOP_BUSY
+let IAP_RESUBMIT_BUSY=false;
+function iapPacks(){
+  // Same catalog-cache fallback as findShopItem() - the Admin panel needs packs without the
+  // Shop overlay ever having opened.
+  const cat=(SHOP_STATE&&SHOP_STATE.catalog&&Array.isArray(SHOP_STATE.catalog.creditPacks))?SHOP_STATE.catalog
+    :((SHOP_CATALOG_CACHE&&Array.isArray(SHOP_CATALOG_CACHE.creditPacks))?SHOP_CATALOG_CACHE:null);
+  const packs=cat?cat.creditPacks:[];
+  return packs.slice().sort((a,b)=>a.credits-b.credits);
+}
+function iapCanOfferPacks(){ return IAP_AVAILABLE===true&&isAccountReady()&&iapPacks().length>0; }
+// The smallest pack whose credits cover `shortfall` - or the biggest pack if nothing alone does
+// (better than offering nothing; the player sees the pack size before Apple's sheet either way).
+function iapCoveringPack(shortfall){
+  const need=Math.max(1,Number(shortfall)||0);
+  const packs=iapPacks();
+  for(const p of packs)if(p.credits>=need)return p;
+  return packs.length?packs[packs.length-1]:null;
+}
+function iapPackPrice(pack){
+  const known=pack&&IAP_PRODUCTS[pack.productId];
+  if(known&&known.displayPrice)return known.displayPrice;
+  return '$'+(Math.round((pack&&pack.usd||0)*100)/100).toFixed(2);
+}
+// The bonus label, derived from Blake's own 10-credits-per-dollar anchor rather than hardcoded,
+// so retuning a pack server-side re-labels itself here. 0 for the base pack by construction.
+function iapPackBonusPct(pack){
+  if(!pack||!pack.usd)return 0;
+  return Math.max(0,Math.round((pack.credits/(pack.usd*10)-1)*100));
+}
+async function iapProbe(){
+  if(IAP_AVAILABLE!==null)return;
+  const plug=nastyIapPlugin();
+  if(!plug){ IAP_AVAILABLE=false; return; }
+  try{ const r=await plug.isAvailable(); IAP_AVAILABLE=!!(r&&r.available); }
+  catch(e){ IAP_AVAILABLE=false; }
+}
+async function iapLoadProducts(){
+  const plug=nastyIapPlugin();
+  if(!plug||IAP_AVAILABLE!==true)return;
+  const ids=iapPacks().map(p=>p.productId).filter(id=>!IAP_PRODUCTS[id]);
+  if(!ids.length)return;
+  try{
+    const r=await plug.getProducts({productIds:ids});
+    for(const p of ((r&&r.products)||[]))if(p&&p.productId)IAP_PRODUCTS[p.productId]=p;
+  }catch(e){ /* stale/no product data just means the usd fallback label - never an error state */ }
+}
+/* One money purchase, end to end. `followUp` (optional) runs only after the credits are
+   confirmed on the account - it is how "buy this item outright" chains straight into the normal
+   credit purchase (buyItem/buyOnlineAccess) without a second tap. */
+async function buyCreditPack(pack,followUp){
+  if(IAP_BUSY||!isAccountReady()||!pack)return;
+  const plug=nastyIapPlugin();
+  if(!plug)return;
+  IAP_BUSY=true;
+  let res=null;
+  try{ res=await plug.purchase({productId:pack.productId}); }
+  catch(e){ IAP_BUSY=false; toast("That purchase couldn't be completed."); return; }
+  if(!res||res.state==='cancelled'){ IAP_BUSY=false; return; }   // backing out of Apple's sheet is a choice, not an error
+  if(res.state==='pending'){
+    // Ask to Buy - a parent has to approve first. The approved transaction shows up later in
+    // the pending list, which iapResubmitPending() drains automatically.
+    IAP_BUSY=false;
+    toast("This purchase is waiting for approval. The credits will be added automatically once it's approved.");
+    return;
+  }
+  if(res.state!=='purchased'||!res.jws){ IAP_BUSY=false; toast("That purchase couldn't be completed."); return; }
+  const vr=await accountFetch('/account/iap/verify',{auth:ACCT.token,jws:res.jws});
+  if(vr.status===200&&vr.body&&vr.body.ok){
+    try{ await plug.finish({transactionId:res.transactionId}); }catch(e){}
+    if(vr.body.wallet){
+      if(SHOP_STATE.wallet)SHOP_STATE.wallet=vr.body.wallet;
+      try{ paintAcctWalletNumbers(vr.body.wallet); }catch(e){}
+    }
+    const added=(vr.body.creditsAdded!=null?vr.body.creditsAdded:pack.credits);
+    if(added>0)toast(added+' credit'+(added===1?'':'s')+' added to your account.');
+    paintShop();
+    IAP_BUSY=false;
+    if(followUp){ try{ await followUp(); }catch(e){} }
+    return;
+  }
+  IAP_BUSY=false;
+  if(vr.status===409&&vr.body&&vr.body.error==='alreadyused'){
+    // This receipt already credited a DIFFERENT account (two accounts on one phone). Not
+    // finished on purpose - whoever owns those credits keeps them; nothing to retry here.
+    toast("That purchase was already applied to a different account.");
+    return;
+  }
+  // Apple accepted the payment but the game server couldn't confirm it - the transaction is NOT
+  // finished, so it survives on this phone and iapResubmitPending() keeps re-sending it until
+  // the server answers. Replay protection server-side makes that retry always safe.
+  toast("Your payment went through, but the credits couldn't be added yet. They'll be added automatically - reopen the Shop in a moment.");
+}
+/* The crash-recovery loop: any Apple transaction this phone never finished (see the FINISH
+   DISCIPLINE note above) is re-presented to the server until it confirms, then finished. Runs
+   quietly at boot and whenever the Shop or the Admin panel opens; a phone with nothing pending
+   does one cheap native call and stops. */
+async function iapResubmitPending(){
+  if(IAP_RESUBMIT_BUSY||!isAccountReady())return;
+  const plug=nastyIapPlugin();
+  if(!plug)return;
+  IAP_RESUBMIT_BUSY=true;
+  try{
+    const pend=await plug.getPending();
+    let added=0, wallet=null;
+    for(const t of ((pend&&pend.transactions)||[])){
+      if(!t||!t.jws)continue;
+      const vr=await accountFetch('/account/iap/verify',{auth:ACCT.token,jws:t.jws});
+      if(vr.status===200&&vr.body&&vr.body.ok){
+        try{ await plug.finish({transactionId:t.transactionId}); }catch(e){}
+        added+=vr.body.creditsAdded||0;
+        if(vr.body.wallet)wallet=vr.body.wallet;
+      }
+      // Anything else (server unreachable, refused): leave the transaction pending and try
+      // again next time - never finish a transaction the server hasn't confirmed.
+    }
+    if(wallet){
+      if(SHOP_STATE.wallet)SHOP_STATE.wallet=wallet;
+      try{ paintAcctWalletNumbers(wallet); }catch(e){}
+      paintShop();
+    }
+    if(added>0)toast(added+' credit'+(added===1?'':'s')+' from an earlier purchase just landed in your account.');
+  }catch(e){}
+  IAP_RESUBMIT_BUSY=false;
 }
 
 // ---- the Admin panel's points-earned / points-remaining box (Blake's ask, § ACCOUNT) ----
@@ -13501,6 +13896,13 @@ function paintAcctWalletNumbers(wallet){
   const earnedEl=$('acctPtsEarned'), remEl=$('acctPtsRemaining');
   if(earnedEl)earnedEl.textContent=wallet.lifetimeEarned;
   if(remEl)remEl.textContent=wallet.balance;
+  // 2026-07-30 (v0.59): credits bought with real money (the server's additive purchasedCredits
+  // field - an older server simply never sends it). Shown only once it's nonzero: a family
+  // member who never spends a dollar never sees a money row at all.
+  const boughtRow=$('acctPtsBoughtRow'), boughtEl=$('acctPtsBought');
+  const bought=Math.max(0,Number(wallet.purchasedCredits)||0);
+  if(boughtRow)boughtRow.classList.toggle('hidden',bought<=0);
+  if(boughtEl)boughtEl.textContent=bought;
 }
 async function refreshAcctWallet(){
   const box=$('acctWallet');
@@ -13822,7 +14224,11 @@ let SHOP_BUSY=false;
 function shopDisplayName(item){
   return (item&&item.id==='namechange_credit')?'Nickname Change':(item?item.name:'');
 }
-function catItemRow(item,wallet){
+// v0.59: `opts.showHeld` (the Admin panel's Shop Customizations rows only) adds a "You have N"
+// line for the nickname token - the count IS the actionable information there (see the v0.51
+// comment above for why the SHOP deliberately does not show it: in the shop it read as a false
+// affordability warning; in the panel it sits right where the token gets redeemed).
+function catItemRow(item,wallet,opts){
   const owned=Array.isArray(wallet.owned)&&wallet.owned.includes(item.id);
   const equippedId=EQUIP[item.category]?EQUIP[item.category].id:null;
   const isEquipped=owned&&equippedId===item.id;
@@ -13834,6 +14240,10 @@ function catItemRow(item,wallet){
     swatch=`<span class="shopSwatch shopSwatchFelt" style="background:${item.c}"></span>`;
   }
   const metaBits=[];
+  if(opts&&opts.showHeld&&item.id==='namechange_credit'){
+    const held=Math.max(0,Number(wallet.namechangeCredits)||0);
+    metaBits.push('You have '+held);
+  }
   let actionHtml;
   // 2026-07-29 (v0.57): was `item.category==='namechange'` - widened to `item.consumable` so the
   // online_month item (also consumable:true, see SHOP_CATALOG server-side) gets the exact same
@@ -13845,25 +14255,46 @@ function catItemRow(item,wallet){
   // consumables into walletNamechangeCredits/walletOnlineMonths instead, never walletOwned), so
   // `owned` is always false for both today - but this stays the right, defensive, DRY check.
   if(item.consumable){
-    actionHtml=`<button class="btn primary shopBuyBtn" data-id="${item.id}" ${canAfford?'':'disabled'}>Buy - ${item.cost} pts</button>`;
+    actionHtml=`<button class="btn primary shopBuyBtn" data-id="${item.id}" ${canAfford?'':'disabled'}>Buy - ${item.cost} credits</button>`;
   }else if(owned){
     metaBits.push('Owned');
     actionHtml=isEquipped
       ?`<button class="btn primary shopEquipBtn" data-id="${item.id}" aria-label="Equipped - tap to remove">Equipped</button>`
       :`<button class="btn ghost shopEquipBtn" data-id="${item.id}">Equip</button>`;
   }else{
-    actionHtml=`<button class="btn primary shopBuyBtn" data-id="${item.id}" ${canAfford?'':'disabled'}>Buy - ${item.cost} pts</button>`;
+    actionHtml=`<button class="btn primary shopBuyBtn" data-id="${item.id}" ${canAfford?'':'disabled'}>Buy - ${item.cost} credits</button>`;
   }
   const dispName=shopDisplayName(item);
+  /* 2026-07-30 (v0.59) § REAL MONEY: an item you can't afford is no longer just a dead disabled
+     button (Blake's ask). When money purchases are available (iPhone app, signed in, Apple says
+     payments are allowed), the row grows a gold "Buy with $X" button offering the SMALLEST credit
+     pack that covers the shortfall, and its own in-place confirm (.shopMoneyRow) spells out the
+     whole deal in credits AND dollars before Apple's own payment sheet confirms the charge:
+     pack bought -> server credits the wallet -> the ordinary credit purchase completes
+     immediately -> leftovers stay. On the website (no plugin) the button simply never renders -
+     the disabled credits button reads exactly as it did in v0.58. */
+  let moneyHtml='', moneyRow='';
+  const buyable=item.consumable||!owned;
+  if(buyable&&!canAfford&&iapCanOfferPacks()){
+    const pack=iapCoveringPack(item.cost-wallet.balance);
+    if(pack){
+      moneyHtml=`<button class="btn ghost shopMoneyBtn" data-id="${item.id}">Buy with ${esc(iapPackPrice(pack))}</button>`;
+      moneyRow=`<div class="shopMoneyRow hidden" data-id="${item.id}">
+        <span>${esc(dispName)} costs ${item.cost} credits and you have ${wallet.balance}. Buy the ${pack.credits}-credit pack for ${esc(iapPackPrice(pack))} (a real-money purchase through Apple) and complete this right away? Leftover credits stay on your account.</span>
+        <div class="shopConfirmBtns"><button class="btn primary shopMoneyYes" data-id="${item.id}" data-pid="${esc(pack.productId)}">Buy for ${esc(iapPackPrice(pack))}</button>
+          <button class="btn ghost shopMoneyNo" data-id="${item.id}">Cancel</button></div>
+      </div>`;
+    }
+  }
   return `<div class="shopItem" data-id="${item.id}">
     <div class="shopItemInfo">${swatch}<div class="shopItemText"><div class="shopItemName">${esc(dispName)}</div>
       ${metaBits.length?`<div class="shopItemMeta">${esc(metaBits.join(' · '))}</div>`:''}</div></div>
-    <div class="shopItemAction">${actionHtml}</div>
+    <div class="shopItemAction">${actionHtml}${moneyHtml}</div>
     <div class="shopConfirmRow hidden" data-id="${item.id}">
-      <span>Buy ${esc(dispName)} for ${item.cost} point${item.cost===1?'':'s'}? Spending can't be undone.</span>
+      <span>Buy ${esc(dispName)} for ${item.cost} credit${item.cost===1?'':'s'}? Spending can't be undone.</span>
       <div class="shopConfirmBtns"><button class="btn primary shopConfirmYes" data-id="${item.id}">Confirm</button>
         <button class="btn ghost shopConfirmNo" data-id="${item.id}">Cancel</button></div>
-    </div>
+    </div>${moneyRow}
   </div>`;
 }
 // 2026-07-29 (v0.57, Blake: "make sure the online play token is available for purchase in the
@@ -13903,7 +14334,7 @@ function paintShop(){
     return;
   }
   if(st.phase==='guest'){
-    balBox.innerHTML=`<div class="shopGuestNote">Signing in is what earns and holds your points - your spendable balance lives on your account, not this phone.</div>
+    balBox.innerHTML=`<div class="shopGuestNote">Signing in is what earns and holds your credits - your spendable balance lives on your account, not this phone.</div>
       ${accountsAvailableHere()?'<button class="btn primary" id="shopSignInBtn" style="margin-top:10px">Sign in with Apple</button>':''}`;
     body.innerHTML='';
     const sb=$('shopSignInBtn');
@@ -13919,10 +14350,35 @@ function paintShop(){
   }
   // 'ready'
   const wallet=st.wallet;
-  balBox.innerHTML=`<div class="shopBalanceMain">${wallet.balance} point${wallet.balance===1?'':'s'} to spend</div>
-    <div class="shopBalanceSub">${wallet.lifetimeEarned} earned lifetime · ${wallet.spent} spent so far</div>`;
+  // 2026-07-30 (v0.59): "credits" everywhere (Blake's decision), and the bought-with-money total
+  // rides the sub line once it exists - the server's additive purchasedCredits field.
+  const bought=Math.max(0,Number(wallet.purchasedCredits)||0);
+  balBox.innerHTML=`<div class="shopBalanceMain">${wallet.balance} credit${wallet.balance===1?'':'s'} to spend</div>
+    <div class="shopBalanceSub">${wallet.lifetimeEarned} earned lifetime${bought>0?` · ${bought} bought`:''} · ${wallet.spent} spent so far</div>`;
   const items=st.catalog.items;
   let html='';
+  /* 2026-07-30 (v0.59) § REAL MONEY: the credit packs section leads the shop. On the iPhone app
+     (plugin present, payments allowed, signed in) each pack is a real Buy button carrying
+     Apple's own localized price - tapping one goes straight to Apple's payment sheet, which is
+     the confirmation step. On the website the same catalog data renders as one honest sentence
+     instead (Blake's decision: the website stays earning-only for now). The "10 credits = $1"
+     anchor is stated right in the header - Blake's own pricing rule, made visible. */
+  const packs=iapPacks();
+  if(packs.length&&iapCanOfferPacks()){
+    html+=`<div class="shopCatHead">Buy credits - 10 credits = $1</div>
+      <div class="shopPacksHint">Credits work the same whether you earn them or buy them. Bigger packs carry a bonus.</div>`;
+    html+=packs.map(p=>{
+      const bonus=iapPackBonusPct(p);
+      return `<div class="shopItem" data-pid="${esc(p.productId)}">
+        <div class="shopItemInfo"><div class="shopItemText"><div class="shopItemName">${p.credits} credits</div>
+          ${bonus>0?`<div class="shopItemMeta">+${bonus}% bonus</div>`:''}</div></div>
+        <div class="shopItemAction"><button class="btn primary shopMoneyBtn shopPackBtn" data-pid="${esc(p.productId)}">${esc(iapPackPrice(p))}</button></div>
+      </div>`;
+    }).join('');
+  }else if(packs.length&&!nastyIapPlugin()){
+    html+=`<div class="shopCatHead">Buy credits - 10 credits = $1</div>
+      <div class="shopPacksHint">Buying credits with real money is available in the iPhone app. On the website you earn credits by winning games.</div>`;
+  }
   SHOP_CATEGORY_LABELS.forEach(([cat,label])=>{
     const list=items.filter(i=>i.category===cat);
     if(!list.length)return;
@@ -13944,12 +14400,38 @@ async function openShopOverlay(){
   if(!wr.ok){ SHOP_STATE={phase:'wallet-unreachable',catalog,wallet:null}; paintShop(); return; }
   SHOP_STATE={phase:'ready',catalog,wallet:wr.wallet};
   paintShop();
+  // 2026-07-30 (v0.59) § REAL MONEY: after the shop is painted and usable, quietly (a) probe the
+  // native purchase plugin + load Apple's localized prices, repainting once they're known, and
+  // (b) drain any pending never-finished transactions. Both no-ops on the website; neither ever
+  // blocks the shop from opening.
+  (async()=>{
+    try{
+      await iapProbe();
+      if(seq!==SHOP_LOAD_SEQ)return;
+      if(IAP_AVAILABLE===true){ await iapLoadProducts(); if(seq===SHOP_LOAD_SEQ)paintShop(); }
+      iapResubmitPending();
+    }catch(e){}
+  })();
 }
+/* v0.59: these used to be scoped to #shopBody only - the Admin panel's Shop Customizations
+   section (§ ACCOUNT) now renders the same catItemRow() markup, so the selectors are global.
+   Safe by the one-overlay-at-a-time invariant (§ OVERLAY LAYER): the Shop and the Admin panel
+   are never on screen together, and toggling rows inside a hidden container is inert. A credit
+   confirm and a money confirm can never show together either - each opener hides the other. */
 function showShopConfirm(id){
-  document.querySelectorAll('#shopBody .shopConfirmRow').forEach(r=>r.classList.toggle('hidden',r.dataset.id!==id));
+  document.querySelectorAll('.shopConfirmRow').forEach(r=>r.classList.toggle('hidden',r.dataset.id!==id));
+  document.querySelectorAll('.shopMoneyRow').forEach(r=>r.classList.add('hidden'));
 }
 function hideShopConfirm(id){
-  const r=document.querySelector(`#shopBody .shopConfirmRow[data-id="${id}"]`);
+  const r=document.querySelector(`.shopConfirmRow[data-id="${id}"]`);
+  if(r)r.classList.add('hidden');
+}
+function showShopMoneyConfirm(id){
+  document.querySelectorAll('.shopMoneyRow').forEach(r=>r.classList.toggle('hidden',r.dataset.id!==id));
+  document.querySelectorAll('.shopConfirmRow').forEach(r=>r.classList.add('hidden'));
+}
+function hideShopMoneyConfirm(id){
+  const r=document.querySelector(`.shopMoneyRow[data-id="${id}"]`);
   if(r)r.classList.add('hidden');
 }
 // Equip/unequip is purely local - no server round trip, no cost, reversible any time (this is a
@@ -13993,28 +14475,49 @@ async function refreshAcctEquip(){
   const body=$('acctEquipBody');
   if(body)body.innerHTML='<div class="acctEquipMsg">Loading your items...</div>';
   const [catalog,wr]=await Promise.all([fetchShopCatalog(),fetchWalletResult()]);
+  // 2026-07-30 (v0.59) § REAL MONEY: the token rows below carry the same money branch the Shop's
+  // rows do, so the native-purchase probe + Apple's localized prices must be known before the
+  // paint. Both resolve instantly on the website (no plugin) and are cached for the session.
+  try{ await iapProbe(); if(IAP_AVAILABLE===true)await iapLoadProducts(); }catch(e){}
   if(!isAccountReady()){ box.classList.add('hidden'); return; }   // signed out while the fetch was in flight
   if(!body)return;
   if(!catalog||!wr.ok){
     body.innerHTML=`<div class="acctEquipMsg">Couldn't load your items right now.</div>`;
     return;
   }
+  let html='';
+  /* 2026-07-30 (v0.59, Blake verbatim: "within the customizations tab you also have the ability
+     for people to buy nickname changes ... and online access/tokens. I only see these in the shop
+     button from the menu"). The two consumable tokens lead this section as REAL buyable rows -
+     the exact catItemRow() rows the Shop renders (same confirm step, same disabled-when-broke
+     button, same real-money branch on iPhone), through the same shopRowClickHandler() delegation,
+     so this can never behave differently from the Shop. The nickname row additionally shows the
+     held count (opts.showHeld - actionable exactly here, see catItemRow()'s own comment). The
+     Online Access box directly above this section stays the detailed status/countdown view; this
+     row is the quick "buy one right here" Blake asked for. */
+  const tokens=catalog.items.filter(i=>i.consumable);
+  if(tokens.length){
+    html+=`<div class="acctEquipCatHead">Tokens</div>`;
+    html+=tokens.map(i=>catItemRow(i,wr.wallet,{showHeld:true})).join('');
+  }
   const owned=Array.isArray(wr.wallet.owned)?wr.wallet.owned:[];
   // 2026-07-29 (v0.57): was `i.category!=='namechange'` - widened to `!i.consumable` for the same
   // reason catItemRow() above widened its own check: online_month is ALSO consumable (never
   // equippable board settings, always spent outright), so it must be excluded from this
-  // Personalizations/equip list the same way namechange tokens already were, or a purchased Online
+  // equip list the same way namechange tokens already were, or a purchased Online
   // Access token would wrongly show up here as something to "equip."
   const items=catalog.items.filter(i=>!i.consumable&&owned.includes(i.id));
   if(!items.length){
-    // Blake: "if they own nothing, say so plainly and point at the Shop."
-    body.innerHTML=`<div class="acctEquipMsg">You don't own any palettes, felts, or titles yet - the Shop is where you get them.</div>
+    // Blake: "if they own nothing, say so plainly and point at the Shop." (v0.59: now shown
+    // BELOW the token rows rather than instead of them - owning no cosmetics never hides the
+    // buyable tokens Blake explicitly asked to see here.)
+    html+=`<div class="acctEquipMsg" style="margin-top:8px">You don't own any palettes, felts, or titles yet - the Shop is where you get them.</div>
       <div class="bigBtns" style="margin-top:8px"><button class="btn ghost" id="btnAcctEquipShop">Open the Shop</button></div>`;
+    body.innerHTML=html;
     const b=$('btnAcctEquipShop');
     if(b)b.onclick=()=>{ closeOverlay('accountOverlay'); openShopOverlay(); };
     return;
   }
-  let html='';
   SHOP_CATEGORY_LABELS.forEach(([cat,label])=>{
     const list=items.filter(i=>i.category===cat);
     if(!list.length)return;
@@ -14062,7 +14565,10 @@ function acctEquipReset(cat){
 }
 // Event delegation on the one container that gets rewritten (#acctEquipBody) - the same "one
 // listener, not a fresh bind per repaint" idiom #shopBody already uses, § SHOP.
+// 2026-07-30 (v0.59): shopRowClickHandler() runs first - this container renders real buy rows
+// (the two consumable tokens, Blake's item 2) through the exact same handler the Shop uses.
 $('acctEquipBody').addEventListener('click',e=>{
+  if(shopRowClickHandler(e))return;
   const eqBtn=e.target.closest('.acctEquipBtn');
   if(eqBtn){ acctEquipToggle(eqBtn.dataset.id); return; }
   const resetBtn=e.target.closest('.acctEquipResetBtn');
@@ -14092,8 +14598,25 @@ async function buyItem(item){
   SHOP_BUSY=false;
   if(r.status===200&&r.body&&r.body.ok){
     if(SHOP_STATE.wallet)SHOP_STATE.wallet=r.body.wallet;
+    // 2026-07-30 (v0.59): purchases can start from the Admin panel's Shop Customizations section
+    // now, not just the Shop overlay - so a success repaints BOTH surfaces (each repaint is a
+    // cheap no-op when its surface isn't on screen). An online-month purchase also refreshes the
+    // entitlement cache straight from this response's own additive onlineAccess field - no
+    // second round trip, same rule buyOnlineAccess() follows.
+    if(r.body.onlineAccess){
+      ONLINE_STATUS_CACHE={data:r.body.onlineAccess,fetchedAt:Date.now()};
+      try{ renderYouCard(); }catch(e){}
+      try{ paintOnlineOverlayNote(); }catch(e){}
+    }
+    try{ if(r.body.wallet)paintAcctWalletNumbers(r.body.wallet); }catch(e){}
     toast(shopDisplayName(item)+' purchased!');
     paintShop();
+    try{
+      if($('accountOverlay')&&!$('accountOverlay').classList.contains('hidden')){
+        refreshAcctEquip();
+        if(item.category==='online')refreshAcctOnline();
+      }
+    }catch(e){}
     return;
   }
   if(r.status===409&&r.body&&r.body.error==='alreadyowned'){
@@ -14104,7 +14627,7 @@ async function buyItem(item){
   }
   if(r.status===409&&r.body&&r.body.error==='cantafford'){
     if(r.body.wallet&&SHOP_STATE.wallet)SHOP_STATE.wallet=r.body.wallet;
-    toast(`You need ${r.body.cost} points for that, but you only have ${r.body.balance}.`);
+    toast(`You need ${r.body.cost} credits for that, but you only have ${r.body.balance}.`);
     paintShop();
     return;
   }
@@ -14124,21 +14647,53 @@ async function buyItem(item){
   toast("Couldn't reach the shop. Check your connection and try again.");
   paintShop();
 }
-// Event delegation on the one container that gets rewritten - avoids re-binding a fresh listener
-// on every paintShop() call (which rebuilds #shopBody's innerHTML from scratch every time).
-$('shopBody').addEventListener('click',e=>{
+/* 2026-07-30 (v0.59): the buy/confirm/money clicks are one shared handler now, because the SAME
+   catItemRow() rows render in TWO rewritten containers - #shopBody (the Shop) and #acctEquipBody
+   (the Admin panel's Shop Customizations section, § ACCOUNT) - and duplicating this logic per
+   container is exactly how the two would drift apart. Returns true when it consumed the click so
+   each container's own listener can fall through to its container-specific buttons. */
+function shopRowClickHandler(e){
   const buyBtn=e.target.closest('.shopBuyBtn');
-  if(buyBtn&&!buyBtn.disabled){ showShopConfirm(buyBtn.dataset.id); return; }
+  if(buyBtn&&!buyBtn.disabled){ showShopConfirm(buyBtn.dataset.id); return true; }
   const yesBtn=e.target.closest('.shopConfirmYes');
   if(yesBtn){
     const id=yesBtn.dataset.id;
     hideShopConfirm(id);
     const item=findShopItem(id);
     if(item)buyItem(item);
-    return;
+    return true;
   }
   const noBtn=e.target.closest('.shopConfirmNo');
-  if(noBtn){ hideShopConfirm(noBtn.dataset.id); return; }
+  if(noBtn){ hideShopConfirm(noBtn.dataset.id); return true; }
+  // § REAL MONEY. Order matters: a credit-pack row's button carries BOTH .shopPackBtn and
+  // .shopMoneyBtn (for the gold styling), so the pack check must run first.
+  const packBtn=e.target.closest('.shopPackBtn');
+  if(packBtn){
+    const pack=iapPacks().find(p=>p.productId===packBtn.dataset.pid);
+    if(pack)buyCreditPack(pack);   // Apple's own payment sheet is the confirmation step
+    return true;
+  }
+  const moneyBtn=e.target.closest('.shopMoneyBtn');
+  if(moneyBtn&&moneyBtn.dataset.id){ showShopMoneyConfirm(moneyBtn.dataset.id); return true; }
+  const moneyYes=e.target.closest('.shopMoneyYes');
+  if(moneyYes){
+    const id=moneyYes.dataset.id;
+    hideShopMoneyConfirm(id);
+    const item=findShopItem(id);
+    const pack=iapPacks().find(p=>p.productId===moneyYes.dataset.pid);
+    // The whole "buy it outright" chain: pack through Apple -> server credits -> the ordinary
+    // credit purchase of the item the player actually wanted, automatically.
+    if(item&&pack)buyCreditPack(pack,()=>buyItem(item));
+    return true;
+  }
+  const moneyNo=e.target.closest('.shopMoneyNo');
+  if(moneyNo){ hideShopMoneyConfirm(moneyNo.dataset.id); return true; }
+  return false;
+}
+// Event delegation on the one container that gets rewritten - avoids re-binding a fresh listener
+// on every paintShop() call (which rebuilds #shopBody's innerHTML from scratch every time).
+$('shopBody').addEventListener('click',e=>{
+  if(shopRowClickHandler(e))return;
   const eqBtn=e.target.closest('.shopEquipBtn');
   if(eqBtn){
     const item=findShopItem(eqBtn.dataset.id);

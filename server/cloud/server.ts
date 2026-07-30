@@ -80,6 +80,13 @@
 // deno-lint-ignore-file no-explicit-any
 import { createEngine } from "./engine.js";
 import { getApnsStats, sendTurnPush } from "./apns.ts";
+// 2026-07-30 § REAL-MONEY CREDIT PACKS - node:crypto/node:buffer are used ONLY by the Apple IAP
+// verifier (X509Certificate parsing + ES256 signature checks over the x5c chain in a signed
+// transaction). Everything else in this file stays on WebCrypto as before. Deno implements both
+// modules natively (verified locally on deno 2.9 before this shipped - the exact
+// chain-verification calls below run identically under node and deno).
+import { Buffer } from "node:buffer";
+import { X509Certificate, verify as nodeCryptoVerify } from "node:crypto";
 
 const PORT = Number(Deno.env.get("NASTY_PORT") ?? 8484);
 const KV_PATH = Deno.env.get("NASTY_KV_PATH") || undefined; // undefined = Deploy's managed KV / local default
@@ -870,6 +877,13 @@ function accountsOnlyBoard(): boolean { return ACCOUNTS_ENABLED && LEADERBOARD_A
  * SERVER-OWNED CATALOG - the client is never trusted for prices; a purchase re-reads the cost
  * from this array every time. Byte-identical item list to server.js's SHOP_CATALOG - keep both in
  * sync if it ever changes, same convention as pointsForWinServer/buildResultEntriesServer.
+ *
+ * 2026-07-30 REPRICE - twin of server.js's (see its catalog comment for the full writeup).
+ * Blake's ask, verbatim: "Make 10 credits be $1 ... Change all shop credit pricing to align with
+ * this structure (always divideable by 10) and make them aspirational!" Every cost is divisible
+ * by 10 on the 10-credits-per-dollar anchor. Owned items and balances are untouched by the
+ * reprice - walletOwned stores ids and walletSpent stores prices already paid, never catalog
+ * prices re-read later.
  * ===================================================================================== */
 // Palette entries carry colors4/colors6 - full replacement sets for the client's
 // COLORS4/COLORS6 arrays, same {name,c,dark} shape per seat (the per-seat NAME feeds
@@ -898,7 +912,7 @@ const ONLINE_FREE_EXTRA_MONTHS = 1;
 const ONLINE_ENTITLEMENT_ENFORCED = accountsEnvFlagOn(Deno.env.get("NASTY_ONLINE_ENTITLEMENT_ENFORCED"), "1");
 const SHOP_CATALOG: ShopItem[] = [
   {
-    id: "palette_sunset", category: "palette", name: "Sunset", cost: 40,
+    id: "palette_sunset", category: "palette", name: "Sunset", cost: 50,
     colors4: [
       { name: "Coral", c: "#e8604c", dark: "#9c3423" },
       { name: "Dusk", c: "#3e4e7e", dark: "#232e4e" },
@@ -915,7 +929,7 @@ const SHOP_CATALOG: ShopItem[] = [
     ],
   },
   {
-    id: "palette_ocean", category: "palette", name: "Ocean Breeze", cost: 40,
+    id: "palette_ocean", category: "palette", name: "Ocean Breeze", cost: 50,
     colors4: [
       { name: "Teal", c: "#2a9d8f", dark: "#175a52" },
       { name: "Deep Blue", c: "#2d4f8f", dark: "#182c55" },
@@ -932,7 +946,7 @@ const SHOP_CATALOG: ShopItem[] = [
     ],
   },
   {
-    id: "palette_forest", category: "palette", name: "Forest", cost: 60,
+    id: "palette_forest", category: "palette", name: "Forest", cost: 80,
     colors4: [
       { name: "Moss", c: "#6f9a3d", dark: "#425e1f" },
       { name: "Sky", c: "#7fb6d9", dark: "#41708f" },
@@ -949,7 +963,7 @@ const SHOP_CATALOG: ShopItem[] = [
     ],
   },
   {
-    id: "palette_royal", category: "palette", name: "Royal", cost: 90,
+    id: "palette_royal", category: "palette", name: "Royal", cost: 150,
     colors4: [
       { name: "Emerald", c: "#1f8a5c", dark: "#0f5236" },
       { name: "Sapphire", c: "#3a55b4", dark: "#1f2f6e" },
@@ -966,7 +980,7 @@ const SHOP_CATALOG: ShopItem[] = [
     ],
   },
   {
-    id: "palette_midnight", category: "palette", name: "Midnight", cost: 130,
+    id: "palette_midnight", category: "palette", name: "Midnight", cost: 250,
     colors4: [
       { name: "Cyan", c: "#3fc5d1", dark: "#20707a" },
       { name: "Violet", c: "#7a63d9", dark: "#463693" },
@@ -982,21 +996,140 @@ const SHOP_CATALOG: ShopItem[] = [
       { name: "Amber", c: "#f0a832", dark: "#a06d10" },
     ],
   },
-  { id: "felt_burgundy", category: "felt", name: "Burgundy Felt", cost: 15, c: "#6b2433", dark: "#35101a" },
-  { id: "felt_navy", category: "felt", name: "Navy Felt", cost: 15, c: "#23456b", dark: "#0e1f35" },
-  { id: "felt_charcoal", category: "felt", name: "Charcoal Felt", cost: 20, c: "#3a4048", dark: "#16191d" },
-  { id: "felt_sunflower", category: "felt", name: "Sunflower Felt", cost: 20, c: "#c99a1e", dark: "#6b4e08" },
-  { id: "title_rookie", category: "title", name: "Rookie", cost: 10 },
-  { id: "title_shark", category: "title", name: "Card Shark", cost: 30 },
-  { id: "title_legend", category: "title", name: "Legend", cost: 60 },
-  { id: "title_nasty", category: "title", name: "Certified Nasty", cost: 90 },
-  { id: "namechange_credit", category: "namechange", name: "Name Change Token", cost: 25, consumable: true },
+  { id: "felt_burgundy", category: "felt", name: "Burgundy Felt", cost: 20, c: "#6b2433", dark: "#35101a" },
+  { id: "felt_navy", category: "felt", name: "Navy Felt", cost: 20, c: "#23456b", dark: "#0e1f35" },
+  { id: "felt_charcoal", category: "felt", name: "Charcoal Felt", cost: 30, c: "#3a4048", dark: "#16191d" },
+  { id: "felt_sunflower", category: "felt", name: "Sunflower Felt", cost: 30, c: "#c99a1e", dark: "#6b4e08" },
+  { id: "title_rookie", category: "title", name: "Rookie", cost: 20 },
+  { id: "title_shark", category: "title", name: "Card Shark", cost: 50 },
+  { id: "title_legend", category: "title", name: "Legend", cost: 100 },
+  { id: "title_nasty", category: "title", name: "Certified Nasty", cost: 200 },
+  { id: "namechange_credit", category: "namechange", name: "Name Change Token", cost: 30, consumable: true },
   // online - a month of online-play entitlement. Consumable/stackable exactly like the
   // namechange credit above (never "alreadyowned" - see § ONLINE ACCESS below), not a one-time
   // unlock. Twin of server.js's.
   { id: ONLINE_ACCESS_ITEM_ID, category: "online", name: "Online Access (1 month)", cost: ONLINE_ACCESS_COST, consumable: true },
 ];
 function shopItemById(id: string): ShopItem | null { return SHOP_CATALOG.find((it) => it.id === id) || null; }
+
+/* =======================================================================================
+ * 2026-07-30 § REAL-MONEY CREDIT PACKS (Apple In-App Purchase) - twin of server.js's block of
+ * the same name; read that one for the full design writeup (Blake's verbatim ask, why credit
+ * packs instead of per-item IAP products, the 10-credits-per-dollar anchor, why `usd` is
+ * display-only). CREDIT_PACKS is BYTE-IDENTICAL to server.js's - keep both in sync, same rule
+ * as SHOP_CATALOG.
+ * ===================================================================================== */
+type CreditPack = { productId: string; credits: number; usd: number; name: string };
+const IAP_BUNDLE_ID = "com.pangman.nasty";
+const CREDIT_PACKS: CreditPack[] = [
+  { productId: "com.pangman.nasty.credits50", credits: 50, usd: 4.99, name: "50 Credits" },
+  { productId: "com.pangman.nasty.credits110", credits: 110, usd: 9.99, name: "110 Credits" },
+  { productId: "com.pangman.nasty.credits280", credits: 280, usd: 24.99, name: "280 Credits" },
+  { productId: "com.pangman.nasty.credits600", credits: 600, usd: 49.99, name: "600 Credits" },
+];
+function creditPackByProductId(id: string): CreditPack | null { return CREDIT_PACKS.find((p) => p.productId === id) || null; }
+const IAP_ENABLED = accountsEnvFlagOn(Deno.env.get("NASTY_IAP_ENABLED"), "1");
+// Sandbox acceptance defaults ON so TestFlight can exercise the whole flow against this (the
+// only) production server - see server.js's matching comment for the trade Blake must decide
+// before the real App Store launch (a TestFlight tester's sandbox purchases mint real credits).
+const IAP_ALLOW_SANDBOX = accountsEnvFlagOn(Deno.env.get("NASTY_IAP_ALLOW_SANDBOX"), "1");
+const IAP_ALLOW_PRODUCTION = accountsEnvFlagOn(Deno.env.get("NASTY_IAP_ALLOW_PRODUCTION"), "1");
+const IAP_JWS_MAX_CHARS = 32768;
+/* Apple Root CA - G3, DER, base64 - the pinned trust anchor; byte-identical constant to
+   server.js's (see there for the download provenance + published-fingerprint check).
+   NASTY_IAP_ROOT_CA_B64 exists ONLY for the test suite's throwaway root. */
+const APPLE_ROOT_CA_G3_B64 =
+  "MIICQzCCAcmgAwIBAgIILcX8iNLFS5UwCgYIKoZIzj0EAwMwZzEbMBkGA1UEAwwSQXBwbGUgUm9vdCBDQSAtIEcz" +
+  "MSYwJAYDVQQLDB1BcHBsZSBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTETMBEGA1UECgwKQXBwbGUgSW5jLjELMAkG" +
+  "A1UEBhMCVVMwHhcNMTQwNDMwMTgxOTA2WhcNMzkwNDMwMTgxOTA2WjBnMRswGQYDVQQDDBJBcHBsZSBSb290IENB" +
+  "IC0gRzMxJjAkBgNVBAsMHUFwcGxlIENlcnRpZmljYXRpb24gQXV0aG9yaXR5MRMwEQYDVQQKDApBcHBsZSBJbmMu" +
+  "MQswCQYDVQQGEwJVUzB2MBAGByqGSM49AgEGBSuBBAAiA2IABJjpLz1AcqTtkyJygRMc3RCV8cWjTnHcFBbZDuWm" +
+  "BSp3ZHtfTjjTuxxEtX/1H7YyYl3J6YRbTzBPEVoA/VhYDKX1DyxNB0cTddqXl5dvMVztK517IDvYuVTZXpmkOlEK" +
+  "MaNCMEAwHQYDVR0OBBYEFLuw3qFYM4iapIqZ3r6966/ayySrMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQD" +
+  "AgEGMAoGCCqGSM49BAMDA2gAMGUCMQCD6cHEFl4aXTQY2e3v9GwOAEZLuN+yRhHFD/3meoyhpmvOwgPUnPWTxnS4" +
+  "at+qIxUCMG1mihDK1A3UT82NQz60imOlM27jbdoXt2QfyFMm+YhidDkLF1vLUagM6BgD56KyKA==";
+function iapPinnedRootDer(): Buffer {
+  const b64 = Deno.env.get("NASTY_IAP_ROOT_CA_B64") || APPLE_ROOT_CA_G3_B64;
+  return Buffer.from(b64, "base64");
+}
+// Apple's marker OIDs on the leaf/intermediate certs - twin of server.js's constants (belt and
+// braces ON TOP of the pinned root, checked by scanning the raw DER; see there).
+const IAP_LEAF_OID_DER = Buffer.from([0x06, 0x0a, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x63, 0x64, 0x06, 0x0b, 0x01]);
+const IAP_INTERMEDIATE_OID_DER = Buffer.from([0x06, 0x0a, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x63, 0x64, 0x06, 0x02, 0x01]);
+function iapB64uToBuf(s: string): Buffer {
+  return Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+}
+type IapVerifyResult = { ok: true; payload: Record<string, unknown> } | { ok: false; reason: string };
+/* The verifier - twin of server.js's verifyAppleSignedJws(), same order of checks and same
+   reasons: alg gate first (kills alg-confusion before any key material is touched), pinned-root
+   byte compare, per-cert validity windows, cert-by-cert chain signatures, Apple marker OIDs,
+   then the ES256 JWS signature against the LEAF key only. Local verification (not a
+   server-to-Apple call) because App Store Server Notifications V2 arrive as this same signed
+   shape and must be verified locally anyway - one verifier covers both, and no App Store
+   Connect API key material ever needs to live on this server. */
+function verifyAppleSignedJws(raw: unknown): IapVerifyResult {
+  if (typeof raw !== "string" || !raw || raw.length > IAP_JWS_MAX_CHARS) return { ok: false, reason: "badjws" };
+  const parts = raw.split(".");
+  if (parts.length !== 3) return { ok: false, reason: "badjws" };
+  let header: Record<string, unknown>;
+  try { header = JSON.parse(iapB64uToBuf(parts[0]).toString("utf8")); }
+  catch { return { ok: false, reason: "badjws" }; }
+  if (!header || header.alg !== "ES256" || !Array.isArray(header.x5c)) return { ok: false, reason: "badalg" };
+  if (header.x5c.length < 2 || header.x5c.length > 5) return { ok: false, reason: "badchain" };
+  let certs: X509Certificate[];
+  try { certs = (header.x5c as unknown[]).map((c) => new X509Certificate(Buffer.from(String(c), "base64"))); }
+  catch { return { ok: false, reason: "badchain" }; }
+  const root = certs[certs.length - 1];
+  if (Buffer.compare(root.raw as Buffer, iapPinnedRootDer()) !== 0) return { ok: false, reason: "untrustedroot" };
+  const now = Date.now();
+  for (let i = 0; i < certs.length; i++) {
+    const from = Date.parse(certs[i].validFrom), to = Date.parse(certs[i].validTo);
+    if (!(Number.isFinite(from) && Number.isFinite(to) && from <= now && now <= to)) return { ok: false, reason: "certexpired" };
+    if (i < certs.length - 1) {
+      try { if (!certs[i].verify(certs[i + 1].publicKey)) return { ok: false, reason: "badchain" }; }
+      catch { return { ok: false, reason: "badchain" }; }
+    }
+  }
+  if (!(certs[0].raw as Buffer).includes(IAP_LEAF_OID_DER)) return { ok: false, reason: "badleafoid" };
+  if (!(certs[1].raw as Buffer).includes(IAP_INTERMEDIATE_OID_DER)) return { ok: false, reason: "badinteroid" };
+  let sigOk = false;
+  try {
+    sigOk = nodeCryptoVerify(
+      "sha256",
+      Buffer.from(parts[0] + "." + parts[1], "ascii"),
+      { key: certs[0].publicKey, dsaEncoding: "ieee-p1363" },
+      iapB64uToBuf(parts[2]),
+    );
+  } catch { sigOk = false; }
+  if (!sigOk) return { ok: false, reason: "badsig" };
+  let payload: Record<string, unknown>;
+  try { payload = JSON.parse(iapB64uToBuf(parts[1]).toString("utf8")); }
+  catch { return { ok: false, reason: "badpayload" }; }
+  if (!payload || typeof payload !== "object") return { ok: false, reason: "badpayload" };
+  return { ok: true, payload };
+}
+function iapEnvironmentAllowed(env: string): boolean {
+  if (env === "Sandbox") return IAP_ALLOW_SANDBOX;
+  if (env === "Production") return IAP_ALLOW_PRODUCTION;
+  return false;
+}
+/* THE REPLAY LEDGER, KV-shaped: one key per Apple transaction id, ["iap", environment,
+   transactionId], NEVER expiring (unlike the 24-hour purchaseKey requestIds) - a transaction
+   replayed a month later must still be refused, forever. Where server.js leans on Node's single
+   thread for check-then-credit safety, this server CANNOT (Deploy runs many isolates), so the
+   claim of the transaction id and the crediting of the account are ONE atomic KV commit - see
+   the /account/iap/verify route. */
+type IapLedgerEntry = {
+  uid: string; productId: string; credits: number; environment: string; purchaseDate: number;
+  ts: number; refunded?: boolean; refundedAt?: number; clawedBack?: number; shortfall?: number;
+};
+function iapKey(environment: string, transactionId: string): Deno.KvKey { return ["iap", environment, transactionId]; }
+// The notification audit log - everything Apple sends is recorded post-verification, kept 90
+// days (the ledger entries above, which carry the refund outcome itself, never expire).
+const IAP_EVENT_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+async function recordIapEvent(ev: Record<string, unknown>): Promise<void> {
+  await kv.set(["iapevent", Date.now(), accountsRandHex(4)], { ts: Date.now(), ...ev }, { expireIn: IAP_EVENT_TTL_MS });
+}
 
 type AccountIdentity = { provider: string; sub: string; linkedAt: number };
 type AccountRecord = {
@@ -1018,6 +1151,10 @@ type AccountRecord = {
   // arrived via POST /admin/wallet/grantall rather than a real purchase, so a later revoke can
   // undo EXACTLY what it granted and never touch anything genuinely bought.
   walletGrantedItems?: string[];
+  // 2026-07-30 § REAL-MONEY CREDIT PACKS - lifetime credits BOUGHT with real money (Apple IAP).
+  // Kept apart from earned points: the leaderboard ranks on EARNED alone and money never moves
+  // it. Optional so pre-feature records read as 0, same convention as every wallet field.
+  walletPurchasedCredits?: number;
   // 2026-07-29 § ONLINE ACCESS - twin of server.js's. Purchased calendar months ("YYYY-MM"
   // strings) of online-play entitlement, on top of the (never-stored, always-derived) free
   // months. Optional/defaulted with Array.isArray(...) exactly like walletOwned, so an account
@@ -1347,6 +1484,8 @@ function newAccountRecord(provider: string, sub: string): AccountRecord {
     claimDeclined: false, created: now, lastSeen: now, refreshToken: null,
     // 2026-07-28 § POINTS WALLET - see server.js's newAccountRecord() for the full reasoning.
     walletSpent: 0, walletOwned: [], walletNamechangeCredits: 0,
+    // 2026-07-30 § REAL-MONEY CREDIT PACKS - see the AccountRecord field's own comment.
+    walletPurchasedCredits: 0,
   };
 }
 // Stage 1 records have provider/sub and no identities array - read through this everywhere.
@@ -1653,17 +1792,22 @@ async function accountEarnedPoints(acct: AccountRecord): Promise<number> {
   return hptsS + hptsT;
 }
 type WalletView = {
-  uid: string; lifetimeEarned: number; spent: number; balance: number;
+  uid: string; lifetimeEarned: number; spent: number; purchasedCredits: number; balance: number;
   owned: string[]; namechangeCredits: number;
 };
 async function walletView(acct: AccountRecord): Promise<WalletView> {
   const earned = await accountEarnedPoints(acct);
   const spent = Math.max(0, Number(acct.walletSpent) || 0);
+  // 2026-07-30 § REAL-MONEY CREDIT PACKS: bought credits join the spendable balance here and
+  // NOWHERE ELSE - accountEarnedPoints() (and therefore the leaderboard) never sees them. Twin
+  // of server.js's walletView().
+  const purchased = Math.max(0, Number(acct.walletPurchasedCredits) || 0);
   return {
     uid: acct.uid,
     lifetimeEarned: earned,
     spent,
-    balance: Math.max(0, earned - spent),
+    purchasedCredits: purchased,
+    balance: Math.max(0, earned + purchased - spent),
     owned: Array.isArray(acct.walletOwned) ? acct.walletOwned.slice() : [],
     namechangeCredits: Math.max(0, Number(acct.walletNamechangeCredits) || 0),
   };
@@ -2029,7 +2173,11 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
       }
       const earned = await accountEarnedPoints(acct);
       const spentSoFar = Math.max(0, Number(acct.walletSpent) || 0);
-      const balance = Math.max(0, earned - spentSoFar);
+      // 2026-07-30 § REAL-MONEY CREDIT PACKS: bought credits are spendable through this exact
+      // path - same formula as walletView(), deliberately not a second opinion. Twin of
+      // server.js's.
+      const purchased = Math.max(0, Number(acct.walletPurchasedCredits) || 0);
+      const balance = Math.max(0, earned + purchased - spentSoFar);
       if (balance < item.cost) {
         const failBody = { error: "cantafford", message: "Not enough points for that yet.", cost: item.cost, balance, wallet: await walletView(acct) };
         if (requestId) await kv.set(purchaseKey(me.uid, requestId), { status: 409, body: failBody } as PurchaseSeen, { expireIn: PURCHASE_ID_TTL_MS });
@@ -2067,6 +2215,70 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
     return json(500, { error: "server error", message: "Couldn't complete that purchase right now. Try again." });
   }
 
+  /* --- 2026-07-30 § REAL-MONEY CREDIT PACKS - the verification endpoint, twin of server.js's
+     /account/iap/verify (read that one for the full contract: nothing client-claimed is
+     trusted, idempotent 200 alreadyProcessed for a resubmitted same-account transaction so the
+     app can always finish() safely, 409 for a replay against a DIFFERENT account).
+     REPLAY SAFETY, Deno-shaped: server.js leans on Node's single thread; this server cannot
+     (Deploy runs many isolates), so the claim of ["iap", env, transactionId] and the credit to
+     the account are ONE atomic commit - `check(versionstamp: null)` means only one of two
+     concurrent submissions of the same transaction can ever win, the loser loops and finds the
+     winner's ledger entry. Same CAS shape as /account/purchase above. And unlike server.js
+     there is no crash-ordering window at all: both writes land atomically or neither does. --- */
+  if (p === "/account/iap/verify") {
+    if (!IAP_ENABLED) return json(503, { error: "iapoff", message: "Buying credits isn't available right now." });
+    const me = await resolveSession(body.auth);
+    if (!me) return json(401, SIGNED_OUT_BODY);
+    const v = verifyAppleSignedJws(body.jws);
+    if (!v.ok) {
+      log("iap verify rejected", v.reason);
+      return json(400, { error: v.reason, message: "That purchase couldn't be verified with Apple." });
+    }
+    const t = v.payload;
+    if (t.bundleId !== IAP_BUNDLE_ID) return json(400, { error: "wrongapp", message: "That purchase belongs to a different app." });
+    const environment = t.environment === "Production" ? "Production" : (t.environment === "Sandbox" ? "Sandbox" : null);
+    if (!environment || !iapEnvironmentAllowed(environment)) return json(400, { error: "badenv", message: "That purchase couldn't be verified with Apple." });
+    const pack = creditPackByProductId(String(t.productId || ""));
+    if (!pack) return json(400, { error: "unknownproduct", message: "That product isn't a credit pack.", productId: String(t.productId || "") });
+    if (t.revocationDate || t.revocationReason !== undefined) return json(400, { error: "revoked", message: "Apple shows that purchase was refunded." });
+    const transactionId = String(t.transactionId || "");
+    if (!transactionId) return json(400, { error: "badpayload", message: "That purchase couldn't be verified with Apple." });
+    const quantity = Math.min(10, Math.max(1, Number(t.quantity) || 1));
+    const credits = pack.credits * quantity;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const seen = await kv.get<IapLedgerEntry>(iapKey(environment, transactionId));
+      if (seen.value) {
+        if (seen.value.uid === me.uid) {
+          const cur = await kv.get<AccountRecord>(accountKey(me.uid));
+          if (!cur.value) return json(401, SIGNED_OUT_BODY);
+          return json(200, { ok: true, alreadyProcessed: true, creditsAdded: 0, transactionId, productId: pack.productId, wallet: await walletView(cur.value) });
+        }
+        return json(409, { error: "alreadyused", message: "That purchase was already applied to a different account." });
+      }
+      const cur = await kv.get<AccountRecord>(accountKey(me.uid));
+      const acct = cur.value;
+      if (!acct) return json(401, SIGNED_OUT_BODY);
+      const updated: AccountRecord = {
+        ...acct,
+        walletPurchasedCredits: Math.max(0, Number(acct.walletPurchasedCredits) || 0) + credits,
+      };
+      const entry: IapLedgerEntry = {
+        uid: me.uid, productId: pack.productId, credits, environment,
+        purchaseDate: Number(t.purchaseDate) || 0, ts: Date.now(),
+      };
+      const ok = await kv.atomic()
+        .check(cur)
+        .check({ key: iapKey(environment, transactionId), versionstamp: null })
+        .set(iapKey(environment, transactionId), entry)   // NO expireIn - replay refusal is forever
+        .set(accountKey(me.uid), updated)
+        .commit();
+      if (!ok.ok) continue;   // account moved, or another isolate claimed this transaction - re-read from the top
+      log("iap credited", me.uid, pack.productId, "credits=" + credits, environment, "txn=" + transactionId);
+      return json(200, { ok: true, creditsAdded: credits, transactionId, productId: pack.productId, wallet: await walletView(updated) });
+    }
+    return json(500, { error: "server error", message: "Couldn't verify that purchase right now. Try again." });
+  }
+
   if (p === "/account/name-available") {
     const clean = cleanName(body.name, "");
     if (!clean) return json(200, { available: false, reason: "empty", message: "Type a name first." });
@@ -2097,7 +2309,13 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
     // the cooldown below. Twin of server.js's - surfaced on the success response.
     let usedNamechangeCredit = false;
     if (acct.nameFolded === folded) {
-      if (acct.gameName !== clean) { acct.gameName = clean; await kv.set(accountKey(acct.uid), acct); }
+      // 2026-07-30 § LIVE RENAME PROPAGATION: even a capitalization edit is a visible change on
+      // everyone else's board, so it propagates too. Twin of server.js's.
+      if (acct.gameName !== clean) {
+        acct.gameName = clean;
+        await kv.set(accountKey(acct.uid), acct);
+        try { await propagateAccountRename(acct.uid, clean); } catch (e) { log("rename propagation failed", e); }
+      }
     } else if (!acct.nameFolded) {
       acct.gameName = clean;
       acct.nameFolded = folded;
@@ -2128,6 +2346,9 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
       await kv.delete(nameIdxKey(oldFolded));   // the old folded name goes back in the pool
       await kv.set(accountKey(acct.uid), acct);
       await kv.set(nameIdxKey(folded), acct.uid);
+      // 2026-07-30 § LIVE RENAME PROPAGATION (Blake: renames "take place right away - even mid
+      // game") - see propagateAccountRename()'s own header comment, § ROOMS.
+      try { await propagateAccountRename(acct.uid, clean); } catch (e) { log("rename propagation failed", e); }
     }
     // Only offered while the one-time migration window is open - see THE CLAIM SUNSET above.
     let pendingClaim = null;
@@ -2187,6 +2408,77 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
   }
 
   return json(404, { error: "no such account route" });
+}
+
+/* ---------------------------------------------------------------------------------------
+ * 2026-07-30 § LIVE RENAME PROPAGATION - twin of server.js's propagateAccountRename() (read
+ * that one's header for the full design: Blake's "take place right away - even mid game" ask,
+ * the verified old-client safety of the additive playerRenamed message, why the digest can
+ * never false-resync over a name, and why PROTOCOL_VERSION stays untouched).
+ *
+ * Deno-specific realities, stated plainly rather than papered over:
+ *   - Rooms live in KV, so this scans the (always tiny - this is a family app) room list and
+ *     runs each hit through touchRoom()'s optimistic-concurrency commit, same as every other
+ *     KV room mutation in this file.
+ *   - The rename must land in BOTH copies of a started game's state: meta.G in KV (what a
+ *     reconnect/isolate-recycle re-hydrates from) AND this isolate's live `engines` cache
+ *     (what the next action's snapshot serializes from) - missing either would resurrect the
+ *     old name later.
+ *   - The broadcast rides broadcastRoom(), which fans out to this isolate's own sockets AND the
+ *     per-room BroadcastChannel - the same single-region-in-practice caveat as every broadcast
+ *     here (file header point 3): if a DIFFERENT isolate is actively driving the room's engine,
+ *     its in-memory copy is not reachable from this request and keeps the old name until its
+ *     next KV re-hydration. Accepted with the same reasoning as the rest of the relay (deploys
+ *     are pinned to one region where one instance serves everything).
+ * ------------------------------------------------------------------------------------- */
+async function propagateAccountRename(uid: string, newName: string): Promise<void> {
+  for await (const e of kv.list<RoomMeta>({ prefix: ["room"] })) {
+    const seen = e.value;
+    if (!seen || !Array.isArray(seen.players)) continue;
+    if (!seen.players.some((p) => p.accountId === uid && p.name !== newName)) continue;
+    const code = seen.code;
+    const r = await touchRoom(code, (meta) => {
+      const renames: { playerId: number; seat: number | null }[] = [];
+      let inLobby = false;
+      for (const p of meta.players) {
+        if (!p.accountId || p.accountId !== uid || p.name === newName) continue;
+        p.name = newName;
+        if (meta.lobby) {
+          const seat = meta.lobby.seats.find((s) => s.claimedBy === p.id);
+          if (seat) { seat.name = newName; inLobby = true; }
+        }
+        let seatIndex = -1;
+        if (meta.started && Array.isArray(meta.seatOwners)) {
+          seatIndex = meta.seatOwners.indexOf(p.id);
+          const G = meta.G as { seats?: { name: string }[] } | null;
+          if (seatIndex >= 0 && G && Array.isArray(G.seats) && G.seats[seatIndex]) {
+            G.seats[seatIndex].name = newName;
+          }
+        }
+        renames.push({ playerId: p.id, seat: seatIndex >= 0 ? seatIndex : null });
+      }
+      if (!renames.length) return false;
+      return { renames, inLobby };
+    });
+    if (!r.ok) continue;
+    // The live engine this isolate may be holding is a SEPARATE object from the meta.G copy
+    // touchRoom just wrote (it was deserialized from KV at hydration) - rename it too, or the
+    // very next action's own persist would write the old name straight back.
+    const eng = engines.get(code);
+    if (eng) {
+      try {
+        const G = eng.getG() as { seats?: { name: string }[] };
+        for (const ren of r.extra.renames as { playerId: number; seat: number | null }[]) {
+          if (ren.seat != null && G && Array.isArray(G.seats) && G.seats[ren.seat]) G.seats[ren.seat].name = newName;
+        }
+      } catch { /* a hydration race is harmless - the KV copy above is already renamed */ }
+    }
+    for (const ren of r.extra.renames as { playerId: number; seat: number | null }[]) {
+      broadcastRoom(code, { type: "playerRenamed", playerId: ren.playerId, seat: ren.seat, name: newName });
+    }
+    if (r.extra.inLobby) broadcastRoom(code, { type: "lobby", lobby: lobbySnapshot(r.meta) });
+    log("account rename propagated to live room", code, "->", newName);
+  }
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -4481,8 +4773,61 @@ async function handler(req: Request, info: Deno.ServeHandlerInfo): Promise<Respo
   }
   // 2026-07-28 § POINTS WALLET - the server-owned shop catalog. Twin of server.js's: a plain,
   // unauthenticated GET, gated on the same accounts kill switch as the rest of this feature.
+  // 2026-07-30 § REAL-MONEY CREDIT PACKS: creditPacks rides along additively (an older client
+  // ignores it); absent entirely with the IAP kill switch off.
   if (ACCOUNTS_ENABLED && url.pathname === "/shop" && req.method === "GET") {
-    return json(200, { items: SHOP_CATALOG });
+    return json(200, IAP_ENABLED ? { items: SHOP_CATALOG, creditPacks: CREDIT_PACKS } : { items: SHOP_CATALOG });
+  }
+  /* 2026-07-30 § REAL-MONEY CREDIT PACKS - App Store Server Notifications V2, twin of
+     server.js's route (read that one for the full contract: signature IS the auth, everything
+     verified is recorded, only REFUND/REVOKE act, claw-back floors at what the account still
+     holds with the remainder written to the ledger entry as `shortfall`, spent-credit items
+     stay owned - stated there plainly as the accepted limit). Deno-specific: the "only deduct
+     once" guard is a CAS on the ledger entry's versionstamp, so two concurrent deliveries of
+     the same refund notification cannot both subtract. */
+  if (ACCOUNTS_ENABLED && IAP_ENABLED && url.pathname === "/appstore/notifications" && req.method === "POST") {
+    const body = await req.json().catch(() => ({} as Record<string, unknown>));
+    const v = verifyAppleSignedJws(body && (body as Record<string, unknown>).signedPayload);
+    if (!v.ok) { log("appstore notification rejected", v.reason); return json(401, { error: v.reason }); }
+    const note = v.payload;
+    const type = String(note.notificationType || "");
+    const subtype = String(note.subtype || "");
+    const data = (note.data && typeof note.data === "object" ? note.data : {}) as Record<string, unknown>;
+    // The transaction inside the notification is its OWN signed JWS, verified independently.
+    let txn: Record<string, unknown> | null = null;
+    if (typeof data.signedTransactionInfo === "string") {
+      const tv = verifyAppleSignedJws(data.signedTransactionInfo);
+      if (tv.ok) txn = tv.payload;
+    }
+    await recordIapEvent({
+      type, subtype,
+      environment: String((txn && txn.environment) || data.environment || ""),
+      transactionId: txn ? String(txn.transactionId || "") : "",
+      productId: txn ? String(txn.productId || "") : "",
+    });
+    if ((type === "REFUND" || type === "REVOKE") && txn && txn.bundleId === IAP_BUNDLE_ID) {
+      const environment = txn.environment === "Production" ? "Production" : "Sandbox";
+      const key = iapKey(environment, String(txn.transactionId || ""));
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const cur = await kv.get<IapLedgerEntry>(key);
+        const entry = cur.value;
+        if (!entry || entry.refunded) break;   // never credited here, or already clawed back once
+        const acctCur = await kv.get<AccountRecord>(accountKey(entry.uid));
+        const acct = acctCur.value;
+        const have = acct ? Math.max(0, Number(acct.walletPurchasedCredits) || 0) : 0;
+        const clawedBack = Math.min(entry.credits, have);
+        const updatedEntry: IapLedgerEntry = {
+          ...entry, refunded: true, refundedAt: Date.now(), clawedBack, shortfall: entry.credits - clawedBack,
+        };
+        let txnCommit = kv.atomic().check(cur).set(key, updatedEntry);
+        if (acct) txnCommit = txnCommit.check(acctCur).set(accountKey(entry.uid), { ...acct, walletPurchasedCredits: have - clawedBack });
+        const ok = await txnCommit.commit();
+        if (!ok.ok) continue;
+        log("iap refund processed", entry.uid, key.join(":"), "clawedBack=" + clawedBack, "shortfall=" + (entry.credits - clawedBack));
+        break;
+      }
+    }
+    return json(200, { ok: true });
   }
   // 2026-07-25 § ACCOUNTS: only routed when the kill switch is ON. With
   // NASTY_ACCOUNTS_ENABLED=0 these paths fall through to the same 404 they hit today - twin of

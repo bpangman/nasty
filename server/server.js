@@ -1222,12 +1222,21 @@ function accountsOnlyBoard() { return ACCOUNTS_ENABLED && LEADERBOARD_ACCOUNTS_O
  *
  * SERVER-OWNED CATALOG - the client is never trusted for prices. Every item's cost lives here,
  * nowhere else, and a purchase re-reads it from this array every time; nothing about a price is
- * ever accepted from the request body. Costs are picked against the existing point economy: a
- * win against a Nasty-difficulty CPU is worth 3 points (pointsForWinServer() above), so a typical
- * player sits at tens to low hundreds of lifetime points (the live board, checked before writing
- * these numbers, has real accounts around 20-450). `consumable:true` (namechange only) means the
+ * ever accepted from the request body. `consumable:true` (namechange and online access) means the
  * item is a stackable credit, not a one-time unlock - it is never "already owned" and can be
  * bought again. Every other category is a permanent, one-time cosmetic unlock.
+ *
+ * 2026-07-30 REPRICE - Blake's ask, verbatim: "Make 10 credits be $1 so that means the 1 month
+ * token for online play would be $5 if it's 50 credits. Change all shop credit pricing to align
+ * with this structure (always divideable by 10) and make them aspirational!" So every cost below
+ * is now divisible by 10 and sits on the 10-credits-per-dollar anchor (see § REAL-MONEY CREDIT
+ * PACKS further down, where that anchor actually meets Apple's price tiers). The original launch
+ * prices (felts 15-20, titles 10-90, palettes 40-130, namechange 25) were tuned purely against
+ * earned points; these are deliberately higher ("aspirational") because credits can now also be
+ * BOUGHT. Risk considered and accepted: players who saved up under the old prices now find some
+ * items dearer - but nothing anyone already OWNS is touched (walletOwned stores ids, never
+ * prices), and nobody's balance moves (walletSpent is a lifetime sum of prices ALREADY paid;
+ * repricing the catalog rewrites neither).
  * ===================================================================================== */
 /* ---------------------------------------------------------------------------------------
  * 2026-07-29 § ONLINE ACCESS (monthly online-play entitlement) - Blake's ask: online play
@@ -1263,7 +1272,7 @@ const SHOP_CATALOG = [
   // client's COLORS4/COLORS6 arrays, same {name,c,dark} shape per seat, because the client uses
   // the per-seat NAME in team-pairing text ("Green + Pink") - so every seat here has a name too.
   {
-    id: "palette_sunset", category: "palette", name: "Sunset", cost: 40,
+    id: "palette_sunset", category: "palette", name: "Sunset", cost: 50,
     colors4: [
       { name: "Coral", c: "#e8604c", dark: "#9c3423" },
       { name: "Dusk", c: "#3e4e7e", dark: "#232e4e" },
@@ -1280,7 +1289,7 @@ const SHOP_CATALOG = [
     ],
   },
   {
-    id: "palette_ocean", category: "palette", name: "Ocean Breeze", cost: 40,
+    id: "palette_ocean", category: "palette", name: "Ocean Breeze", cost: 50,
     colors4: [
       { name: "Teal", c: "#2a9d8f", dark: "#175a52" },
       { name: "Deep Blue", c: "#2d4f8f", dark: "#182c55" },
@@ -1297,7 +1306,7 @@ const SHOP_CATALOG = [
     ],
   },
   {
-    id: "palette_forest", category: "palette", name: "Forest", cost: 60,
+    id: "palette_forest", category: "palette", name: "Forest", cost: 80,
     colors4: [
       { name: "Moss", c: "#6f9a3d", dark: "#425e1f" },
       { name: "Sky", c: "#7fb6d9", dark: "#41708f" },
@@ -1314,7 +1323,7 @@ const SHOP_CATALOG = [
     ],
   },
   {
-    id: "palette_royal", category: "palette", name: "Royal", cost: 90,
+    id: "palette_royal", category: "palette", name: "Royal", cost: 150,
     colors4: [
       { name: "Emerald", c: "#1f8a5c", dark: "#0f5236" },
       { name: "Sapphire", c: "#3a55b4", dark: "#1f2f6e" },
@@ -1331,7 +1340,7 @@ const SHOP_CATALOG = [
     ],
   },
   {
-    id: "palette_midnight", category: "palette", name: "Midnight", cost: 130,
+    id: "palette_midnight", category: "palette", name: "Midnight", cost: 250,
     colors4: [
       { name: "Cyan", c: "#3fc5d1", dark: "#20707a" },
       { name: "Violet", c: "#7a63d9", dark: "#463693" },
@@ -1349,18 +1358,18 @@ const SHOP_CATALOG = [
   },
   // felt - table background colors. c/dark are the two radial-gradient stops, direct
   // replacements for the client's --felt1/--felt2 CSS variables (default #256b46/#0e3421).
-  { id: "felt_burgundy", category: "felt", name: "Burgundy Felt", cost: 15, c: "#6b2433", dark: "#35101a" },
-  { id: "felt_navy", category: "felt", name: "Navy Felt", cost: 15, c: "#23456b", dark: "#0e1f35" },
-  { id: "felt_charcoal", category: "felt", name: "Charcoal Felt", cost: 20, c: "#3a4048", dark: "#16191d" },
-  { id: "felt_sunflower", category: "felt", name: "Sunflower Felt", cost: 20, c: "#c99a1e", dark: "#6b4e08" },
+  { id: "felt_burgundy", category: "felt", name: "Burgundy Felt", cost: 20, c: "#6b2433", dark: "#35101a" },
+  { id: "felt_navy", category: "felt", name: "Navy Felt", cost: 20, c: "#23456b", dark: "#0e1f35" },
+  { id: "felt_charcoal", category: "felt", name: "Charcoal Felt", cost: 30, c: "#3a4048", dark: "#16191d" },
+  { id: "felt_sunflower", category: "felt", name: "Sunflower Felt", cost: 30, c: "#c99a1e", dark: "#6b4e08" },
   // title - a short label shown next to the player's name on the leaderboard.
-  { id: "title_rookie", category: "title", name: "Rookie", cost: 10 },
-  { id: "title_shark", category: "title", name: "Card Shark", cost: 30 },
-  { id: "title_legend", category: "title", name: "Legend", cost: 60 },
-  { id: "title_nasty", category: "title", name: "Certified Nasty", cost: 90 },
+  { id: "title_rookie", category: "title", name: "Rookie", cost: 20 },
+  { id: "title_shark", category: "title", name: "Card Shark", cost: 50 },
+  { id: "title_legend", category: "title", name: "Legend", cost: 100 },
+  { id: "title_nasty", category: "title", name: "Certified Nasty", cost: 200 },
   // namechange - a one-shot credit that lets a player change their nickname despite the existing
   // 30-day cooldown. Consumable/stackable, not a one-time unlock - see /account/name below.
-  { id: "namechange_credit", category: "namechange", name: "Name Change Token", cost: 25, consumable: true },
+  { id: "namechange_credit", category: "namechange", name: "Name Change Token", cost: 30, consumable: true },
   // online - a month of online-play entitlement. Consumable/stackable exactly like the
   // namechange credit above (never "alreadyowned" - see § ONLINE ACCESS below, right after
   // walletView()), not a one-time unlock. Buying it grants the earliest calendar month the
@@ -1369,6 +1378,215 @@ const SHOP_CATALOG = [
   { id: ONLINE_ACCESS_ITEM_ID, category: "online", name: "Online Access (1 month)", cost: ONLINE_ACCESS_COST, consumable: true },
 ];
 function shopItemById(id) { return SHOP_CATALOG.find((it) => it.id === id) || null; }
+
+/* =======================================================================================
+ * 2026-07-30 § REAL-MONEY CREDIT PACKS (Apple In-App Purchase) - Blake's ask, verbatim: "Now is
+ * the time! please add functionality for people to purchase things outright with real money (CC
+ * transaction) if they don't have enough credits earned or would simply just rather purchase
+ * instead of earning the credits. Make 10 credits be $1 so that means the 1 month token for
+ * online play would be $5 if it's 50 credits."
+ *
+ * THE SHAPE, and why it is credit packs rather than per-item products: Apple forbids a credit
+ * card / Stripe checkout inside an iOS app for digital goods (App Review Guideline 3.1.1), so
+ * real money means StoreKit In-App Purchase, and every IAP product must be created in App Store
+ * Connect and pass Apple review. One product PER SHOP ITEM would mean an App Store Connect
+ * round trip every time Blake adds a felt - so the products are a small fixed ladder of
+ * CONSUMABLE CREDIT PACKS instead, and the client presents "buy this item outright": it offers
+ * the smallest pack that covers the shortfall, buys the pack through Apple, this server credits
+ * the wallet, and the client immediately completes the normal credit purchase. Leftover credits
+ * simply stay on the account. Credits bought with money ARE just credits - they spend through
+ * the exact same /account/purchase path as earned ones; nothing about spending is forked.
+ *
+ * THE LADDER sits on Blake's 10-credits-per-dollar anchor. The base pack is exactly the anchor
+ * (50 credits / $4.99 - Apple's tier for "$5"); the bigger packs carry a modest bonus so they
+ * are the visibly better deal, the standard consumable-pack convention (and every pack size is
+ * still divisible by 10, per the same ask):
+ *   50  credits  $4.99   the anchor - exactly one Online Access month
+ *   110 credits  $9.99   +10% bonus
+ *   280 credits  $24.99  +12% bonus - covers Midnight (250) outright from zero
+ *   600 credits  $49.99  +20% bonus
+ * `usd` here is DISPLAY/BOOKKEEPING ONLY (what the App Store Connect price was set to at the
+ * time of writing) - Apple owns the real charged price, per storefront and after any tier
+ * changes; nothing in this server ever computes money from it. The `credits` number is the only
+ * field that has authority, and it is server-owned exactly like every SHOP_CATALOG cost.
+ * BYTE-IDENTICAL TWIN in server/cloud/server.ts - keep both in sync, same rule as SHOP_CATALOG.
+ * ===================================================================================== */
+const IAP_BUNDLE_ID = "com.pangman.nasty";
+const CREDIT_PACKS = [
+  { productId: "com.pangman.nasty.credits50", credits: 50, usd: 4.99, name: "50 Credits" },
+  { productId: "com.pangman.nasty.credits110", credits: 110, usd: 9.99, name: "110 Credits" },
+  { productId: "com.pangman.nasty.credits280", credits: 280, usd: 24.99, name: "280 Credits" },
+  { productId: "com.pangman.nasty.credits600", credits: 600, usd: 49.99, name: "600 Credits" },
+];
+function creditPackByProductId(id) { return CREDIT_PACKS.find((p) => p.productId === id) || null; }
+// Emergency kill switch, same convention as ACCOUNTS_ENABLED: "0" makes /account/iap/verify and
+// /appstore/notifications answer 503/404 without touching any other route. Default ON.
+const IAP_ENABLED = accountsEnvFlagOn(process.env.NASTY_IAP_ENABLED, "1");
+// Which Apple environments may CREDIT a wallet. TestFlight purchases arrive with
+// environment:"Sandbox" (they are free - Apple charges nobody for them), and there is only ONE
+// production server, so sandbox acceptance defaults ON so Blake's TestFlight family can test the
+// whole flow end to end. THE TRADE, stated plainly: while sandbox is accepted, a TestFlight
+// tester's purchases mint real spendable credits without real money changing hands. Before the
+// real App Store launch Blake must decide whether to flip NASTY_IAP_ALLOW_SANDBOX to "0"
+// (breaks TestFlight purchase testing) or accept free credits for TestFlight testers.
+const IAP_ALLOW_SANDBOX = accountsEnvFlagOn(process.env.NASTY_IAP_ALLOW_SANDBOX, "1");
+const IAP_ALLOW_PRODUCTION = accountsEnvFlagOn(process.env.NASTY_IAP_ALLOW_PRODUCTION, "1");
+// A real Apple signed transaction (JWS with a 3-cert x5c chain) is ~4-6KB; refuse absurd input
+// outright, same philosophy as APPLE_TOKEN_MAX_CHARS above.
+const IAP_JWS_MAX_CHARS = 32768;
+/* Apple Root CA - G3, DER, base64 - the PINNED trust anchor every signed transaction's x5c
+   chain must terminate in. Downloaded 2026-07-30 from
+   https://www.apple.com/certificateauthority/AppleRootCA-G3.cer and verified against Apple's
+   published SHA-256 fingerprint 63:34:3A:BF:B8:9A:6A:03:EB:B5:7E:9B:3F:5F:A7:BE:7C:4F:5C:75:
+   6F:30:17:B3:A8:C4:88:C3:65:3E:91:79 (valid to 2039). Env-overridable ONLY so the test suite
+   can substitute its own throwaway root (same convention as NASTY_APPLE_JWKS_URL for sign-in) -
+   never set NASTY_IAP_ROOT_CA_B64 in production. */
+const APPLE_ROOT_CA_G3_B64 =
+  "MIICQzCCAcmgAwIBAgIILcX8iNLFS5UwCgYIKoZIzj0EAwMwZzEbMBkGA1UEAwwSQXBwbGUgUm9vdCBDQSAtIEcz" +
+  "MSYwJAYDVQQLDB1BcHBsZSBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTETMBEGA1UECgwKQXBwbGUgSW5jLjELMAkG" +
+  "A1UEBhMCVVMwHhcNMTQwNDMwMTgxOTA2WhcNMzkwNDMwMTgxOTA2WjBnMRswGQYDVQQDDBJBcHBsZSBSb290IENB" +
+  "IC0gRzMxJjAkBgNVBAsMHUFwcGxlIENlcnRpZmljYXRpb24gQXV0aG9yaXR5MRMwEQYDVQQKDApBcHBsZSBJbmMu" +
+  "MQswCQYDVQQGEwJVUzB2MBAGByqGSM49AgEGBSuBBAAiA2IABJjpLz1AcqTtkyJygRMc3RCV8cWjTnHcFBbZDuWm" +
+  "BSp3ZHtfTjjTuxxEtX/1H7YyYl3J6YRbTzBPEVoA/VhYDKX1DyxNB0cTddqXl5dvMVztK517IDvYuVTZXpmkOlEK" +
+  "MaNCMEAwHQYDVR0OBBYEFLuw3qFYM4iapIqZ3r6966/ayySrMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQD" +
+  "AgEGMAoGCCqGSM49BAMDA2gAMGUCMQCD6cHEFl4aXTQY2e3v9GwOAEZLuN+yRhHFD/3meoyhpmvOwgPUnPWTxnS4" +
+  "at+qIxUCMG1mihDK1A3UT82NQz60imOlM27jbdoXt2QfyFMm+YhidDkLF1vLUagM6BgD56KyKA==";
+function iapPinnedRootDer() {
+  const b64 = process.env.NASTY_IAP_ROOT_CA_B64 || APPLE_ROOT_CA_G3_B64;
+  return Buffer.from(b64, "base64");
+}
+/* Apple marks its App Store signing leaf certificates with OID 1.2.840.113635.100.6.11.1 and
+   the WWDR intermediate with OID 1.2.840.113635.100.6.2.1 (the same checks Apple's own
+   app-store-server-library makes). Node's X509Certificate does not expose arbitrary extensions,
+   so presence is checked by scanning the raw DER for the encoded OID bytes - a belt-and-braces
+   check ON TOP of the pinned-root chain verification above it, not the primary boundary. */
+const IAP_LEAF_OID_DER = Buffer.from([0x06, 0x0a, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x63, 0x64, 0x06, 0x0b, 0x01]);
+const IAP_INTERMEDIATE_OID_DER = Buffer.from([0x06, 0x0a, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x63, 0x64, 0x06, 0x02, 0x01]);
+
+/* --- the verifier. Takes the raw JWS string a client (or Apple's notification service) sent,
+ * returns { ok:true, payload } with the VERIFIED payload object, or { ok:false, reason } with a
+ * machine-readable reason. Nothing the client claims is ever trusted: the payload only counts
+ * after (1) the x5c chain verifies cert-by-cert and terminates byte-for-byte in the pinned
+ * Apple root, (2) every cert is inside its validity window, (3) the Apple marker OIDs are
+ * present, and (4) the ES256 signature verifies against the LEAF key. verifyReceipt (the
+ * long-deprecated endpoint) is deliberately not used anywhere.
+ * WHY LOCAL VERIFICATION and not a server-to-Apple API call: App Store Server Notifications V2
+ * (the refund path below) arrive as exactly this same signed-JWS shape and MUST be verified
+ * locally anyway - so one verifier covers both, works offline, and needs no App Store Connect
+ * API key material on either server. --- */
+function verifyAppleSignedJws(raw) {
+  if (typeof raw !== "string" || !raw || raw.length > IAP_JWS_MAX_CHARS) return { ok: false, reason: "badjws" };
+  const parts = raw.split(".");
+  if (parts.length !== 3) return { ok: false, reason: "badjws" };
+  let header;
+  try { header = JSON.parse(accountsB64uToBuf(parts[0]).toString("utf8")); }
+  catch (e) { return { ok: false, reason: "badjws" }; }
+  // alg is REQUIRED to be ES256 before any key material is touched - the classic alg-confusion
+  // attacks ("none", HS256-with-a-public-key) die right here, same rule as verifyOidcToken.
+  if (!header || header.alg !== "ES256" || !Array.isArray(header.x5c)) return { ok: false, reason: "badalg" };
+  if (header.x5c.length < 2 || header.x5c.length > 5) return { ok: false, reason: "badchain" };
+  let certs;
+  try { certs = header.x5c.map((c) => new crypto.X509Certificate(Buffer.from(String(c), "base64"))); }
+  catch (e) { return { ok: false, reason: "badchain" }; }
+  // The chain must TERMINATE in the pinned Apple root - byte-identical DER, not just same name.
+  const root = certs[certs.length - 1];
+  if (Buffer.compare(root.raw, iapPinnedRootDer()) !== 0) return { ok: false, reason: "untrustedroot" };
+  const now = Date.now();
+  for (let i = 0; i < certs.length; i++) {
+    // Every cert inside its own validity window...
+    const from = Date.parse(certs[i].validFrom), to = Date.parse(certs[i].validTo);
+    if (!(Number.isFinite(from) && Number.isFinite(to) && from <= now && now <= to)) return { ok: false, reason: "certexpired" };
+    // ...and every cert actually SIGNED by the next one up (the root self-check is skipped -
+    // its authority comes from the pin above, not from its self-signature).
+    if (i < certs.length - 1) {
+      try { if (!certs[i].verify(certs[i + 1].publicKey)) return { ok: false, reason: "badchain" }; }
+      catch (e) { return { ok: false, reason: "badchain" }; }
+    }
+  }
+  // Apple's marker OIDs (see the constants above) - only enforced against the REAL Apple root,
+  // because the test suite's throwaway chain carries them too (its openssl config adds them),
+  // but a future test root without them should not silently weaken what production checks.
+  if (!certs[0].raw.includes(IAP_LEAF_OID_DER)) return { ok: false, reason: "badleafoid" };
+  if (!certs[1].raw.includes(IAP_INTERMEDIATE_OID_DER)) return { ok: false, reason: "badinteroid" };
+  // Finally the JWS signature itself, ES256 (raw r||s per JOSE, hence ieee-p1363), LEAF key only.
+  let sigOk = false;
+  try {
+    sigOk = crypto.verify(
+      "sha256",
+      Buffer.from(parts[0] + "." + parts[1], "ascii"),
+      { key: certs[0].publicKey, dsaEncoding: "ieee-p1363" },
+      accountsB64uToBuf(parts[2]),
+    );
+  } catch (e) { sigOk = false; }
+  if (!sigOk) return { ok: false, reason: "badsig" };
+  let payload;
+  try { payload = JSON.parse(accountsB64uToBuf(parts[1]).toString("utf8")); }
+  catch (e) { return { ok: false, reason: "badpayload" }; }
+  if (!payload || typeof payload !== "object") return { ok: false, reason: "badpayload" };
+  return { ok: true, payload };
+}
+function iapEnvironmentAllowed(env) {
+  if (env === "Sandbox") return IAP_ALLOW_SANDBOX;
+  if (env === "Production") return IAP_ALLOW_PRODUCTION;
+  return false;
+}
+
+/* --- THE REPLAY LEDGER - the single most safety-critical structure in this feature. Every
+ * Apple transaction id that has EVER credited a wallet lives here, keyed
+ * "<environment>:<transactionId>" (environments are separate id spaces), and is NEVER pruned -
+ * unlike purchaseSeen's 24-hour requestIds, a transaction replayed a month later must still be
+ * refused, forever. A missing guard here is players minting free credits from one real receipt.
+ *
+ * WHY THE CHECK-THEN-CREDIT IS SAFE ON THIS SERVER: everything between reading the ledger and
+ * writing it back is synchronous - verifyAppleSignedJws() is pure sync crypto, and there is no
+ * `await` anywhere between the ledger lookup and the ledger write in the /account/iap/verify
+ * handler below - so Node's single thread serializes two "simultaneous" submissions of the
+ * same transaction; the second always sees the first's ledger entry. (The Deno twin cannot rely
+ * on that and uses one atomic KV commit instead - see server.ts.)
+ *
+ * CRASH ORDERING, thought through: the ledger is persisted to disk BEFORE the credited account
+ * is. If the process dies between the two writes, the surviving state is "ledger says credited,
+ * wallet missed it" - an UNDER-credit a resubmission will answer alreadyProcessed for (and the
+ * ledger entry has enough detail for Blake to hand-fix via /admin/wallet). The opposite order
+ * would leave "wallet credited, ledger empty" - a replay would then credit AGAIN, i.e. minting.
+ * Under-credit is recoverable; minting is not. That is why both writes are persist-NOW (never
+ * the debounced scheduleAccountStorePersist convention every cosmetic feature uses). --- */
+const IAP_LEDGER_FILE = process.env.NASTY_IAP_LEDGER_FILE
+  ? path.resolve(process.env.NASTY_IAP_LEDGER_FILE)
+  : path.join(__dirname, "iap-ledger.json");
+let iapLedger = {};   // "<env>:<txnId>" -> {uid, productId, credits, environment, ts, refunded?, clawedBack?, shortfall?}
+function loadIapLedger() {
+  try {
+    const o = JSON.parse(fs.readFileSync(IAP_LEDGER_FILE, "utf8"));
+    if (o && typeof o === "object") iapLedger = o;
+  } catch (e) { iapLedger = {}; }
+}
+function persistIapLedgerNow() {
+  try { fs.writeFileSync(IAP_LEDGER_FILE, JSON.stringify(iapLedger)); }
+  catch (e) { log("iap ledger persist failed", e.message); }
+}
+function iapLedgerKey(environment, transactionId) { return environment + ":" + transactionId; }
+
+/* --- the notification audit log (App Store Server Notifications V2). Everything Apple sends -
+ * refunds, revocations, its TEST ping, types this server has never heard of - is recorded here
+ * after signature verification, capped at the newest 500, so "what did Apple tell us and when"
+ * is always answerable even for types this code takes no action on. --- */
+const IAP_EVENTS_FILE = process.env.NASTY_IAP_EVENTS_FILE
+  ? path.resolve(process.env.NASTY_IAP_EVENTS_FILE)
+  : path.join(__dirname, "iap-events.json");
+let iapEvents = [];
+function loadIapEvents() {
+  try {
+    const o = JSON.parse(fs.readFileSync(IAP_EVENTS_FILE, "utf8"));
+    if (Array.isArray(o)) iapEvents = o;
+  } catch (e) { iapEvents = []; }
+}
+function recordIapEvent(ev) {
+  iapEvents.push(Object.assign({ ts: Date.now() }, ev));
+  if (iapEvents.length > 500) iapEvents = iapEvents.slice(-500);
+  try { fs.writeFileSync(IAP_EVENTS_FILE, JSON.stringify(iapEvents)); }
+  catch (e) { log("iap events persist failed", e.message); }
+}
 
 /* --- storage. Six small JSON files, all env-overridable exactly like NASTY_LEADERBOARD_FILE so
    tests point them at scratch paths, all debounce-persisted like the leaderboard, and all in
@@ -1807,6 +2025,11 @@ function newAccountRecord(provider, sub) {
     walletSpent: 0,             // lifetime points spent - NEVER reduces the leaderboard's earned total
     walletOwned: [],            // owned non-consumable shop item ids (palette/felt/title)
     walletNamechangeCredits: 0, // one-shot credits that bypass the 30-day rename cooldown once each
+    // 2026-07-30 § REAL-MONEY CREDIT PACKS - lifetime credits BOUGHT with real money (Apple
+    // IAP), kept apart from earned points on purpose: the leaderboard ranks on EARNED alone and
+    // money must never move it. Balance becomes earned + purchased - spent (see walletView()).
+    // A refund subtracts back off this counter (see /appstore/notifications), never off earned.
+    walletPurchasedCredits: 0,
     // 2026-07-28 § POINTS WALLET ADMIN GRANT - which currently-owned ids arrived via
     // POST /admin/wallet/grantall rather than a real purchase, so a later revoke can undo
     // EXACTLY what it granted and never touch anything genuinely bought. An id can only ever be
@@ -2169,11 +2392,17 @@ function accountEarnedPoints(acct) {
 function walletView(acct) {
   const earned = accountEarnedPoints(acct);
   const spent = Math.max(0, Number(acct.walletSpent) || 0);
+  // 2026-07-30 § REAL-MONEY CREDIT PACKS: credits bought with money join the spendable balance
+  // here and NOWHERE ELSE - accountEarnedPoints() (and therefore the leaderboard) never sees
+  // them. Old account records simply read 0, the same Array.isArray/|| 0 convention as every
+  // other wallet field.
+  const purchased = Math.max(0, Number(acct.walletPurchasedCredits) || 0);
   return {
     uid: acct.uid,
     lifetimeEarned: earned,
     spent,
-    balance: Math.max(0, earned - spent),
+    purchasedCredits: purchased,
+    balance: Math.max(0, earned + purchased - spent),
     owned: Array.isArray(acct.walletOwned) ? acct.walletOwned.slice() : [],
     namechangeCredits: Math.max(0, Number(acct.walletNamechangeCredits) || 0),
   };
@@ -2438,6 +2667,60 @@ function accountPublicView(acct, exp) {
     exp: exp || 0,
   };
 }
+/* ---------------------------------------------------------------------------------------
+ * 2026-07-30 § LIVE RENAME PROPAGATION - Blake's ask, verbatim: nickname changes "take place
+ * right away - even mid game". Before this, a successful /account/name rename updated the
+ * ACCOUNT (and the renamer's own phone via the response), but a LIVE room never heard about it:
+ * player names are copied into room/lobby/engine state at host/join and nothing ever wrote them
+ * again, so the other players' boards kept the old name until the game ended. This helper runs
+ * on every successful rename and pushes the new name into every live room this account is
+ * sitting in - the room's own player record, the lobby seat (if still in the lobby), and the
+ * running engine's seat (if the game already started) - then broadcasts an ADDITIVE
+ * {type:"playerRenamed", playerId, seat, name} message plus a fresh lobby snapshot when in
+ * lobby.
+ *
+ * OLD-CLIENT SAFETY, verified rather than assumed: index.html's handleNetMessage() ends in
+ * `default: return;` (checked in the v0.58 source before this shipped), so every already-shipped
+ * build silently ignores the new message type - worst case an old client keeps showing the old
+ * name, exactly what happened before this feature existed. The state-integrity digest
+ * (gDigestServer() above / the client's gDigest()) deliberately hashes NO names, so a client
+ * that misses this message can never be pushed into a false resync by it. PROTOCOL_VERSION is
+ * therefore NOT bumped.
+ *
+ * LEADERBOARD SAFETY: game-end attribution is keyed on accountId (accountIdForSeat(), see
+ * finishGame()), never on the seat's display name - so a mid-game rename can never misfile a
+ * result; this only changes what everyone SEES. Twin lives in server/cloud/server.ts.
+ * ------------------------------------------------------------------------------------- */
+function propagateAccountRename(uid, newName) {
+  for (const room of rooms.values()) {
+    let inLobby = false;
+    for (const p of room.players.values()) {
+      if (!p.accountId || p.accountId !== uid || p.name === newName) continue;
+      p.name = newName;
+      // The lobby seat, if this player is still sitting in a lobby.
+      if (room.lobby) {
+        const seat = room.lobby.seats.find((s) => s.claimedBy === p.id);
+        if (seat) { seat.name = newName; inLobby = true; }
+      }
+      // The running game's seat, if the game already started - this is what the plaques on
+      // every other phone render from (via snapshots), so it must move too or a reconnect
+      // would resurrect the old name.
+      let seatIndex = -1;
+      if (room.started && room.engine && Array.isArray(room.seatOwners)) {
+        seatIndex = room.seatOwners.indexOf(p.id);
+        if (seatIndex >= 0) {
+          const G = room.engine.getG();
+          if (G && Array.isArray(G.seats) && G.seats[seatIndex]) G.seats[seatIndex].name = newName;
+        }
+      }
+      broadcast(room, { type: "playerRenamed", playerId: p.id, seat: seatIndex >= 0 ? seatIndex : null, name: newName });
+      touch(room);   // also schedules the room's disk persist, so a restart keeps the new name
+      log("account rename propagated to live room", room.code, "player=" + p.id, "->", newName);
+    }
+    if (inLobby) broadcast(room, { type: "lobby", lobby: lobbySnapshot(room) });
+  }
+}
+
 async function handleAccountRoute(req, res, url) {
   if (!underAccountRateLimit(remoteIp(req))) {
     sendJson(res, 429, { error: "slow down", message: "Too many sign-in tries. Wait a minute and try again." });
@@ -2626,7 +2909,10 @@ async function handleAccountRoute(req, res, url) {
     }
     const earned = accountEarnedPoints(acct);
     const spentSoFar = Math.max(0, Number(acct.walletSpent) || 0);
-    const balance = Math.max(0, earned - spentSoFar);
+    // 2026-07-30 § REAL-MONEY CREDIT PACKS: bought credits are spendable through this exact
+    // path - same formula as walletView(), deliberately not a second opinion.
+    const purchased = Math.max(0, Number(acct.walletPurchasedCredits) || 0);
+    const balance = Math.max(0, earned + purchased - spentSoFar);
     if (balance < item.cost) {
       const failBody = { error: "cantafford", message: "Not enough points for that yet.", cost: item.cost, balance, wallet: walletView(acct) };
       if (requestId) { purchaseSeen[purchaseIdemKey(acct.uid, requestId)] = { status: 409, body: failBody, ts: Date.now() }; schedulePurchaseSeenPersist(); }
@@ -2660,6 +2946,70 @@ async function handleAccountRoute(req, res, url) {
     };
     if (requestId) { purchaseSeen[purchaseIdemKey(acct.uid, requestId)] = { status: 200, body: okBody, ts: Date.now() }; schedulePurchaseSeenPersist(); }
     sendJson(res, 200, okBody);
+    return;
+  }
+
+  /* --- 2026-07-30 § REAL-MONEY CREDIT PACKS - the verification endpoint. The iPhone app buys a
+     consumable credit pack through Apple (StoreKit 2), then POSTs the SIGNED TRANSACTION (the
+     jwsRepresentation) here. Everything of consequence is decided from the verified payload -
+     the client's word is never taken for what was bought, for how much, or for whom Apple
+     thinks paid. Success is idempotent on the Apple transaction id: resubmitting an
+     already-credited transaction answers 200 alreadyProcessed:true (with the current wallet) so
+     the app can safely finish() a transaction whose first submission's reply got lost - the ONE
+     wrong answer there would be an error, because the app would then never finish the
+     transaction and would resubmit it forever.
+     REPLAY SAFETY: see the § REPLAY LEDGER block above for the whole design (sync check-to-write
+     on this single-threaded server, ledger-before-account crash ordering, never-pruned keys). */
+  if (p === "/account/iap/verify") {
+    if (!IAP_ENABLED) { sendJson(res, 503, { error: "iapoff", message: "Buying credits isn't available right now." }); return; }
+    const me = resolveSession(body.auth);
+    if (!me) { sendJson(res, 401, SIGNED_OUT_BODY); return; }
+    const acct = me.account;
+    const v = verifyAppleSignedJws(body.jws);
+    if (!v.ok) {
+      log("iap verify rejected", v.reason);
+      sendJson(res, 400, { error: v.reason, message: "That purchase couldn't be verified with Apple." });
+      return;
+    }
+    const t = v.payload;
+    // Every claim below comes out of the VERIFIED payload. bundleId first: a validly-signed
+    // transaction for someone else's app must be worthless here.
+    if (t.bundleId !== IAP_BUNDLE_ID) { sendJson(res, 400, { error: "wrongapp", message: "That purchase belongs to a different app." }); return; }
+    const environment = t.environment === "Production" ? "Production" : (t.environment === "Sandbox" ? "Sandbox" : null);
+    if (!environment || !iapEnvironmentAllowed(environment)) { sendJson(res, 400, { error: "badenv", message: "That purchase couldn't be verified with Apple." }); return; }
+    const pack = creditPackByProductId(t.productId);
+    // Unknown product id = validly signed but not a credit pack (or a product this server has
+    // never heard of). Refused outright - crediting ANYTHING from an unrecognized product would
+    // let a future non-credit product mint credits.
+    if (!pack) { sendJson(res, 400, { error: "unknownproduct", message: "That product isn't a credit pack.", productId: String(t.productId || "") }); return; }
+    // A transaction Apple has already revoked/refunded must never credit, even on first sight.
+    if (t.revocationDate || t.revocationReason !== undefined) { sendJson(res, 400, { error: "revoked", message: "Apple shows that purchase was refunded." }); return; }
+    const transactionId = String(t.transactionId || "");
+    if (!transactionId) { sendJson(res, 400, { error: "badpayload", message: "That purchase couldn't be verified with Apple." }); return; }
+    // StoreKit lets a purchase carry quantity > 1; this client never sends one, but if Apple
+    // says the player paid for N packs, crediting 1 would underpay them. Bounded defensively.
+    const quantity = Math.min(10, Math.max(1, Number(t.quantity) || 1));
+    const credits = pack.credits * quantity;
+    const key = iapLedgerKey(environment, transactionId);
+    // ---- replay guard. NOTHING between this lookup and the ledger write below may await. ----
+    const seen = iapLedger[key];
+    if (seen) {
+      if (seen.uid === acct.uid) {
+        // The idempotent-success case described above - same account, already credited.
+        sendJson(res, 200, { ok: true, alreadyProcessed: true, creditsAdded: 0, transactionId, productId: pack.productId, wallet: walletView(acct) });
+      } else {
+        // Someone replaying another account's receipt (or one device signed into two accounts).
+        // Refused - the credits stay where they landed first.
+        sendJson(res, 409, { error: "alreadyused", message: "That purchase was already applied to a different account." });
+      }
+      return;
+    }
+    iapLedger[key] = { uid: acct.uid, productId: pack.productId, credits, environment, purchaseDate: Number(t.purchaseDate) || 0, ts: Date.now() };
+    persistIapLedgerNow();   // ledger FIRST - see the crash-ordering note on the § REPLAY LEDGER block
+    acct.walletPurchasedCredits = Math.max(0, Number(acct.walletPurchasedCredits) || 0) + credits;
+    persistAccountStoreNow(STORE_ACCOUNTS);   // money moved - never the debounced persist
+    log("iap credited", acct.uid, pack.productId, "credits=" + credits, environment, "txn=" + transactionId);
+    sendJson(res, 200, { ok: true, creditsAdded: credits, transactionId, productId: pack.productId, wallet: walletView(acct) });
     return;
   }
 
@@ -2700,7 +3050,13 @@ async function handleAccountRoute(req, res, url) {
     if (acct.nameFolded === folded) {
       // Same name, possibly a different capitalization. Idempotent and always free - the fold is
       // what identity is enforced on, so this is a label edit, not a rename.
-      if (acct.gameName !== clean) { acct.gameName = clean; scheduleAccountStorePersist(STORE_ACCOUNTS); }
+      // 2026-07-30 § LIVE RENAME PROPAGATION: even a capitalization edit is a visible change on
+      // everyone else's board, so it propagates too.
+      if (acct.gameName !== clean) {
+        acct.gameName = clean;
+        scheduleAccountStorePersist(STORE_ACCOUNTS);
+        try { propagateAccountRename(acct.uid, clean); } catch (e) { log("rename propagation failed", e.message); }
+      }
     } else if (!acct.nameFolded) {
       acct.gameName = clean;
       acct.nameFolded = folded;
@@ -2740,6 +3096,9 @@ async function handleAccountRoute(req, res, url) {
       accountIndex["name:" + folded] = acct.uid;
       scheduleAccountStorePersist(STORE_ACCOUNTS);
       scheduleAccountStorePersist(STORE_ACCT_INDEX);
+      // 2026-07-30 § LIVE RENAME PROPAGATION (Blake: renames "take place right away - even mid
+      // game") - see propagateAccountRename()'s own header comment right above this route.
+      try { propagateAccountRename(acct.uid, clean); } catch (e) { log("rename propagation failed", e.message); }
     }
     // Is there existing history sitting on the board under this name? Report it; do NOT move
     // anything. An automatic merge on a name match would silently hand one relative another
@@ -3880,7 +4239,70 @@ const server = http.createServer((req, res) => {
   // there is nothing here that needs a session. Gated on the same kill switch as the rest of the
   // accounts feature it belongs to - with NASTY_ACCOUNTS_ENABLED=0 this 404s like everything else.
   if (ACCOUNTS_ENABLED && url.pathname === "/shop" && req.method === "GET") {
-    sendJson(res, 200, { items: SHOP_CATALOG });
+    // 2026-07-30 § REAL-MONEY CREDIT PACKS: creditPacks rides along additively (a client that
+    // has never heard of it ignores it, same convention as every response-shape change in this
+    // file). Absent entirely with the IAP kill switch off, so the client falls back to
+    // credits-only presentation.
+    sendJson(res, 200, IAP_ENABLED ? { items: SHOP_CATALOG, creditPacks: CREDIT_PACKS } : { items: SHOP_CATALOG });
+    return;
+  }
+  /* 2026-07-30 § REAL-MONEY CREDIT PACKS - App Store Server Notifications V2. Apple POSTs
+     {signedPayload} here for refunds, revocations, and its own connectivity TEST. Auth is the
+     signature itself (same pinned-root verifier as purchases - there is no session, Apple is
+     the caller), so a forged POST from anyone else dies in verifyAppleSignedJws(). Everything
+     verified is RECORDED (recordIapEvent); the only types acted on are REFUND and REVOKE, which
+     subtract the pack's credits back off walletPurchasedCredits so a refunded pack does not
+     silently leave credits behind. What is NOT handled, stated plainly: credits already SPENT
+     cannot be fully clawed back - the deduction floors at the credits the account still has
+     (balance can reach 0 but never goes negative), the un-recovered remainder is written into
+     the ledger entry as `shortfall`, and items already bought with the refunded credits stay
+     owned. Apple expects a 200 on success and retries on 5xx; a bad signature answers 401. */
+  if (ACCOUNTS_ENABLED && IAP_ENABLED && url.pathname === "/appstore/notifications" && req.method === "POST") {
+    (async () => {
+      const body = await readJsonBody(req);
+      const v = verifyAppleSignedJws(body && body.signedPayload);
+      if (!v.ok) { log("appstore notification rejected", v.reason); sendJson(res, 401, { error: v.reason }); return; }
+      const note = v.payload;
+      const type = String(note.notificationType || "");
+      const subtype = String(note.subtype || "");
+      const data = note.data && typeof note.data === "object" ? note.data : {};
+      // The transaction inside the notification is its OWN signed JWS, verified independently -
+      // the outer envelope being genuine does not vouch for an inner payload nobody checked.
+      let txn = null;
+      if (typeof data.signedTransactionInfo === "string") {
+        const tv = verifyAppleSignedJws(data.signedTransactionInfo);
+        if (tv.ok) txn = tv.payload;
+      }
+      recordIapEvent({
+        type, subtype,
+        environment: String((txn && txn.environment) || data.environment || ""),
+        transactionId: txn ? String(txn.transactionId || "") : "",
+        productId: txn ? String(txn.productId || "") : "",
+      });
+      if ((type === "REFUND" || type === "REVOKE") && txn && txn.bundleId === IAP_BUNDLE_ID) {
+        const environment = txn.environment === "Production" ? "Production" : "Sandbox";
+        const key = iapLedgerKey(environment, String(txn.transactionId || ""));
+        const entry = iapLedger[key];
+        // Only a transaction THIS server credited can be clawed back, and only once - a
+        // replayed/duplicate refund notification is recorded above but deducts nothing again.
+        if (entry && !entry.refunded) {
+          const acct = accounts[entry.uid];
+          const have = acct ? Math.max(0, Number(acct.walletPurchasedCredits) || 0) : 0;
+          const clawedBack = Math.min(entry.credits, have);
+          entry.refunded = true;
+          entry.refundedAt = Date.now();
+          entry.clawedBack = clawedBack;
+          entry.shortfall = entry.credits - clawedBack;
+          persistIapLedgerNow();
+          if (acct) {
+            acct.walletPurchasedCredits = have - clawedBack;
+            persistAccountStoreNow(STORE_ACCOUNTS);
+          }
+          log("iap refund processed", entry.uid, key, "clawedBack=" + clawedBack, "shortfall=" + entry.shortfall);
+        }
+      }
+      sendJson(res, 200, { ok: true });
+    })().catch((e) => { log("appstore notification error", e); sendJson(res, 500, { error: "server error" }); });
     return;
   }
   if (ACCOUNTS_ENABLED && url.pathname.startsWith("/account/")) {
@@ -4797,6 +5219,8 @@ loadLeaderboardEpoch();
 // leaves all six stores empty and writes nothing at all.
 loadAccountStores();
 loadPurchaseSeen();   // 2026-07-28 § POINTS WALLET - purchase-request dedupe, twin of loadSoloSeen()
+loadIapLedger();      // 2026-07-30 § REAL-MONEY CREDIT PACKS - the forever replay ledger
+loadIapEvents();      // 2026-07-30 § REAL-MONEY CREDIT PACKS - the Apple notification audit log
 log(`admin token file: ${ADMIN_TOKEN_FILE}`);
 log(`protocol version: ${PROTOCOL_VERSION}`);
 log(`accounts: ${!ACCOUNTS_ENABLED ? "OFF (NASTY_ACCOUNTS_ENABLED=0)" : (accountsConfigured() ? "on, Apple audiences configured" : "on but Apple is not configured yet - /account/* answers 503")}`);

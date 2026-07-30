@@ -43,6 +43,14 @@ server/claims.json
 # email-codes.json holds a HASH of each pending six-digit sign-in code plus the address it was
 # sent to, so it is personal data even though the code itself is never written down.
 server/email-codes.json
+# 2026-07-28/30 wallet + real-money runtime state for the DEV server (production keeps all of
+# this in Deno KV). purchase-ids.json is the shop's requestId dedupe; iap-ledger.json is the
+# forever ledger of Apple transaction ids that have credited a wallet (the replay guard - real
+# purchase records, never committed to a public repo); iap-events.json is the App Store
+# notification audit log.
+server/purchase-ids.json
+server/iap-ledger.json
+server/iap-events.json
 # The Sign in with Apple key, when Blake creates it (same treatment as the APNs key above).
 server/apple-key.p8
 server/apple-key-id.txt
