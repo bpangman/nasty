@@ -691,6 +691,36 @@
                         StatusBar.swift-sourced reasoning. `#verTap` bumped `v0.62` -> `v0.63`.
                         Full writeup, real measurements, and the palette-work credit: HANDOFF.md
                         "v0.63".
+                      - v0.64 (2026-08-02), Blake caught the v0.63 status-bar gamble not paying
+                        off, plus two more UI reports:
+                        Item 2 (THE HEADLINE FIX): `overlaysWebView` flipped back `true`->`false`
+                        - v0.63's flip had silently turned `syncNativeStatusBarColor()` into a
+                        no-op, which is why Blake saw "nothing changed." The v0.61/v0.63 CSS band
+                        (--feltTopBand/--feltTopBandRGB) is deleted outright, not just disabled -
+                        it never rendered under `overlaysWebView:false` either. Blake's own
+                        follow-up also corrected the COLOR, not just the mechanism: "a faint
+                        color like it used to be," not a seamless page-matching blend (v0.53's
+                        fix) - `syncNativeStatusBarColor()` sends `f.dark`/`DEFAULT_FELT.dark`
+                        again, build 68's original expression, restored verbatim. One working
+                        mechanism now, not two silent no-ops - see body{}'s own dated comment,
+                        § STYLE, for the full story.
+                        Item 1: `.teeBubble`'s near-black background (§ STYLE) made a genuinely
+                        dark peg (Midnight's own Midnight, Ocean Breeze's Deep Blue, Forest's
+                        Pine, etc.) all but vanish. New `teeBubbleBg()` (§ RENDER, right above
+                        `showBubbles()`) lightens a bubble's own fill toward a same-family warm
+                        gray, scaled continuously off the peg's own real WCAG luminance against
+                        the bubble's default color - not a hardcoded palette list, so it
+                        self-corrects for any future palette. A peg that already reads fine
+                        (every DEFAULT_COLORS4/6 color, most shop colors) gets `null` back and the
+                        bubble stays byte-identical.
+                        Item 3 (server-catalog, not this file): Forest's Moss was still reading as
+                        "another green" next to Pine even after v0.63's retune. Replaced with
+                        Reseda Green (a real historical/named muted sage), which is dramatically
+                        LIGHTER and far less saturated than Pine rather than just hue-shifted -
+                        see SHOP_CATALOG's own dated comment, server/server.js (+ the
+                        server/cloud/server.ts twin).
+                        `#verTap` bumped `v0.63` -> `v0.64`. Full writeup, screenshots, and the
+                        simulator verification: HANDOFF.md "v0.64".
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -1184,17 +1214,14 @@
      them would have shifted the no-felt-equipped look by a few RGB values, which the "byte-
      identical to v0.54" requirement does not allow - see HANDOFF.md "v0.55". */
   --feltSurface:#10281a; --feltSurfaceRGB:9,32,20; --feltSurfaceAlpha:0.55; --feltBackdropRGB:5,15,9;
-  /* 2026-07-31 (v0.61, item 7, Blake's own H2 suggestion - see the body{} background rule below
-     and feltTopEdgeColor()'s/applyEquippedFelt()'s own comments, § SHOP, for the full
-     investigation). Default is feltTopEdgeColor(null)'s real computed output - #1c5638 - same
-     "byte-identical to before this pass" rule every other felt token here follows: a player with
-     no felt equipped sees exactly the same top edge as before this change. */
-  --feltTopBand:#1c5638;
-  /* 2026-08-01 (v0.63, item 4) - the RGB triplet of the same color, so the body{} rule below can
-     paint it at PARTIAL alpha (a real rgba()) instead of the flat opaque fill v0.61 used - see
-     that rule's own updated comment for why. Same default-matches-v0.61-exactly rule: #1c5638 =
-     28,86,56. Set alongside --feltTopBand itself, same call site (applyEquippedFelt(), § SHOP). */
-  --feltTopBandRGB:28,86,56;
+  /* 2026-08-02 (v0.64, item 2) - --feltTopBand/--feltTopBandRGB (v0.61/v0.63) are GONE. They
+     painted a CSS band sized to env(safe-area-inset-top), which only reports a real, nonzero
+     value once the WebView's own frame extends under the status bar (StatusBar.overlaysWebView:
+     true) - and v0.63's own honest diagnosis already said as much: under this app's real setting
+     (overlaysWebView:false, restored below, see body{}'s own dated comment), that inset reports
+     ~0, so this band was dead weight rendering at ~0 height the whole time it existed. Removed
+     outright rather than left as unused CSS - see body{}'s own comment for where the top strip's
+     color actually comes from now (the native strip itself, not a web-side band). */
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%}
@@ -1268,10 +1295,57 @@ html,body{margin:0;height:100%}
    real effect of flipping overlaysWebView, on a real notched iPhone - CANNOT be rendered or
    screenshotted in this headless environment. See HANDOFF.md "v0.63" for exactly what was and was
    not possible to verify here. This is the one change in this whole pass that most needs an actual
-   TestFlight check on a real device before it ships past a cautious rollout. */
+   TestFlight check on a real device before it ships past a cautious rollout.
+
+   2026-08-02 (v0.64, item 2) - THE v0.63 GAMBLE ABOVE DID NOT PAY OFF, and Blake caught it twice.
+   Blake, verbatim, this pass: "nothing changed with the top bevel of the iphone screen (near the
+   battery and clock, etc.) Just look back into your memory of this project and see when I asked
+   you to fill in the coloring (or rather how it used to be setup) and switch it back to that
+   please." Two things went wrong, both now corrected:
+   (1) v0.63's own "HONESTY REQUIRED" note above was right to flag overlaysWebView:true as
+   unverified and risky - it turned out to actively break the ONE mechanism that had already been
+   PROVEN, on a real simulator screen, to work: build 68's `syncNativeStatusBarColor()` (see that
+   function's own v0.52/v0.53 comments, § SHOP) painting the native `backgroundView`
+   `overlaysWebView:false` provides. Per StatusBar.swift (re-read again this pass, same file every
+   round above already cited): with `overlaysWebView:true`, that separate native view is REMOVED
+   entirely, so `setBackgroundColor()` becomes a harmless no-op - which is exactly why Blake saw
+   nothing change. v0.63 knew this ("becomes a safe, harmless no-op") and shipped it anyway as "the
+   fallback Blake is explicitly choosing" - but Blake's actual v0.61 ask was for translucency WHILE
+   still following the felt; he never asked to give up the one mechanism that demonstrably worked.
+   (2) The flat/translucent band this comment block used to describe (--feltTopBand/--feltTopBandRGB,
+   removed from :root above) never had anything real to paint under overlaysWebView:false in the
+   first place - v0.63's own diagnosis two paragraphs up already said as much (env(safe-area-inset-
+   top) reports ~0 there). So it wasn't a second working mechanism competing with the native one; it
+   was two NON-working mechanisms (v0.63's broken native no-op, plus a band that only had a chance of
+   rendering under the very setting that broke the native strip) - Blake saw a seam because NEITHER
+   was actually doing anything.
+   THE FIX: `app/capacitor.config.json`'s `StatusBar.overlaysWebView` is back to `false` -
+   `syncNativeStatusBarColor()` is live again. The CSS band is deleted outright, not just disabled,
+   so there is exactly ONE mechanism now, not two silently fighting (or in this case, both silently
+   doing nothing).
+   A SECOND CORRECTION, from Blake directly once the "seamless match" plan above was described back
+   to him, verbatim: "Remember, I want the top bevel part to go back to the very faint version of
+   the felt color. Don't try to match its density, just have it be a faint color like it used to
+   be." That rules out `feltTopEdgeColor(f)` here too (v0.53's own fix, described earlier in this
+   comment block) - Blake was never asking for a pixel-seamless blend with the page underneath, he
+   wanted the strip to read as a muted, faint HINT of the felt. "How it used to be" is build 68's
+   ORIGINAL relationship, before v0.53 ever touched it: the felt's own DARK end (`f.dark`/
+   `DEFAULT_FELT.dark`) - inherently a deep, desaturated-reading shade next to the felt's bright
+   accent color, which is what reads as "faint" against black status-bar icons.
+   `syncNativeStatusBarColor()` (§ SHOP) sends `f.dark`/`DEFAULT_FELT.dark` again, restored verbatim
+   to build 68's own expression, not reinvented. `app/capacitor.config.json`'s static
+   `StatusBar.backgroundColor` is back to `#0e3421` (DEFAULT_FELT.dark) to match, for the very first
+   native frame before this script runs.
+   HONEST LIMIT, stated as plainly as every gap above: `overlaysWebView:false` paints an OPAQUE
+   native UIView - genuine, literal see-through translucency is a hard platform constraint this mode
+   cannot deliver. Blake's clarified ask does not actually need it - a FAINT, MUTED color is not the
+   same thing as a see-through one, and is fully achievable here.
+   VERIFIED ON THE SIMULATOR THIS PASS, not just reasoned about - and specifically checked that the
+   strip still visibly changes per felt (faint does not mean identical across felts) - see
+   HANDOFF.md "v0.64" for the screenshot pairs and exact method (same throwaway-copy technique as
+   every prior release). */
 body{font-family:-apple-system,"Segoe UI",system-ui,sans-serif;color:var(--cream);
-  background:linear-gradient(rgba(var(--feltTopBandRGB),.6),rgba(var(--feltTopBandRGB),.6) env(safe-area-inset-top),transparent env(safe-area-inset-top)),
-    radial-gradient(120% 95% at 50% 28%,var(--felt1),var(--felt2) 78%);
+  background:radial-gradient(120% 95% at 50% 28%,var(--felt1),var(--felt2) 78%);
   overflow:hidden;user-select:none;-webkit-user-select:none}
 button{font:inherit;cursor:pointer}
 .hidden{display:none!important}
@@ -3775,7 +3849,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.63</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.64</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -9458,6 +9532,46 @@ function currentBoardScale(){
   const w=bs.getBoundingClientRect().width;
   return w>0?w/1000:1;
 }
+/* 2026-08-02 (v0.64, item 1) Blake, verbatim: "on the hovering clickable peg buttons if the peg
+   itself is very dark (like some of the midnight ones) can you lighten up the background on their
+   button?" .teeBubble's own fill (§ STYLE) is a fixed near-black rgba(15,10,6,.92) - fine against
+   a bright peg (every DEFAULT_COLORS4/6 color, most shop colors), but a genuinely dark peg -
+   Midnight's own "Midnight" #0c1445, Ocean Breeze's Deep Blue #000e47, Forest's Pine, Sunset's
+   Dusk/Crimson, Midnight's Indigo/Eclipse - reads at a WCAG contrast of barely 1.0-2.0 against
+   that near-black bubble (measured: Midnight #0c1445 is 1.13:1, Ocean's Deep Blue is 1.08:1,
+   effectively invisible) and the peg all but disappears.
+   Deliberately NOT a hardcoded list of "these palettes/colors are dark" - Blake's own ask names
+   Midnight but the bug is general, and a hardcoded list breaks the instant a future palette ships
+   a new dark color. Instead this is derived straight from the peg's own color, using the exact
+   same relLuminanceRGB()/hexToRgbArr() WCAG math already used elsewhere in this file
+   (inkFor()/darkenToLuminance(), § SHOP) - not a new method:
+     1. Compute the peg's real contrast against the bubble's own default fill. If it already clears
+        TEE_BUBBLE_CONTRAST_FLOOR, return null - the bubble stays byte-identical to before this
+        pass for every color that was already fine (verified below: every DEFAULT_COLORS4/6 color
+        clears 2.8:1+, most shop colors clear 2.2:1+).
+     2. Darkening the bubble further is not an option - the default is already near-black. The only
+        way to separate a very dark peg from its own button is to lighten TOWARD a same-family warm
+        gray (TEE_BUBBLE_BG_LIT) - kept in the app's existing dark-glass-with-a-gold-border
+        language, not a redesign of the bubble itself (no size/border/shape change).
+     3. How FAR to lighten is continuous, not a snap-to-gray toggle: `t` scales from 0 (right at the
+        contrast floor - imperceptible nudge) to 1 (a peg so dark it reads near-1:1 against the
+        default - the full lighten). A borderline color (Forest's Pine, Sunset's Crimson) gets a
+        subtle push; a truly invisible one (Midnight, Ocean's Deep Blue) gets the full lift.
+   Checked across every shipped palette (both colors4 and colors6) and both board sizes - see
+   HANDOFF.md "v0.64" for the full before/after contrast table and the real rendered screenshots. */
+const TEE_BUBBLE_BG=[15,10,6];          // rgba(15,10,6) - .teeBubble's own default fill, § STYLE - matched here (not re-hardcoded blind) so a future CSS tweak to that default is one place to also update
+const TEE_BUBBLE_BG_LIT=[92,86,74];     // a lightened, still-dark, same warm-gray family - the bubble stays "the bubble," just readable
+const TEE_BUBBLE_CONTRAST_FLOOR=2.2;    // a floor, not the test (same discipline the Shop's own palette work uses) - re-checked by eye on the real 4p/6p renders, every palette, before trusting this number
+function teeBubbleBg(hex){
+  const rgb=hexToRgbArr(hex);
+  const Lc=relLuminanceRGB(rgb[0],rgb[1],rgb[2]);
+  const LbgDefault=relLuminanceRGB(TEE_BUBBLE_BG[0],TEE_BUBBLE_BG[1],TEE_BUBBLE_BG[2]);
+  const contrastNow=(Lc+0.05)/(LbgDefault+0.05);
+  if(contrastNow>=TEE_BUBBLE_CONTRAST_FLOOR)return null;
+  const t=Math.max(0,Math.min(1,(TEE_BUBBLE_CONTRAST_FLOOR-contrastNow)/(TEE_BUBBLE_CONTRAST_FLOOR-1)));
+  const mix=TEE_BUBBLE_BG.map((v,i)=>Math.round(v+(TEE_BUBBLE_BG_LIT[i]-v)*t));
+  return `rgba(${mix[0]},${mix[1]},${mix[2]},.92)`;
+}
 /* 2026-07-25 item D: showBubbles() is now a thin wrapper around buildBubblePlan(), which does
    ALL the placement work exactly as before but returns a plan instead of touching the DOM. Why:
    a 46px-rendered bubble is a big object in board space on a small phone (about 172 board-px
@@ -9498,6 +9612,12 @@ function showBubbles(list,cls){
     // measure the hard cap on real rendered output. See buildBubblePlan()'s MAX_BADGE_SHIFT.
     b.dataset.s=sp.it.s; b.dataset.pi=sp.it.pi; b.dataset.shift=(sp.shift||0).toFixed(2);
     b.innerHTML=teeSVG(G.seats[sp.it.s].color,true);
+    // 2026-08-02 (v0.64, item 1): lighten this bubble's own background when the seat's peg color
+    // is too dark to read against the default near-black fill - see teeBubbleBg()'s own header
+    // comment, right above showBubbles(), for the full derivation. null (the common case) leaves
+    // the CSS default untouched.
+    const bubBg=teeBubbleBg(G.seats[sp.it.s].color.c);
+    if(bubBg)b.style.background=bubBg;
     b.addEventListener('click',e=>{e.stopPropagation();onTeeClick(sp.it.s,sp.it.pi);});
     layer.appendChild(b);
   });
@@ -14278,16 +14398,12 @@ function applyEquippedFelt(){
   applySurfaceTokens(f);
   syncNativeStatusBarColor(f);
   syncThemeColorMeta(f);
-  // 2026-07-31 (v0.61, item 7, H2): the flat top band's own color (body{}'s CSS, § STYLE) - same
-  // feltTopEdgeColor(f) value the native status bar and the theme-color meta tag both just got set
-  // to, right above, so all three (native status bar, this web-side flat band, the browser tab's
-  // own theme-color) can never disagree about what the "top edge" color is for the current felt.
-  const topBand=feltTopEdgeColor(f);
-  document.documentElement.style.setProperty('--feltTopBand',topBand);
-  // 2026-08-01 (v0.63, item 4): the RGB triplet of the same color, for body{}'s new rgba() band
-  // (§ STYLE) - see that rule's own comment for why this is now translucent instead of opaque.
-  // Same call site, same frame, so it can never disagree with --feltTopBand itself.
-  document.documentElement.style.setProperty('--feltTopBandRGB',hexToRgbArr(topBand).join(','));
+  // 2026-08-02 (v0.64, item 2): the two lines that used to sit here (--feltTopBand/--feltTopBandRGB,
+  // v0.61/v0.63's web-side CSS band) are gone - the band never had anything real to paint under
+  // this app's restored overlaysWebView:false (see body{}'s own dated comment, § STYLE, and
+  // syncNativeStatusBarColor()'s comment right below for the full story). The native status bar
+  // strip and the browser tab's theme-color are the only two things this function still syncs,
+  // both right above, unchanged.
 }
 // v0.52 BUG FIX (Blake: "the felt color changes mid game when I choose it but the area at the
 // top... doesn't follow the color change of the board"). DIAGNOSIS, confirmed by reading
@@ -14310,34 +14426,37 @@ function applyEquippedFelt(){
 // function's own CODE MAP entry, § SHOP, for the boot/live-update story.
 //
 // v0.53 BUG FIX (Blake: "why is [the top strip] soft tinted in the color instead of just full
-// board... can we make that top portion look exactly like everything else?"). CORRECTED DIAGNOSIS
-// - the v0.52 comment above (since edited) had this wrong: it sent the felt's DARK end (`f.dark`),
-// reasoning that matched capacitor.config.json's own static default. It does match that default,
-// but the default itself was never the right target. The PAGE underneath this strip is painted by
-// (§ STYLE, body's own background):
-//   radial-gradient(120% 95% at 50% 28%, var(--felt1), var(--felt2) 78%)
-// - an ellipse centered 28% of the way DOWN the screen, and felt2 does not fully "arrive" until
-// 78% of the way to that ellipse's own edge. At the very TOP of the screen, nowhere near either of
-// those, the gradient is nowhere close to felt2 - so sending `f.dark` painted the strip a visibly
-// darker, duller color than the page immediately below it. That gap WAS the "soft tinted" seam.
-// See feltTopEdgeColor() above for the fix - it computes the color this exact gradient actually
-// paints at the top edge, and this now sends THAT instead of the dark end, for every felt. Also
-// updated capacitor.config.json's static `StatusBar.backgroundColor` (was `#0e3421`, DEFAULT_FELT's
-// dark end - now the default felt's computed top-edge color, `#1c5638`) so the very first frame
-// (before this script runs) matches too, not just every frame after boot - see HANDOFF.md "v0.53"
-// for whether that static change needs a native rebuild (short answer: yes, for the STATIC value
-// itself; this runtime call needed none, same as v0.52 - see that entry).
-// 2026-08-01 (v0.63, item 4): as of this pass, capacitor.config.json's StatusBar.overlaysWebView
-// is `true` (see body{}'s own v0.63 comment, § STYLE, for the full why). Per the plugin's own iOS
-// source (StatusBar.swift, setOverlaysWebView()): when overlaying, the separate native
-// `backgroundView` this call targets is removed entirely, and setBackgroundColor() only ever
-// writes to that view - so this call is now a harmless no-op on a real device, same
-// try/catch-degrades-silently shape as always. Left in, not deleted: cheap, and it keeps a future
-// rollback to overlaysWebView:false (a one-line capacitor.config.json edit) working correctly with
-// no JS change needed.
+// board... can we make that top portion look exactly like everything else?"). This pass changed
+// the color sent here from the felt's DARK end (`f.dark`, the v0.52 original above) to
+// `feltTopEdgeColor(f)` - a computed color that seamlessly matches the exact pixel the page's own
+// gradient paints at y=0, so the native strip would blend perfectly into the web content directly
+// below it. SUPERSEDED by v0.64 below - kept here, not deleted, because the geometry writeup (the
+// gradient math, still real and still correct) has value for feltTopEdgeColor()'s OTHER caller
+// (syncThemeColorMeta(), right below).
+// 2026-08-01 (v0.63, item 4): that pass flipped capacitor.config.json's StatusBar.overlaysWebView
+// to `true`, which per the plugin's own iOS source (StatusBar.swift, setOverlaysWebView()) removes
+// the separate native `backgroundView` this call targets entirely - so for the one release this
+// call was a harmless no-op on a real device (this is WHY Blake saw nothing change - see body{}'s
+// own v0.64 comment, § STYLE, for the full story of how that was caught and reverted).
+// 2026-08-02 (v0.64, item 2) - TWO corrections, not one. First, overlaysWebView is back to `false`
+// - this call is LIVE again. Second, Blake's OWN follow-up clarification, verbatim, once he saw
+// the "seamless match" direction described: "Remember, I want the top bevel part to go back to the
+// very faint version of the felt color. Don't try to match its density, just have it be a faint
+// color like it used to be." That is v0.53's own fix REJECTED, not just v0.63's - Blake never
+// wanted feltTopEdgeColor()'s exact page-matching blend here, he wanted the strip to read as a
+// muted, faint HINT of the felt, not the same visual weight as the board. "How it used to be" is
+// literally build 68 - the ORIGINAL v0.52 mechanism, before v0.53 ever touched it: `f.dark` (or
+// `DEFAULT_FELT.dark` with nothing equipped), the felt's own dark end - inherently a deep, muted
+// shade next to the felt's bright accent color, which is exactly what reads as "faint" against a
+// black-icon status bar. Restored verbatim, not reinvented: same expression this function used at
+// build 68, `capacitor.config.json`'s static `StatusBar.backgroundColor` also reverted `#1c5638`
+// back to `#0e3421` (DEFAULT_FELT.dark) so the very first native frame, before this script ever
+// runs, matches too - see HANDOFF.md "v0.64" for the full before/after and the simulator proof that
+// this still visibly changes per felt (a floor requirement Blake was explicit about: faint does not
+// mean invisible or identical across felts).
 function syncNativeStatusBarColor(f){
   if(!IS_APP)return;
-  try{ CAP.Plugins.StatusBar.setBackgroundColor({color:feltTopEdgeColor(f)}); }catch(e){}
+  try{ CAP.Plugins.StatusBar.setBackgroundColor({color:f?f.dark:DEFAULT_FELT.dark}); }catch(e){}
 }
 // 2026-07-31 (v0.61, item 7) - a separate, definite bug found while investigating Blake's status-
 // bar-seam ask (see the <meta name="theme-color"> tag's own comment, head of the file, and

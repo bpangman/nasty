@@ -1073,17 +1073,42 @@ const SHOP_CATALOG: ShopItem[] = [
       { name: "Seaglass", c: "#215f1c", dark: "#102f0e" },
     ],
   },
+  /* 2026-08-02 (v0.64, item 3) Blake, verbatim: "one of the green colors on forest still needs to
+   * be different - too similar." Pine and Moss, even after the same-day v0.63 follow-up above
+   * (which already moved Moss "brighter and more yellow" specifically to separate it from Pine),
+   * were still both reading as shades of the same green at a glance - the two hues (Pine ~143 deg,
+   * Moss ~76 deg) are 67 degrees apart on paper, but both still sit inside the same broad
+   * "green-to-yellow-green" wedge a player actually sees on the felt, especially at similar
+   * darkness. THE FIX, per this task's own instruction (numbers are a floor, never the test; no
+   * colorblind-safety constraint - Blake already confirmed nobody who plays needs it): rather than
+   * nudge the hue further (already tried, twice), Moss is replaced with Reseda Green, a real
+   * historical/named muted sage-olive (a genuine sourced color, same "steal a real palette"
+   * discipline the rest of this catalog uses) that is DRAMATICALLY lighter and far less saturated
+   * than Pine (L 41.8% vs Pine's 20.4%, saturation 16.4% vs Pine's 48.1%) rather than just
+   * hue-shifted - a muted, grayish sage next to a deep, saturated evergreen reads as unmistakably
+   * different even at a glance, not just under a hue-angle measurement. Pine itself is UNCHANGED -
+   * it stays the palette's one clearly, unambiguously green color, satisfying "Forest must still
+   * read as a forest." Still clears the WCAG >=2.0 wood-contrast floor against all three wood
+   * stops (2.04-3.26, see HANDOFF.md "v0.64" for the full table) - comfortably clear of the
+   * original broken-Yellow range (1.03-1.32) this task's own instructions warn against. Checked by
+   * actually rendering both the 4-player and 6-player boards with Moss forced into home/stable/
+   * starting-block/mid-track next to Pine and looking, not inferred from the numbers alone - see
+   * HANDOFF.md "v0.64" for the screenshots. `dark` computed at the same ~0.505 scale-down every
+   * other color in this palette already uses (verified against all six existing pairs before
+   * picking the multiplier).
+   * BYTE-IDENTICAL TWIN in server/server.js - keep both in sync, same rule as the rest of this
+   * catalog. */
   {
     id: "palette_forest", category: "palette", name: "Forest", cost: 80,
     colors4: [
       { name: "Pine", c: "#1b4d2e", dark: "#0e2717" },
-      { name: "Moss", c: "#62752f", dark: "#313a17" },
+      { name: "Moss", c: "#6C7C59", dark: "#373f2d" },
       { name: "Berry", c: "#6b2049", dark: "#371026" },
       { name: "Amber", c: "#834507", dark: "#442404" },
     ],
     colors6: [
       { name: "Pine", c: "#1b4d2e", dark: "#0e2717" },
-      { name: "Moss", c: "#62752f", dark: "#313a17" },
+      { name: "Moss", c: "#6C7C59", dark: "#373f2d" },
       { name: "Berry", c: "#6b2049", dark: "#371026" },
       { name: "Amber", c: "#834507", dark: "#442404" },
       { name: "Bark", c: "#472e22", dark: "#261812" },
