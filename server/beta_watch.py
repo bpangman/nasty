@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '72ecfc77-9fa9-4c51-a16a-1654f3027f71'
+BUILD_SUBMISSION_ID = '04b7cbeb-4fc9-48fc-8e98-9d8b66b73d18'
 
 
 def current_build():
@@ -101,11 +101,15 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p>What is in this one - the Shop's paid color options got a real upgrade, and a broken button got fixed:</p>
+<p style="background:#fff3cd;padding:12px 16px;border-radius:8px;border:1px solid #e6c260"><b>Please check one thing for me first:</b> this update changes how the very top of the screen works, behind the clock and battery, trying to finally fix that color seam up there. Open the app and just glance at the top of the screen. It should look normal, no weird overlap with the clock or battery or the notch. If anything looks off up there, tell Cortana right away.</p>
+<p>Everything else in this update:</p>
 <ul>
-<li><b>Every peg color option was checked for how well it shows up on the board.</b> The faint ones (the gold on Royal, the tan on Ocean Breeze, and a few others) are now much easier to see, both mid game and sitting in home, stable, or on their starting spot.</li>
-<li><b>Midnight, Royal, and Forest now actually look like their names.</b> Midnight is genuinely deep blues and near black, Royal leads with a true purple and a richer gold, and Forest is led by real greens instead of an odd mix.</li>
-<li><b>The credit pack buttons in the Shop are fixed.</b> They were showing yellow text on a yellow background and were basically impossible to read - now they are dark text on gold, with a little ring so they still stand out as real-money buttons.</li>
+<li><b>The little X buttons now line up exactly with the title next to them</b> in the Shop, Leaderboard, and every other window - measured this time, not eyeballed.</li>
+<li><b>Buying anything now shows a bigger "you got it" message, centered on the screen</b> - credits, palettes, felts, titles, the nickname token, Online Access, all of them, not just Online Access like before.</li>
+<li><b>Once you equip something, that confirmation message now fades away on its own</b> even in the middle of a game, instead of sitting there.</li>
+<li><b>The Shop's Nickname Change now lets you change your name right from the Shop</b> if you already hold a token - no need to go find it in the Admin panel.</li>
+<li><b>The credit pack buttons in the Shop are easier to read</b> - the felt color shows through now instead of a solid gold block, with white text.</li>
+<li><b>The five paid color options in the Shop got another pass</b> - Sunset, Forest, Ocean Breeze, Royal and Midnight should all genuinely match their names now.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -116,11 +120,11 @@ try:
 <a href="https://nastyboardgame.com">nastyboardgame.com</a></p>
 <p>Same game, same online rooms, app players and browser players share tables with the 4 letter codes.</p>
 <p><b>Your own phone:</b> TestFlight will auto update you to the new build if it hasn't already.</p>
-<p>Play hard for a week and send Cortana anything weird. After that: one command from her, one "Release" tap from you, and NASTY is on the App Store.</p>
+<p>Play hard for a week and send Cortana anything weird, especially that top-of-screen check above. After that: one command from her, one "Release" tap from you, and NASTY is on the App Store.</p>
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - shop palette colors upgraded, yellow-on-yellow credit buttons fixed', body], check=True)
+                    f'NASTY: build {BUILD} is live - please check the top of the screen first', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
