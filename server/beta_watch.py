@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = 'fcad8e03-4fd1-47ba-83ec-37bc47d14609'
+BUILD_SUBMISSION_ID = 'cbc99edd-0821-4949-8d5c-9cdd0d6164ec'
 
 
 def current_build():
@@ -101,12 +101,12 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p>What is in this one - the big Shop money update, plus the board and pop-up polish:</p>
+<p>What is in this one - a popups fix, a clearer Shop section, and two honest messages instead of dead ends:</p>
 <ul>
-<li><b>The Shop takes real money now.</b> Everything is priced in credits (10 credits = $1), and there are credit packs you can buy through Apple - so anything in the Shop can be bought outright, even before you have earned enough. One heads up: the buy buttons switch on once the App Store paperwork on your end is done; earning credits by winning works exactly as always.</li>
-<li><b>Nickname changes are clearer.</b> Two buttons now, a heads up before your one free change (it locks your name for 30 days), and a clear confirmation before a token is ever redeemed. You can also buy nickname and online tokens right inside Shop Customizations on the Admin page.</li>
-<li><b>Name changes land instantly - even mid game.</b> Change your nickname and everyone at the table sees it right away, on the board itself.</li>
-<li><b>Board and pop-up polish.</b> Drag the board around with one finger while zoomed in, every pop-up is centered again with its X pinned to the window, and the four titles finally each look different.</li>
+<li><b>Popup close buttons fixed for good.</b> The X in the corner of a popup can no longer get covered by text scrolling underneath it - the title and the X now stay put while only the middle of the popup scrolls. Also, 12 popups lost their X entirely because it was just a second way to tap a Cancel or OK button already sitting right there - the popups that kept their X are the ones with an actual Close button.</li>
+<li><b>Shop's Online Access section is clearer.</b> It is now called "Extend Online Access" and shows how many days you have left, plus any extra months you already bought and banked ahead.</li>
+<li><b>The delete account warning is honest now.</b> It tells you plainly that deleting your account destroys any credits you paid real money for, for good, with no refund.</li>
+<li><b>Greyed out Buy buttons finally say something.</b> Tapping one now tells you exactly how many more credits you need instead of doing nothing.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -121,7 +121,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - the Shop takes real money now, plus clearer nickname changes', body], check=True)
+                    f'NASTY: build {BUILD} is live - popups fixed, clearer Shop, honest delete warning', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
