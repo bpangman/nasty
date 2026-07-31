@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = 'cbc99edd-0821-4949-8d5c-9cdd0d6164ec'
+BUILD_SUBMISSION_ID = '0e65904a-16fc-49c1-87fe-0eb12b4b1401'
 
 
 def current_build():
@@ -101,12 +101,13 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p>What is in this one - a popups fix, a clearer Shop section, and two honest messages instead of dead ends:</p>
+<p>What is in this one - a hidden message finally shows up, the Shop's day counter got clearer, and popups look a little more polished:</p>
 <ul>
-<li><b>Popup close buttons fixed for good.</b> The X in the corner of a popup can no longer get covered by text scrolling underneath it - the title and the X now stay put while only the middle of the popup scrolls. Also, 12 popups lost their X entirely because it was just a second way to tap a Cancel or OK button already sitting right there - the popups that kept their X are the ones with an actual Close button.</li>
-<li><b>Shop's Online Access section is clearer.</b> It is now called "Extend Online Access" and shows how many days you have left, plus any extra months you already bought and banked ahead.</li>
-<li><b>The delete account warning is honest now.</b> It tells you plainly that deleting your account destroys any credits you paid real money for, for good, with no refund.</li>
-<li><b>Greyed out Buy buttons finally say something.</b> Tapping one now tells you exactly how many more credits you need instead of doing nothing.</li>
+<li><b>The "not enough credits" message no longer hides.</b> Before, if you tried to buy something you could not afford, the message popped up behind the Shop or Admin window - you would not see it until you closed the window. Now it always shows up front and center, right when you tap.</li>
+<li><b>The Shop's days-left number is bolder and updates instantly.</b> It is easier to spot now, and after you buy more Online Access days it updates right away instead of needing you to close and reopen the Shop.</li>
+<li><b>Popup X buttons sit evenly with the title now,</b> with a little more breathing room underneath, instead of crowding the top of the window.</li>
+<li><b>Buying Online Access gives you a real celebration on screen</b> so you know it actually went through.</li>
+<li><b>The color at the very top of the screen, near the clock and battery, blends into the felt better</b> instead of showing an obvious hard line.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -121,7 +122,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - popups fixed, clearer Shop, honest delete warning', body], check=True)
+                    f'NASTY: build {BUILD} is live - the hidden credits message now shows up, clearer Shop days-left', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
