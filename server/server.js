@@ -1271,151 +1271,250 @@ const SHOP_CATALOG = [
   // stays internally distinct. Each entry carries colors4/colors6 - full replacements for the
   // client's COLORS4/COLORS6 arrays, same {name,c,dark} shape per seat, because the client uses
   // the per-seat NAME in team-pairing text ("Green + Pink") - so every seat here has a name too.
-  /* 2026-07-31 (peg-visibility pass, Blake's item 4 + item 5) - every color below was
-   * rebuilt from scratch against two hard requirements Blake gave directly:
-   *   item 4, verbatim: "verify all the peg color options. some of them (i.e. the yellowish
-   *     one on royal or the tannish one on ocean breeze) have the problem we had way back in
-   *     the day with the original yellow (default) pegs slots (meaning home, stable, and
-   *     starting block). Make sure these ones are more pronounced on the board." Clarified
-   *     later the same day: "and by dense I don't mean bigger, I just mean not as faint" - so
-   *     the fix is color intensity only (deeper, more saturated hex values), never a size/
-   *     stroke-width change. The board itself paints home rows, the loop's starting-block
-   *     holes, and stable (base) holes all using the seat's OWN color for the ring/outline
-   *     around each hole (see index.html, drawBoard(), § RENDER) - a peg is always the same
-   *     color as the slot it sits in, on purpose (Blake: "I don't want the pegs to be a
-   *     different color than their home/stable/starting block... they should still be the
-   *     same color as each other"), so the only lever that exists is making that ONE shared
-   *     color itself read clearly against the board's warm tan/gold wood
-   *     (#f0d9ab/#e2c288/#cfa968, drawBoard()'s "url(#wood)" gradient) - exactly the same root
-   *     cause and the same fix already proven on the original default Yellow (see the
-   *     v0.11.3 comment a few hundred lines into index.html's drawBoard()).
-   *   item 5, verbatim: "can you make sure the color schemes match the names you've given
-   *     them? for instance, the 'midnight' colors (as well as 'royal' and 'forest') don't
-   *     really match that description. Make these more distinct!"
-   * Method: every color was checked with the actual WCAG contrast-ratio formula (relative
-   * luminance) against all three wood-gradient stops, threshold >=2.0 (the old default Yellow,
-   * #f0c419, measured 1.03-1.32 against this same wood - anything down in that range is a
-   * confirmed repeat of the original bug). Every color was ALSO checked pairwise against every
-   * other color in its own colors4/colors6 array (both plain and simulated for protanopia/
-   * deuteranopia) so seat colors stay tellable apart at the table, not just readable against
-   * the board. Nobody owns any of these palettes yet (still in testing, Blake's call), so nothing
-   * here needed to preserve a prior look for its own sake. Full numbers live with the session
-   * that did this pass, not repeated here - see HANDOFF.md.
-   *   Sunset - kept its coral/dusk/rose/gold sunset identity, deepened every swatch that was
-   *     too pale to read (old Rose/Gold/Cream all measured under 1.15 against the wood); the
-   *     old pale "Cream" is now "Dune", a muted dusk-horizon taupe that does not collide with
-   *     the deepened Coral.
-   *   Ocean Breeze - kept teal/deep-blue/coral, replaced the named-and-shamed pale "Sand"
-   *     with "Driftwood" (a real color, not a wash) and "Seafoam" with a deeper "Seaglass" -
-   *     both of the old ones measured ~1.0 against the wood, i.e. functionally invisible.
-   *   Forest - item 5 rework: now genuinely green-forward ("Pine"/"Moss", two real forest
-   *     greens) plus "Berry"/"Amber" as the warm accents; the old pale-blue "Sky" is gone
-   *     entirely (never read as "forest"), "Bark" was retuned off a green-vs-brown protanopia
-   *     collision, and the old washed-out "Birch" is now a deep slate-blue that actually holds
-   *     up against the wood.
-   *   Royal - item 5 rework: colors4 had NO purple at all before this pass, which is why it
-   *     never read as "royal" - now leads with a true "Amethyst" purple plus a deepened
-   *     "Gold", alongside Sapphire/Crimson; colors6 replaces the old pale "Ivory" with
-   *     "Pearl" (a cool, deep, purple-leaning neutral that does not collide with Emerald).
-   *   Midnight - item 5 rework, ground up: was cyan/violet/magenta/amber/silver/lime, i.e. a
-   *     bright rainbow with nothing midnight about it. Now "Midnight"/"Indigo"/"Slate"
-   *     (genuine deep blues and near-black) carry the name, with "Starlight"/"Frost" as the
-   *     cool bright accents every dark palette needs to stay tellable apart at a glance, and
-   *     "Eclipse" (deep plum-black) rounding out the 6-seat board.
-   * ROUND 2, same day: Blake looked at the round-1 render and flagged Royal's Gold and Ocean
-   * Breeze's Driftwood as still the faintest thing on the board even after the rebuild above -
-   * both are the deliberately neutral/desaturated seat in their palette, and a neutral color
-   * needs MORE luminance contrast than a saturated one to feel equally present (WCAG contrast is
-   * luminance-only; it does not credit a color for being vivid). Densified both again: Gold
-   * #996a12->#7a520e (wood contrast 2.15->3.13), Driftwood #6a5e44->#564b37 (2.89->3.88) - still
-   * clearly the same two colors, just with real weight now. Re-verified pairwise against every
-   * sibling in their own colors4/colors6 array (plain + simulated protanopia/deuteranopia) -
-   * still clean.
+  /* 2026-07-31 (v0.63, ALL FIVE palettes redone, ground-up method change) - Blake looked at the
+   * v0.62 rebuild above live (iOS build 77) and rejected it outright, verbatim: "the colors
+   * actually got worse. sunset doesn't look like sunset at all, forest has 2 greens that are
+   * almost indistinguishable, I know you're still changing midnight but all 4 look the same in
+   * build 77, royal should have royal purple, gold, etc. Please just find a color palette online
+   * of other games that have different colored game pieces and steal those color schemes so we
+   * know they match their description and are distinguishable."
+   * THE METHOD CHANGE THIS INSTRUCTS: v0.62 (and the first Midnight-only follow-up attempt,
+   * superseded below without ever shipping) hand-derived every hex value from HSL math tuned
+   * against WCAG contrast and a simulated-colorblindness distance - and that approach produced
+   * colors that passed every number and still looked like shades of each other on the real
+   * board. Blake's fix for that is not "tune the numbers harder," it is "stop hand-deriving and
+   * borrow color sets that have already been solved by someone else" - so every color below
+   * traces to a REAL, NAMED, SOURCED color: an established design-system token (Tailwind CSS),
+   * a real pigment/gem/mineral name (Prussian Blue, Sapphire Blue, Pine Green, DarkGoldenrod),
+   * a CSS/X11 named color (Indigo, DarkRed, SlateBlue, SeaGreen), or a colorblind-safe
+   * categorical palette built for exactly this problem (Okabe-Ito). Sources are noted per color
+   * below. Every sourced color was then DARKENED OR RETUNED AS NEEDED (never lightened past its
+   * source) to clear this board's wood-contrast floor and to separate it from its own palette
+   * siblings - the source is the starting point and the reason each hue was picked, not a
+   * license to skip the contrast/CVD floor from v0.62, which still applies (see METHOD below).
+   * PRIORITY ORDER, Blake's own words carried over from the Midnight-only round and now applied
+   * to all five: a color matching its palette's NAME is desired, but DISTINGUISHABILITY WINS
+   * every time the two conflict - see Forest below for the clearest example of that trade.
+   * THE FIVE PALETTES AND WHERE EACH COLOR CAME FROM:
+   *   Sunset ("warm oranges, pinks, deep reds, dusk purple", Blake's own words) - Coral, Rose,
+   *     Crimson and Violet are the four-player set, matching those four words exactly; Dusk
+   *     (a second, cooler navy-toned dusk color) and Gold round out the 6-player board. Every
+   *     hue traces to the Tailwind CSS palette (orange/pink/red/violet/blue families,
+   *     independently retuned darker for wood contrast and to spread the four warm colors apart
+   *     by VALUE as well as hue, since four saturated warm hues packed into ~75 degrees of the
+   *     wheel collide if they are all the same darkness) except Gold, which is a retuned
+   *     DarkGoldenrod (CSS named color).
+   *   Ocean Breeze - Teal (real named color, darkened), Deep Blue (Prussian Blue, a real
+   *     historical pigment name), Coral (darkened Pantone "Living Coral", the 2019 Pantone
+   *     Color of the Year), Driftwood (a darkened real sand/driftwood tone), Anemone (CSS
+   *     SlateBlue, unmodified hue) and Seaglass (darkened CSS SeaGreen, pushed greener to clear
+   *     Teal).
+   *   Forest - Pine (the real named color "Pine Green", retuned bluer/deeper - see below for
+   *     why), Moss (the real "Moss Green", retuned brighter and more yellow), Berry (Crayola's
+   *     real "Boysenberry", darkened), Amber (a real "Metallic Gold" family tone, brightened and
+   *     warmed toward orange so it reads as gold rather than olive), Bark (the real named color
+   *     "Bark Brown") and Birch (a neutral warm-gray birch-bark tone - deliberately NOT another
+   *     green). THE NAME-VS-DISTINGUISHABILITY TRADE, explicit per Blake's rule: a true green
+   *     Pine (its most "forest" hue, ~175 degrees) sits dangerously close to Berry's magenta
+   *     under simulated red-green colorblindness - deep saturated green and deep saturated
+   *     magenta are a classic, well-documented CVD collision, not a numeric artifact. Retuning
+   *     Pine bluer (~195 degrees, still reads as a dark teal-green pine) fixed that pairing
+   *     outright while every other pairing held. Distinguishability won; Pine gave a little
+   *     ground on how "green" it looks so Moss could be the palette's one unambiguous green.
+   *   Royal ("royal purple AND gold", Blake's own words, both now genuinely present) - Amethyst
+   *     (a real sourced "Royal Purple" hex), Sapphire (the real named color "Sapphire Blue"),
+   *     Crimson (the real CSS named "Crimson", darkened), Pearl (a true neutral gray, not the
+   *     pale off-white "pearl" usually means - a pale pearl fails the wood-contrast floor the
+   *     same way the original broken Yellow did, so distinguishability/legibility won over the
+   *     literal name here too), Emerald (a darkened real "Emerald Green") and Gold (a darkened,
+   *     re-warmed "Metallic Gold" family tone, same warming Amber in Forest got, for the same
+   *     reason - a cooler/more olive gold read as green-brown rather than gold on the real
+   *     render).
+   *   Midnight - see the dated comment directly below this one; it was reworked a second time,
+   *     after the pass immediately above (still describing the OLD, now-superseded colors)
+   *     failed exactly the way Blake described for the other four - the new Midnight uses this
+   *     same sourced-color method (IBM Design Library, Okabe-Ito, CSS named colors, a sourced
+   *     night-sky palette) rather than the hand-derived HSL math the never-shipped first
+   *     Midnight-only follow-up used.
+   * METHOD, unchanged floor from v0.62 (numbers are a floor, not the test - see below): every
+   * color's "c" value clears WCAG contrast >=2.0 against all three wood-gradient stops
+   * (#f0d9ab/#e2c288/#cfa968; the original broken default Yellow measured 1.03-1.32 there) -
+   * this pass's worst case across all five palettes is 2.05 (Forest's Birch), most land 2.2-8+.
+   * Every color was also checked pairwise, within its own colors4/colors6 array, against a
+   * simulated protanopia/deuteranopia transform - and CRUCIALLY, per the lesson of the
+   * Midnight-only round, THE NUMBERS WERE TREATED AS A FLOOR, NOT THE TEST: every one of the
+   * ten renders below (five palettes x 4-player and 6-player boards) was actually generated
+   * (palette injected through the app's own repaintSeatColors()/COLORS4/COLORS6 equip
+   * machinery, pegs forced into home, stable, starting-block and mid-track for every seat
+   * simultaneously) and looked at, and colors that passed the numbers but still read as
+   * confusable in the render (Forest's Pine/Berry, Ocean Breeze's Teal/Deep Blue after an
+   * earlier retune, Royal's and Sunset's golds reading as olive rather than gold) were retuned
+   * again until the real board looked right, not just the math.
+   * BYTE-IDENTICAL TWIN in server/cloud/server.ts - keep both in sync, same rule as the rest of
+   * this catalog. */
+  /* 2026-07-31, same day, follow-up pass - THE COLORBLIND CONSTRAINT ABOVE IS WITHDRAWN. The
+   * "retuned bluer" Pine and "cooler navy-toned" Dusk described in the big comment above were
+   * both driven by a protanopia/deuteranopia simulation gate I imposed on my own initiative -
+   * Blake never asked for it. I asked him directly whether anyone who actually plays is red-green
+   * colorblind. His answer, verbatim: "no one is, drop the rule." That gate is why Sunset's Dusk
+   * became a plain navy blue (exactly the "doesn't look like sunset" complaint) and why Forest's
+   * Pine gave up its green for a teal-blue (exactly the "forest has no green" complaint) - the
+   * math was satisfied and the names still failed, because the constraint being solved for was
+   * never the real one. It's gone now. Only the two rules in the big comment above still bind:
+   * every seat unmistakably different TO NORMAL VISION, and the palette reads as its name -
+   * compatible again with the gate removed. Re-fixed below, same real-sourced-color method, same
+   * WCAG wood-contrast floor (>=2.0, still a floor not the test), same discipline of actually
+   * rendering the real 4p/6p boards and looking before calling it done. Royal and Midnight were
+   * already reviewed clean under the OLD gate and are untouched here - the gate coming off can
+   * only help them, never hurt, since it was strictly extra constraint.
+   *   Sunset's Dusk - was Tailwind blue-900 (a plain blue). Now "Byzantium", a real historical
+   *     named color (#702963), darkened slightly: a genuine warm wine/plum purple, the "dusk"
+   *     end of a sunset gradient rather than a night-sky color. Distinguished from Violet (the
+   *     4-player purple) by lightness and by leaning redder/more magenta where Violet leans
+   *     bluer - confirmed on the real 6-player render, not just by hue-angle math.
+   *   Sunset's Crimson - was #5f1113, so dark it read closer to near-black than to a color and
+   *     sat too close to Coral in hue with only darkness telling them apart. Brightened toward a
+   *     true CSS "DarkRed" (#8B0000) while staying the darkest of the four core Sunset colors.
+   *   Sunset's Gold - was reading olive/brown rather than gold. Rebrightened toward the
+   *     DarkGoldenrod family (#B8860B) it was already sourced from, warmed further toward orange
+   *     so it reads gold against the warm wood instead of blending toward brown.
+   *   Forest's Pine - was Pine Green retuned bluer/teal specifically to dodge Berry under CVD
+   *     simulation; with that gate gone it goes back to being an actual pine: a deep evergreen
+   *     from the real "Hunter Green" family (~#355E3B), darkened further for wood contrast.
+   *   Forest's Moss - unchanged hue family but retuned: the prior value measured 1.63 against the
+   *     wood floor (below the 2.0 line, i.e. it had the same faintness problem as the original
+   *     broken Yellow) and, more importantly, sat too close to Pine in brightness once Pine
+   *     stopped being a blue. Deepened and re-saturated so Moss is now unmistakably the LIGHTER
+   *     of the two - real forest greens told apart by lightness alone, no CVD math needed for it.
+   *   Ocean Breeze - not part of Blake's complaint (he named Sunset, Forest, Midnight, Royal, not
+   *     this one), reviewed anyway per instruction. Teal/Deep Blue/Coral/Anemone/Seaglass all
+   *     still read clearly and still read "ocean" - untouched. Driftwood, on an actual look at the
+   *     rendered board (not the number - it already cleared the 2.0 floor at 2.91), was still
+   *     visibly the faintest color on the board, nearly blending into the tan wood the same way
+   *     Royal's Gold and this same Driftwood did back in the v0.62 round-2 densify. Same fix
+   *     again: darker and less saturated, not a hue change - #453c2c (wood contrast 4.92) - a true
+   *     dark driftwood-gray that now holds its own next to the other five.
+   * Every change below was re-rendered on both the 4-player and 6-player boards (pegs forced into
+   * home/stable/starting-block for every seat via repaintSeatColors(), same harness as the rest of
+   * this file's palette work) and looked at directly, not inferred from the contrast numbers.
    * BYTE-IDENTICAL TWIN in server/cloud/server.ts - keep both in sync, same rule as the rest of
    * this catalog. */
   {
     id: "palette_sunset", category: "palette", name: "Sunset", cost: 50,
     colors4: [
-      { name: "Coral", c: "#c94824", dark: "#661f0e" },
-      { name: "Dusk", c: "#3e4e7e", dark: "#232e4e" },
-      { name: "Rose", c: "#b83a6e", dark: "#541831" },
-      { name: "Gold", c: "#9c620c", dark: "#4a2e04" },
+      { name: "Coral", c: "#c4431c", dark: "#62220e" },
+      { name: "Rose", c: "#b6207a", dark: "#5b103d" },
+      { name: "Crimson", c: "#8a1a1a", dark: "#450d0d" },
+      { name: "Violet", c: "#6D28D9", dark: "#35136c" },
     ],
     colors6: [
-      { name: "Coral", c: "#c94824", dark: "#661f0e" },
-      { name: "Dusk", c: "#3e4e7e", dark: "#232e4e" },
-      { name: "Rose", c: "#b83a6e", dark: "#541831" },
-      { name: "Dune", c: "#6a5039", dark: "#382b1c" },
-      { name: "Violet", c: "#8a5ba6", dark: "#54326a" },
-      { name: "Gold", c: "#9c620c", dark: "#4a2e04" },
+      { name: "Coral", c: "#c4431c", dark: "#62220e" },
+      { name: "Rose", c: "#b6207a", dark: "#5b103d" },
+      { name: "Crimson", c: "#8a1a1a", dark: "#450d0d" },
+      { name: "Gold", c: "#a8620c", dark: "#543106" },
+      { name: "Dusk", c: "#5c2153", dark: "#2e102a" },
+      { name: "Violet", c: "#6D28D9", dark: "#35136c" },
     ],
   },
   {
     id: "palette_ocean", category: "palette", name: "Ocean Breeze", cost: 50,
     colors4: [
-      { name: "Teal", c: "#176459", dark: "#0c342e" },
-      { name: "Deep Blue", c: "#2d4f8f", dark: "#182c55" },
-      { name: "Coral", c: "#bf4630", dark: "#5c1e13" },
-      { name: "Driftwood", c: "#564b37", dark: "#2b251b" },
+      { name: "Teal", c: "#0c6e6e", dark: "#063737" },
+      { name: "Deep Blue", c: "#000e47", dark: "#000724" },
+      { name: "Coral", c: "#A83E2C", dark: "#552016" },
+      { name: "Driftwood", c: "#453c2c", dark: "#231e16" },
     ],
     colors6: [
-      { name: "Teal", c: "#176459", dark: "#0c342e" },
-      { name: "Deep Blue", c: "#2d4f8f", dark: "#182c55" },
-      { name: "Coral", c: "#bf4630", dark: "#5c1e13" },
-      { name: "Driftwood", c: "#564b37", dark: "#2b251b" },
-      { name: "Anemone", c: "#7a52a0", dark: "#3c284f" },
-      { name: "Seaglass", c: "#2b823a", dark: "#15401c" },
+      { name: "Teal", c: "#0c6e6e", dark: "#063737" },
+      { name: "Deep Blue", c: "#000e47", dark: "#000724" },
+      { name: "Coral", c: "#A83E2C", dark: "#552016" },
+      { name: "Driftwood", c: "#453c2c", dark: "#231e16" },
+      { name: "Anemone", c: "#6A5ACD", dark: "#2d2371" },
+      { name: "Seaglass", c: "#215f1c", dark: "#102f0e" },
     ],
   },
   {
     id: "palette_forest", category: "palette", name: "Forest", cost: 80,
     colors4: [
-      { name: "Pine", c: "#1f6b3d", dark: "#10361f" },
-      { name: "Moss", c: "#4f6b28", dark: "#283615" },
-      { name: "Berry", c: "#b04a72", dark: "#6e2543" },
-      { name: "Amber", c: "#a85d16", dark: "#542e0b" },
+      { name: "Pine", c: "#1b4d2e", dark: "#0e2717" },
+      { name: "Moss", c: "#62752f", dark: "#313a17" },
+      { name: "Berry", c: "#6b2049", dark: "#371026" },
+      { name: "Amber", c: "#834507", dark: "#442404" },
     ],
     colors6: [
-      { name: "Pine", c: "#1f6b3d", dark: "#10361f" },
-      { name: "Moss", c: "#4f6b28", dark: "#283615" },
-      { name: "Berry", c: "#b04a72", dark: "#6e2543" },
-      { name: "Birch", c: "#3f5866", dark: "#1f2c33" },
-      { name: "Bark", c: "#6e3820", dark: "#391c10" },
-      { name: "Amber", c: "#a85d16", dark: "#542e0b" },
+      { name: "Pine", c: "#1b4d2e", dark: "#0e2717" },
+      { name: "Moss", c: "#62752f", dark: "#313a17" },
+      { name: "Berry", c: "#6b2049", dark: "#371026" },
+      { name: "Amber", c: "#834507", dark: "#442404" },
+      { name: "Bark", c: "#472e22", dark: "#261812" },
+      { name: "Birch", c: "#7a7671", dark: "#3d3b38" },
     ],
   },
   {
     id: "palette_royal", category: "palette", name: "Royal", cost: 150,
     colors4: [
-      { name: "Amethyst", c: "#6b2fa0", dark: "#341750" },
-      { name: "Sapphire", c: "#3a55b4", dark: "#1f2f6e" },
-      { name: "Crimson", c: "#b12a3c", dark: "#6d1220" },
-      { name: "Gold", c: "#7a520e", dark: "#3c2907" },
+      { name: "Amethyst", c: "#6C3BAA", dark: "#371e57" },
+      { name: "Sapphire", c: "#0F52BA", dark: "#082a5e" },
+      { name: "Crimson", c: "#B01030", dark: "#590818" },
+      { name: "Gold", c: "#744911", dark: "#3a2409" },
     ],
     colors6: [
-      { name: "Amethyst", c: "#6b2fa0", dark: "#341750" },
-      { name: "Sapphire", c: "#3a55b4", dark: "#1f2f6e" },
-      { name: "Crimson", c: "#b12a3c", dark: "#6d1220" },
-      { name: "Pearl", c: "#5a5468", dark: "#2d2a34" },
-      { name: "Emerald", c: "#1a7550", dark: "#0d3a28" },
-      { name: "Gold", c: "#7a520e", dark: "#3c2907" },
+      { name: "Amethyst", c: "#6C3BAA", dark: "#371e57" },
+      { name: "Sapphire", c: "#0F52BA", dark: "#082a5e" },
+      { name: "Crimson", c: "#B01030", dark: "#590818" },
+      { name: "Pearl", c: "#707070", dark: "#383838" },
+      { name: "Emerald", c: "#1e6742", dark: "#0f3321" },
+      { name: "Gold", c: "#744911", dark: "#3a2409" },
     ],
   },
+  /* 2026-07-31 (v0.63, Midnight's second rework, replacing the never-shipped hand-derived pass
+   * described in this file's git history) - the pass right above (which described colors4 as
+   * Midnight/Indigo/Slate/Starlight and colors6 adding Eclipse/Frost-renamed-Aurora) fixed the
+   * three flagged pairs (Midnight/Slate, Indigo/Eclipse, Starlight/Frost) with hand-tuned HSL
+   * math and a real render confirmed it worked - but it was never shipped, because Blake's very
+   * next message rejected the ENTIRE v0.62 rebuild across all five palettes (see the big comment
+   * above palette_sunset) and asked for a method change: stop hand-deriving hex values, use real
+   * sourced color sets instead. Midnight is redone here on that same new method, from scratch,
+   * rather than keeping the hand-derived version just because it happened to already work -
+   * consistency with the other four palettes' sourcing standard matters more than reusing a
+   * result that was never actually seen or approved.
+   * SOURCES, one per color: Midnight itself - a real sourced night-sky palette stop. Indigo -
+   * the real CSS/X11 named color "Indigo" (#4B0082), picked over IBM Design Library's brighter
+   * "Indigo 50" token specifically because that brighter version sat too close to Starlight once
+   * both were rendered bright (see METHOD below - a numeric pass, then the render caught it).
+   * Slate - Tailwind CSS's "slate-500" token, a true low-saturation blue-gray. Eclipse - the CSS
+   * named color "DarkRed", read as a lunar/blood-moon red-black. Aurora - Okabe-Ito's
+   * colorblind-safe "Bluish Green", darkened to clear the wood-contrast floor (the Okabe-Ito
+   * palette is tuned for on-screen figures at full brightness, not against this board's warm
+   * wood, so darkening was still required). Starlight - Okabe-Ito's "Sky Blue", likewise
+   * darkened.
+   * METHOD, same floor as the big comment above: WCAG wood contrast >=2.0 (this palette's colors
+   * land 2.16-7.93), pairwise protanopia/deuteranopia-simulated distance checked across the full
+   * colors4 and colors6 arrays (worst case 44.6, Indigo vs. Aurora - the three ORIGINALLY
+   * flagged pairs, Midnight/Slate, Indigo/Eclipse and Starlight/Aurora-the-artist-formerly-
+   * known-as-Frost, all land 45-148). Then, because a numeric pass alone is exactly what
+   * produced the pairs this whole task exists to fix: the real 6-player and 4-player boards were
+   * rendered (palette injected through repaintSeatColors()/COLORS4/COLORS6, pegs forced into
+   * home/stable/starting-block/mid-track for every seat) and looked at. That render is what
+   * caught IBM's brighter Indigo colliding with Starlight even though its own numbers passed -
+   * swapped for CSS Indigo (above) and re-rendered clean.
+   * BYTE-IDENTICAL TWIN in server/cloud/server.ts - keep both in sync, same rule as the rest of
+   * this catalog. */
   {
     id: "palette_midnight", category: "palette", name: "Midnight", cost: 250,
     colors4: [
-      { name: "Midnight", c: "#0c1526", dark: "#060b16" },
-      { name: "Indigo", c: "#3d3374", dark: "#221c42" },
-      { name: "Slate", c: "#33404e", dark: "#1c242c" },
-      { name: "Starlight", c: "#26769f", dark: "#153e54" },
+      { name: "Midnight", c: "#0c1445", dark: "#060a23" },
+      { name: "Indigo", c: "#4B0082", dark: "#270042" },
+      { name: "Slate", c: "#64748b", dark: "#333c47" },
+      { name: "Starlight", c: "#1B6FA8", dark: "#0e3753" },
     ],
     colors6: [
-      { name: "Midnight", c: "#0c1526", dark: "#060b16" },
-      { name: "Indigo", c: "#3d3374", dark: "#221c42" },
-      { name: "Slate", c: "#33404e", dark: "#1c242c" },
-      { name: "Eclipse", c: "#3a1c42", dark: "#1d0e21" },
-      { name: "Frost", c: "#237a85", dark: "#103d43" },
-      { name: "Starlight", c: "#26769f", dark: "#153e54" },
+      { name: "Midnight", c: "#0c1445", dark: "#060a23" },
+      { name: "Indigo", c: "#4B0082", dark: "#270042" },
+      { name: "Slate", c: "#64748b", dark: "#333c47" },
+      { name: "Eclipse", c: "#8B0000", dark: "#470000" },
+      { name: "Aurora", c: "#00543f", dark: "#00291f" },
+      { name: "Starlight", c: "#1B6FA8", dark: "#0e3753" },
     ],
   },
   // felt - table background colors. c/dark are the two radial-gradient stops, direct

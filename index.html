@@ -652,6 +652,45 @@
                         value and never once updated by any JS - now synced every felt change
                         (syncThemeColorMeta(), same call site as syncNativeStatusBarColor()).
                         `#verTap` bumped `v0.60` -> `v0.61`.
+                      - v0.62 (2026-07-31, a separate session): peg color visibility + all 5 Shop
+                        palette names rebuilt so they actually match their names (Sunset/Ocean
+                        Breeze/Forest/Royal/Midnight, SHOP_CATALOG, server/server.js +
+                        server/cloud/server.ts), plus the credit-pack "yellow on yellow" button
+                        fix. See HANDOFF.md "v0.62" for the full writeup - server-catalog work,
+                        not index.html, mostly.
+                      - v0.63 (2026-08-01), Blake's six-item batch, all index.html:
+                        Item 3: the X-vs-header alignment bug (Blake's THIRD report) was two real,
+                        measured causes - `.modalHead`'s padding was asymmetric (22px top/14px
+                        bottom) and `.modalCard h3`'s inherited margin was asymmetric (2px/12px) -
+                        both made align-items:center center the wrong box. Fixed structurally
+                        (symmetric padding, `margin:0` on the header h3) rather than another
+                        hand-tuned offset - see .modalCard>.modalHead's own dated comment, § STYLE.
+                        Item 1: .purchaseCelebration moved to true center (`top:50%`, was `16%`),
+                        gained tap-to-dismiss, and now fires for EVERY purchase, not just Online
+                        Access - see celebrateItemPurchase()/celebrateCreditPackPurchase()/
+                        celebrateRename(), § SHOP.
+                        Item 7: toast()'s auto-fade only ever armed on the main menu - equipToggle()
+                        can fire mid-game from the Admin panel, where it silently never faded. New
+                        `alwaysFade` param on toast(), § UTIL, opted into by the equip/unequip/
+                        reset-to-default toasts only - every other call site unchanged.
+                        Item 2: the Shop's Nickname Change row shows "Change" (not "Buy") once a
+                        token is held, opening the SAME change-name box (moved out of
+                        #accountOverlay into its own #nameChangeOverlay popup, openable from either
+                        screen via openOverlay's backToCurrent hand-off) - no second rename path.
+                        Buying a token from the SHOP specifically walks straight into that box.
+                        Item 5: the credit-pack buttons' gold-on-gold-turned-gold-text problem -
+                        Blake wanted no fill (felt shows through, like the other money buttons)
+                        with white text, not gold - see .shopPackBtn's own dated comment, § STYLE.
+                        Item 4: the status-bar seam - `capacitor.config.json`'s
+                        `StatusBar.overlaysWebView` flipped `false`->`true` (confirmed via
+                        `git log` that this app never actually shipped `true` before, despite
+                        Blake's "back to the beginning" phrasing) so the existing v0.61 flat-band
+                        mechanism can finally reach the real safe-area-inset region instead of
+                        rendering at ~0 height, now painted translucent/felt-tinted instead of
+                        flat opaque - see body{}'s own dated comment, § STYLE, for the full
+                        StatusBar.swift-sourced reasoning. `#verTap` bumped `v0.62` -> `v0.63`.
+                        Full writeup, real measurements, and the palette-work credit: HANDOFF.md
+                        "v0.63".
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -1151,6 +1190,11 @@
      "byte-identical to before this pass" rule every other felt token here follows: a player with
      no felt equipped sees exactly the same top edge as before this change. */
   --feltTopBand:#1c5638;
+  /* 2026-08-01 (v0.63, item 4) - the RGB triplet of the same color, so the body{} rule below can
+     paint it at PARTIAL alpha (a real rgba()) instead of the flat opaque fill v0.61 used - see
+     that rule's own updated comment for why. Same default-matches-v0.61-exactly rule: #1c5638 =
+     28,86,56. Set alongside --feltTopBand itself, same call site (applyEquippedFelt(), § SHOP). */
+  --feltTopBandRGB:28,86,56;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%}
@@ -1167,23 +1211,66 @@ html,body{margin:0;height:100%}
    sample): by y=44px the default felt has already drifted a Euclidean RGB distance of ~5-6 units
    from its own y=0 color, and Sunflower (the brightest felt) has drifted ~8-13 units - small per
    pixel, but a real, continuous, visible gradient starting the instant the flat native bar ends.
-   THE FIX, exactly as Blake proposed: a genuinely FLAT band at the very top of the page, sized to
-   env(safe-area-inset-top) (the same safe-area primitive already used elsewhere, e.g. .winCloseBtn
-   above), painted the SAME feltTopEdgeColor(f) color the native status bar itself is set to
-   (syncNativeStatusBarColor(), § SHOP) - so the flat native strip transitions into a flat WEB
-   strip of the IDENTICAL color, and the radial gradient's own curve only starts to show once
-   BOTH flat strips are behind the viewer, not at the very first pixel below the status bar. No
-   new DOM element needed: this is a second background LAYER on the existing body rule (CSS
-   background layers paint in listed order, first on top) - a linear-gradient that is flatly
-   var(--feltTopBand) for exactly env(safe-area-inset-top), then jumps straight to transparent so
-   the existing radial-gradient shows through everywhere below that line, byte-identical to before
-   this pass. --feltTopBand is set alongside --felt1/--felt2 in applyEquippedFelt() (§ SHOP, same
-   call site as syncNativeStatusBarColor()/syncThemeColorMeta() - all three track the same felt
-   change in the same frame). On a browser/desktop with no safe-area inset at all (env() resolves
-   to 0), this band has zero height and is invisible - provably a no-op there, only relevant on a
-   notched device, which is the ONLY place this seam was ever reported. */
+   THE v0.61 FIX, exactly as Blake proposed then: a genuinely FLAT band at the very top of the
+   page, sized to env(safe-area-inset-top), painted the SAME feltTopEdgeColor(f) color the native
+   status bar itself was set to (syncNativeStatusBarColor(), § SHOP) - so the flat native strip
+   transitioned into a flat WEB strip of the IDENTICAL color. --feltTopBand is set alongside
+   --felt1/--felt2 in applyEquippedFelt() (§ SHOP, same call site as syncNativeStatusBarColor()/
+   syncThemeColorMeta() - all three track the same felt change in the same frame).
+
+   2026-08-01 (v0.63, item 4) Blake: "I know we sorta fixed the coloring on that top apple bar...
+   but it's still very obvious for every color (even default) where the break is... if we can't
+   match the coloring exactly for the top bevel part of the iphone... please just go back to that
+   translucent coloring scheme we had at the beginning (though I'd still like the translucent
+   aspect to have a tinge of whatever color the player has chosen for continuity)."
+   HONEST FINDING, checked rather than assumed: `git log -p --all -- app/capacitor.config.json`
+   shows `StatusBar.overlaysWebView` has been `false` in EVERY commit since this file's very first
+   one (v0.8.1, the original App Store wrapper) - there is no earlier build in this repo's own
+   history where the status bar was genuinely translucent. What follows is built fresh from Blake's
+   own description (a real translucent, felt-tinted strip) and from reading the actual native
+   plugin source (app/node_modules/@capacitor/status-bar/ios/.../StatusBar.swift, the same file
+   v0.52's original diagnosis was based on), not a restoration of prior code - flagged here plainly
+   so nobody goes looking for a "revert" that was never there to revert to.
+   WHY v0.61's flat band could never have looked right on a real device, confirmed straight from
+   StatusBar.swift: with `overlaysWebView:false` (the setting this whole app shipped with, every
+   version, until this pass), `resizeWebView()` sets `webViewFrame.origin.y = statusBarHeight` - the
+   WKWebView's own frame starts BELOW the status bar entirely. A WebView positioned that way reports
+   ~0 for `env(safe-area-inset-top)` (there is no unsafe region left inside ITS OWN bounds to inset
+   from) - meaning the v0.61 band above, `sized to env(safe-area-inset-top)`, was very likely
+   rendering at ~0 height on the real device the whole time, a well-reasoned fix that the
+   architecture itself never let take effect. Also confirmed in the same source:
+   `setBackgroundColor()` only ever writes to `backgroundView?.backgroundColor` - the SEPARATE
+   native opaque UIView `overlaysWebView:false` paints - so it was never going to produce
+   "translucent" no matter what color it was sent.
+   THE FIX Blake is explicitly choosing as the fallback: `overlaysWebView:true` in
+   app/capacitor.config.json (the one native-config change this pass makes). Per the SAME Swift
+   source: with `overlaysWebView:true`, the separate backgroundView is removed entirely (there is
+   nothing left for setBackgroundColor()/syncNativeStatusBarColor() to paint - it becomes a safe,
+   harmless no-op, kept only so a future rollback to overlaysWebView:false needs no JS change) and
+   `resizeWebView()` instead lets the WebView's frame extend to the TOP of the real screen, under
+   the status bar/notch - which is what finally makes `env(safe-area-inset-top)` report the real
+   inset, and makes the flat-band mechanism below actually reach the region the status bar icons
+   sit over, for the first time in this app's real production history. This app's own CSS was
+   already defensively written assuming exactly this (#topbar's own `env(safe-area-inset-top)`/
+   `-right`/`-left` padding predates this pass) - completing an assumption already baked into the
+   layout, not introducing a new one.
+   TRANSLUCENT, not flat: the band below is now painted at partial alpha
+   (rgba(var(--feltTopBandRGB),.6)) instead of the fully opaque var(--feltTopBand) v0.61 used - it
+   genuinely blends with whatever the radial-gradient's own real value is at that same spot (the
+   SECOND background layer, listed below it, showing partially through) rather than replacing it
+   outright - a real, literal translucency (partially see-through), tinted by the currently
+   equipped felt (feltTopEdgeColor(f), same source as before), updating live the instant the felt
+   changes (same applyEquippedFelt() call site, unchanged). No `backdrop-filter` blur was added -
+   there is nothing meaningfully different behind this band for a blur to reveal (it is the very
+   top of the app's own page, not real content), so a plain alpha blend was judged the honest,
+   lower-risk choice over a purely decorative blur effect.
+   HONESTY REQUIRED, stated as plainly as v0.61's own gap was: the real native status bar - and the
+   real effect of flipping overlaysWebView, on a real notched iPhone - CANNOT be rendered or
+   screenshotted in this headless environment. See HANDOFF.md "v0.63" for exactly what was and was
+   not possible to verify here. This is the one change in this whole pass that most needs an actual
+   TestFlight check on a real device before it ships past a cautious rollout. */
 body{font-family:-apple-system,"Segoe UI",system-ui,sans-serif;color:var(--cream);
-  background:linear-gradient(var(--feltTopBand),var(--feltTopBand) env(safe-area-inset-top),transparent env(safe-area-inset-top)),
+  background:linear-gradient(rgba(var(--feltTopBandRGB),.6),rgba(var(--feltTopBandRGB),.6) env(safe-area-inset-top),transparent env(safe-area-inset-top)),
     radial-gradient(120% 95% at 50% 28%,var(--felt1),var(--felt2) 78%);
   overflow:hidden;user-select:none;-webkit-user-select:none}
 button{font:inherit;cursor:pointer}
@@ -2227,17 +2314,29 @@ button{font:inherit;cursor:pointer}
    real screen, not the board. z-index:96 sits above every overlay level including
    #reclaimReqOverlay's 90 exception (see #toasts' own stacking-order comment, item 6 above) and
    just above #toasts' own 95, since this is meant to read as MORE prominent than a normal toast,
-   not competing with one. pointer-events:none throughout (same convention #toasts already uses)
-   so it can never trap a tap on the real UI underneath it while it's up - dismissal is
-   timeout-only (showPurchaseCelebration(), § SHOP), which already satisfies "dismiss cleanly on
-   its own" without needing to also be tappable. */
-.purchaseCelebration{position:fixed;left:50%;top:16%;transform:translate(-50%,-50%);z-index:96;
+   not competing with one.
+   2026-08-01 (v0.63, item 1) Blake: "move the celebration after purchasing the online play token
+   to the center of the screen. also, please add a celebration to every purchase (center of the
+   screen again)." Two real changes: (1) `top:16%` was never the true center Blake asked for the
+   FIRST time this banner shipped (v0.61) - just a fixed distance from the top that happened to
+   clear a short overlay's own header. Changed to `top:50%`, which - combined with the existing
+   `transform:translate(-50%,-50%)` - is the actual geometric center of the screen on both axes,
+   not an approximation. (2) "must dismiss... on tap" (this session's own task) meant this could no
+   longer stay `pointer-events:none` end to end the way the v0.61 version did - but the FULL
+   element still must never trap a tap on the real UI underneath it (Blake never asked for a modal),
+   so only the small visible card (.purchaseCelebrationSign, below) gets `pointer-events:auto` back;
+   the outer wrapper (this rule) stays none. Since the wrapper has no explicit width/height of its
+   own (a fixed-position block with no dimensions set shrink-wraps to its own content, same as
+   before this pass), that inner card is already the ENTIRE hit-testable area - there is no invisible
+   full-screen strip left over to accidentally swallow a tap. */
+.purchaseCelebration{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:96;
   pointer-events:none;text-align:center;max-width:86vw;
   animation:celebPop .5s cubic-bezier(.34,1.56,.64,1) both}
 .purchaseCelebration.leaving{animation:celebFade .3s ease forwards}
 .purchaseCelebrationSign{display:inline-flex;flex-direction:column;gap:4px;padding:16px 22px;
   border-radius:16px;background:rgba(15,10,6,.92);border:2px solid var(--gold);
-  box-shadow:0 14px 36px rgba(0,0,0,.55),0 0 30px rgba(244,197,66,.35)}
+  box-shadow:0 14px 36px rgba(0,0,0,.55),0 0 30px rgba(244,197,66,.35);
+  pointer-events:auto;cursor:pointer}
 .purchaseCelebrationSign b{font-size:18px;color:var(--gold);letter-spacing:.01em}
 .purchaseCelebrationSign span{font-size:13.5px;color:var(--cream);line-height:1.4}
 @keyframes celebPop{
@@ -2330,6 +2429,11 @@ button{font:inherit;cursor:pointer}
   padding:4px 18px;font-size:14.5px;font-weight:700;line-height:1.22;box-shadow:0 6px 18px rgba(0,0,0,.4);
   animation:toastIn .25s ease-out;max-width:100%;text-align:center}
 @keyframes toastIn{from{opacity:0;transform:translateY(12px)}}
+/* 2026-08-01 (v0.63, item 7): the fade-out half of toast()'s own auto-dismiss, § UTIL - was an
+   abrupt t.remove() with no exit animation at all. Same short fade every other auto-dismissing
+   notice in this file now uses (.purchaseCelebration.leaving, this same session, § FX). */
+.toast.leaving{animation:toastFade .3s ease forwards}
+@keyframes toastFade{to{opacity:0;transform:translateY(-8px)}}
 /* v0.13.3 (Blake): turn prompts ("Your turn - tap a card", "Pick a tee to move", ...) moved out
    of #handInfo and INTO this same bubble (turnPrompt(), § UI) - one message surface instead of
    two. When the prompt is for THIS screen's own action (.myTurn), the bubble gets a gold
@@ -2725,10 +2829,48 @@ button{font:inherit;cursor:pointer}
    `flex:0 0 auto`, the X (and the header row generally) sat flush against .modalBody right below
    it with nothing but the row's own line-height as buffer. Added 14px bottom padding, using this
    app's existing 22px top padding as the spacing unit (14px reads as a real but not oversized gap
-   under a 44px circle - verified visually, not picked blind, see HANDOFF.md "v0.61" testing). */
+   under a 44px circle - verified visually, not picked blind, see HANDOFF.md "v0.61" testing).
+   2026-08-01 (v0.63, item 3 - Blake's THIRD report on this, verbatim): "the x out buttons still
+   aren't in-line with the header of the window... Imagine a line is going perfectly horizontal
+   through the center mass of the wording in the header... when it gets all the way to the right,
+   that line should go directly through the intersection point of the x (right in the middle).
+   Then, the spacing on the top and bottom of the pinned header space should be equal from both the
+   top of the x and the bottom." TWO real, separate bugs found by MEASURING (getBoundingClientRect
+   on the X, the h3 TEXT, and .modalHead itself), not by eyeballing the v0.61 fix again:
+   (a) The v0.61 padding above was ASYMMETRIC (22px top, 14px bottom) - since .modalHead's content
+   row is exactly 44px tall (the X circle is the tallest item, taller than a single line of h3
+   text) and align-items:center centers every flex item on the SAME line within that row,
+   asymmetric padding around a centered row means the row itself sits off-center in the BAND: the
+   X's own center measured 44px from the band's top edge but only 36px from its bottom edge (the
+   22-vs-14 gap, exactly) - a real, measured violation of "equal spacing top and bottom," not a
+   rounding error.
+   (b) `.modalCard h3{margin:2px 0 12px}` (below, § the modal card rule) gives every header h3 an
+   ASYMMETRIC top/bottom MARGIN - 2px above, 12px below. align-items:center centers a flex item's
+   full MARGIN BOX, not its content box, so that 2-vs-12 imbalance alone pulled the text's own
+   content (what a reader's eye actually sees as "the wording") about 5px off the row's true center
+   line - independent of and in addition to bug (a). This is what a THIRD report on "still not
+   aligned" after two rounds of tuning was actually catching: the fix was in the wrong place both
+   times (nudging the X), when the real asymmetry was in the HEADER's own padding and the TITLE's
+   own margin, not the X.
+   THE FIX, structural rather than another hand-tuned offset: (1) .modalHead's padding is now
+   SYMMETRIC (22px on every side - using the existing top value, so nothing shrinks, only the
+   bottom buffer grows a little more generous). Symmetric padding around a row that align-items:
+   center already centers means the row's own center line and the band's own center line are now
+   the SAME line, by construction, for any content height (one line, two lines, whatever the X
+   itself needs) - not just the specific pixel counts measured today. (2) `.modalHead>h3` gets its
+   own `margin:0`, overriding the inherited 2px/12px asymmetry - the ONLY place in the whole app a
+   header h3 sits inside a centered flex row, so this can't affect any other h3 (every other h3 is
+   plain block content in a scrolling .modalBody, where margin does normal vertical-spacing work,
+   completely unrelated to this centering job). With both fixes together, the X and the header
+   TEXT's own visual center land on the exact same row-center line BY CONSTRUCTION, and that same
+   line is the band's own vertical center BY CONSTRUCTION - satisfying both of Blake's requirements
+   at once, for one line, two lines (a wrapped title just makes the row taller; the center line
+   moves with it, X included), any overlay, any viewport. See HANDOFF.md "v0.63" for the real
+   getBoundingClientRect() numbers (X vs. a Range over the h3's own text vs. the band) on all 7
+   kept-X overlays plus the admin panel, at 320x568 and 390x844, before and after this fix. */
 .modalCard>.modalHead{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;
-  gap:10px;padding:22px 22px 14px}
-.modalCard>.modalHead>h3{flex:1 1 auto;min-width:0}
+  gap:10px;padding:22px}
+.modalCard>.modalHead>h3{flex:1 1 auto;min-width:0;margin:0}
 /* min-width:0 lets a long title WRAP inside its own flex column instead of forcing the row wider
    than the card (the usual flexbox "min-width:auto by default" trap) - no padding-right arithmetic
    needed anymore: flexbox itself reserves the X's own 44px+gap column, so a title can never grow
@@ -2827,6 +2969,17 @@ button{font:inherit;cursor:pointer}
    full-screen page, which is the whole point of the 2026-07-25 overlay-stacking fix (see
    § OVERLAY LAYER): two full-screen layers must never be visible at once, so a settings panel
    never opens another one. */
+/* 2026-08-01 (v0.63, item 2): #acctNameEdit's new home, its own popup (#nameChangeOverlay, see
+   that overlay's own markup comment) - .confirmCard's base rule (§ STYLE, above) is only 2px
+   padding by design (every OTHER confirmCard supplies its own spacing via a .sign badge or a
+   plain <p>, floating directly on the scrim - the established look for this whole family of
+   popups). #acctNameEdit's input/buttons need real side padding the way they had it before (22px,
+   from #accountOverlay's own .modalBody) to not look flush against the screen edge, so this
+   overlay alone gets it added back - no card background/border added, on purpose, to keep the
+   same "floats on the scrim" convention every sibling confirmCard already uses (signOutWarnOverlay,
+   leaveConfirmOverlay, etc.) rather than inventing a new bordered-box look for just this one. */
+#nameChangeOverlay .confirmCard{padding:2px 20px}
+.nameChangeHead{margin:4px 0 14px;font-size:19px;font-weight:800;color:var(--cream)}
 .acctNameEdit{display:grid;grid-template-columns:1fr;gap:8px;margin-top:8px}
 .acctNameEdit input{width:100%;box-sizing:border-box;min-height:44px;font-size:16px;
   padding:10px 12px;border-radius:12px;background:rgba(0,0,0,.3);color:var(--cream);
@@ -2878,8 +3031,11 @@ button{font:inherit;cursor:pointer}
      .modalCard>.modalHead rule above, scaled to THIS override's own 14px unit instead of the
      main rule's 22px (9px is roughly the same 14/22 proportion the main rule's 14px-under-22px
      uses) - the short-screen Admin panel gets the identical buffer-under-the-X treatment, just
-     sized down to fit. */
-  #accountOverlay .modalCard>.modalHead{padding:14px 14px 9px}
+     sized down to fit.
+     2026-08-01 (v0.63, item 3): same symmetric-padding fix as the main .modalCard>.modalHead rule
+     above, scaled to this override's own 14px unit - was 14px/9px (the same top-heavier imbalance
+     that broke the main rule's centering), now flat 14px on every side. */
+  #accountOverlay .modalCard>.modalHead{padding:14px}
   #accountOverlay .modalCard>.modalBody{padding:0 14px 14px}
   .acctHead{margin-bottom:10px}
   .acctRows,.acctSoon{gap:6px}
@@ -3190,6 +3346,10 @@ button{font:inherit;cursor:pointer}
      not a silently-stuck one. */
   .purchaseCelebration{animation:none;opacity:1;transform:translate(-50%,-50%) scale(1) rotate(0deg)}
   .purchaseCelebration.leaving{animation:none;opacity:0}
+  /* 2026-08-01 (v0.63, item 7): same "leaving is killed outright, not given a landed state"
+     convention as .purchaseCelebration.leaving right above - a toast's leaving state IS invisible
+     (opacity:0), so there is no landed state to jump to; this just removes the fade's motion. */
+  .toast.leaving{animation:none;opacity:0}
 }
 
 /* v0.10: a phone rotated into landscape (short viewport height - the web version has no
@@ -3396,19 +3556,33 @@ button{font:inherit;cursor:pointer}
 .shopMoneyBtn{border-color:rgba(244,197,66,.7)!important;color:#ffdf8a!important}
 /* 2026-07-31 (Blake, verbatim): "Change the colors of the credit purchase allotment buttons.
    It's yellow on yellow." Root cause: the credit-pack row's own buttons (.shopPackBtn, line
-   ~14961) carry BOTH .btn.primary (gold #f4c542 background, dark #3a2c05 text) AND .shopMoneyBtn
+   ~14961) carried BOTH .btn.primary (gold #f4c542 background, dark #3a2c05 text) AND .shopMoneyBtn
    (the rule right above, pale gold #ffdf8a text, !important) - the pale text landed on the gold
-   fill, ~1.25:1 contrast, effectively invisible. The ghost "Buy with $X" per-item money button
-   (.btn.ghost.shopMoneyBtn, line ~14813) never has this problem - pale gold text on that button's
-   dark translucent background reads fine (measured 6.5:1-11.1:1 against every felt's own
-   modalCard surface, worst case Sunflower). So the pale-text override is scoped OFF the .primary
-   case here, which lets it fall through to .btn.primary's own dark text (8.37:1, unchanged from
-   any other primary button) - and the primary case gets its own distinct "this is a money
-   button" signal, a solid dark-gold ring in the same ink as its text, since Blake's original
-   design intent (this rule's own header comment) was for money buttons to read as visually
-   distinct from a plain credits purchase, not just legible. */
-.shopMoneyBtn:not(.primary){color:#ffdf8a!important}
-.shopMoneyBtn.primary{border:2px solid #3a2c05!important}
+   fill, ~1.25:1 contrast, effectively invisible. THAT round's fix scoped the pale-text override
+   off the .primary case so it fell through to .btn.primary's own dark text instead (8.37:1,
+   technically legible) - but Blake still found it hard to read afterward, and said so again,
+   2026-08-01 (v0.63, item 5, Blake verbatim): "the font of the credit packs is still gold - just
+   make it no fill (background felt color comes through) or white like you did with the others
+   (and changes based off the felt background behind and what's better)." Read plainly: he never
+   wanted a solid gold FILL on these buttons at all (which is what made the earlier "just fix the
+   text color" round still look wrong to him even at a measured-legible contrast) - he wants the
+   SAME no-fill/ghost treatment already used for the per-item "Buy with $X" button right above
+   (.btn.ghost.shopMoneyBtn - translucent background, the modalCard's own felt-tinted surface
+   showing through), with the TEXT itself white rather than gold. THE FIX: .shopPackBtn's markup
+   swapped `primary`->`ghost` (line ~14961) - no more solid fill, so the modalCard's own felt
+   surface shows through exactly like every other ghost button, satisfying "no fill (background
+   felt color comes through)" literally. The rule right above still gives it the same gold-tinted
+   BORDER every money button gets (the "this spends real money" signal Blake's own original v0.59
+   design wanted preserved - kept, since he only ever objected to the fill/font, never the border),
+   but the pack button's own TEXT is overridden white below - the ONE piece of "or white" his own
+   two options actually named, chosen over a literal transparent-text/felt-cutout treatment because
+   it is legible against every felt by construction (feltSurface's own luminance is capped low by
+   darkenToLuminance()'s ceiling, § SHOP - white text on a translucent overlay over that surface
+   clears WCAG AA on every felt with real margin to spare, not just barely) rather than depending on
+   exactly what's rendered behind a see-through glyph. MEASURED (real WCAG contrast against the
+   real rendered button background, all 5 felts): see HANDOFF.md "v0.63" for the full per-felt
+   table - every felt clears 4.5:1, worst case still well clear. */
+.shopMoneyBtn.shopPackBtn{color:#fff!important}
 .shopMoneyRow{flex-basis:100%;display:flex;flex-direction:column;gap:8px;margin-top:2px;
   padding:10px;border-radius:10px;background:rgba(40,28,0,.4);border:1px solid rgba(244,197,66,.35);
   font-size:13px;color:#ffe9a8}
@@ -3601,7 +3775,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.62</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.63</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -4476,30 +4650,13 @@ button{font:inherit;cursor:pointer}
              that is still going, with the right warnings on it. -->
         <button class="btn ghost acctRow hidden" id="btnAcctMenu">Back to the menu<small>This game is finished - nothing left to lose</small></button>
       </div>
-      <div class="acctNameEdit hidden" id="acctNameEdit">
-        <input id="acctNameInput" maxlength="10" aria-label="Your name" autocomplete="off" autocapitalize="words">
-        <!-- 2026-07-28 (v0.51, Blake: "make the name change token easier to understand - and make
-             it something that's obvious I need to redeem when clicking the change nickname button
-             ... I don't see anything about it there"). Filled in by refreshNameCreditInfo(), § SHOP,
-             the INSTANT this box opens (openAccountNameEdit()) - not just after a cooldown blocks a
-             rename, which is where this info used to be hidden until v0.51. Always states the plain
-             30-day rule truthfully; adds the held-token count only when the account actually has
-             one or more. -->
-        <div class="acctNameCreditNote hidden" id="acctNameCreditNote"></div>
-        <div class="acctWarn" id="acctNameWarn"></div>
-        <!-- 2026-07-30 (v0.59, Blake's item 6, verbatim: "you currently have 3 buttons for nickname
-             change (cancel, change name, and redeem token). Get rid of the token button and just
-             have the first 2"). The v0.50/v0.51 always-visible redeem button (#btnAcctNameUseCredit)
-             is DELETED, not hidden - the whole flow now runs off the ONE "Change name" button, with
-             every branch (the free-change heads-up, the explicit token-redeem confirmation, the
-             buy-a-token offer when none is held) staged into #acctNameConfirm below, each needing
-             an explicit accept - see $('btnAcctNameSave').onclick and its helpers, § SHOP area. -->
-        <div class="acctNameConfirm hidden" id="acctNameConfirm"></div>
-        <div class="acctNameBtns">
-          <button class="btn primary" id="btnAcctNameSave">Change name</button>
-          <button class="btn ghost" id="btnAcctNameCancel">Cancel</button>
-        </div>
-      </div>
+      <!-- 2026-08-01 (v0.63, item 2): #acctNameEdit (the change-name box) moved OUT of here and
+           into its own top-level #nameChangeOverlay, right after this overlay's own closing tags,
+           below - see that overlay's markup comment for why (Blake: "a Change button that pops up
+           a window (center of the screen)" reachable from the Shop, not just this panel). Every id
+           inside it, and every function that reads/writes those ids (openAccountNameEdit(),
+           closeAccountNameEdit(), attemptAccountRename(), etc., § ACCOUNT SIGN-IN), is completely
+           unchanged - only WHERE the markup lives moved, not what it contains or how it works. -->
       <div class="acctSoon">
         <button class="btn ghost acctRow" id="btnAcctSignIn" disabled>Sign in</button>
         <button class="btn ghost acctRow" id="btnAcctSignOut" disabled>Sign out</button>
@@ -4536,6 +4693,62 @@ button{font:inherit;cursor:pointer}
         <div class="acctNote" id="acctAgeNote">Accounts are for ages 13 and up. Anyone younger should continue as a guest.</div>
       </div>
       <div class="bigBtns"><button class="btn primary" id="btnAcctClose">Close</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- 2026-08-01 (v0.63, item 2) Blake: "the shop should allow you to change your name straight from
+     the shop (and if you already have a token, instead of a buy button it should just be a change
+     button that pops up a window (center of the screen) to change your name)."
+     #acctNameEdit (below) is the SAME box that used to live inline inside #accountOverlay, moved
+     here byte-for-byte (every id, every class, every child) and wrapped in a real .confirmCard so
+     it can be reached and CENTERED as its own popup from anywhere - the Account panel's own
+     "Change your name" row (unchanged, still calls openAccountNameEdit()) and now the Shop's
+     Nickname Change row too (shopRowClickHandler()'s new .shopChangeNameBtn branch, § SHOP), or
+     buying a token straight into it (buyItem()'s own v0.63 comment, § SHOP) - one implementation,
+     reused, not a second rename path.
+     No X, by design - matches the v0.60 "an X that only ever clicks a button already on the same
+     card is a decoy" rule this file already established for every OTHER confirmCard in this
+     category (signOutWarnOverlay, leaveConfirmOverlay, etc.): #btnAcctNameCancel is the one
+     unambiguous safe way out, already right there on the card.
+     openOverlay()/closeOverlay() (§ OVERLAY LAYER) do the actual show/hide - see
+     openAccountNameEdit()'s/closeAccountNameEdit()'s own v0.63 comments, § ACCOUNT SIGN-IN, for how
+     they now call `openOverlay('nameChangeOverlay',{backToCurrent:true})`/`closeOverlay(...)`
+     ALONGSIDE their existing #acctNameEdit hidden-class toggle (untouched, on purpose - several
+     async handlers in this box already check `$('acctNameEdit').classList.contains('hidden')` to
+     detect "the box was closed while I was fetching," and leaving that exact check alone rather
+     than re-deriving it from the new overlay meant zero risk to that existing guard).
+     backToCurrent:true (not a fixed backTo) because this popup can now be opened from TWO different
+     screens (Account panel or Shop) - it remembers whichever one was actually showing and hands
+     that one back specifically, the same generic mechanism the one-time online-rules popup already
+     uses for the identical "opened from more than one place" situation (openOverlay()'s own
+     comment, § OVERLAY LAYER). -->
+<div id="nameChangeOverlay" class="overlay hidden">
+  <div class="confirmCard">
+    <h4 class="nameChangeHead">Change your name</h4>
+    <div class="acctNameEdit hidden" id="acctNameEdit">
+      <input id="acctNameInput" maxlength="10" aria-label="Your name" autocomplete="off" autocapitalize="words">
+      <!-- 2026-07-28 (v0.51, Blake: "make the name change token easier to understand - and make
+           it something that's obvious I need to redeem when clicking the change nickname button
+           ... I don't see anything about it there"). Filled in by refreshNameCreditInfo(), § SHOP,
+           the INSTANT this box opens (openAccountNameEdit()) - not just after a cooldown blocks a
+           rename, which is where this info used to be hidden until v0.51. Always states the plain
+           30-day rule truthfully; adds the held-token count only when the account actually has
+           one or more. -->
+      <div class="acctNameCreditNote hidden" id="acctNameCreditNote"></div>
+      <div class="acctWarn" id="acctNameWarn"></div>
+      <!-- 2026-07-30 (v0.59, Blake's item 6, verbatim: "you currently have 3 buttons for nickname
+           change (cancel, change name, and redeem token). Get rid of the token button and just
+           have the first 2"). The v0.50/v0.51 always-visible redeem button (#btnAcctNameUseCredit)
+           is DELETED, not hidden - the whole flow now runs off the ONE "Change name" button, with
+           every branch (the free-change heads-up, the explicit token-redeem confirmation, the
+           buy-a-token offer when none is held) staged into #acctNameConfirm below, each needing
+           an explicit accept - see $('btnAcctNameSave').onclick and its helpers, § SHOP area. -->
+      <div class="acctNameConfirm hidden" id="acctNameConfirm"></div>
+      <div class="acctNameBtns">
+        <button class="btn primary" id="btnAcctNameSave">Change name</button>
+        <button class="btn ghost" id="btnAcctNameCancel">Cancel</button>
+      </div>
     </div>
   </div>
 </div>
@@ -8261,7 +8474,23 @@ let uiResolve=null;
 // at 4000ms per Blake's ask). In-game toasts (menu hidden) are completely unchanged - still stay
 // until replaced, exactly as v0.11.2 intended. Only removes THIS toast's own element, guarded by
 // `.contains()`, so it can never clobber a newer toast that already replaced it.
-function toast(msg,ms=3000,force=false){
+// 2026-08-01 (v0.63, item 7) Blake: "once something is equipped, it's okay to display the message
+// telling me but also make it fade away eventually." ROOT CAUSE, found by reading this function
+// before changing anything (per this session's own instruction): the auto-dismiss timer below only
+// ever arms `if(!$('menu').classList.contains('hidden'))` - true on the main menu, but FALSE for
+// the entire time a game is on screen (`#menu` is hidden the moment a game starts). equipToggle()
+// (§ SHOP) can fire from the Admin panel's own Shop Customizations section mid-game (the panel is
+// reachable any time the game is paused) - so an equip/unequip toast picked up during a live game
+// never had the "on the menu" branch true, and just sat there until the NEXT toast() call replaced
+// it, exactly Blake's report. Rather than changing the menu-only gate itself (every other in-game
+// toast - turn prompts, "X took a piece out," etc. - deliberately STAYS until replaced, a real
+// design choice from v0.11.2/v0.11.3, not a bug), this adds one new opt-in parameter,
+// `alwaysFade`, that bypasses the menu check for exactly the callers that want it - every existing
+// call site leaves it `false` (the default) and is byte-for-byte unaffected. Fires the same fade
+// (.leaving, reusing the exact class/keyframe convention .purchaseCelebration already established
+// this same session, § ANIM) instead of an abrupt removal either way - a small, pure improvement
+// to every toast's own exit, not just the new alwaysFade case.
+function toast(msg,ms=3000,force=false,alwaysFade=false){
   // v0.19: `force` lets a kick/Jack-swap message punch through the SKIP half of this
   // suppression (see spotlightEvent()) - Blake's ask was "make sure even when skipping it's
   // obvious something big happened," and a silently-suppressed toast defeated that even once
@@ -8272,9 +8501,13 @@ function toast(msg,ms=3000,force=false){
   $('toasts').replaceChildren();   // one message at a time - newest replaces the old, never stacks into the cards
   const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
   $('toasts').appendChild(t);
-  if(!$('menu').classList.contains('hidden')){
+  if(alwaysFade||!$('menu').classList.contains('hidden')){
     const dismissMs=Math.max(ms,4000);
-    setTimeout(()=>{ if($('toasts').contains(t))t.remove(); },dismissMs);
+    setTimeout(()=>{
+      if(!$('toasts').contains(t))return;
+      t.classList.add('leaving');
+      setTimeout(()=>{ if($('toasts').contains(t))t.remove(); },300);
+    },dismissMs);
   }
 }
 // v0.11.3 fix (Blake): since v0.11.2 a toast STAYS until replaced (see comment above) instead of
@@ -13052,6 +13285,13 @@ function closeAccountNameEdit(){
   hideNameCreditOffer();
   const row=$('btnAcctName');
   if(row&&row.classList.contains('hidden'))row.classList.remove('hidden');
+  // 2026-08-01 (v0.63, item 2): #acctNameEdit now lives inside its own popup (#nameChangeOverlay) -
+  // closeOverlay() hands back whichever screen (Shop or Account panel) was actually showing when
+  // this opened (openOverlay's own backToCurrent hand-off, see openAccountNameEdit() below), and is
+  // a safe no-op if the overlay is already hidden (closeOverlay()/hideOverlayEl() both already
+  // guard on that, § OVERLAY LAYER) - so this is harmless even on a call site that only ever closed
+  // the OLD inline box and never opened this overlay to begin with.
+  closeOverlay('nameChangeOverlay');
 }
 /* 2026-07-27 (v0.42): 'local' mode (renaming a signed-out guest's own player) is retired along
    with the whole idea of a guest nickname. It is left in place here, dormant, rather than ripped
@@ -13070,6 +13310,15 @@ function openAccountNameEdit(mode,msg){
   hideNameCreditOffer();
   if(box.classList.contains('hidden'))box.classList.remove('hidden');
   $('btnAcctName').classList.add('hidden');
+  // 2026-08-01 (v0.63, item 2) Blake: "a Change button that pops up a window (center of the
+  // screen) to change your name." This can now be called from the Shop (a held Nickname Change
+  // token's own row, shopRowClickHandler()'s new .shopChangeNameBtn branch, § SHOP) as well as the
+  // Account panel's own "Change your name" row - openOverlay()'s existing backToCurrent mechanism
+  // (§ OVERLAY LAYER, the same one the one-time online-rules popup already uses for the identical
+  // "opened from more than one place" situation) hides whichever of the two was actually on screen
+  // and remembers it, so closeAccountNameEdit()'s own closeOverlay() call, above, hands the RIGHT
+  // one back - the Shop stays the Shop, the Account panel stays the Account panel, never confused.
+  openOverlay('nameChangeOverlay',{backToCurrent:true});
   try{ inp.focus(); inp.select(); }catch(e){}
   // 2026-07-28 (v0.51): the Nickname Change info/offer is now shown the INSTANT this box opens,
   // not just after a cooldown blocks a plain rename - see refreshNameCreditInfo(), § SHOP, and
@@ -13164,10 +13413,26 @@ async function attemptAccountRename(raw,useCredit){
     // renames its seat instantly; an ONLINE game hears the server's own playerRenamed broadcast
     // (handleNetMessage, § NET), which covers this phone and everyone else's alike.
     try{ applyLocalRenameNow(oldName,r.body.gameName); }catch(e){}
+    // 2026-08-01 (v0.63, item 2): this box can now be reached from the Shop itself (it hides,
+    // rather than destroys, whatever screen was behind it - see openAccountNameEdit()'s own
+    // openOverlay() call, below), and a token-redeeming rename changes wallet.namechangeCredits -
+    // how many tokens are left. The Shop/Admin panel's own Tokens row needs the FRESH count the
+    // instant this box hands that screen back, same "never show a stale number" rule buyItem()
+    // already follows for a real purchase. /account/name's own response already carries the fresh
+    // count on every success (server.js, not just the 429 cooldown branch it originally existed
+    // for) - no second round trip needed.
+    if(r.body.namechangeCredits!=null){
+      ACCT_NAME_CREDITS=r.body.namechangeCredits;
+      if(SHOP_STATE.wallet)SHOP_STATE.wallet.namechangeCredits=r.body.namechangeCredits;
+      try{ paintShop(); }catch(e){}
+      try{ refreshAcctEquip(); }catch(e){}
+    }
     hideNameCreditOffer();
     closeAccountNameEdit();
     renderAccountPanel();
-    toast('You are '+ACCT.gameName+(r.body.usedNamechangeCredit?' on the leaderboard. (Nickname Change token used)':' on the leaderboard.'));
+    // 2026-08-01 (v0.63, item 2) Blake: "once changed, you need the celebration in the center of
+    // the screen." Was a plain toast() - see celebrateRename(), § SHOP.
+    celebrateRename(ACCT.gameName,!!r.body.usedNamechangeCredit);
     return;
   }
   if(r.status===429&&r.body&&r.body.error==='cooldown'){
@@ -13213,7 +13478,9 @@ async function showNameTokenPurchaseOffer(raw,serverMsg){
         <button class="btn ghost" id="acctNameBuyNo">Never mind</button></div>`,()=>{
       $('acctNameBuyYes').onclick=async()=>{
         hideAcctNameConfirm();
-        await buyItem(item);   // the normal credit purchase - the exact same path the Shop uses
+        // skipAutoFollowup:true - this flow already has its own next step (showNameTokenConfirm(),
+        // right below) - see buyItem()'s own header comment, § SHOP, for why.
+        await buyItem(item,{skipAutoFollowup:true});   // the normal credit purchase - the exact same path the Shop uses
         const w2=await fetchWalletResult();
         const c2=w2.ok?Math.max(0,Number(w2.wallet.namechangeCredits)||0):0;
         if(c2>0)showNameTokenConfirm(raw,c2);
@@ -13231,7 +13498,8 @@ async function showNameTokenPurchaseOffer(raw,serverMsg){
       $('acctNameMoneyYes').onclick=()=>{
         hideAcctNameConfirm();
         buyCreditPack(pack,async()=>{
-          await buyItem(item);
+          // skipAutoFollowup:true - same reasoning as the credits-only branch above.
+          await buyItem(item,{skipAutoFollowup:true});
           const w2=await fetchWalletResult();
           const c2=w2.ok?Math.max(0,Number(w2.wallet.namechangeCredits)||0):0;
           if(c2>0)showNameTokenConfirm(raw,c2);
@@ -14014,7 +14282,12 @@ function applyEquippedFelt(){
   // feltTopEdgeColor(f) value the native status bar and the theme-color meta tag both just got set
   // to, right above, so all three (native status bar, this web-side flat band, the browser tab's
   // own theme-color) can never disagree about what the "top edge" color is for the current felt.
-  document.documentElement.style.setProperty('--feltTopBand',feltTopEdgeColor(f));
+  const topBand=feltTopEdgeColor(f);
+  document.documentElement.style.setProperty('--feltTopBand',topBand);
+  // 2026-08-01 (v0.63, item 4): the RGB triplet of the same color, for body{}'s new rgba() band
+  // (§ STYLE) - see that rule's own comment for why this is now translucent instead of opaque.
+  // Same call site, same frame, so it can never disagree with --feltTopBand itself.
+  document.documentElement.style.setProperty('--feltTopBandRGB',hexToRgbArr(topBand).join(','));
 }
 // v0.52 BUG FIX (Blake: "the felt color changes mid game when I choose it but the area at the
 // top... doesn't follow the color change of the board"). DIAGNOSIS, confirmed by reading
@@ -14054,6 +14327,14 @@ function applyEquippedFelt(){
 // (before this script runs) matches too, not just every frame after boot - see HANDOFF.md "v0.53"
 // for whether that static change needs a native rebuild (short answer: yes, for the STATIC value
 // itself; this runtime call needed none, same as v0.52 - see that entry).
+// 2026-08-01 (v0.63, item 4): as of this pass, capacitor.config.json's StatusBar.overlaysWebView
+// is `true` (see body{}'s own v0.63 comment, § STYLE, for the full why). Per the plugin's own iOS
+// source (StatusBar.swift, setOverlaysWebView()): when overlaying, the separate native
+// `backgroundView` this call targets is removed entirely, and setBackgroundColor() only ever
+// writes to that view - so this call is now a harmless no-op on a real device, same
+// try/catch-degrades-silently shape as always. Left in, not deleted: cheap, and it keeps a future
+// rollback to overlaysWebView:false (a one-line capacitor.config.json edit) working correctly with
+// no JS change needed.
 function syncNativeStatusBarColor(f){
   if(!IS_APP)return;
   try{ CAP.Plugins.StatusBar.setBackgroundColor({color:feltTopEdgeColor(f)}); }catch(e){}
@@ -14308,7 +14589,8 @@ async function buyCreditPack(pack,followUp){
       try{ paintAcctWalletNumbers(vr.body.wallet); }catch(e){}
     }
     const added=(vr.body.creditsAdded!=null?vr.body.creditsAdded:pack.credits);
-    if(added>0)toast(added+' credit'+(added===1?'':'s')+' added to your account.');
+    // 2026-08-01 (v0.63, item 1): was a plain toast() - see celebrateCreditPackPurchase(), § SHOP.
+    if(added>0)celebrateCreditPackPurchase(pack,added);
     paintShop();
     IAP_BUSY=false;
     if(followUp){ try{ await followUp(); }catch(e){} }
@@ -14592,21 +14874,31 @@ function paintOnlineAccess(status,wallet){
    (paintOnlineAccess(), shopOnlineAccessSubline(), above) - no hand-rolled date math here. Must
    plainly state a full calendar month was purchased AND the new expiry, per Blake's ask; both
    sentences are stated in plain words, never a bare date with no sentence around it. */
+// 2026-08-01 (v0.63, item 1) Blake: "add a celebration to every purchase (center of the screen
+// again)" - and "must dismiss on its own and on tap" (this session's own task). Refactored to a
+// single dismiss() closure shared by BOTH triggers instead of two separate removal code paths that
+// could double-fire or race: a tap calls dismiss() early, the timeout calls the SAME dismiss()
+// later - whichever runs first wins (the `dismissed` flag makes the second call a no-op), and
+// either way the exact same .leaving fade + delayed remove() runs, so a tapped-away banner and a
+// timed-out one look identical, never an abrupt cut. The tap target is `.purchaseCelebrationSign`
+// only (pointer-events:auto there, none everywhere else - see that rule's own CSS comment) - the
+// banner can be dismissed early but can never trap a tap meant for the real UI underneath it.
 function showPurchaseCelebration(headline,detail){
   document.querySelectorAll('.purchaseCelebration').forEach(el=>el.remove());   // latest wins, same convention as toast()
   const el=document.createElement('div');
   el.className='purchaseCelebration';
-  el.innerHTML=`<div class="purchaseCelebrationSign"><b>${esc(headline)}</b><span>${esc(detail)}</span></div>`;
+  el.innerHTML=`<div class="purchaseCelebrationSign"><b>${esc(headline)}</b>${detail?`<span>${esc(detail)}</span>`:''}</div>`;
   document.body.appendChild(el);
-  // Timeout-only dismissal (pointer-events:none throughout, see the CSS comment) - this can never
-  // trap a tap on the Shop/Admin panel underneath it, matching this app's existing "no modal trap"
-  // convention for every non-blocking notice (toast() included). .leaving plays a short fade
-  // (CSS) before the element is actually removed, so it never just vanishes mid-frame.
-  setTimeout(()=>{
-    if(!document.body.contains(el))return;
+  let dismissed=false;
+  const dismiss=()=>{
+    if(dismissed||!document.body.contains(el))return;
+    dismissed=true;
     el.classList.add('leaving');
     setTimeout(()=>{ if(document.body.contains(el))el.remove(); },320);
-  },3800);
+  };
+  const sign=el.querySelector('.purchaseCelebrationSign');
+  if(sign)sign.addEventListener('click',dismiss);
+  setTimeout(dismiss,3800);
 }
 function celebrateOnlineAccessPurchase(access){
   try{
@@ -14620,6 +14912,34 @@ function celebrateOnlineAccessPurchase(access){
     ?`You're covered through ${formatChicagoMonth(until)} - ${accessCountdownText(until)}.`
     :"You're covered for another month.";
   showPurchaseCelebration('A full month of Online Play, unlocked!',detail);
+}
+// 2026-08-01 (v0.63, item 1): the generic version - every OTHER shop item (credit packs, palettes,
+// felts, titles, nickname tokens) now gets the same centered celebration online_month always had,
+// instead of the plain toast() they used to get. Same confetti palette, same banner machinery - no
+// second implementation. Reused directly from buyItem()'s success branch (§ SHOP, below) for a
+// non-consumable/non-online purchase, and from buyCreditPack()/celebrateRename() below for the two
+// purchase-adjacent flows that never ran through buyItem() at all.
+function celebrateItemPurchase(item){
+  try{ confettiBurst(['#f4c542','#ffe9a8','#7db4d3','#ffffff']); }catch(e){}
+  showPurchaseCelebration(shopDisplayName(item)+' purchased!','');
+}
+function celebrateCreditPackPurchase(pack,added){
+  try{ confettiBurst(['#f4c542','#ffe9a8','#7db4d3','#ffffff']); }catch(e){}
+  showPurchaseCelebration(added+' credit'+(added===1?'':'s')+' added!',
+    pack?('Bought the '+pack.credits+'-credit pack for '+iapPackPrice(pack)+'.'):'');
+}
+// 2026-08-01 (v0.63, item 2) Blake: "once changed, you need the celebration in the center of the
+// screen." Fires for EVERY successful rename (free, token-redeemed, or admin-panel-triggered) -
+// see attemptAccountRename()'s own success branch, § ACCOUNT SIGN-IN - not just the Shop-triggered
+// token flow this item was originally about, so the Shop and the Account panel can never treat the
+// same success event differently (the house rule every other purchase surface in this file already
+// follows). Judgment call, flagged plainly: a plain FREE rename (no token spent) gets this too,
+// not just a token redeem - simpler and more consistent than a banner that sometimes appears and
+// sometimes doesn't for what is, from the player's seat, the exact same "my name just changed"
+// moment. Easy to scope down to token-only later if Blake would rather the free path stay quiet.
+function celebrateRename(name,usedToken){
+  try{ confettiBurst(['#f4c542','#ffe9a8','#7db4d3','#ffffff']); }catch(e){}
+  showPurchaseCelebration('You are '+name+' on the leaderboard!',usedToken?'Nickname Change token used.':'');
 }
 // Same confirm-in-place idiom the Shop's own showShopConfirm()/hideShopConfirm() use (above) -
 // re-wired every paint since #acctOnlineBody's innerHTML is rebuilt from scratch each time.
@@ -14774,10 +15094,22 @@ function catItemRow(item,wallet,opts){
   }else if(item.category==='felt'&&item.c){
     swatch=`<span class="shopSwatch shopSwatchFelt" style="background:${item.c}"></span>`;
   }
+  // 2026-08-01 (v0.63, item 2) Blake: "the shop should allow you to change your name straight from
+  // the shop (and if you already have a token, instead of a buy button it should just be a change
+  // button that pops up a window)." Computed unconditionally (not just under opts.showHeld, the
+  // Admin-panel-only flag this used to be gated behind) since the SHOP's own row now needs to know
+  // this too, to decide Buy vs. Change - see the action-button branch, below.
+  const heldNamechange=item.id==='namechange_credit'?Math.max(0,Number(wallet.namechangeCredits)||0):0;
   const metaBits=[];
-  if(opts&&opts.showHeld&&item.id==='namechange_credit'){
-    const held=Math.max(0,Number(wallet.namechangeCredits)||0);
-    metaBits.push('You have '+held);
+  if(item.id==='namechange_credit'){
+    // The Admin panel's Tokens row (opts.showHeld) always states the count, even at 0 - it's the
+    // actionable place to see it (v0.59's own reasoning, unchanged). The Shop only shows it once
+    // there's something to act on (held>0, i.e. exactly when the button below reads "Change") -
+    // showing "You have 0" next to a plain Buy button would resurrect the exact "false
+    // affordability warning" bug the v0.51 comment right below this function already root-caused
+    // and removed from the Shop once before.
+    if(opts&&opts.showHeld)metaBits.push('You have '+heldNamechange);
+    else if(heldNamechange>0)metaBits.push('You have '+heldNamechange);
   }
   let actionHtml;
   // 2026-07-29 (v0.57): was `item.category==='namechange'` - widened to `item.consumable` so the
@@ -14801,7 +15133,17 @@ function catItemRow(item,wallet,opts){
   // of the two surfaces (the Shop's own SHOP_STATE.wallet, or the Admin panel's own
   // refreshAcctEquip() wallet fetch) rendered it - no second wallet lookup, no risk of the two
   // ever disagreeing.
-  if(item.consumable){
+  // 2026-08-01 (v0.63, item 2): holding at least one Nickname Change token turns this row's
+  // action from "Buy" into "Change" - the token is already there to spend, so the button should
+  // lead straight into spending it (openAccountNameEdit(), § ACCOUNT SIGN-IN) rather than offering
+  // to buy ANOTHER one on top of it. Deliberately namechange_credit only - online_month stays a
+  // pure "Buy" row even once purchased (there is no separate "use it" step for extending access;
+  // buying it IS using it), so this can never be read as a general "consumable with a balance
+  // gets a second button" rule.
+  const isNamechangeChange=item.id==='namechange_credit'&&heldNamechange>0;
+  if(isNamechangeChange){
+    actionHtml=`<button class="btn primary shopChangeNameBtn" data-id="${item.id}">Change</button>`;
+  }else if(item.consumable){
     actionHtml=`<button class="btn primary shopBuyBtn" data-id="${item.id}" data-balance="${wallet.balance}" ${buyDisabledAttr}>Buy - ${item.cost} credits</button>`;
   }else if(owned){
     metaBits.push('Owned');
@@ -14821,7 +15163,11 @@ function catItemRow(item,wallet,opts){
      immediately -> leftovers stay. On the website (no plugin) the button simply never renders -
      the disabled credits button reads exactly as it did in v0.58. */
   let moneyHtml='', moneyRow='';
-  const buyable=item.consumable||!owned;
+  // isNamechangeChange guard: a held token means there is nothing left to buy on this row at all
+  // (canAfford/cost are moot - the action is Change, not Buy) - without this, a player holding a
+  // token but genuinely broke on credits would confusingly see a "Buy with $X" button offering to
+  // buy a SECOND token right next to a "Change" button offering to spend the one they already have.
+  const buyable=!isNamechangeChange&&(item.consumable||!owned);
   if(buyable&&!canAfford&&iapCanOfferPacks()){
     const pack=iapCoveringPack(item.cost-wallet.balance);
     if(pack){
@@ -14973,7 +15319,7 @@ function paintShop(){
       return `<div class="shopItem" data-pid="${esc(p.productId)}">
         <div class="shopItemInfo"><div class="shopItemText"><div class="shopItemName">${p.credits} credits</div>
           ${bonus>0?`<div class="shopItemMeta">+${bonus}% bonus</div>`:''}</div></div>
-        <div class="shopItemAction"><button class="btn primary shopMoneyBtn shopPackBtn" data-pid="${esc(p.productId)}">${esc(iapPackPrice(p))}</button></div>
+        <div class="shopItemAction"><button class="btn ghost shopMoneyBtn shopPackBtn" data-pid="${esc(p.productId)}">${esc(iapPackPrice(p))}</button></div>
       </div>`;
     }).join('');
   }else if(packs.length&&!nastyIapPlugin()){
@@ -15051,12 +15397,17 @@ function hideShopMoneyConfirm(id){
 // (name/colors4/colors6/c/dark) into EQUIP so applyEquipped() at boot never needs a network fetch.
 function equipToggle(item){
   const already=EQUIP[item.category]&&EQUIP[item.category].id===item.id;
+  // 2026-08-01 (v0.63, item 7) Blake: "once something is equipped... make it fade away
+  // eventually." alwaysFade:true (toast()'s new 4th param, § UTIL) - equipToggle() is reachable
+  // from the Admin panel mid-game, where toast()'s own menu-only auto-dismiss never used to arm at
+  // all (see toast()'s own header comment for the full root-cause), which is exactly why this
+  // message used to just sit there. Every other toast() call in this file is untouched.
   if(already){
     EQUIP[item.category]=null;
-    toast(item.name+' unequipped - back to the standard '+(item.category==='felt'?'felt':item.category==='title'?'title':'colors')+'.');
+    toast(item.name+' unequipped - back to the standard '+(item.category==='felt'?'felt':item.category==='title'?'title':'colors')+'.',3000,false,true);
   }else{
     EQUIP[item.category]={id:item.id,name:item.name,colors4:item.colors4,colors6:item.colors6,c:item.c,dark:item.dark};
-    toast(item.name+' equipped.');
+    toast(item.name+' equipped.',3000,false,true);
   }
   saveEquip();
   applyEquipped();
@@ -15170,7 +15521,9 @@ function acctEquipReset(cat){
   EQUIP[cat]=null;
   saveEquip();
   applyEquipped();
-  toast('Back to the standard '+(cat==='felt'?'felt':cat==='title'?'title (none)':'colors')+'.');
+  // 2026-08-01 (v0.63, item 7): same alwaysFade fix as equipToggle()'s own two toasts, above - this
+  // "Use default" row is the same Admin-panel-mid-game equip family, just the reset side of it.
+  toast('Back to the standard '+(cat==='felt'?'felt':cat==='title'?'title (none)':'colors')+'.',3000,false,true);
   try{ renderMenu(); }catch(e){}
   try{ paintShop(); }catch(e){}
   refreshAcctEquip();
@@ -15202,7 +15555,14 @@ $('acctEquipToggleBtn').addEventListener('click',()=>{
 // synchronously before any await, so a second click physically cannot start a second request
 // while the first is in flight (see server/server.js's own W6 test for the server-side half of
 // this - two concurrent requests with the SAME requestId land exactly one charge either way).
-async function buyItem(item){
+// 2026-08-01 (v0.63, item 2): `opts.skipAutoFollowup` exists for exactly ONE caller -
+// showNameTokenPurchaseOffer()'s own internal "buy a token, then redeem it" step (§ ACCOUNT
+// SIGN-IN) - which already opens its own follow-up confirm (showNameTokenConfirm()) right after
+// this resolves; without the flag, the auto-open-the-rename-window logic below would reopen the
+// box on top of that confirm and wipe out the name the player already typed. Every OTHER caller
+// (the Shop's own Buy button, the Admin panel's Tokens row, the "buy the covering pack with real
+// money" flow) leaves opts undefined and gets the new item 2 behavior by default.
+async function buyItem(item,opts){
   if(SHOP_BUSY||!isAccountReady())return;
   SHOP_BUSY=true;
   const reqId='purch-'+Date.now()+'-'+Math.random().toString(36).slice(2,10);
@@ -15241,7 +15601,23 @@ async function buyItem(item){
     if(item.id==='online_month'){
       celebrateOnlineAccessPurchase(r.body.onlineAccess||(ONLINE_STATUS_CACHE&&ONLINE_STATUS_CACHE.data));
     }else{
-      toast(shopDisplayName(item)+' purchased!');
+      // 2026-08-01 (v0.63, item 1): was a plain toast() - every purchase gets the same centered
+      // celebration online_month already had. See celebrateItemPurchase(), § SHOP.
+      celebrateItemPurchase(item);
+    }
+    // 2026-08-01 (v0.63, item 2) Blake, verbatim: "the shop should allow you to change your name
+    // straight from the shop... right after buying a nickname change token." Deliberately scoped
+    // to the SHOP specifically (checked via #shopOverlay's own visibility, not just item.id) -
+    // Blake's own words name the Shop, and the Admin panel's Tokens row already has its own
+    // established, tested flow (buy -> the row updates in place with the new held count -> a
+    // separate tap on "Change your name" or the row's own new Change button) that this would
+    // otherwise silently collapse into one step by whisking the panel away behind the rename
+    // popup the instant a token lands, before refreshAcctEquip() below ever got to show the new
+    // count. Buying from the Shop has no such in-place row to preserve (the Shop's own row will
+    // repaint correctly via paintShop() either way, whether this box is open on top of it or not).
+    if(item.id==='namechange_credit'&&!(opts&&opts.skipAutoFollowup)
+       &&$('shopOverlay')&&!$('shopOverlay').classList.contains('hidden')){
+      try{ openAccountNameEdit('account',''); }catch(e){}
     }
     paintShop();
     try{
@@ -15295,6 +15671,12 @@ async function buyItem(item){
    identically via `.btn[aria-disabled="true"]`, § STYLE) - so the click NOW fires, and this
    handler is what gives it a real answer instead of silently doing nothing. */
 function shopRowClickHandler(e){
+  // 2026-08-01 (v0.63, item 2): a held Nickname Change token's row (Shop or Admin Tokens) - see
+  // catItemRow()'s own comment, above. Opens the exact same rename window the Account panel's
+  // "Change your name" row does - one implementation, reached from three doors now (Account panel,
+  // Shop, Admin Tokens), never a second rename path.
+  const changeNameBtn=e.target.closest('.shopChangeNameBtn');
+  if(changeNameBtn){ openAccountNameEdit('account',''); return true; }
   const buyBtn=e.target.closest('.shopBuyBtn');
   if(buyBtn&&buyBtn.getAttribute('aria-disabled')==='true'){
     const item=findShopItem(buyBtn.dataset.id);
