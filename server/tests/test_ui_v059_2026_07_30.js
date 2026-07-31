@@ -190,8 +190,14 @@ async function main() {
 
     // ---- U2: unaffordable item -> money offer -> full outright purchase ----
     const midnightRow = '#shopBody .shopItem[data-id="palette_midnight"]';
-    check(await page.locator(midnightRow + " .shopBuyBtn[disabled]").count() === 1,
-      "U2 Midnight (250) is still shown with its disabled credits button (the honest credit price)");
+    // 2026-07-31: v0.60 item 4 swapped the native `disabled` attribute for `aria-disabled="true"`
+    // on an unaffordable shopBuyBtn (see index.html's catItemRow()/shopRowClickHandler() comments -
+    // a real `disabled` attribute swallowed the click before a toast could ever fire). This
+    // assertion predates that change and was still checking for `disabled`, which no longer
+    // appears on this button at all - updated to match the button's actual, current markup rather
+    // than reverting the v0.60 accessibility fix.
+    check(await page.locator(midnightRow + " .shopBuyBtn[aria-disabled='true']").count() === 1,
+      "U2 Midnight (250) is still shown with its disabled-looking (aria-disabled) credits button (the honest credit price)");
     check(await page.locator(midnightRow + " .shopMoneyBtn").count() === 1,
       "U2b and it now ALSO offers the gold real-money button instead of being a dead end");
     await page.locator(midnightRow + " .shopMoneyBtn").scrollIntoViewIfNeeded();
@@ -230,7 +236,11 @@ async function main() {
     const eqBody = await page.evaluate(() => document.getElementById("acctEquipBody").textContent);
     check(/Tokens/.test(eqBody) && /Nickname Change/.test(eqBody) && /You have 0/.test(eqBody),
       "U3e the Nickname Change token row is right there, with the held count");
-    check(/Online Access/.test(eqBody), "U3f and the Online Access token row is there too");
+    // 2026-07-31: v0.60 item 2 renamed this row's display name from "Online Access" to
+    // "Online Play" / "(1 month)" (see index.html's shopDisplayName()/catItemRow() comments) -
+    // this assertion predates that rename. Updated to match the current, intentional wording
+    // rather than the product's old name.
+    check(/Online Play/.test(eqBody), "U3f and the Online Play (online access) token row is there too");
     check(await page.locator('#acctEquipBody .shopItem[data-id="online_month"] .shopBuyBtn').count() === 1,
       "U3g both rows carry real Buy buttons inside the panel");
     check(/Midnight/.test(eqBody), "U3h the money-bought Midnight palette shows up as an owned customization");

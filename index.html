@@ -3586,7 +3586,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.61</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.62</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -7238,9 +7238,17 @@ function drawBoard(){
   // seat color (green/navy/red/white/purple) sits far enough away in hue from that background to
   // read fine at a uniform .14 lane opacity / plain stroke ring, but Yellow (#f0c419) is close
   // enough in hue+lightness to the wood itself that it nearly vanishes at the same treatment.
-  // Fix targets Yellow specifically (richer lane opacity + a second darker outline ring, mirroring
-  // the loop-hole start-ring treatment a few lines down) rather than changing every color's look.
-  const laneOpacity=col=>col.name==='Yellow'?.22:.14;
+  // Fix targeted Yellow specifically at the time (richer lane opacity + a second darker outline
+  // ring, mirroring the loop-hole start-ring treatment a few lines down) rather than changing
+  // every color's look.
+  // 2026-07-31 (peg-visibility pass, Blake's item 4, round 2): after the palette rebuild
+  // (server/server.js's/server/cloud/server.ts's SHOP_CATALOG, same date) Blake flagged two
+  // specific survivors - Royal's Gold and Ocean Breeze's Driftwood - as still the faintest thing
+  // on the board even with the new hex values. His words: "and by dense I don't mean bigger, I
+  // just mean not as faint." So the .22 lane opacity this v0.11.3 fix once reserved for Yellow
+  // only is now every color's baseline - a pure opacity bump on the SAME line every seat already
+  // drew here, nothing added, nothing resized. Yellow's own extra dark underlay right below is
+  // untouched; it was already doing its job and isn't part of what got flagged this round.
   // safe-row lanes ("between parallel lines")
   for(let s=0;s<G.n;s++){
     const col=G.seats[s].color, a=LAY.home[s][0], b=LAY.home[s][HOME_N-1];
@@ -7253,7 +7261,7 @@ function drawBoard(){
                  'stroke-linecap':'round',opacity:.14},svg);
     }
     el('line',{x1:a.x,y1:a.y,x2:b.x,y2:b.y,stroke:col.c,'stroke-width':LAY.holeR*2+14,
-               'stroke-linecap':'round',opacity:laneOpacity(col)},svg);
+               'stroke-linecap':'round',opacity:.22},svg);
   }
   LAY.loop.forEach(h=>{
     el('circle',{cx:h.x,cy:h.y,r:LAY.holeR,fill:'url(#hole)'},svg);
@@ -7277,7 +7285,11 @@ function drawBoard(){
     });
     LAY.base[s].forEach(h=>{
       el('circle',{cx:h.x,cy:h.y,r:LAY.holeR,fill:'url(#hole)'},svg);
-      el('circle',{cx:h.x,cy:h.y,r:LAY.holeR+4,fill:'none',stroke:col.c,'stroke-width':3,opacity:.75,
+      // 2026-07-31 (peg-visibility pass, Blake's item 4, round 2): the stable ring was the one
+      // slot outline drawn at reduced opacity (.75) for every color - home and starting-block
+      // rings are already full opacity. Bumped to 1 for the same reason as the lane wash above:
+      // not-as-faint, not bigger - stroke-width and the dashed pattern are both untouched.
+      el('circle',{cx:h.x,cy:h.y,r:LAY.holeR+4,fill:'none',stroke:col.c,'stroke-width':3,opacity:1,
                    'stroke-dasharray':'5 4'},svg);
     });
   }

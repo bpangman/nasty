@@ -911,89 +911,151 @@ const ONLINE_FREE_EXTRA_MONTHS = 1;
 // status endpoint at all.
 const ONLINE_ENTITLEMENT_ENFORCED = accountsEnvFlagOn(Deno.env.get("NASTY_ONLINE_ENTITLEMENT_ENFORCED"), "1");
 const SHOP_CATALOG: ShopItem[] = [
+  /* 2026-07-31 (peg-visibility pass, Blake's item 4 + item 5) - every color below was
+   * rebuilt from scratch against two hard requirements Blake gave directly:
+   *   item 4, verbatim: "verify all the peg color options. some of them (i.e. the yellowish
+   *     one on royal or the tannish one on ocean breeze) have the problem we had way back in
+   *     the day with the original yellow (default) pegs slots (meaning home, stable, and
+   *     starting block). Make sure these ones are more pronounced on the board." Clarified
+   *     later the same day: "and by dense I don't mean bigger, I just mean not as faint" - so
+   *     the fix is color intensity only (deeper, more saturated hex values), never a size/
+   *     stroke-width change. The board itself paints home rows, the loop's starting-block
+   *     holes, and stable (base) holes all using the seat's OWN color for the ring/outline
+   *     around each hole (see index.html, drawBoard(), § RENDER) - a peg is always the same
+   *     color as the slot it sits in, on purpose (Blake: "I don't want the pegs to be a
+   *     different color than their home/stable/starting block... they should still be the
+   *     same color as each other"), so the only lever that exists is making that ONE shared
+   *     color itself read clearly against the board's warm tan/gold wood
+   *     (#f0d9ab/#e2c288/#cfa968, drawBoard()'s "url(#wood)" gradient) - exactly the same root
+   *     cause and the same fix already proven on the original default Yellow (see the
+   *     v0.11.3 comment a few hundred lines into index.html's drawBoard()).
+   *   item 5, verbatim: "can you make sure the color schemes match the names you've given
+   *     them? for instance, the 'midnight' colors (as well as 'royal' and 'forest') don't
+   *     really match that description. Make these more distinct!"
+   * Method: every color was checked with the actual WCAG contrast-ratio formula (relative
+   * luminance) against all three wood-gradient stops, threshold >=2.0 (the old default Yellow,
+   * #f0c419, measured 1.03-1.32 against this same wood - anything down in that range is a
+   * confirmed repeat of the original bug). Every color was ALSO checked pairwise against every
+   * other color in its own colors4/colors6 array (both plain and simulated for protanopia/
+   * deuteranopia) so seat colors stay tellable apart at the table, not just readable against
+   * the board. Nobody owns any of these palettes yet (still in testing, Blake's call), so nothing
+   * here needed to preserve a prior look for its own sake. Full numbers live with the session
+   * that did this pass, not repeated here - see HANDOFF.md.
+   *   Sunset - kept its coral/dusk/rose/gold sunset identity, deepened every swatch that was
+   *     too pale to read (old Rose/Gold/Cream all measured under 1.15 against the wood); the
+   *     old pale "Cream" is now "Dune", a muted dusk-horizon taupe that does not collide with
+   *     the deepened Coral.
+   *   Ocean Breeze - kept teal/deep-blue/coral, replaced the named-and-shamed pale "Sand"
+   *     with "Driftwood" (a real color, not a wash) and "Seafoam" with a deeper "Seaglass" -
+   *     both of the old ones measured ~1.0 against the wood, i.e. functionally invisible.
+   *   Forest - item 5 rework: now genuinely green-forward ("Pine"/"Moss", two real forest
+   *     greens) plus "Berry"/"Amber" as the warm accents; the old pale-blue "Sky" is gone
+   *     entirely (never read as "forest"), "Bark" was retuned off a green-vs-brown protanopia
+   *     collision, and the old washed-out "Birch" is now a deep slate-blue that actually holds
+   *     up against the wood.
+   *   Royal - item 5 rework: colors4 had NO purple at all before this pass, which is why it
+   *     never read as "royal" - now leads with a true "Amethyst" purple plus a deepened
+   *     "Gold", alongside Sapphire/Crimson; colors6 replaces the old pale "Ivory" with
+   *     "Pearl" (a cool, deep, purple-leaning neutral that does not collide with Emerald).
+   *   Midnight - item 5 rework, ground up: was cyan/violet/magenta/amber/silver/lime, i.e. a
+   *     bright rainbow with nothing midnight about it. Now "Midnight"/"Indigo"/"Slate"
+   *     (genuine deep blues and near-black) carry the name, with "Starlight"/"Frost" as the
+   *     cool bright accents every dark palette needs to stay tellable apart at a glance, and
+   *     "Eclipse" (deep plum-black) rounding out the 6-seat board.
+   * ROUND 2, same day: Blake looked at the round-1 render and flagged Royal's Gold and Ocean
+   * Breeze's Driftwood as still the faintest thing on the board even after the rebuild above -
+   * both are the deliberately neutral/desaturated seat in their palette, and a neutral color
+   * needs MORE luminance contrast than a saturated one to feel equally present (WCAG contrast is
+   * luminance-only; it does not credit a color for being vivid). Densified both again: Gold
+   * #996a12->#7a520e (wood contrast 2.15->3.13), Driftwood #6a5e44->#564b37 (2.89->3.88) - still
+   * clearly the same two colors, just with real weight now. Re-verified pairwise against every
+   * sibling in their own colors4/colors6 array (plain + simulated protanopia/deuteranopia) -
+   * still clean.
+   * BYTE-IDENTICAL TWIN in server/cloud/server.ts - keep both in sync, same rule as the rest of
+   * this catalog. */
   {
     id: "palette_sunset", category: "palette", name: "Sunset", cost: 50,
     colors4: [
-      { name: "Coral", c: "#e8604c", dark: "#9c3423" },
+      { name: "Coral", c: "#c94824", dark: "#661f0e" },
       { name: "Dusk", c: "#3e4e7e", dark: "#232e4e" },
-      { name: "Rose", c: "#e08bb0", dark: "#9c4f74" },
-      { name: "Gold", c: "#f2a93b", dark: "#a56f12" },
+      { name: "Rose", c: "#b83a6e", dark: "#541831" },
+      { name: "Gold", c: "#9c620c", dark: "#4a2e04" },
     ],
     colors6: [
-      { name: "Coral", c: "#e8604c", dark: "#9c3423" },
+      { name: "Coral", c: "#c94824", dark: "#661f0e" },
       { name: "Dusk", c: "#3e4e7e", dark: "#232e4e" },
-      { name: "Rose", c: "#e08bb0", dark: "#9c4f74" },
-      { name: "Cream", c: "#f2e4c4", dark: "#b5a377" },
+      { name: "Rose", c: "#b83a6e", dark: "#541831" },
+      { name: "Dune", c: "#6a5039", dark: "#382b1c" },
       { name: "Violet", c: "#8a5ba6", dark: "#54326a" },
-      { name: "Gold", c: "#f2a93b", dark: "#a56f12" },
+      { name: "Gold", c: "#9c620c", dark: "#4a2e04" },
     ],
   },
   {
     id: "palette_ocean", category: "palette", name: "Ocean Breeze", cost: 50,
     colors4: [
-      { name: "Teal", c: "#2a9d8f", dark: "#175a52" },
+      { name: "Teal", c: "#176459", dark: "#0c342e" },
       { name: "Deep Blue", c: "#2d4f8f", dark: "#182c55" },
-      { name: "Coral", c: "#ee6352", dark: "#a2372a" },
-      { name: "Sand", c: "#edd9a3", dark: "#ab9354" },
+      { name: "Coral", c: "#bf4630", dark: "#5c1e13" },
+      { name: "Driftwood", c: "#564b37", dark: "#2b251b" },
     ],
     colors6: [
-      { name: "Teal", c: "#2a9d8f", dark: "#175a52" },
+      { name: "Teal", c: "#176459", dark: "#0c342e" },
       { name: "Deep Blue", c: "#2d4f8f", dark: "#182c55" },
-      { name: "Coral", c: "#ee6352", dark: "#a2372a" },
-      { name: "Sand", c: "#edd9a3", dark: "#ab9354" },
-      { name: "Anemone", c: "#8f68b8", dark: "#553a74" },
-      { name: "Seafoam", c: "#9fd8c5", dark: "#5d9a85" },
+      { name: "Coral", c: "#bf4630", dark: "#5c1e13" },
+      { name: "Driftwood", c: "#564b37", dark: "#2b251b" },
+      { name: "Anemone", c: "#7a52a0", dark: "#3c284f" },
+      { name: "Seaglass", c: "#2b823a", dark: "#15401c" },
     ],
   },
   {
     id: "palette_forest", category: "palette", name: "Forest", cost: 80,
     colors4: [
-      { name: "Moss", c: "#6f9a3d", dark: "#425e1f" },
-      { name: "Sky", c: "#7fb6d9", dark: "#41708f" },
+      { name: "Pine", c: "#1f6b3d", dark: "#10361f" },
+      { name: "Moss", c: "#4f6b28", dark: "#283615" },
       { name: "Berry", c: "#b04a72", dark: "#6e2543" },
-      { name: "Amber", c: "#e2a83c", dark: "#96690f" },
+      { name: "Amber", c: "#a85d16", dark: "#542e0b" },
     ],
     colors6: [
-      { name: "Moss", c: "#6f9a3d", dark: "#425e1f" },
-      { name: "Sky", c: "#7fb6d9", dark: "#41708f" },
+      { name: "Pine", c: "#1f6b3d", dark: "#10361f" },
+      { name: "Moss", c: "#4f6b28", dark: "#283615" },
       { name: "Berry", c: "#b04a72", dark: "#6e2543" },
-      { name: "Birch", c: "#efe7d4", dark: "#b7ab88" },
-      { name: "Bark", c: "#8a5a34", dark: "#54351d" },
-      { name: "Amber", c: "#e2a83c", dark: "#96690f" },
+      { name: "Birch", c: "#3f5866", dark: "#1f2c33" },
+      { name: "Bark", c: "#6e3820", dark: "#391c10" },
+      { name: "Amber", c: "#a85d16", dark: "#542e0b" },
     ],
   },
   {
     id: "palette_royal", category: "palette", name: "Royal", cost: 150,
     colors4: [
-      { name: "Emerald", c: "#1f8a5c", dark: "#0f5236" },
+      { name: "Amethyst", c: "#6b2fa0", dark: "#341750" },
       { name: "Sapphire", c: "#3a55b4", dark: "#1f2f6e" },
       { name: "Crimson", c: "#b12a3c", dark: "#6d1220" },
-      { name: "Gold", c: "#d4af37", dark: "#8a6d14" },
+      { name: "Gold", c: "#7a520e", dark: "#3c2907" },
     ],
     colors6: [
-      { name: "Emerald", c: "#1f8a5c", dark: "#0f5236" },
+      { name: "Amethyst", c: "#6b2fa0", dark: "#341750" },
       { name: "Sapphire", c: "#3a55b4", dark: "#1f2f6e" },
       { name: "Crimson", c: "#b12a3c", dark: "#6d1220" },
-      { name: "Ivory", c: "#f1e9d5", dark: "#b6ab89" },
-      { name: "Amethyst", c: "#7d3fa8", dark: "#4a2166" },
-      { name: "Gold", c: "#d4af37", dark: "#8a6d14" },
+      { name: "Pearl", c: "#5a5468", dark: "#2d2a34" },
+      { name: "Emerald", c: "#1a7550", dark: "#0d3a28" },
+      { name: "Gold", c: "#7a520e", dark: "#3c2907" },
     ],
   },
   {
     id: "palette_midnight", category: "palette", name: "Midnight", cost: 250,
     colors4: [
-      { name: "Cyan", c: "#3fc5d1", dark: "#20707a" },
-      { name: "Violet", c: "#7a63d9", dark: "#463693" },
-      { name: "Magenta", c: "#d955a8", dark: "#8c2f68" },
-      { name: "Amber", c: "#f0a832", dark: "#a06d10" },
+      { name: "Midnight", c: "#0c1526", dark: "#060b16" },
+      { name: "Indigo", c: "#3d3374", dark: "#221c42" },
+      { name: "Slate", c: "#33404e", dark: "#1c242c" },
+      { name: "Starlight", c: "#26769f", dark: "#153e54" },
     ],
     colors6: [
-      { name: "Cyan", c: "#3fc5d1", dark: "#20707a" },
-      { name: "Violet", c: "#7a63d9", dark: "#463693" },
-      { name: "Magenta", c: "#d955a8", dark: "#8c2f68" },
-      { name: "Silver", c: "#c9ced9", dark: "#848b9c" },
-      { name: "Lime", c: "#9ed14b", dark: "#5e8422" },
-      { name: "Amber", c: "#f0a832", dark: "#a06d10" },
+      { name: "Midnight", c: "#0c1526", dark: "#060b16" },
+      { name: "Indigo", c: "#3d3374", dark: "#221c42" },
+      { name: "Slate", c: "#33404e", dark: "#1c242c" },
+      { name: "Eclipse", c: "#3a1c42", dark: "#1d0e21" },
+      { name: "Frost", c: "#237a85", dark: "#103d43" },
+      { name: "Starlight", c: "#26769f", dark: "#153e54" },
     ],
   },
   { id: "felt_burgundy", category: "felt", name: "Burgundy Felt", cost: 20, c: "#6b2433", dark: "#35101a" },
