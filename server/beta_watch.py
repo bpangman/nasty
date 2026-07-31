@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '04b7cbeb-4fc9-48fc-8e98-9d8b66b73d18'
+BUILD_SUBMISSION_ID = 'fe417d5a-6db3-42b4-8f69-9164704bd4ff'
 
 
 def current_build():
@@ -101,15 +101,11 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p style="background:#fff3cd;padding:12px 16px;border-radius:8px;border:1px solid #e6c260"><b>Please check one thing for me first:</b> this update changes how the very top of the screen works, behind the clock and battery, trying to finally fix that color seam up there. Open the app and just glance at the top of the screen. It should look normal, no weird overlap with the clock or battery or the notch. If anything looks off up there, tell Cortana right away.</p>
+<p style="background:#fff3cd;padding:12px 16px;border-radius:8px;border:1px solid #e6c260"><b>Please check one thing for me first:</b> the top of the screen, behind the clock and battery, should now actually change color to match whichever felt you have equipped - a soft, faint tint, not a bright block. Open the app, glance at the top, then equip a different felt from the Shop and glance again. If it does not change, or looks wrong, tell Cortana right away - this one has been wrong twice before, so a real check matters.</p>
 <p>Everything else in this update:</p>
 <ul>
-<li><b>The little X buttons now line up exactly with the title next to them</b> in the Shop, Leaderboard, and every other window - measured this time, not eyeballed.</li>
-<li><b>Buying anything now shows a bigger "you got it" message, centered on the screen</b> - credits, palettes, felts, titles, the nickname token, Online Access, all of them, not just Online Access like before.</li>
-<li><b>Once you equip something, that confirmation message now fades away on its own</b> even in the middle of a game, instead of sitting there.</li>
-<li><b>The Shop's Nickname Change now lets you change your name right from the Shop</b> if you already hold a token - no need to go find it in the Admin panel.</li>
-<li><b>The credit pack buttons in the Shop are easier to read</b> - the felt color shows through now instead of a solid gold block, with white text.</li>
-<li><b>The five paid color options in the Shop got another pass</b> - Sunset, Forest, Ocean Breeze, Royal and Midnight should all genuinely match their names now.</li>
+<li><b>Very dark game pieces are easier to spot and tap now</b> - the little background circle behind a dark peg (like some of the Midnight colors, or Ocean Breeze's Deep Blue) lightens up so the piece does not disappear against it.</li>
+<li><b>Forest's two green colors are clearly different now</b> - Pine stays a deep forest green, and Moss is now a lighter, muted sage color instead of reading as "another green."</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
