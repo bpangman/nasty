@@ -7,7 +7,23 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Nasty">
-<meta name="theme-color" content="#0e3421">
+<!-- 2026-07-31 (v0.61, item 7) Blake: "I know we sorta fixed the coloring on that top apple bar
+     with the clock and battery stuff but it's still very obvious for every color (even default)
+     where the break is. Can we not have these colors match better? they still look very
+     different." Investigated as two hypotheses (see feltTopEdgeColor()/syncNativeStatusBarColor()/
+     applyEquippedFelt()'s own comments, § SHOP, and HANDOFF.md "v0.61" for the full writeup and
+     real WebKit pixel-sampling results) - but ALSO found a separate, definite, currently-broken
+     bug while investigating: this tag was STATIC and never touched by any JS anywhere in the file
+     (confirmed by grepping the whole file for "theme-color" - this was the only match), stuck on
+     `#0e3421` - DEFAULT_FELT.dark, the wrong end of the gradient (see feltTopEdgeColor()'s own
+     v0.53 comment for why the DARK end was always the wrong target, not just for this tag). Fixed
+     value below is feltTopEdgeColor(null)'s own real computed output (verified, not eyeballed -
+     see HANDOFF.md "v0.61"), matching capacitor.config.json's already-correct static default. This
+     tag only ever matters in a mobile BROWSER (Safari/Chrome's own tab-color chrome) - separate
+     from and in addition to the native iOS app's status bar, which syncNativeStatusBarColor()
+     already keeps in sync at runtime; this tag had no runtime sync at all until now (see
+     syncThemeColorMeta(), applyEquippedFelt(), § SHOP - same call site as the native sync). -->
+<meta name="theme-color" content="#1c5638">
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
 <!--
@@ -594,6 +610,48 @@
                         used) instead of opening the confirm step. One shared handler covers both
                         the Shop and the Admin panel's Shop Customizations rows, same as always.
                         `#verTap` bumped `v0.59` -> `v0.60`.
+                    v0.61 (2026-07-31), four of Blake's own asks this session - see HANDOFF.md
+                    "v0.61" for verbatim asks/root-causes/screenshots:
+                      - Item 6 (real bug): an unaffordable-item toast() painted BEHIND the Shop/
+                        Admin overlay (#toasts was z-index:65, .overlay is z-index:80) - invisible
+                        until the overlay closed. Fixed at the ONE shared #toasts rule (§ STYLE,
+                        z-index now 95, above every overlay level including #reclaimReqOverlay's
+                        90 exception) - every toast() call site (shopRowClickHandler(),
+                        wireAcctOnlineBuy(), everything else) is fixed structurally, with no
+                        per-site patching.
+                      - Item 1a: the Shop's days-left line (shopOnlineAccessSubline()) buried the
+                        countdown mid-sentence in the plain-muted .shopOnlineNote color. Split onto
+                        its own line, new .shopOnlineCountdown class, byte-identical to the Admin
+                        panel's own .acctOnlineCountdown (#ffe9a8, bold) so the two screens read
+                        identically.
+                      - Item 1b: buyItem()'s success path refreshed ONLINE_STATUS_CACHE but never
+                        SHOP_STATE.onlineStatus, the stale snapshot paintShop() actually reads - a
+                        Shop purchase needed a reopen/reload to show the new days-left figure. One
+                        line fixed it: `SHOP_STATE.onlineStatus=r.body.onlineAccess;` before the
+                        repaint.
+                      - Item 3: a purchased online_month now gets a real celebration (confettiBurst(),
+                        generalized to take an optional explicit color array so it never touches
+                        G.winners/G.seats - G is null outside a live game and this can fire from the
+                        main menu - plus a new viewport-fixed .purchaseCelebration banner, NOT the
+                        board-space .nastyStamp, which lives inside #boardScale's own zoomed
+                        coordinate space and would be wrong here) from both buyOnlineAccess() (Admin)
+                        and buyItem() when item.id==='online_month' (Shop). Timeout-dismissed,
+                        pointer-events:none throughout (matches #toasts' own "never trap input"
+                        convention), respects REDUCED exactly like confettiBurst() already did.
+                      - Item 7: re-verified feltTopEdgeColor() against real WebKit-rendered pixels
+                        (clean - matches within 0-1 unit of rounding at the gradient's own dead-
+                        center point) and investigated Blake's own H2 hypothesis (a single matching
+                        y=0 color still reads as a seam against a FLAT native status bar, since the
+                        page immediately starts curving away from it) - confirmed with a clean
+                        synthetic render (measurable RGB drift by y=44px). Implemented Blake's own
+                        fix: a genuinely flat `--feltTopBand` layer at the top of body{}'s
+                        background, sized to env(safe-area-inset-top), same feltTopEdgeColor(f)
+                        color the native status bar gets - zero height (a no-op, verified) on any
+                        screen with no real notch. Also fixed a separate, definite bug found along
+                        the way: the static `<meta name="theme-color">` tag was stuck on the wrong
+                        value and never once updated by any JS - now synced every felt change
+                        (syncThemeColorMeta(), same call site as syncNativeStatusBarColor()).
+                        `#verTap` bumped `v0.60` -> `v0.61`.
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -716,6 +774,20 @@
                     button that already IS the leave affordance adds a decoy, not a convenience;
                     Close-labeled buttons (7 of 19) keep their X. See HANDOFF.md "v0.60" for the full
                     12/7 split and reasoning per overlay. `#verTap` bumped `v0.59` -> `v0.60`.
+                    v0.61 (2026-07-31, item 2, Blake's own follow-up to v0.60's flex header/body
+                    split): "at least move it up so the x is even on the same row as the wording...
+                    more of a buffer between the bottom of the x button and the bottom of the fixed
+                    title bar." `.modalCard>.modalHead` was `align-items:flex-start` (top-aligned the
+                    44px X circle with the h3's TOP edge, not its text row) and `padding:22px 22px 0`
+                    (zero bottom padding, so the header sat flush against .modalBody right below it).
+                    Changed to `align-items:center` (X and title now share one visual row) and real
+                    bottom padding (14px, using the existing 22px top padding as this app's spacing
+                    unit) - same treatment applied to `#accountOverlay`'s own short-screen override,
+                    scaled to ITS 14px unit. Checked at 320px on both a short title (Shop) and the
+                    longest kept-X title in the app (reunionOverlay, "Getting the table back
+                    together," a genuine 2-line wrap) - center still reads correctly for the wrapped
+                    case too, no flex-start exception needed (see HANDOFF.md "v0.61" screenshots).
+                    `#verTap` bumped `v0.60` -> `v0.61`.
     Autotest: open with #autotest (4p FFA all-CPU) or #autotest6 (6p teams) - fast-forwards a full game.
     Preview the real site while the gate is up: append ?preview=1 to the URL (v0.43).
 
@@ -1073,11 +1145,46 @@
      them would have shifted the no-felt-equipped look by a few RGB values, which the "byte-
      identical to v0.54" requirement does not allow - see HANDOFF.md "v0.55". */
   --feltSurface:#10281a; --feltSurfaceRGB:9,32,20; --feltSurfaceAlpha:0.55; --feltBackdropRGB:5,15,9;
+  /* 2026-07-31 (v0.61, item 7, Blake's own H2 suggestion - see the body{} background rule below
+     and feltTopEdgeColor()'s/applyEquippedFelt()'s own comments, § SHOP, for the full
+     investigation). Default is feltTopEdgeColor(null)'s real computed output - #1c5638 - same
+     "byte-identical to before this pass" rule every other felt token here follows: a player with
+     no felt equipped sees exactly the same top edge as before this change. */
+  --feltTopBand:#1c5638;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%}
+/* 2026-07-31 (v0.61, item 7) Blake: "...it's still very obvious for every color (even default)
+   where the break is. Can we not have these colors match better? they still look very different."
+   H1 (re-verify feltTopEdgeColor()'s math against real rendering) came back clean: a real WebKit
+   render at the gradient's own dead-center x matches feltTopEdgeColor()'s computed value almost
+   exactly (0-1 RGB units of rounding noise - see HANDOFF.md "v0.61" for the full per-felt/per-
+   viewport table). So Blake's OWN suggested fix (H2) was investigated next, seriously, with real
+   rendering rather than assumed: a single matching color exactly AT y=0 does not read as seamless
+   against a FLAT native status bar, because the native strip is flat across its own real height
+   (~44-59pt on notched iPhones) while the page immediately starts curving away from that color -
+   measured on a clean synthetic render of this exact gradient (no UI on top to contaminate the
+   sample): by y=44px the default felt has already drifted a Euclidean RGB distance of ~5-6 units
+   from its own y=0 color, and Sunflower (the brightest felt) has drifted ~8-13 units - small per
+   pixel, but a real, continuous, visible gradient starting the instant the flat native bar ends.
+   THE FIX, exactly as Blake proposed: a genuinely FLAT band at the very top of the page, sized to
+   env(safe-area-inset-top) (the same safe-area primitive already used elsewhere, e.g. .winCloseBtn
+   above), painted the SAME feltTopEdgeColor(f) color the native status bar itself is set to
+   (syncNativeStatusBarColor(), § SHOP) - so the flat native strip transitions into a flat WEB
+   strip of the IDENTICAL color, and the radial gradient's own curve only starts to show once
+   BOTH flat strips are behind the viewer, not at the very first pixel below the status bar. No
+   new DOM element needed: this is a second background LAYER on the existing body rule (CSS
+   background layers paint in listed order, first on top) - a linear-gradient that is flatly
+   var(--feltTopBand) for exactly env(safe-area-inset-top), then jumps straight to transparent so
+   the existing radial-gradient shows through everywhere below that line, byte-identical to before
+   this pass. --feltTopBand is set alongside --felt1/--felt2 in applyEquippedFelt() (§ SHOP, same
+   call site as syncNativeStatusBarColor()/syncThemeColorMeta() - all three track the same felt
+   change in the same frame). On a browser/desktop with no safe-area inset at all (env() resolves
+   to 0), this band has zero height and is invisible - provably a no-op there, only relevant on a
+   notched device, which is the ONLY place this seam was ever reported. */
 body{font-family:-apple-system,"Segoe UI",system-ui,sans-serif;color:var(--cream);
-  background:radial-gradient(120% 95% at 50% 28%,var(--felt1),var(--felt2) 78%);
+  background:linear-gradient(var(--feltTopBand),var(--feltTopBand) env(safe-area-inset-top),transparent env(safe-area-inset-top)),
+    radial-gradient(120% 95% at 50% 28%,var(--felt1),var(--felt2) 78%);
   overflow:hidden;user-select:none;-webkit-user-select:none}
 button{font:inherit;cursor:pointer}
 .hidden{display:none!important}
@@ -2108,6 +2215,37 @@ button{font:inherit;cursor:pointer}
 .nastyStamp .sign b{font-size:34px}
 .ring{position:absolute;border:3px solid #fff;border-radius:50%;pointer-events:none;transform:translate(-50%,-50%)}
 .confetti{position:fixed;width:10px;height:16px;top:-20px;z-index:70;pointer-events:none}
+/* 2026-07-31 (v0.61, item 3) Blake: "give a bigger celebration on the screen when they purchase
+   online access (so they know something happened)". Deliberately NOT the board-space .nastyStamp
+   (nastyBlast(), above) - checked, not assumed: .nastyStamp is appended into #fxLayer, an
+   `inset:0` layer that lives INSIDE #boardScale's own coordinate space (nastyBlast() positions it
+   with raw board-space coordinates like `left:500px`), scaled by whatever zoom fitBoard() is
+   currently applying to the board - wrong (and, at the main menu with no board rendered at all,
+   meaningless) for something that has to appear reliably over the Shop/Admin overlay, which is
+   NOT inside #boardScale. This is a genuinely separate, viewport-FIXED element instead - same
+   pop-in-and-settle visual language as .nastyStamp (rotate + scale entrance) but anchored to the
+   real screen, not the board. z-index:96 sits above every overlay level including
+   #reclaimReqOverlay's 90 exception (see #toasts' own stacking-order comment, item 6 above) and
+   just above #toasts' own 95, since this is meant to read as MORE prominent than a normal toast,
+   not competing with one. pointer-events:none throughout (same convention #toasts already uses)
+   so it can never trap a tap on the real UI underneath it while it's up - dismissal is
+   timeout-only (showPurchaseCelebration(), § SHOP), which already satisfies "dismiss cleanly on
+   its own" without needing to also be tappable. */
+.purchaseCelebration{position:fixed;left:50%;top:16%;transform:translate(-50%,-50%);z-index:96;
+  pointer-events:none;text-align:center;max-width:86vw;
+  animation:celebPop .5s cubic-bezier(.34,1.56,.64,1) both}
+.purchaseCelebration.leaving{animation:celebFade .3s ease forwards}
+.purchaseCelebrationSign{display:inline-flex;flex-direction:column;gap:4px;padding:16px 22px;
+  border-radius:16px;background:rgba(15,10,6,.92);border:2px solid var(--gold);
+  box-shadow:0 14px 36px rgba(0,0,0,.55),0 0 30px rgba(244,197,66,.35)}
+.purchaseCelebrationSign b{font-size:18px;color:var(--gold);letter-spacing:.01em}
+.purchaseCelebrationSign span{font-size:13.5px;color:var(--cream);line-height:1.4}
+@keyframes celebPop{
+  0%{opacity:0;transform:translate(-50%,-50%) scale(.55) rotate(-7deg)}
+  55%{opacity:1;transform:translate(-50%,-50%) scale(1.06) rotate(2deg)}
+  100%{opacity:1;transform:translate(-50%,-50%) scale(1) rotate(0deg)}
+}
+@keyframes celebFade{to{opacity:0;transform:translate(-50%,-50%) scale(.92)}}
 
 /* ---------- Toasts / overlays ---------- */
 /* anchored below the board, just above the hand - clear of the top-bar buttons.
@@ -2134,8 +2272,45 @@ button{font:inherit;cursor:pointer}
    bubble by its BOTTOM edge is what keeps Skip and the bubble sharing one baseline no matter
    how tall the message gets. A normal one-line message looks identical to before, because a
    bubble exactly --bandH tall in a --bandH row is in the same place either way. */
+/* 2026-07-31 (v0.61, item 6) Blake: "the message you're trying to display when I click something
+   that can't be purchased with credits (i don't have enough) pops up behind the window, so I only
+   see it when I x out of the shop window (if it's still there) please fix this for both the shop,
+   admin, and in-game personalization menu"
+   Root cause: every "not enough credits" message funnels through the ONE toast() function (§ UTIL,
+   ~line 8016) into this ONE #toasts element - but #toasts sat at z-index:65 while .overlay (what
+   #shopOverlay AND #accountOverlay both are - the Shop, the Admin panel, and its Shop
+   Customizations/in-game personalization section all live inside one or the other) sits at
+   z-index:80. A toast fired while any overlay is open painted UNDER the overlay's own card,
+   invisible until the overlay closed - exactly Blake's report. Fixing this one rule fixes every
+   call site structurally (shopRowClickHandler()'s unaffordable-item branch, wireAcctOnlineBuy()'s
+   Buy-button branch, and anything else that ever calls toast()) with no per-site patching.
+   The FULL z-index stacking order in this file, found by grepping every "z-index" occurrence,
+   lowest to highest (so this number is chosen deliberately, not guessed):
+     2   .winCloseBtn/.overlayXBtn (the round X button itself, inside its own card)
+     3/4 .overlay.canScroll::before/::after ("more below" hint + fade - scoped INSIDE .overlay's
+         own stacking context via position:absolute, never compete with the numbers below)
+     5   #connIndicator
+     26  .teeBubble (board-space tee-pick targets)
+     38  .safeStamp
+     40  .nastyStamp (the rotating NASTY! stamp, nastyBlast())
+     60  .cardFloat (flying card animations)
+     65  #awayActions (the away-ladder button row just above the toast bubble - unchanged, it has
+         no reason to sit above an overlay, it is board-context chrome)
+     67  #btnSkip
+     70  .confetti
+     80  .overlay (#shopOverlay, #accountOverlay, every other overlay's shared base level)
+     90  #reclaimReqOverlay (a deliberate exception ABOVE the normal overlay level - see its own
+         comment near ~line 4011-4024 and the .modalHead comment above - untouched by this fix)
+     96  .purchaseCelebration (v0.61, item 3 - the bigger online-access-purchase celebration, added
+         AFTER this comment was first written - see its own comment right above its CSS rule)
+     999 #bootCover (first-paint loading screen, never coexists with a toast)
+   #toasts now sits at 95: above EVERY overlay including #reclaimReqOverlay's 90 exception, so a
+   toast is always readable no matter what's open underneath it, and still below #bootCover's 999
+   (which is gone long before any toast could ever fire). Only the z-index changed here - the
+   position/bottom/height/left/right geometry below (anchored off --handH/--toastBandTop) is
+   untouched, verified pixel-identical with no overlay open, see HANDOFF.md "v0.61" testing. */
 #toasts{position:fixed;bottom:calc(var(--handH,148px) + 8px);height:var(--bandH);
-  left:12px;right:124px;z-index:65;
+  left:12px;right:124px;z-index:95;
   display:flex;justify-content:center;align-items:flex-end;
   pointer-events:none;padding:0}
 /* Minimum height (matches #btnSkip's --bandH exactly): a 1-line message is vertically centered
@@ -2537,8 +2712,22 @@ button{font:inherit;cursor:pointer}
    everything else inside modalBody. #btnWinClose (winOverlay) and .confirmCard are UNCHANGED - see
    their own rules/comments; neither one has a modalCard-style whole-card scroll to begin with. */
 .confirmCard>.overlayXBtn{position:absolute;top:8px;right:8px}
-.modalCard>.modalHead{flex:0 0 auto;display:flex;align-items:flex-start;justify-content:space-between;
-  gap:10px;padding:22px 22px 0}
+/* 2026-07-31 (v0.61, item 2) Blake: "if you aren't going to move the x to the very top right
+   corner (it didn't move, it's just on a title strip) at least move it up so the x is even on the
+   same row as the wording (i.e. Shop, Admin, etc.). This should also make there more of a buffer
+   between the bottom of the x button and the bottom of the fixed title bar (currently the x is
+   right on the bottom of that section and it looks weird)"
+   Two separate things, both real: (1) align-items:flex-start top-aligned the 44x44px X circle with
+   the h3's TOP edge instead of centering it on the heading's own text row, so a single-line title
+   ("Shop") sat visibly lower than the X beside it. Changed to center - the X and the title's text
+   baseline now share the same row, which is what "even on the same row as the wording" means.
+   (2) padding was `22px 22px 0` - literally zero bottom padding - and since .modalHead is
+   `flex:0 0 auto`, the X (and the header row generally) sat flush against .modalBody right below
+   it with nothing but the row's own line-height as buffer. Added 14px bottom padding, using this
+   app's existing 22px top padding as the spacing unit (14px reads as a real but not oversized gap
+   under a 44px circle - verified visually, not picked blind, see HANDOFF.md "v0.61" testing). */
+.modalCard>.modalHead{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;
+  gap:10px;padding:22px 22px 14px}
 .modalCard>.modalHead>h3{flex:1 1 auto;min-width:0}
 /* min-width:0 lets a long title WRAP inside its own flex column instead of forcing the row wider
    than the card (the usual flexbox "min-width:auto by default" trap) - no padding-right arithmetic
@@ -2684,8 +2873,13 @@ button{font:inherit;cursor:pointer}
   /* 2026-07-31 (v0.60): split from the old single `.modalCard{padding:14px}` override now that
      padding lives on .modalHead/.modalBody separately - same 14px on every side, just applied to
      the two boxes that actually have padding now (top on the head, bottom on the body, sides on
-     both) instead of one box that no longer takes its own padding at all. */
-  #accountOverlay .modalCard>.modalHead{padding:14px 14px 0}
+     both) instead of one box that no longer takes its own padding at all.
+     2026-07-31 (v0.61, item 2): the same "give the head real bottom padding" fix as the main
+     .modalCard>.modalHead rule above, scaled to THIS override's own 14px unit instead of the
+     main rule's 22px (9px is roughly the same 14/22 proportion the main rule's 14px-under-22px
+     uses) - the short-screen Admin panel gets the identical buffer-under-the-X treatment, just
+     sized down to fit. */
+  #accountOverlay .modalCard>.modalHead{padding:14px 14px 9px}
   #accountOverlay .modalCard>.modalBody{padding:0 14px 14px}
   .acctHead{margin-bottom:10px}
   .acctRows,.acctSoon{gap:6px}
@@ -2986,6 +3180,16 @@ button{font:inherit;cursor:pointer}
      Show them immediately, in their landed position, instead. */
   .nastyStamp{animation:none;opacity:1;transform:translate(-50%,-50%) rotate(-8deg) scale(1)}
   .safeStamp{animation:none;opacity:1}
+  /* 2026-07-31 (v0.61, item 3): same convention as .nastyStamp/.safeStamp right above - .celebPop
+     also starts at opacity:0, so simply killing the animation would silently delete the purchase
+     celebration for anyone with Reduce Motion on. Shown immediately in its landed position
+     instead - the confetti burst is already fully skipped by confettiBurst()'s own REDUCED check
+     (§ ANIM), unrelated to this CSS block, so REDUCED users still get the text/border celebration,
+     just with no motion anywhere. .leaving is killed outright (opacity:0, no fade) rather than
+     given a landed state, since its landed state IS invisible - a static instantly-gone element,
+     not a silently-stuck one. */
+  .purchaseCelebration{animation:none;opacity:1;transform:translate(-50%,-50%) scale(1) rotate(0deg)}
+  .purchaseCelebration.leaving{animation:none;opacity:0}
 }
 
 /* v0.10: a phone rotated into landscape (short viewport height - the web version has no
@@ -3199,6 +3403,13 @@ button{font:inherit;cursor:pointer}
    .shopPacksHint right above (a quiet informational line under a category header), its own class
    since the two are conceptually different notes that could in principle both exist on screen. */
 .shopOnlineNote{font-size:12.5px;color:#a9d2b5;margin:2px 0 6px;line-height:1.45}
+/* 2026-07-31 (v0.61, item 1a): byte-identical to .acctOnlineCountdown (CSS ~line 3148 - font-size,
+   color #ffe9a8, font-weight, margin-top all match exactly) so the days-left figure reads the same
+   whether it's seen in the Shop or the Admin panel. #ffe9a8 is the same soft-amber accent already
+   proven safe against every felt (see .acctOnlineCountdown's own v0.56 comment above) - trusted
+   here rather than re-derived, and checked again on real screenshots against 2 different felts (see
+   HANDOFF.md "v0.61" testing) since --feltSurface (the Shop card's background) is felt-derived. */
+.shopOnlineCountdown{font-size:12.5px;color:#ffe9a8;font-weight:700;margin-top:6px}
 
 /* ---- v0.51 (Blake: "for the designations (ie rookie) you can buy in the shop, don't make this
    something that goes next to your name in the leaderboard. Make it more like a badge icon or
@@ -3375,7 +3586,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.60</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.61</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -7964,14 +8175,24 @@ async function animateDeal(counts){
   }
   await Promise.all(jobs);
 }
-function confettiBurst(){
+// 2026-07-31 (v0.61, item 3): confettiBurst() grew an optional `cols` parameter so it can be
+// reused OUTSIDE a live game (the Shop/Admin panel purchase celebration below, celebrateOnline
+// PurchaseCelebration()) - the win-screen call site (§ TURNS, "sWin(); confettiBurst();") is
+// UNCHANGED, still calling it with no argument, so it still falls back to G.winners'/G.seats'
+// own colors exactly as before. This was a real, checked hazard, not a hypothetical: G is `null`
+// outside a live game (`let G=null;`, § STATE) and the Shop/Admin panel are reachable straight
+// from the main menu with no game in progress - `G.winners.map(...)` would have thrown a
+// TypeError the instant a purchase celebration tried to call the unmodified function with no
+// game running. Passing an explicit color array bypasses G entirely, so this is safe to call
+// from any screen, in a game or not.
+function confettiBurst(cols){
   // 2026-07-25 (item O of the UI polish batch): the single biggest piece of motion in the whole
   // app - 90 elements tumbling down the full height of the screen for 2 to 5 seconds each - had
   // no Reduce Motion check at all, because it is animated from JS and the CSS @media block that
   // covers everything else can't reach it. Skipped entirely now. Nothing is lost: the win
   // overlay itself, the winner's name, the scoreboard and the win sound all still fire.
   if(REDUCED)return;
-  const cols=G.winners.map(w=>G.seats[w].color.c).concat(['#f4c542','#ffffff']);
+  cols=cols||G.winners.map(w=>G.seats[w].color.c).concat(['#f4c542','#ffffff']);
   for(let i=0;i<90;i++){
     const c=document.createElement('div'); c.className='confetti';
     c.style.left=Math.random()*100+'vw';
@@ -13761,6 +13982,12 @@ function applyEquippedFelt(){
   document.documentElement.style.setProperty('--felt2',f?f.dark:DEFAULT_FELT.dark);
   applySurfaceTokens(f);
   syncNativeStatusBarColor(f);
+  syncThemeColorMeta(f);
+  // 2026-07-31 (v0.61, item 7, H2): the flat top band's own color (body{}'s CSS, § STYLE) - same
+  // feltTopEdgeColor(f) value the native status bar and the theme-color meta tag both just got set
+  // to, right above, so all three (native status bar, this web-side flat band, the browser tab's
+  // own theme-color) can never disagree about what the "top edge" color is for the current felt.
+  document.documentElement.style.setProperty('--feltTopBand',feltTopEdgeColor(f));
 }
 // v0.52 BUG FIX (Blake: "the felt color changes mid game when I choose it but the area at the
 // top... doesn't follow the color change of the board"). DIAGNOSIS, confirmed by reading
@@ -13803,6 +14030,21 @@ function applyEquippedFelt(){
 function syncNativeStatusBarColor(f){
   if(!IS_APP)return;
   try{ CAP.Plugins.StatusBar.setBackgroundColor({color:feltTopEdgeColor(f)}); }catch(e){}
+}
+// 2026-07-31 (v0.61, item 7) - a separate, definite bug found while investigating Blake's status-
+// bar-seam ask (see the <meta name="theme-color"> tag's own comment, head of the file, and
+// HANDOFF.md "v0.61"): that tag was STATIC, stuck on the wrong (dark-end) value, and never once
+// touched by any JS in this file. This is the missing runtime sync, same call site and same
+// try/catch-degrades-silently convention as syncNativeStatusBarColor() right above (though this
+// one isn't IS_APP-gated - the theme-color tag is a real, live thing in any mobile BROWSER tab,
+// not a native-only concept, so it should update there too, not just inside the iOS app). Some
+// browsers (older Firefox, some older WebKit builds) simply ignore this tag - setting `content`
+// on an element that exists is always safe there either way, never throws.
+function syncThemeColorMeta(f){
+  try{
+    const m=document.querySelector('meta[name="theme-color"]');
+    if(m)m.content=feltTopEdgeColor(f);
+  }catch(e){}
 }
 function applyEquipped(){ applyEquippedPalette(); applyEquippedFelt(); }
 // Titles are shown next to a name (leaderboard rows, the you card) but the equip choice is LOCAL
@@ -14313,6 +14555,45 @@ function paintOnlineAccess(status,wallet){
     </div>`;
   wireAcctOnlineBuy();
 }
+/* 2026-07-31 (v0.61, item 3) Blake: "give a bigger celebration on the screen when they purchase
+   online access (so they know something happened)". showPurchaseCelebration() is the generic
+   banner-paint (any headline/detail text); celebrateOnlineAccessPurchase() is the one call site
+   both purchase paths below (buyOnlineAccess() - the Admin panel - and buyItem() when the
+   purchased item is online_month - the Shop) use, so the two surfaces can never say something
+   different about the same purchase. Reuses accessCountdownText()/formatChicagoMonth() - the same
+   date-math functions every other online-access display in this file already reads from
+   (paintOnlineAccess(), shopOnlineAccessSubline(), above) - no hand-rolled date math here. Must
+   plainly state a full calendar month was purchased AND the new expiry, per Blake's ask; both
+   sentences are stated in plain words, never a bare date with no sentence around it. */
+function showPurchaseCelebration(headline,detail){
+  document.querySelectorAll('.purchaseCelebration').forEach(el=>el.remove());   // latest wins, same convention as toast()
+  const el=document.createElement('div');
+  el.className='purchaseCelebration';
+  el.innerHTML=`<div class="purchaseCelebrationSign"><b>${esc(headline)}</b><span>${esc(detail)}</span></div>`;
+  document.body.appendChild(el);
+  // Timeout-only dismissal (pointer-events:none throughout, see the CSS comment) - this can never
+  // trap a tap on the Shop/Admin panel underneath it, matching this app's existing "no modal trap"
+  // convention for every non-blocking notice (toast() included). .leaving plays a short fade
+  // (CSS) before the element is actually removed, so it never just vanishes mid-frame.
+  setTimeout(()=>{
+    if(!document.body.contains(el))return;
+    el.classList.add('leaving');
+    setTimeout(()=>{ if(document.body.contains(el))el.remove(); },320);
+  },3800);
+}
+function celebrateOnlineAccessPurchase(access){
+  try{
+    // Explicit gold/cream/blue palette, NOT the default G.winners-derived one - see confettiBurst()'s
+    // own v0.61 comment (§ ANIM) for why passing an explicit array here is the real fix, not a
+    // stylistic choice: G is null outside a live game and this can fire from the main menu.
+    confettiBurst(['#f4c542','#ffe9a8','#7db4d3','#ffffff']);
+  }catch(e){}
+  const until=access&&access.accessUntil;
+  const detail=until
+    ?`You're covered through ${formatChicagoMonth(until)} - ${accessCountdownText(until)}.`
+    :"You're covered for another month.";
+  showPurchaseCelebration('A full month of Online Play, unlocked!',detail);
+}
 // Same confirm-in-place idiom the Shop's own showShopConfirm()/hideShopConfirm() use (above) -
 // re-wired every paint since #acctOnlineBody's innerHTML is rebuilt from scratch each time.
 // 2026-07-31 (v0.60, item 4): the identical dead-button problem catItemRow()/shopRowClickHandler()
@@ -14346,7 +14627,10 @@ async function buyOnlineAccess(){
     // The spec's own additive `onlineAccess` field on a successful purchase means this needs no
     // second round trip to /account/online-status - the fresh truth rides the purchase response.
     if(r.body.onlineAccess)ONLINE_STATUS_CACHE={data:r.body.onlineAccess,fetchedAt:Date.now()};
-    toast("Online Access purchased - you're covered for another month.");
+    // 2026-07-31 (v0.61, item 3): was a plain toast() here - upgraded to the bigger celebration
+    // (confetti + a real on-screen banner), see celebrateOnlineAccessPurchase()'s own comment
+    // right above wireAcctOnlineBuy(). Same success path, same data, just a bigger announcement.
+    celebrateOnlineAccessPurchase(r.body.onlineAccess||(ONLINE_STATUS_CACHE&&ONLINE_STATUS_CACHE.data));
     paintOnlineAccess(r.body.onlineAccess||(ONLINE_STATUS_CACHE&&ONLINE_STATUS_CACHE.data),r.body.wallet||null);
     // The points-remaining number just changed too - paint straight from THIS response's own
     // wallet (paintAcctWalletNumbers(), § ACCOUNT) rather than a second /account/wallet round
@@ -14582,14 +14866,27 @@ function shopOnlineAccessSubline(status,wallet){
   if(status.guest){
     return `<div class="shopOnlineNote">Sign in to see your Online Access.</div>`;
   }
+  // 2026-07-31 (v0.61, item 1a) Blake: "don't bury the amount of day left for online access. make
+  // it bolded and a different obvious color (do this in the shop, the admin button is way more
+  // obvious)". The Admin panel's #acctOnline box already got this right (paintOnlineAccess(),
+  // above) by putting the countdown on its OWN line in .acctOnlineCountdown
+  // (font-size:12.5px;color:#ffe9a8;font-weight:700;margin-top:6px - CSS ~line 3148). The Shop's
+  // version buried the same figure mid-sentence inside the plain-muted .shopOnlineNote line
+  // (#a9d2b5, not bold, easy to miss). Fixed by splitting the countdown phrase out into its own
+  // line, styled with .shopOnlineCountdown (§ STYLE, byte-identical font-size/color/weight/
+  // margin-top to .acctOnlineCountdown on purpose - reads identically on both screens) - only in
+  // the two states that actually have a countdown figure to show; 'not entitled' and
+  // 'unreachable'/'guest' have no days-left number and are unchanged.
   if(status.entitled&&status.reason==='free'){
-    return `<div class="shopOnlineNote">You're in your free period, through ${esc(formatMonthKey(status.freeThroughMonth))} - ${esc(accessCountdownText(status.accessUntil))}. Nothing purchased yet, and you don't need to buy anything until it ends.</div>`;
+    return `<div class="shopOnlineNote">You're in your free period, through ${esc(formatMonthKey(status.freeThroughMonth))}. Nothing purchased yet, and you don't need to buy anything until it ends.</div>
+      <div class="shopOnlineCountdown">${esc(accessCountdownText(status.accessUntil))} in your free period</div>`;
   }
   if(status.entitled&&status.reason==='purchased'){
     const ahead=status.monthsAheadCovered>0
       ?`, plus ${status.monthsAheadCovered} extra month${status.monthsAheadCovered===1?'':'s'} banked ahead`
       :', nothing extra banked ahead yet';
-    return `<div class="shopOnlineNote">You're covered through ${esc(formatChicagoMonth(status.accessUntil))}${ahead} - ${esc(accessCountdownText(status.accessUntil))}.</div>`;
+    return `<div class="shopOnlineNote">You're covered through ${esc(formatChicagoMonth(status.accessUntil))}${ahead}.</div>
+      <div class="shopOnlineCountdown">${esc(accessCountdownText(status.accessUntil))}.</div>`;
   }
   // Not entitled, reason 'none' - free period over, nothing purchased.
   return `<div class="shopOnlineNote">Your free period has ended and you haven't bought Online Access yet - one token is ${cost} credits and covers a full calendar month.</div>`;
@@ -14893,11 +15190,32 @@ async function buyItem(item){
     // second round trip, same rule buyOnlineAccess() follows.
     if(r.body.onlineAccess){
       ONLINE_STATUS_CACHE={data:r.body.onlineAccess,fetchedAt:Date.now()};
+      // 2026-07-31 (v0.61, item 1b) Blake: "when I purchase to extend online access, the day
+      // tracker doesn't update right away, I need to x out of the shop window and then reload for
+      // it to update. fix this." Root cause: paintShop() (§ SHOP, above) reads
+      // SHOP_STATE.onlineStatus, a one-time snapshot fetched once in openShopOverlay() - it never
+      // reads ONLINE_STATUS_CACHE directly. This block already refreshed ONLINE_STATUS_CACHE (the
+      // real source of truth every other consumer reads) but never told SHOP_STATE about it, so
+      // the paintShop() call two lines below still rendered the STALE days-left line even though
+      // the purchase had genuinely gone through - fixed everywhere else (renderYouCard(),
+      // paintOnlineOverlayNote()) except the Shop's own days-left line itself. buyOnlineAccess()
+      // (the Admin panel's own Buy flow, above) never had this bug since it repaints straight from
+      // the fresh ONLINE_STATUS_CACHE.data instead of a separate snapshot. The whole fix: keep
+      // SHOP_STATE's snapshot in step with the cache it was copied from, before paintShop() runs.
+      SHOP_STATE.onlineStatus=r.body.onlineAccess;
       try{ renderYouCard(); }catch(e){}
       try{ paintOnlineOverlayNote(); }catch(e){}
     }
     try{ if(r.body.wallet)paintAcctWalletNumbers(r.body.wallet); }catch(e){}
-    toast(shopDisplayName(item)+' purchased!');
+    // 2026-07-31 (v0.61, item 3): the online_month item gets the bigger celebration (confetti + a
+    // real on-screen banner) instead of the plain toast every other item still gets - same
+    // celebrateOnlineAccessPurchase() the Admin panel's buyOnlineAccess() calls, above, so the Shop
+    // and the Admin panel purchase path can never say something different about the same purchase.
+    if(item.id==='online_month'){
+      celebrateOnlineAccessPurchase(r.body.onlineAccess||(ONLINE_STATUS_CACHE&&ONLINE_STATUS_CACHE.data));
+    }else{
+      toast(shopDisplayName(item)+' purchased!');
+    }
     paintShop();
     try{
       if($('accountOverlay')&&!$('accountOverlay').classList.contains('hidden')){
