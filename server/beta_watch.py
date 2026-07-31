@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = 'fe417d5a-6db3-42b4-8f69-9164704bd4ff'
+BUILD_SUBMISSION_ID = '06cb1af7-3f0d-4267-8cc1-93769fe0c466'
 
 
 def current_build():
@@ -97,30 +97,31 @@ try:
         sys.exit(0)
 
     body = '/tmp/nasty_beta_live.html'
+    # 2026-08-02 (v0.65 ship): the old body's "browser link... app players and browser players
+    # share tables" line was WRONG and had apparently been copied forward unedited since v0.43
+    # (2026-07-27) added the coming-soon website gate - a plain browser visitor to
+    # nastyboardgame.com has not been able to reach #menu/#game at all since then, only the
+    # coming-soon screen. Caught and fixed while touching this file for the v0.65 release;
+    # replaced with an honest line about what the website shows today.
     open(body, 'w').write(f'''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p style="background:#fff3cd;padding:12px 16px;border-radius:8px;border:1px solid #e6c260"><b>Please check one thing for me first:</b> the top of the screen, behind the clock and battery, should now actually change color to match whichever felt you have equipped - a soft, faint tint, not a bright block. Open the app, glance at the top, then equip a different felt from the Shop and glance again. If it does not change, or looks wrong, tell Cortana right away - this one has been wrong twice before, so a real check matters.</p>
-<p>Everything else in this update:</p>
+<p>What's in this build:</p>
 <ul>
-<li><b>Very dark game pieces are easier to spot and tap now</b> - the little background circle behind a dark peg (like some of the Midnight colors, or Ocean Breeze's Deep Blue) lightens up so the piece does not disappear against it.</li>
-<li><b>Forest's two green colors are clearly different now</b> - Pine stays a deep forest green, and Moss is now a lighter, muted sage color instead of reading as "another green."</li>
+<li><b>Signing out (or deleting your account) now resets every equipped cosmetic</b> - board colors, table felt, and title all go back to the standard look immediately, even if you were in the middle of a game. Before this, a previous account's palette/felt/title could keep showing after you signed out.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
 <a href="https://testflight.apple.com/join/d79YpZea">https://testflight.apple.com/join/d79YpZea</a></p>
 <p>They tap it, install Apple's free "TestFlight" app if asked, tap Install, and NASTY is on their phone. Works for up to 10,000 testers, so invite the whole clan.</p>
-<h3>The browser link (no install, computers welcome):</h3>
-<p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
-<a href="https://nastyboardgame.com">nastyboardgame.com</a></p>
-<p>Same game, same online rooms, app players and browser players share tables with the 4 letter codes.</p>
+<p>(nastyboardgame.com itself is intentionally a coming-soon page right now, not the playable game - all play happens in the app.)</p>
 <p><b>Your own phone:</b> TestFlight will auto update you to the new build if it hasn't already.</p>
-<p>Play hard for a week and send Cortana anything weird, especially that top-of-screen check above. After that: one command from her, one "Release" tap from you, and NASTY is on the App Store.</p>
+<p>Play a bit and send Cortana anything weird. When you're ready for the real public launch, that's one command from her plus your own "Release" tap in App Store Connect.</p>
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - please check the top of the screen first', body], check=True)
+                    f'NASTY: build {BUILD} is live', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
