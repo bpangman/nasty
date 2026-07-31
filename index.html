@@ -3394,6 +3394,21 @@ button{font:inherit;cursor:pointer}
    "buy the covering pack, then finish this purchase" - same in-place confirm idiom as
    .shopConfirmRow above (Apple's payment sheet is the final, authoritative confirmation on top). */
 .shopMoneyBtn{border-color:rgba(244,197,66,.7)!important;color:#ffdf8a!important}
+/* 2026-07-31 (Blake, verbatim): "Change the colors of the credit purchase allotment buttons.
+   It's yellow on yellow." Root cause: the credit-pack row's own buttons (.shopPackBtn, line
+   ~14961) carry BOTH .btn.primary (gold #f4c542 background, dark #3a2c05 text) AND .shopMoneyBtn
+   (the rule right above, pale gold #ffdf8a text, !important) - the pale text landed on the gold
+   fill, ~1.25:1 contrast, effectively invisible. The ghost "Buy with $X" per-item money button
+   (.btn.ghost.shopMoneyBtn, line ~14813) never has this problem - pale gold text on that button's
+   dark translucent background reads fine (measured 6.5:1-11.1:1 against every felt's own
+   modalCard surface, worst case Sunflower). So the pale-text override is scoped OFF the .primary
+   case here, which lets it fall through to .btn.primary's own dark text (8.37:1, unchanged from
+   any other primary button) - and the primary case gets its own distinct "this is a money
+   button" signal, a solid dark-gold ring in the same ink as its text, since Blake's original
+   design intent (this rule's own header comment) was for money buttons to read as visually
+   distinct from a plain credits purchase, not just legible. */
+.shopMoneyBtn:not(.primary){color:#ffdf8a!important}
+.shopMoneyBtn.primary{border:2px solid #3a2c05!important}
 .shopMoneyRow{flex-basis:100%;display:flex;flex-direction:column;gap:8px;margin-top:2px;
   padding:10px;border-radius:10px;background:rgba(40,28,0,.4);border:1px solid rgba(244,197,66,.35);
   font-size:13px;color:#ffe9a8}
