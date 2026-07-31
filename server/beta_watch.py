@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '0e65904a-16fc-49c1-87fe-0eb12b4b1401'
+BUILD_SUBMISSION_ID = '72ecfc77-9fa9-4c51-a16a-1654f3027f71'
 
 
 def current_build():
@@ -101,13 +101,11 @@ try:
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
-<p>What is in this one - a hidden message finally shows up, the Shop's day counter got clearer, and popups look a little more polished:</p>
+<p>What is in this one - the Shop's paid color options got a real upgrade, and a broken button got fixed:</p>
 <ul>
-<li><b>The "not enough credits" message no longer hides.</b> Before, if you tried to buy something you could not afford, the message popped up behind the Shop or Admin window - you would not see it until you closed the window. Now it always shows up front and center, right when you tap.</li>
-<li><b>The Shop's days-left number is bolder and updates instantly.</b> It is easier to spot now, and after you buy more Online Access days it updates right away instead of needing you to close and reopen the Shop.</li>
-<li><b>Popup X buttons sit evenly with the title now,</b> with a little more breathing room underneath, instead of crowding the top of the window.</li>
-<li><b>Buying Online Access gives you a real celebration on screen</b> so you know it actually went through.</li>
-<li><b>The color at the very top of the screen, near the clock and battery, blends into the felt better</b> instead of showing an obvious hard line.</li>
+<li><b>Every peg color option was checked for how well it shows up on the board.</b> The faint ones (the gold on Royal, the tan on Ocean Breeze, and a few others) are now much easier to see, both mid game and sitting in home, stable, or on their starting spot.</li>
+<li><b>Midnight, Royal, and Forest now actually look like their names.</b> Midnight is genuinely deep blues and near black, Royal leads with a true purple and a richer gold, and Forest is led by real greens instead of an odd mix.</li>
+<li><b>The credit pack buttons in the Shop are fixed.</b> They were showing yellow text on a yellow background and were basically impossible to read - now they are dark text on gold, with a little ring so they still stand out as real-money buttons.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
@@ -122,7 +120,7 @@ try:
 <p>- Cortana</p></div>''')
     subprocess.run(['python3', '/Users/jarvis/clawd/gmail_sa.py', 'send',
                     'blake.pangman@gmail.com',
-                    f'NASTY: build {BUILD} is live - the hidden credits message now shows up, clearer Shop days-left', body], check=True)
+                    f'NASTY: build {BUILD} is live - shop palette colors upgraded, yellow-on-yellow credit buttons fixed', body], check=True)
     open(DONE, 'w').write('approved\n')
     log(f'APPROVED - build {BUILD} email sent, watcher done')
 except Exception as e:
