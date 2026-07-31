@@ -11,9 +11,12 @@ pack through four steps and only does what is missing:
   1. create the consumable IAP product itself
   2. add the en-US localization (display name + description players see on the payment sheet)
   3. set the price schedule (base territory USA, the Apple price tier for each pack)
-  4. upload a review screenshot (required before the product can reach "Ready to Submit";
-     uses appstore/menu.png as a stand-in until a real Shop screenshot exists - Apple only
-     looks at it during review, players never see it)
+  4. upload a review screenshot (required before the product can reach "Ready to Submit").
+     2026-08-02 (v0.65): now the REAL Shop screenshot (appstore/shop.png, a genuine v0.65
+     simulator capture showing the actual credit-pack rows/prices) - was appstore/menu.png, a
+     plain menu screenshot used only as a stand-in to get the products configured before a real
+     Shop shot existed. Apple only looks at this during review, players never see it, but it
+     should still show the real thing, not a placeholder - see HANDOFF.md "v0.65".
   5. set territory availability (all territories + automatically available in new ones) -
      discovered the hard way 2026-07-30: WITHOUT this the product sits in MISSING_METADATA
      forever with no hint about what is missing; setting it is what flips READY_TO_SUBMIT
@@ -42,7 +45,7 @@ import urllib.request
 KEY = '/Users/jarvis/nasty-game/server/AuthKey_4JZ244TV94.p8'
 KID, ISS = '4JZ244TV94', '8e4b9c40-3dfe-4cbf-8b12-0e6d6c585cdf'
 APP_ID = '6790999186'
-SCREENSHOT = '/Users/jarvis/nasty-game/appstore/menu.png'
+SCREENSHOT = '/Users/jarvis/nasty-game/appstore/shop.png'
 
 # The ladder - keep byte-for-byte in step with CREDIT_PACKS in both servers.
 # `tier` is the USD customer price the price-point lookup matches on.

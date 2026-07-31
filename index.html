@@ -721,6 +721,20 @@
                         server/cloud/server.ts twin).
                         `#verTap` bumped `v0.63` -> `v0.64`. Full writeup, screenshots, and the
                         simulator verification: HANDOFF.md "v0.64".
+                      - v0.65 (2026-08-02), Blake: "when someone signs out it should default
+                        everything (pegs, felt color, etc) back to the defaults (even mid game)".
+                        NEW: `resetEquipToDefaults()` (right after `acctEquipReset()`) zeroes all
+                        three EQUIP categories at once and calls the exact same `applyEquipped()`
+                        the per-category reset already used - so a live board, its felt, the
+                        native status bar strip and the menu/you card all revert with no restart.
+                        Called from `accountSignOut()` and `accountDelete()` - both are the one UI
+                        path (the Admin panel, `#accountOverlay`) since there is no separate
+                        "Admin" screen. DESIGN CALL, made explicit rather than left accidental:
+                        EQUIP is per-PHONE, not per-account (this section's own header comment), so
+                        signing back in as the SAME account does NOT restore the old equip choice -
+                        it starts from defaults like any other sign-in, consistent with sign-out
+                        always meaning defaults. See `resetEquipToDefaults()`'s own header comment
+                        for the full reasoning, and HANDOFF.md "v0.65" for the verification.
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -3849,7 +3863,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.64</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.65</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -3859,12 +3873,16 @@ button{font:inherit;cursor:pointer}
      (§ COMING SOON, near § ADMIN) fills in #csQrImg and unhides this div; nothing else on this
      screen needs JS. Starts hidden (class="hidden") because #menu itself starts visible by
      default in the markup - the boot sequence (bottom of this file) is what decides which of the
-     two actually gets shown, hiding #menu in favor of this one when the gate is up. -->
+     two actually gets shown, hiding #menu in favor of this one when the gate is up.
+     2026-08-02 (v0.65): #csTag/#csNote got ids so renderComingSoon() can swap their text off
+     NASTY_APPSTORE_LIVE (§ CAPACITOR) - the copy below is the "coming soon" default (that flag is
+     false until Blake flips it); the "now live" copy is written once, in JS, not duplicated here,
+     so the two strings can never drift out of sync with each other. -->
 <div id="comingSoon" class="hidden">
   <div class="sign"><b>NASTY</b></div>
   <div class="estTop">Est. 1993</div>
-  <p class="tag">The Nasty app is coming soon to the App Store.</p>
-  <p class="csNote">Online play happens right in the iPhone app. Got a game invite link? Open it on your iPhone with the Nasty app once it's live.</p>
+  <p class="tag" id="csTag">The Nasty app is coming soon to the App Store.</p>
+  <p class="csNote" id="csNote">Online play happens right in the iPhone app. Got a game invite link? Open it on your iPhone with the Nasty app once it's live.</p>
   <div class="csQrCard"><img id="csQrImg" alt="QR code for the App Store listing"></div>
   <div class="csQrLabel">Scan for the App Store</div>
   <div class="csLinks"><a href="privacy.html">Privacy</a><span>&middot;</span><a href="support.html">Support</a></div>
@@ -5100,26 +5118,31 @@ const IS_APP=!!(CAP&&CAP.isNativePlatform&&CAP.isNativePlatform());
      - ?preview=1 in the URL - Blake's own escape hatch to see/test the real site while the gate
        stays up for everyone else (documented in HANDOFF.md "v0.43"). */
 const NASTY_WEBSITE_GATE_ENABLED=true;
-/* !!! PLACEHOLDER - REPLACE BEFORE GOING LIVE !!! (added 2026-07-27, v0.43)
-   The Nasty App Store listing does not exist yet. Until it does, the QR code on the coming-soon
-   screen - and the URL it encodes - point at a URL that is deliberately NOT a real destination, so
-   nobody can tap/scan through to something broken by accident.
-   WHEN THE REAL APP STORE LISTING IS LIVE, a future session must:
-     1. Get the real "https://apps.apple.com/app/id..." link from App Store Connect.
-     2. Regenerate the QR as a small SVG pointed at that real link (this session used
-        `pip3 install qrcode`, then qrcode.image.svg.SvgPathImage with a hand-added cream
-        background rect recolored to the app's --ink token - see HANDOFF.md's dated v0.43 entry
-        for the exact recipe/commands used, so it can be repeated instead of reinvented), base64
-        it, and swap PLACEHOLDER_APPSTORE_QR_DATAURI below for the new string.
-     3. Swap PLACEHOLDER_APPSTORE_URL below for the real link too - nothing reads this constant at
-        runtime yet (it exists so the intended destination is written down in plain text next to
-        the QR that encodes it, not just buried in a base64 blob), but keep it truthful.
-     4. Check this off in HANDOFF.md's prelaunch list too - it is noted there as well.
-   THIS EXACT PLACEHOLDER WAS VERIFIED to decode back to the URL below with `zbarimg` before it was
-   embedded (see HANDOFF.md's v0.43 entry, "Testing") - a future swap should be verified the same
-   way, not just assumed to have encoded correctly. */
-const PLACEHOLDER_APPSTORE_URL='https://nastyboardgame.com/coming-soon-placeholder';
-const PLACEHOLDER_APPSTORE_QR_DATAURI='data:image/svg+xml;base64,PHN2ZyB2ZXJzaW9uPSIxLjEiIHZpZXdCb3g9IjAgMCA0MSA0MSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iNDEiIGhlaWdodD0iNDEiIGZpbGw9IiNmYmY3ZWUiLz48cGF0aCBkPSJNNCw0SDVWNUg0ek01LDRINlY1SDV6TTYsNEg3VjVINnpNNyw0SDhWNUg3ek04LDRIOVY1SDh6TTksNEgxMFY1SDl6TTEwLDRIMTFWNUgxMHpNMTIsNEgxM1Y1SDEyek0xNSw0SDE2VjVIMTV6TTE3LDRIMThWNUgxN3pNMjAsNEgyMVY1SDIwek0yMSw0SDIyVjVIMjF6TTIyLDRIMjNWNUgyMnpNMjMsNEgyNFY1SDIzek0yNCw0SDI1VjVIMjR6TTI3LDRIMjhWNUgyN3pNMzAsNEgzMVY1SDMwek0zMSw0SDMyVjVIMzF6TTMyLDRIMzNWNUgzMnpNMzMsNEgzNFY1SDMzek0zNCw0SDM1VjVIMzR6TTM1LDRIMzZWNUgzNXpNMzYsNEgzN1Y1SDM2ek00LDVINVY2SDR6TTEwLDVIMTFWNkgxMHpNMTIsNUgxM1Y2SDEyek0xMyw1SDE0VjZIMTN6TTE0LDVIMTVWNkgxNHpNMTYsNUgxN1Y2SDE2ek0xNyw1SDE4VjZIMTd6TTIwLDVIMjFWNkgyMHpNMjIsNUgyM1Y2SDIyek0yNyw1SDI4VjZIMjd6TTI4LDVIMjlWNkgyOHpNMzAsNUgzMVY2SDMwek0zNiw1SDM3VjZIMzZ6TTQsNkg1VjdINHpNNiw2SDdWN0g2ek03LDZIOFY3SDd6TTgsNkg5VjdIOHpNMTAsNkgxMVY3SDEwek0xMyw2SDE0VjdIMTN6TTE0LDZIMTVWN0gxNHpNMTUsNkgxNlY3SDE1ek0xNiw2SDE3VjdIMTZ6TTE5LDZIMjBWN0gxOXpNMjEsNkgyMlY3SDIxek0yMyw2SDI0VjdIMjN6TTI0LDZIMjVWN0gyNHpNMjYsNkgyN1Y3SDI2ek0zMCw2SDMxVjdIMzB6TTMyLDZIMzNWN0gzMnpNMzMsNkgzNFY3SDMzek0zNCw2SDM1VjdIMzR6TTM2LDZIMzdWN0gzNnpNNCw3SDVWOEg0ek02LDdIN1Y4SDZ6TTcsN0g4VjhIN3pNOCw3SDlWOEg4ek0xMCw3SDExVjhIMTB6TTEyLDdIMTNWOEgxMnpNMTMsN0gxNFY4SDEzek0xNSw3SDE2VjhIMTV6TTE4LDdIMTlWOEgxOHpNMjAsN0gyMVY4SDIwek0yMyw3SDI0VjhIMjN6TTI0LDdIMjVWOEgyNHpNMjYsN0gyN1Y4SDI2ek0yNyw3SDI4VjhIMjd6TTI4LDdIMjlWOEgyOHpNMzAsN0gzMVY4SDMwek0zMiw3SDMzVjhIMzJ6TTMzLDdIMzRWOEgzM3pNMzQsN0gzNVY4SDM0ek0zNiw3SDM3VjhIMzZ6TTQsOEg1VjlINHpNNiw4SDdWOUg2ek03LDhIOFY5SDd6TTgsOEg5VjlIOHpNMTAsOEgxMVY5SDEwek0xNiw4SDE3VjlIMTZ6TTE3LDhIMThWOUgxN3pNMTgsOEgxOVY5SDE4ek0yMSw4SDIyVjlIMjF6TTI0LDhIMjVWOUgyNHpNMjgsOEgyOVY5SDI4ek0zMCw4SDMxVjlIMzB6TTMyLDhIMzNWOUgzMnpNMzMsOEgzNFY5SDMzek0zNCw4SDM1VjlIMzR6TTM2LDhIMzdWOUgzNnpNNCw5SDVWMTBINHpNMTAsOUgxMVYxMEgxMHpNMTQsOUgxNVYxMEgxNHpNMTUsOUgxNlYxMEgxNXpNMTcsOUgxOFYxMEgxN3pNMTgsOUgxOVYxMEgxOHpNMjIsOUgyM1YxMEgyMnpNMjMsOUgyNFYxMEgyM3pNMjQsOUgyNVYxMEgyNHpNMjUsOUgyNlYxMEgyNXpNMjYsOUgyN1YxMEgyNnpNMjgsOUgyOVYxMEgyOHpNMzAsOUgzMVYxMEgzMHpNMzYsOUgzN1YxMEgzNnpNNCwxMEg1VjExSDR6TTUsMTBINlYxMUg1ek02LDEwSDdWMTFINnpNNywxMEg4VjExSDd6TTgsMTBIOVYxMUg4ek05LDEwSDEwVjExSDl6TTEwLDEwSDExVjExSDEwek0xMiwxMEgxM1YxMUgxMnpNMTQsMTBIMTVWMTFIMTR6TTE2LDEwSDE3VjExSDE2ek0xOCwxMEgxOVYxMUgxOHpNMjAsMTBIMjFWMTFIMjB6TTIyLDEwSDIzVjExSDIyek0yNCwxMEgyNVYxMUgyNHpNMjYsMTBIMjdWMTFIMjZ6TTI4LDEwSDI5VjExSDI4ek0zMCwxMEgzMVYxMUgzMHpNMzEsMTBIMzJWMTFIMzF6TTMyLDEwSDMzVjExSDMyek0zMywxMEgzNFYxMUgzM3pNMzQsMTBIMzVWMTFIMzR6TTM1LDEwSDM2VjExSDM1ek0zNiwxMEgzN1YxMUgzNnpNMTIsMTFIMTNWMTJIMTJ6TTEzLDExSDE0VjEySDEzek0xNCwxMUgxNVYxMkgxNHpNMTYsMTFIMTdWMTJIMTZ6TTIxLDExSDIyVjEySDIxek0yMiwxMUgyM1YxMkgyMnpNMjQsMTFIMjVWMTJIMjR6TTI3LDExSDI4VjEySDI3ek0yOCwxMUgyOVYxMkgyOHpNNCwxMkg1VjEzSDR6TTYsMTJIN1YxM0g2ek03LDEySDhWMTNIN3pNOSwxMkgxMFYxM0g5ek0xMCwxMkgxMVYxM0gxMHpNMTEsMTJIMTJWMTNIMTF6TTEzLDEySDE0VjEzSDEzek0xNCwxMkgxNVYxM0gxNHpNMTgsMTJIMTlWMTNIMTh6TTIwLDEySDIxVjEzSDIwek0yMSwxMkgyMlYxM0gyMXpNMjMsMTJIMjRWMTNIMjN6TTI1LDEySDI2VjEzSDI1ek0yOCwxMkgyOVYxM0gyOHpNMzAsMTJIMzFWMTNIMzB6TTMzLDEySDM0VjEzSDMzek0zNSwxMkgzNlYxM0gzNXpNMzYsMTJIMzdWMTNIMzZ6TTQsMTNINVYxNEg0ek02LDEzSDdWMTRINnpNMTEsMTNIMTJWMTRIMTF6TTEyLDEzSDEzVjE0SDEyek0xMywxM0gxNFYxNEgxM3pNMTQsMTNIMTVWMTRIMTR6TTE2LDEzSDE3VjE0SDE2ek0yMCwxM0gyMVYxNEgyMHpNMjIsMTNIMjNWMTRIMjJ6TTIzLDEzSDI0VjE0SDIzek0yNCwxM0gyNVYxNEgyNHpNMjcsMTNIMjhWMTRIMjd6TTMwLDEzSDMxVjE0SDMwek0zMSwxM0gzMlYxNEgzMXpNMzMsMTNIMzRWMTRIMzN6TTM0LDEzSDM1VjE0SDM0ek0zNiwxM0gzN1YxNEgzNnpNNCwxNEg1VjE1SDR6TTcsMTRIOFYxNUg3ek04LDE0SDlWMTVIOHpNMTAsMTRIMTFWMTVIMTB6TTEyLDE0SDEzVjE1SDEyek0xMywxNEgxNFYxNUgxM3pNMTgsMTRIMTlWMTVIMTh6TTIwLDE0SDIxVjE1SDIwek0yMSwxNEgyMlYxNUgyMXpNMjUsMTRIMjZWMTVIMjV6TTI2LDE0SDI3VjE1SDI2ek0yNywxNEgyOFYxNUgyN3pNMjksMTRIMzBWMTVIMjl6TTMxLDE0SDMyVjE1SDMxek0zMiwxNEgzM1YxNUgzMnpNMzMsMTRIMzRWMTVIMzN6TTM2LDE0SDM3VjE1SDM2ek03LDE1SDhWMTZIN3pNOSwxNUgxMFYxNkg5ek0xMywxNUgxNFYxNkgxM3pNMTcsMTVIMThWMTZIMTd6TTE4LDE1SDE5VjE2SDE4ek0xOSwxNUgyMFYxNkgxOXpNMjAsMTVIMjFWMTZIMjB6TTIyLDE1SDIzVjE2SDIyek0yMywxNUgyNFYxNkgyM3pNMjgsMTVIMjlWMTZIMjh6TTMxLDE1SDMyVjE2SDMxek0zMywxNUgzNFYxNkgzM3pNMzYsMTVIMzdWMTZIMzZ6TTksMTZIMTBWMTdIOXpNMTAsMTZIMTFWMTdIMTB6TTEyLDE2SDEzVjE3SDEyek0xNSwxNkgxNlYxN0gxNXpNMTYsMTZIMTdWMTdIMTZ6TTE5LDE2SDIwVjE3SDE5ek0yMiwxNkgyM1YxN0gyMnpNMjYsMTZIMjdWMTdIMjZ6TTI4LDE2SDI5VjE3SDI4ek0yOSwxNkgzMFYxN0gyOXpNMzEsMTZIMzJWMTdIMzF6TTMyLDE2SDMzVjE3SDMyek0zMywxNkgzNFYxN0gzM3pNMzUsMTZIMzZWMTdIMzV6TTQsMTdINVYxOEg0ek02LDE3SDdWMThINnpNMTEsMTdIMTJWMThIMTF6TTEyLDE3SDEzVjE4SDEyek0xMywxN0gxNFYxOEgxM3pNMTUsMTdIMTZWMThIMTV6TTE2LDE3SDE3VjE4SDE2ek0yMCwxN0gyMVYxOEgyMHpNMjIsMTdIMjNWMThIMjJ6TTI1LDE3SDI2VjE4SDI1ek0yOCwxN0gyOVYxOEgyOHpNMjksMTdIMzBWMThIMjl6TTM0LDE3SDM1VjE4SDM0ek0zNSwxN0gzNlYxOEgzNXpNNSwxOEg2VjE5SDV6TTgsMThIOVYxOUg4ek0xMCwxOEgxMVYxOUgxMHpNMTEsMThIMTJWMTlIMTF6TTE0LDE4SDE1VjE5SDE0ek0xNywxOEgxOFYxOUgxN3pNMTksMThIMjBWMTlIMTl6TTIwLDE4SDIxVjE5SDIwek0yMSwxOEgyMlYxOUgyMXpNMjIsMThIMjNWMTlIMjJ6TTI1LDE4SDI2VjE5SDI1ek0yOCwxOEgyOVYxOUgyOHpNMzAsMThIMzFWMTlIMzB6TTMzLDE4SDM0VjE5SDMzek00LDE5SDVWMjBINHpNNSwxOUg2VjIwSDV6TTYsMTlIN1YyMEg2ek04LDE5SDlWMjBIOHpNOSwxOUgxMFYyMEg5ek0xMSwxOUgxMlYyMEgxMXpNMTIsMTlIMTNWMjBIMTJ6TTE0LDE5SDE1VjIwSDE0ek0xNSwxOUgxNlYyMEgxNXpNMTYsMTlIMTdWMjBIMTZ6TTE3LDE5SDE4VjIwSDE3ek0yMCwxOUgyMVYyMEgyMHpNMjIsMTlIMjNWMjBIMjJ6TTIzLDE5SDI0VjIwSDIzek0yNCwxOUgyNVYyMEgyNHpNMjUsMTlIMjZWMjBIMjV6TTI2LDE5SDI3VjIwSDI2ek0yNywxOUgyOFYyMEgyN3pNMjgsMTlIMjlWMjBIMjh6TTI5LDE5SDMwVjIwSDI5ek0zMCwxOUgzMVYyMEgzMHpNMzIsMTlIMzNWMjBIMzJ6TTMzLDE5SDM0VjIwSDMzek0zNCwxOUgzNVYyMEgzNHpNNSwyMEg2VjIxSDV6TTcsMjBIOFYyMUg3ek0xMCwyMEgxMVYyMUgxMHpNMTEsMjBIMTJWMjFIMTF6TTEzLDIwSDE0VjIxSDEzek0xNCwyMEgxNVYyMUgxNHpNMTYsMjBIMTdWMjFIMTZ6TTE3LDIwSDE4VjIxSDE3ek0xOCwyMEgxOVYyMUgxOHpNMTksMjBIMjBWMjFIMTl6TTIyLDIwSDIzVjIxSDIyek0yMywyMEgyNFYyMUgyM3pNMjQsMjBIMjVWMjFIMjR6TTI1LDIwSDI2VjIxSDI1ek0yNiwyMEgyN1YyMUgyNnpNMjcsMjBIMjhWMjFIMjd6TTI4LDIwSDI5VjIxSDI4ek0yOSwyMEgzMFYyMUgyOXpNMzAsMjBIMzFWMjFIMzB6TTMyLDIwSDMzVjIxSDMyek0zNCwyMEgzNVYyMUgzNHpNNiwyMUg3VjIySDZ6TTcsMjFIOFYyMkg3ek05LDIxSDEwVjIySDl6TTExLDIxSDEyVjIySDExek0xMywyMUgxNFYyMkgxM3pNMTQsMjFIMTVWMjJIMTR6TTE1LDIxSDE2VjIySDE1ek0xOSwyMUgyMFYyMkgxOXpNMjEsMjFIMjJWMjJIMjF6TTI0LDIxSDI1VjIySDI0ek0yNSwyMUgyNlYyMkgyNXpNMjYsMjFIMjdWMjJIMjZ6TTI3LDIxSDI4VjIySDI3ek0yOCwyMUgyOVYyMkgyOHpNMjksMjFIMzBWMjJIMjl6TTMwLDIxSDMxVjIySDMwek0zMiwyMUgzM1YyMkgzMnpNMzMsMjFIMzRWMjJIMzN6TTM1LDIxSDM2VjIySDM1ek0zNiwyMUgzN1YyMkgzNnpNNCwyMkg1VjIzSDR6TTUsMjJINlYyM0g1ek04LDIySDlWMjNIOHpNOSwyMkgxMFYyM0g5ek0xMCwyMkgxMVYyM0gxMHpNMTMsMjJIMTRWMjNIMTN6TTE0LDIySDE1VjIzSDE0ek0xNiwyMkgxN1YyM0gxNnpNMTksMjJIMjBWMjNIMTl6TTIwLDIySDIxVjIzSDIwek0yMSwyMkgyMlYyM0gyMXpNMjQsMjJIMjVWMjNIMjR6TTI1LDIySDI2VjIzSDI1ek0yNiwyMkgyN1YyM0gyNnpNMzEsMjJIMzJWMjNIMzF6TTMyLDIySDMzVjIzSDMyek0zNCwyMkgzNVYyM0gzNHpNMzUsMjJIMzZWMjNIMzV6TTUsMjNINlYyNEg1ek03LDIzSDhWMjRIN3pNMTEsMjNIMTJWMjRIMTF6TTEyLDIzSDEzVjI0SDEyek0xNiwyM0gxN1YyNEgxNnpNMTgsMjNIMTlWMjRIMTh6TTE5LDIzSDIwVjI0SDE5ek0yMCwyM0gyMVYyNEgyMHpNMjMsMjNIMjRWMjRIMjN6TTMwLDIzSDMxVjI0SDMwek0zMiwyM0gzM1YyNEgzMnpNNCwyNEg1VjI1SDR6TTUsMjRINlYyNUg1ek02LDI0SDdWMjVINnpNOSwyNEgxMFYyNUg5ek0xMCwyNEgxMVYyNUgxMHpNMTEsMjRIMTJWMjVIMTF6TTEyLDI0SDEzVjI1SDEyek0xNSwyNEgxNlYyNUgxNXpNMTYsMjRIMTdWMjVIMTZ6TTE4LDI0SDE5VjI1SDE4ek0xOSwyNEgyMFYyNUgxOXpNMjIsMjRIMjNWMjVIMjJ6TTIzLDI0SDI0VjI1SDIzek0yNSwyNEgyNlYyNUgyNXpNMzMsMjRIMzRWMjVIMzN6TTM0LDI0SDM1VjI1SDM0ek0zNiwyNEgzN1YyNUgzNnpNNCwyNUg1VjI2SDR6TTUsMjVINlYyNkg1ek02LDI1SDdWMjZINnpNNywyNUg4VjI2SDd6TTgsMjVIOVYyNkg4ek0xMSwyNUgxMlYyNkgxMXpNMTcsMjVIMThWMjZIMTd6TTE5LDI1SDIwVjI2SDE5ek0yMiwyNUgyM1YyNkgyMnpNMjUsMjVIMjZWMjZIMjV6TTI3LDI1SDI4VjI2SDI3ek0zMCwyNUgzMVYyNkgzMHpNMzQsMjVIMzVWMjZIMzR6TTM2LDI1SDM3VjI2SDM2ek02LDI2SDdWMjdINnpNOCwyNkg5VjI3SDh6TTksMjZIMTBWMjdIOXpNMTAsMjZIMTFWMjdIMTB6TTEyLDI2SDEzVjI3SDEyek0xMywyNkgxNFYyN0gxM3pNMTcsMjZIMThWMjdIMTd6TTIwLDI2SDIxVjI3SDIwek0yNCwyNkgyNVYyN0gyNHpNMjcsMjZIMjhWMjdIMjd6TTI4LDI2SDI5VjI3SDI4ek0yOSwyNkgzMFYyN0gyOXpNMzEsMjZIMzJWMjdIMzF6TTMyLDI2SDMzVjI3SDMyek0zNCwyNkgzNVYyN0gzNHpNMzUsMjZIMzZWMjdIMzV6TTM2LDI2SDM3VjI3SDM2ek01LDI3SDZWMjhINXpNNywyN0g4VjI4SDd6TTExLDI3SDEyVjI4SDExek0xMywyN0gxNFYyOEgxM3pNMTQsMjdIMTVWMjhIMTR6TTE3LDI3SDE4VjI4SDE3ek0xOCwyN0gxOVYyOEgxOHpNMjAsMjdIMjFWMjhIMjB6TTIyLDI3SDIzVjI4SDIyek0yOSwyN0gzMFYyOEgyOXpNMzAsMjdIMzFWMjhIMzB6TTMxLDI3SDMyVjI4SDMxek0zMywyN0gzNFYyOEgzM3pNMzUsMjdIMzZWMjhIMzV6TTM2LDI3SDM3VjI4SDM2ek00LDI4SDVWMjlINHpNOCwyOEg5VjI5SDh6TTksMjhIMTBWMjlIOXpNMTAsMjhIMTFWMjlIMTB6TTExLDI4SDEyVjI5SDExek0xMywyOEgxNFYyOUgxM3pNMTQsMjhIMTVWMjlIMTR6TTE2LDI4SDE3VjI5SDE2ek0xOCwyOEgxOVYyOUgxOHpNMTksMjhIMjBWMjlIMTl6TTIxLDI4SDIyVjI5SDIxek0yNiwyOEgyN1YyOUgyNnpNMjgsMjhIMjlWMjlIMjh6TTI5LDI4SDMwVjI5SDI5ek0zMCwyOEgzMVYyOUgzMHpNMzEsMjhIMzJWMjlIMzF6TTMyLDI4SDMzVjI5SDMyek0xMiwyOUgxM1YzMEgxMnpNMTQsMjlIMTVWMzBIMTR6TTE1LDI5SDE2VjMwSDE1ek0xNiwyOUgxN1YzMEgxNnpNMTgsMjlIMTlWMzBIMTh6TTE5LDI5SDIwVjMwSDE5ek0yMSwyOUgyMlYzMEgyMXpNMjMsMjlIMjRWMzBIMjN6TTI2LDI5SDI3VjMwSDI2ek0yOCwyOUgyOVYzMEgyOHpNMzIsMjlIMzNWMzBIMzJ6TTMzLDI5SDM0VjMwSDMzek00LDMwSDVWMzFINHpNNSwzMEg2VjMxSDV6TTYsMzBIN1YzMUg2ek03LDMwSDhWMzFIN3pNOCwzMEg5VjMxSDh6TTksMzBIMTBWMzFIOXpNMTAsMzBIMTFWMzFIMTB6TTEyLDMwSDEzVjMxSDEyek0xNSwzMEgxNlYzMUgxNXpNMTYsMzBIMTdWMzFIMTZ6TTE3LDMwSDE4VjMxSDE3ek0xOCwzMEgxOVYzMUgxOHpNMjMsMzBIMjRWMzFIMjN6TTI3LDMwSDI4VjMxSDI3ek0yOCwzMEgyOVYzMUgyOHpNMzAsMzBIMzFWMzFIMzB6TTMyLDMwSDMzVjMxSDMyek00LDMxSDVWMzJINHpNMTAsMzFIMTFWMzJIMTB6TTEyLDMxSDEzVjMySDEyek0xMywzMUgxNFYzMkgxM3pNMTYsMzFIMTdWMzJIMTZ6TTE3LDMxSDE4VjMySDE3ek0xOCwzMUgxOVYzMkgxOHpNMTksMzFIMjBWMzJIMTl6TTIwLDMxSDIxVjMySDIwek0yNCwzMUgyNVYzMkgyNHpNMjUsMzFIMjZWMzJIMjV6TTI3LDMxSDI4VjMySDI3ek0yOCwzMUgyOVYzMkgyOHpNMzIsMzFIMzNWMzJIMzJ6TTMzLDMxSDM0VjMySDMzek0zNCwzMUgzNVYzMkgzNHpNMzUsMzFIMzZWMzJIMzV6TTQsMzJINVYzM0g0ek02LDMySDdWMzNINnpNNywzMkg4VjMzSDd6TTgsMzJIOVYzM0g4ek0xMCwzMkgxMVYzM0gxMHpNMTMsMzJIMTRWMzNIMTN6TTE1LDMySDE2VjMzSDE1ek0xNywzMkgxOFYzM0gxN3pNMTksMzJIMjBWMzNIMTl6TTIxLDMySDIyVjMzSDIxek0yNSwzMkgyNlYzM0gyNXpNMjYsMzJIMjdWMzNIMjZ6TTI3LDMySDI4VjMzSDI3ek0yOCwzMkgyOVYzM0gyOHpNMjksMzJIMzBWMzNIMjl6TTMwLDMySDMxVjMzSDMwek0zMSwzMkgzMlYzM0gzMXpNMzIsMzJIMzNWMzNIMzJ6TTM0LDMySDM1VjMzSDM0ek00LDMzSDVWMzRINHpNNiwzM0g3VjM0SDZ6TTcsMzNIOFYzNEg3ek04LDMzSDlWMzRIOHpNMTAsMzNIMTFWMzRIMTB6TTEyLDMzSDEzVjM0SDEyek0xNCwzM0gxNVYzNEgxNHpNMTYsMzNIMTdWMzRIMTZ6TTIxLDMzSDIyVjM0SDIxek0yMiwzM0gyM1YzNEgyMnpNMjQsMzNIMjVWMzRIMjR6TTI2LDMzSDI3VjM0SDI2ek0yNywzM0gyOFYzNEgyN3pNMzEsMzNIMzJWMzRIMzF6TTMzLDMzSDM0VjM0SDMzek0zNCwzM0gzNVYzNEgzNHpNMzYsMzNIMzdWMzRIMzZ6TTQsMzRINVYzNUg0ek02LDM0SDdWMzVINnpNNywzNEg4VjM1SDd6TTgsMzRIOVYzNUg4ek0xMCwzNEgxMVYzNUgxMHpNMTIsMzRIMTNWMzVIMTJ6TTEzLDM0SDE0VjM1SDEzek0xNiwzNEgxN1YzNUgxNnpNMTcsMzRIMThWMzVIMTd6TTE4LDM0SDE5VjM1SDE4ek0yMSwzNEgyMlYzNUgyMXpNMjQsMzRIMjVWMzVIMjR6TTI4LDM0SDI5VjM1SDI4ek0zMCwzNEgzMVYzNUgzMHpNMzEsMzRIMzJWMzVIMzF6TTMzLDM0SDM0VjM1SDMzek00LDM1SDVWMzZINHpNMTAsMzVIMTFWMzZIMTB6TTEzLDM1SDE0VjM2SDEzek0xNSwzNUgxNlYzNkgxNXpNMTcsMzVIMThWMzZIMTd6TTE4LDM1SDE5VjM2SDE4ek0xOSwzNUgyMFYzNkgxOXpNMjAsMzVIMjFWMzZIMjB6TTIxLDM1SDIyVjM2SDIxek0yMiwzNUgyM1YzNkgyMnpNMjcsMzVIMjhWMzZIMjd6TTI4LDM1SDI5VjM2SDI4ek0yOSwzNUgzMFYzNkgyOXpNMzEsMzVIMzJWMzZIMzF6TTMyLDM1SDMzVjM2SDMyek0zNiwzNUgzN1YzNkgzNnpNNCwzNkg1VjM3SDR6TTUsMzZINlYzN0g1ek02LDM2SDdWMzdINnpNNywzNkg4VjM3SDd6TTgsMzZIOVYzN0g4ek05LDM2SDEwVjM3SDl6TTEwLDM2SDExVjM3SDEwek0xMiwzNkgxM1YzN0gxMnpNMTQsMzZIMTVWMzdIMTR6TTE1LDM2SDE2VjM3SDE1ek0xOCwzNkgxOVYzN0gxOHpNMTksMzZIMjBWMzdIMTl6TTIwLDM2SDIxVjM3SDIwek0yMSwzNkgyMlYzN0gyMXpNMjIsMzZIMjNWMzdIMjJ6TTIzLDM2SDI0VjM3SDIzek0yNSwzNkgyNlYzN0gyNXpNMjcsMzZIMjhWMzdIMjd6TTI5LDM2SDMwVjM3SDI5ek0zMiwzNkgzM1YzN0gzMnpNMzQsMzZIMzVWMzdIMzR6IiBpZD0icXItcGF0aCIgZmlsbD0iIzJiMjExOCIgZmlsbC1vcGFjaXR5PSIxIiBmaWxsLXJ1bGU9Im5vbnplcm8iIHN0cm9rZT0ibm9uZSIvPjwvc3ZnPg==';
+/* 2026-08-02 (v0.65): the placeholder from v0.43 is retired. The App Store Connect API confirmed
+   this app's real Apple ID is 6790999186 (GET /v1/apps/6790999186, re-read fresh this session,
+   not assumed from an old note) - Apple's numeric-id link format is stable and public the moment
+   an app record exists in App Store Connect, it does NOT require the app to have cleared review
+   or be live yet (confirmed against Apple's own documented link format, not guessed). So the QR
+   below is the REAL destination, generated the same way the v0.43 placeholder documented its own
+   recipe (`pip3 install qrcode`, then `qrcode.image.svg.SvgPathImage`, a hand-added cream
+   background rect recolored to the app's --ink token) and VERIFIED to decode back to the exact
+   URL below with `zbarimg` before being embedded here - see HANDOFF.md "v0.65" for the command
+   transcript. Scanning it before the app is actually Approved will show Apple's own "not
+   available" page, not a broken link - that gap is what NASTY_APPSTORE_LIVE (right below) is
+   for: it gates the on-screen WORDING (§ COMING SOON), not this QR/URL, which are safe to be
+   truthful ahead of time. */
+const APPSTORE_URL='https://apps.apple.com/app/id6790999186';
+/* THE SECOND SWITCH, same one-boolean idea as NASTY_WEBSITE_GATE_ENABLED above. The QR/URL just
+   above already point at the real listing - what this flag controls is only whether the
+   coming-soon screen's TEXT says "coming soon" or "now live" (renderComingSoon(), § COMING SOON,
+   near § ADMIN). Flip this to `true` the moment the app is actually Approved and live on the App
+   Store - nothing else needs to change, no rebuild, this is a website-only flag (an app update
+   picks it up the same way any index.html edit does, but the app doesn't read this constant for
+   anything, it only ever governs the WEBSITE gate screen). Stays `false` until then so a visitor
+   is never told the app is live when tapping through would 404. See HANDOFF.md "v0.65" for why
+   the QR itself could go live today while this could not. */
+const NASTY_APPSTORE_LIVE=false;
+const APPSTORE_QR_DATAURI='data:image/svg+xml;base64,PHN2ZyB2ZXJzaW9uPSIxLjEiIHZpZXdCb3g9IjAgMCAzNyAzNyIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMzciIGhlaWdodD0iMzciIGZpbGw9IiNmYmY3ZWUiLz48cGF0aCBkPSJNNCw0SDVWNUg0ek01LDRINlY1SDV6TTYsNEg3VjVINnpNNyw0SDhWNUg3ek04LDRIOVY1SDh6TTksNEgxMFY1SDl6TTEwLDRIMTFWNUgxMHpNMTIsNEgxM1Y1SDEyek0xMyw0SDE0VjVIMTN6TTE4LDRIMTlWNUgxOHpNMjEsNEgyMlY1SDIxek0yMiw0SDIzVjVIMjJ6TTIzLDRIMjRWNUgyM3pNMjYsNEgyN1Y1SDI2ek0yNyw0SDI4VjVIMjd6TTI4LDRIMjlWNUgyOHpNMjksNEgzMFY1SDI5ek0zMCw0SDMxVjVIMzB6TTMxLDRIMzJWNUgzMXpNMzIsNEgzM1Y1SDMyek00LDVINVY2SDR6TTEwLDVIMTFWNkgxMHpNMTIsNUgxM1Y2SDEyek0xMyw1SDE0VjZIMTN6TTE0LDVIMTVWNkgxNHpNMTgsNUgxOVY2SDE4ek0yMCw1SDIxVjZIMjB6TTIyLDVIMjNWNkgyMnpNMjYsNUgyN1Y2SDI2ek0zMiw1SDMzVjZIMzJ6TTQsNkg1VjdINHpNNiw2SDdWN0g2ek03LDZIOFY3SDd6TTgsNkg5VjdIOHpNMTAsNkgxMVY3SDEwek0xNCw2SDE1VjdIMTR6TTE1LDZIMTZWN0gxNXpNMTYsNkgxN1Y3SDE2ek0xNyw2SDE4VjdIMTd6TTE4LDZIMTlWN0gxOHpNMjAsNkgyMVY3SDIwek0yMiw2SDIzVjdIMjJ6TTIzLDZIMjRWN0gyM3pNMjQsNkgyNVY3SDI0ek0yNiw2SDI3VjdIMjZ6TTI4LDZIMjlWN0gyOHpNMjksNkgzMFY3SDI5ek0zMCw2SDMxVjdIMzB6TTMyLDZIMzNWN0gzMnpNNCw3SDVWOEg0ek02LDdIN1Y4SDZ6TTcsN0g4VjhIN3pNOCw3SDlWOEg4ek0xMCw3SDExVjhIMTB6TTEyLDdIMTNWOEgxMnpNMTYsN0gxN1Y4SDE2ek0xNyw3SDE4VjhIMTd6TTIwLDdIMjFWOEgyMHpNMjEsN0gyMlY4SDIxek0yMyw3SDI0VjhIMjN6TTI2LDdIMjdWOEgyNnpNMjgsN0gyOVY4SDI4ek0yOSw3SDMwVjhIMjl6TTMwLDdIMzFWOEgzMHpNMzIsN0gzM1Y4SDMyek00LDhINVY5SDR6TTYsOEg3VjlINnpNNyw4SDhWOUg3ek04LDhIOVY5SDh6TTEwLDhIMTFWOUgxMHpNMTQsOEgxNVY5SDE0ek0xNSw4SDE2VjlIMTV6TTE2LDhIMTdWOUgxNnpNMTcsOEgxOFY5SDE3ek0xOSw4SDIwVjlIMTl6TTIxLDhIMjJWOUgyMXpNMjMsOEgyNFY5SDIzek0yNiw4SDI3VjlIMjZ6TTI4LDhIMjlWOUgyOHpNMjksOEgzMFY5SDI5ek0zMCw4SDMxVjlIMzB6TTMyLDhIMzNWOUgzMnpNNCw5SDVWMTBINHpNMTAsOUgxMVYxMEgxMHpNMTYsOUgxN1YxMEgxNnpNMTcsOUgxOFYxMEgxN3pNMjMsOUgyNFYxMEgyM3pNMjQsOUgyNVYxMEgyNHpNMjYsOUgyN1YxMEgyNnpNMzIsOUgzM1YxMEgzMnpNNCwxMEg1VjExSDR6TTUsMTBINlYxMUg1ek02LDEwSDdWMTFINnpNNywxMEg4VjExSDd6TTgsMTBIOVYxMUg4ek05LDEwSDEwVjExSDl6TTEwLDEwSDExVjExSDEwek0xMiwxMEgxM1YxMUgxMnpNMTQsMTBIMTVWMTFIMTR6TTE2LDEwSDE3VjExSDE2ek0xOCwxMEgxOVYxMUgxOHpNMjAsMTBIMjFWMTFIMjB6TTIyLDEwSDIzVjExSDIyek0yNCwxMEgyNVYxMUgyNHpNMjYsMTBIMjdWMTFIMjZ6TTI3LDEwSDI4VjExSDI3ek0yOCwxMEgyOVYxMUgyOHpNMjksMTBIMzBWMTFIMjl6TTMwLDEwSDMxVjExSDMwek0zMSwxMEgzMlYxMUgzMXpNMzIsMTBIMzNWMTFIMzJ6TTEyLDExSDEzVjEySDEyek0xNSwxMUgxNlYxMkgxNXpNMTgsMTFIMTlWMTJIMTh6TTIxLDExSDIyVjEySDIxek0yMiwxMUgyM1YxMkgyMnpNMjMsMTFIMjRWMTJIMjN6TTQsMTJINVYxM0g0ek02LDEySDdWMTNINnpNNywxMkg4VjEzSDd6TTksMTJIMTBWMTNIOXpNMTAsMTJIMTFWMTNIMTB6TTExLDEySDEyVjEzSDExek0xNCwxMkgxNVYxM0gxNHpNMTYsMTJIMTdWMTNIMTZ6TTE5LDEySDIwVjEzSDE5ek0yMSwxMkgyMlYxM0gyMXpNMjIsMTJIMjNWMTNIMjJ6TTI2LDEySDI3VjEzSDI2ek0yOSwxMkgzMFYxM0gyOXpNMzEsMTJIMzJWMTNIMzF6TTMyLDEySDMzVjEzSDMyek01LDEzSDZWMTRINXpNNiwxM0g3VjE0SDZ6TTksMTNIMTBWMTRIOXpNMTIsMTNIMTNWMTRIMTJ6TTE0LDEzSDE1VjE0SDE0ek0xNiwxM0gxN1YxNEgxNnpNMTgsMTNIMTlWMTRIMTh6TTIzLDEzSDI0VjE0SDIzek0yNCwxM0gyNVYxNEgyNHpNMjUsMTNIMjZWMTRIMjV6TTI2LDEzSDI3VjE0SDI2ek0yOCwxM0gyOVYxNEgyOHpNMzIsMTNIMzNWMTRIMzJ6TTgsMTRIOVYxNUg4ek05LDE0SDEwVjE1SDl6TTEwLDE0SDExVjE1SDEwek0xMiwxNEgxM1YxNUgxMnpNMTMsMTRIMTRWMTVIMTN6TTE1LDE0SDE2VjE1SDE1ek0xNywxNEgxOFYxNUgxN3pNMjAsMTRIMjFWMTVIMjB6TTIxLDE0SDIyVjE1SDIxek0yNSwxNEgyNlYxNUgyNXpNMjYsMTRIMjdWMTVIMjZ6TTI4LDE0SDI5VjE1SDI4ek0zMCwxNEgzMVYxNUgzMHpNMzEsMTRIMzJWMTVIMzF6TTUsMTVINlYxNkg1ek04LDE1SDlWMTZIOHpNOSwxNUgxMFYxNkg5ek0xMSwxNUgxMlYxNkgxMXpNMTQsMTVIMTVWMTZIMTR6TTE3LDE1SDE4VjE2SDE3ek0yMCwxNUgyMVYxNkgyMHpNMzIsMTVIMzNWMTZIMzJ6TTYsMTZIN1YxN0g2ek05LDE2SDEwVjE3SDl6TTEwLDE2SDExVjE3SDEwek0xMSwxNkgxMlYxN0gxMXpNMTQsMTZIMTVWMTdIMTR6TTE2LDE2SDE3VjE3SDE2ek0yMCwxNkgyMVYxN0gyMHpNMjEsMTZIMjJWMTdIMjF6TTI3LDE2SDI4VjE3SDI3ek0yOSwxNkgzMFYxN0gyOXpNMzAsMTZIMzFWMTdIMzB6TTQsMTdINVYxOEg0ek02LDE3SDdWMThINnpNNywxN0g4VjE4SDd6TTgsMTdIOVYxOEg4ek0xMSwxN0gxMlYxOEgxMXpNMTQsMTdIMTVWMThIMTR6TTE1LDE3SDE2VjE4SDE1ek0xNiwxN0gxN1YxOEgxNnpNMTcsMTdIMThWMThIMTd6TTE4LDE3SDE5VjE4SDE4ek0xOSwxN0gyMFYxOEgxOXpNMjEsMTdIMjJWMThIMjF6TTIyLDE3SDIzVjE4SDIyek0yMywxN0gyNFYxOEgyM3pNMjYsMTdIMjdWMThIMjZ6TTMwLDE3SDMxVjE4SDMwek0zMSwxN0gzMlYxOEgzMXpNMzIsMTdIMzNWMThIMzJ6TTQsMThINVYxOUg0ek01LDE4SDZWMTlINXpNNiwxOEg3VjE5SDZ6TTcsMThIOFYxOUg3ek0xMCwxOEgxMVYxOUgxMHpNMTEsMThIMTJWMTlIMTF6TTE0LDE4SDE1VjE5SDE0ek0xNiwxOEgxN1YxOUgxNnpNMTgsMThIMTlWMTlIMTh6TTIwLDE4SDIxVjE5SDIwek0yMywxOEgyNFYxOUgyM3pNMjYsMThIMjdWMTlIMjZ6TTMwLDE4SDMxVjE5SDMwek0zMSwxOEgzMlYxOUgzMXpNMzIsMThIMzNWMTlIMzJ6TTYsMTlIN1YyMEg2ek03LDE5SDhWMjBIN3pNOSwxOUgxMFYyMEg5ek0xMSwxOUgxMlYyMEgxMXpNMTMsMTlIMTRWMjBIMTN6TTE2LDE5SDE3VjIwSDE2ek0xNywxOUgxOFYyMEgxN3pNMTksMTlIMjBWMjBIMTl6TTIyLDE5SDIzVjIwSDIyek0yMywxOUgyNFYyMEgyM3pNMjQsMTlIMjVWMjBIMjR6TTI4LDE5SDI5VjIwSDI4ek0zMSwxOUgzMlYyMEgzMXpNNSwyMEg2VjIxSDV6TTcsMjBIOFYyMUg3ek0xMCwyMEgxMVYyMUgxMHpNMTEsMjBIMTJWMjFIMTF6TTEyLDIwSDEzVjIxSDEyek0yMCwyMEgyMVYyMUgyMHpNMjMsMjBIMjRWMjFIMjN6TTI0LDIwSDI1VjIxSDI0ek0yNSwyMEgyNlYyMUgyNXpNMjgsMjBIMjlWMjFIMjh6TTI5LDIwSDMwVjIxSDI5ek0zMSwyMEgzMlYyMUgzMXpNNSwyMUg2VjIySDV6TTYsMjFIN1YyMkg2ek05LDIxSDEwVjIySDl6TTEyLDIxSDEzVjIySDEyek0xNiwyMUgxN1YyMkgxNnpNMTcsMjFIMThWMjJIMTd6TTE5LDIxSDIwVjIySDE5ek0yMCwyMUgyMVYyMkgyMHpNMjEsMjFIMjJWMjJIMjF6TTI1LDIxSDI2VjIySDI1ek0yNywyMUgyOFYyMkgyN3pNMjksMjFIMzBWMjJIMjl6TTMwLDIxSDMxVjIySDMwek0zMSwyMUgzMlYyMkgzMXpNNCwyMkg1VjIzSDR6TTgsMjJIOVYyM0g4ek05LDIySDEwVjIzSDl6TTEwLDIySDExVjIzSDEwek0xMywyMkgxNFYyM0gxM3pNMTQsMjJIMTVWMjNIMTR6TTE1LDIySDE2VjIzSDE1ek0xOSwyMkgyMFYyM0gxOXpNMjAsMjJIMjFWMjNIMjB6TTIxLDIySDIyVjIzSDIxek0yNCwyMkgyNVYyM0gyNHpNMjUsMjJIMjZWMjNIMjV6TTI4LDIySDI5VjIzSDI4ek0zMCwyMkgzMVYyM0gzMHpNNywyM0g4VjI0SDd6TTgsMjNIOVYyNEg4ek0xMSwyM0gxMlYyNEgxMXpNMTMsMjNIMTRWMjRIMTN6TTE0LDIzSDE1VjI0SDE0ek0xNiwyM0gxN1YyNEgxNnpNMjEsMjNIMjJWMjRIMjF6TTIyLDIzSDIzVjI0SDIyek0yNywyM0gyOFYyNEgyN3pNMzAsMjNIMzFWMjRIMzB6TTUsMjRINlYyNUg1ek02LDI0SDdWMjVINnpNOSwyNEgxMFYyNUg5ek0xMCwyNEgxMVYyNUgxMHpNMTEsMjRIMTJWMjVIMTF6TTE1LDI0SDE2VjI1SDE1ek0xNiwyNEgxN1YyNUgxNnpNMTcsMjRIMThWMjVIMTd6TTE5LDI0SDIwVjI1SDE5ek0yMSwyNEgyMlYyNUgyMXpNMjIsMjRIMjNWMjVIMjJ6TTIzLDI0SDI0VjI1SDIzek0yNCwyNEgyNVYyNUgyNHpNMjUsMjRIMjZWMjVIMjV6TTI2LDI0SDI3VjI1SDI2ek0yNywyNEgyOFYyNUgyN3pNMjgsMjRIMjlWMjVIMjh6TTI5LDI0SDMwVjI1SDI5ek0zMCwyNEgzMVYyNUgzMHpNMTIsMjVIMTNWMjZIMTJ6TTE1LDI1SDE2VjI2SDE1ek0xNywyNUgxOFYyNkgxN3pNMTgsMjVIMTlWMjZIMTh6TTIxLDI1SDIyVjI2SDIxek0yMiwyNUgyM1YyNkgyMnpNMjQsMjVIMjVWMjZIMjR6TTI4LDI1SDI5VjI2SDI4ek0yOSwyNUgzMFYyNkgyOXpNMzAsMjVIMzFWMjZIMzB6TTMxLDI1SDMyVjI2SDMxek0zMiwyNUgzM1YyNkgzMnpNNCwyNkg1VjI3SDR6TTUsMjZINlYyN0g1ek02LDI2SDdWMjdINnpNNywyNkg4VjI3SDd6TTgsMjZIOVYyN0g4ek05LDI2SDEwVjI3SDl6TTEwLDI2SDExVjI3SDEwek0xMiwyNkgxM1YyN0gxMnpNMTUsMjZIMTZWMjdIMTV6TTE2LDI2SDE3VjI3SDE2ek0xNywyNkgxOFYyN0gxN3pNMjAsMjZIMjFWMjdIMjB6TTIxLDI2SDIyVjI3SDIxek0yMywyNkgyNFYyN0gyM3pNMjQsMjZIMjVWMjdIMjR6TTI2LDI2SDI3VjI3SDI2ek0yOCwyNkgyOVYyN0gyOHpNMjksMjZIMzBWMjdIMjl6TTMxLDI2SDMyVjI3SDMxek00LDI3SDVWMjhINHpNMTAsMjdIMTFWMjhIMTB6TTEyLDI3SDEzVjI4SDEyek0xNSwyN0gxNlYyOEgxNXpNMTksMjdIMjBWMjhIMTl6TTIyLDI3SDIzVjI4SDIyek0yNCwyN0gyNVYyOEgyNHpNMjgsMjdIMjlWMjhIMjh6TTI5LDI3SDMwVjI4SDI5ek0zMSwyN0gzMlYyOEgzMXpNNCwyOEg1VjI5SDR6TTYsMjhIN1YyOUg2ek03LDI4SDhWMjlIN3pNOCwyOEg5VjI5SDh6TTEwLDI4SDExVjI5SDEwek0xNCwyOEgxNVYyOUgxNHpNMTUsMjhIMTZWMjlIMTV6TTE2LDI4SDE3VjI5SDE2ek0xOCwyOEgxOVYyOUgxOHpNMTksMjhIMjBWMjlIMTl6TTIwLDI4SDIxVjI5SDIwek0yMSwyOEgyMlYyOUgyMXpNMjQsMjhIMjVWMjlIMjR6TTI1LDI4SDI2VjI5SDI1ek0yNiwyOEgyN1YyOUgyNnpNMjcsMjhIMjhWMjlIMjd6TTI4LDI4SDI5VjI5SDI4ek0zMCwyOEgzMVYyOUgzMHpNNCwyOUg1VjMwSDR6TTYsMjlIN1YzMEg2ek03LDI5SDhWMzBIN3pNOCwyOUg5VjMwSDh6TTEwLDI5SDExVjMwSDEwek0xMiwyOUgxM1YzMEgxMnpNMTMsMjlIMTRWMzBIMTN6TTE1LDI5SDE2VjMwSDE1ek0xOCwyOUgxOVYzMEgxOHpNMTksMjlIMjBWMzBIMTl6TTIxLDI5SDIyVjMwSDIxek0yNCwyOUgyNVYzMEgyNHpNMjUsMjlIMjZWMzBIMjV6TTI4LDI5SDI5VjMwSDI4ek0yOSwyOUgzMFYzMEgyOXpNMzIsMjlIMzNWMzBIMzJ6TTQsMzBINVYzMUg0ek02LDMwSDdWMzFINnpNNywzMEg4VjMxSDd6TTgsMzBIOVYzMUg4ek0xMCwzMEgxMVYzMUgxMHpNMTIsMzBIMTNWMzFIMTJ6TTEzLDMwSDE0VjMxSDEzek0xNCwzMEgxNVYzMUgxNHpNMTYsMzBIMTdWMzFIMTZ6TTE3LDMwSDE4VjMxSDE3ek0xOCwzMEgxOVYzMUgxOHpNMjAsMzBIMjFWMzFIMjB6TTIyLDMwSDIzVjMxSDIyek0yNCwzMEgyNVYzMUgyNHpNMjUsMzBIMjZWMzFIMjV6TTI3LDMwSDI4VjMxSDI3ek0zMCwzMEgzMVYzMUgzMHpNMzIsMzBIMzNWMzFIMzJ6TTQsMzFINVYzMkg0ek0xMCwzMUgxMVYzMkgxMHpNMTMsMzFIMTRWMzJIMTN6TTE1LDMxSDE2VjMySDE1ek0xNywzMUgxOFYzMkgxN3pNMjAsMzFIMjFWMzJIMjB6TTIyLDMxSDIzVjMySDIyek0yNCwzMUgyNVYzMkgyNHpNMjUsMzFIMjZWMzJIMjV6TTI3LDMxSDI4VjMySDI3ek0yOCwzMUgyOVYzMkgyOHpNMjksMzFIMzBWMzJIMjl6TTMxLDMxSDMyVjMySDMxek00LDMySDVWMzNINHpNNSwzMkg2VjMzSDV6TTYsMzJIN1YzM0g2ek03LDMySDhWMzNIN3pNOCwzMkg5VjMzSDh6TTksMzJIMTBWMzNIOXpNMTAsMzJIMTFWMzNIMTB6TTEyLDMySDEzVjMzSDEyek0xNSwzMkgxNlYzM0gxNXpNMTYsMzJIMTdWMzNIMTZ6TTIwLDMySDIxVjMzSDIwek0yMywzMkgyNFYzM0gyM3pNMjQsMzJIMjVWMzNIMjR6TTI3LDMySDI4VjMzSDI3ek0zMSwzMkgzMlYzM0gzMXoiIGlkPSJxci1wYXRoIiBmaWxsPSIjMmIyMTE4IiBmaWxsLW9wYWNpdHk9IjEiIGZpbGwtcnVsZT0ibm9uemVybyIgc3Ryb2tlPSJub25lIi8+PC9zdmc+';
 const PUBLIC_URL='https://nastyboardgame.com/';   // canonical link to put in invites when
   // running in-app - location.href there is capacitor://localhost/... or a local file URL,
   // not something a friend could ever open, so always point invites at the real website.
@@ -13924,13 +13947,16 @@ async function accountSignIn(){
 /* Signing out is local first, told to the server second: the token leaves this phone before the
    server hears about it, so a flaky connection can never leave somebody stuck signed in. A
    signed-out player is exactly a guest - saved games, this device's own stats and every room
-   rejoin credential are untouched. */
+   rejoin credential are untouched. 2026-08-02 (v0.65): the ONE thing that IS reset is cosmetics -
+   resetEquipToDefaults() (§ SHOP) below - because those were never "this device's own" the way
+   stats/saves are; they're a preference that only makes sense for whoever currently owns them. */
 async function accountSignOut(){
   const t=ACCT&&ACCT.token;
   ACCT=null; ACCT_NOTICE='';
   // v0.36 item 3: the offer belongs to the account, not to this phone.
   ACCT_CLAIM=null; ACCT_CLAIM_STEP='offer'; CLAIM_PROBED=false;
   ONLINE_STATUS_CACHE=null;   // v0.56: entitlement belongs to the account too - never carry it past sign-out
+  resetEquipToDefaults();   // v0.65: pegs/felt/title back to default, live, even mid-game - see its own header comment
   saveAcctToken('');
   renderAccountRows(); updateAccountButton();
   renderYouCard();   // v0.44: back to the guest nudge, the moment the menu is on screen again
@@ -13963,6 +13989,7 @@ async function accountDelete(eraseBoard){
   ACCT=null;
   ACCT_CLAIM=null; ACCT_CLAIM_STEP='offer'; CLAIM_PROBED=false;   // v0.36 item 3
   ONLINE_STATUS_CACHE=null;   // v0.56: same reasoning as accountSignOut() just above
+  resetEquipToDefaults();   // v0.65: same reasoning as accountSignOut() just above - see its own header comment
   saveAcctToken('');
   closeAcctDeleteConfirm();
   // Apple keeps its own list of the apps you have used Sign in with Apple on, and only the person
@@ -15646,6 +15673,42 @@ function acctEquipReset(cat){
   try{ renderMenu(); }catch(e){}
   try{ paintShop(); }catch(e){}
   refreshAcctEquip();
+}
+// 2026-08-02 (v0.65) Blake, verbatim: "when someone signs out it should default everything (pegs,
+// felt color, etc) back to the defaults (even mid game)". ROOT CAUSE (this section's own header
+// comment, restated because it's exactly what made this a bug): EQUIP is a per-PHONE display
+// preference, not a per-ACCOUNT one - there is no server field for "what's equipped," only for
+// what's OWNED. So signing out (or deleting the account) used to leave the previous account's
+// palette/felt/title sitting in localStorage and still painting the board - a person who is now
+// signed out (or a different account signing in next) would keep seeing cosmetics they may not
+// own at all. Fix: reset every EQUIP category at once, the exact same three lines
+// acctEquipReset() right above already uses per-category (EQUIP[cat]=null / saveEquip() /
+// applyEquipped()) - not a second repaint path. applyEquipped()=applyEquippedPalette()+
+// applyEquippedFelt() already IS the live, mid-game-safe repaint: applyEquippedPalette() calls
+// repaintSeatColors() whenever a game (G.seats) exists (v0.52), and applyEquippedFelt() drives
+// --felt1/--felt2 (so body's background repaints immediately, game or menu alike),
+// syncNativeStatusBarColor() (the native strip, v0.52/v0.53) and syncThemeColorMeta() (the
+// browser tab color, v0.61) - so this one call reaches the board, the felt, the native status bar
+// strip AND the menu/you card, with no restart, exactly per the ask. renderMenu()/paintShop() are
+// the same defensive try/catch repaints acctEquipReset() already does (paintShop() is a no-op
+// here in practice - the Shop and the Admin panel can never be open at the same time, per the
+// one-overlay-at-a-time invariant - kept anyway so this function is a complete, self-contained
+// "make every screen agree" call regardless of who calls it in the future). Guarded so a phone
+// that owned nothing does no work and shows no toast. INTENTIONAL DESIGN CALL, decided here rather
+// than left accidental: signing back in as the SAME account afterward does NOT restore the old
+// equip choice - EQUIP was never account-scoped to begin with (see header comment), so "signed
+// out -> defaults" and "signed in -> defaults until you re-equip from the Shop/Admin panel" are
+// the same rule applied consistently, not a special case. This also closes the title side of
+// Blake's ask for free: titledNameHtml()/renderYouCard() already gate any title badge on
+// isAccountReady() (a signed-out guest was never ABLE to render one), but EQUIP.title itself no
+// longer even holds a stale value past sign-out for a future call site to trip over.
+function resetEquipToDefaults(){
+  if(!EQUIP.palette&&!EQUIP.felt&&!EQUIP.title)return;
+  EQUIP={palette:null,felt:null,title:null};
+  saveEquip();
+  applyEquipped();
+  try{ renderMenu(); }catch(e){}
+  try{ paintShop(); }catch(e){}
 }
 // Event delegation on the one container that gets rewritten (#acctEquipBody) - the same "one
 // listener, not a fresh bind per repaint" idiom #shopBody already uses, § SHOP.
@@ -17619,7 +17682,17 @@ function renderComingSoon(){
   // when the gate is up, so nothing sits, even invisibly, behind the coming-soon card.
   $('menu').classList.add('hidden');
   const img=$('csQrImg');
-  if(img)img.src=PLACEHOLDER_APPSTORE_QR_DATAURI;
+  if(img)img.src=APPSTORE_QR_DATAURI;
+  // 2026-08-02 (v0.65): the QR/URL are already real (§ CAPACITOR) - only the WORDING waits for
+  // NASTY_APPSTORE_LIVE. THE SWITCH Blake flips once the app is Approved: nothing else on this
+  // screen needs to change.
+  const tag=$('csTag'), note=$('csNote');
+  if(tag)tag.textContent=NASTY_APPSTORE_LIVE
+    ? 'NASTY is live on the App Store!'
+    : 'The Nasty app is coming soon to the App Store.';
+  if(note)note.textContent=NASTY_APPSTORE_LIVE
+    ? 'Online play happens right in the iPhone app. Got a game invite link? Open it on your iPhone with the Nasty app.'
+    : "Online play happens right in the iPhone app. Got a game invite link? Open it on your iPhone with the Nasty app once it's live.";
   $('comingSoon').classList.remove('hidden');
 }
 
