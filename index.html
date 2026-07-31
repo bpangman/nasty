@@ -279,6 +279,15 @@
                     of the guest nudge for the brief window before that answer is known, on a phone
                     that IS carrying a stored session. See that boot block's own long comment for
                     the full story.
+                    v0.60 (2026-07-31), item 3: #acctDelText (the delete-account warning, right
+                    where accountDelete() is wired) now says plainly what deleting actually costs -
+                    confirmed by reading deleteAccountRecord() in BOTH server/server.js and
+                    server/cloud/server.ts before writing a word: eraseBoard only ever controls the
+                    LEADERBOARD row, the wallet (walletOwned/walletSpent/walletPurchasedCredits/
+                    walletOnlineMonths/walletNamechangeCredits) lives on the SAME account record
+                    that gets unconditionally deleted either way. So every credit - earned AND
+                    bought with real money - is gone for good, no refund, and the warning now says
+                    so. Copy-only; no server change (the behavior it describes already existed).
     § SHOP ........ NEW (v0.50, 2026-07-28): the client half of the points economy - the server
                     side (GET /shop, POST /account/wallet, POST /account/purchase, and
                     POST /account/name's new useNamechangeCredit flag) shipped server-only the day
@@ -558,6 +567,33 @@
                           PROTOCOL_VERSION unchanged); handleNetMessage's new case renames the
                           live seat + plaque, and applyLocalRenameNow() does the same for an
                           offline game on this phone. `#verTap` bumped `v0.58` -> `v0.59`.
+                    v0.60 (2026-07-31), items 2 and 4 of this session's ask - see HANDOFF.md "v0.60"
+                    for Blake's full verbatim asks and every state screenshot:
+                      - Item 2: SHOP_CATEGORY_LABELS's 'online' entry is now exactly "Extend Online
+                        Access" (was a full sentence). A new shopOnlineAccessSubline() renders a
+                        live days-left/tokens-owned line directly under that header, reusing
+                        fetchOnlineStatus()/accessCountdownText()/humanDuration()/formatMonthKey()/
+                        formatChicagoMonth() verbatim - the SAME functions the Admin panel's own
+                        #acctOnline box already uses (paintOnlineAccess(), same section) - so the
+                        Shop and the Admin panel can never disagree about what "covered through" or
+                        "days left" means. openShopOverlay() now fetches online status alongside
+                        the catalog/wallet (one more Promise.all leg, same ONLINE_STATUS_CACHE, no
+                        second cache). shopDisplayName()/catItemRow() also grew an online_month
+                        special case - the row shows "Online Play" then "(1 month)" on its own
+                        line, display-only (server catalog id/name untouched, same pattern as the
+                        existing namechange_credit rename right above it).
+                      - Item 4: Blake's report - tapping a greyed-out Buy button did nothing.
+                        Root cause: the native `disabled` attribute suppresses a click before it
+                        ever fires. FIX: catItemRow()'s two Buy-button sites and
+                        paintOnlineAccess()'s #acctOnlineBuyBtn now render `aria-disabled="true"`
+                        instead when unaffordable (a new `.btn[aria-disabled="true"]` rule, § STYLE,
+                        reproduces `.btn:disabled`'s exact greyed look, so nothing changes for a
+                        sighted user) - the click fires now, and shopRowClickHandler()/
+                        wireAcctOnlineBuy() answer it with `toast()` ("X costs N credits and you
+                        have M.", the exact voice buyOnlineAccess()'s existing 409 handler already
+                        used) instead of opening the confirm step. One shared handler covers both
+                        the Shop and the Admin panel's Shop Customizations rows, same as always.
+                        `#verTap` bumped `v0.59` -> `v0.60`.
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -661,6 +697,25 @@
                     check). Every OVERLAY_X_WIRING entry re-verified to still find its button and
                     fire the identical safe button - only WHERE each X lives in the DOM and HOW it's
                     positioned changed, never what it's bound to. `#verTap` bumped `v0.57` -> `v0.58`.
+                    v0.60 (2026-07-31, item 1a - re-evaluating the X pattern against WCAG 2.2's
+                    2.4.11 "Focus Not Obscured"): the v0.58 sticky-badge-over-a-scrolling-card design
+                    (above) worked, but was still the exact shape of pattern that guidance flags - a
+                    pinned child riding over content that scrolls underneath it. FIX: every
+                    .modalCard is now a flex COLUMN split into a non-scrolling `.modalHead` (title +
+                    X, when present) and a separate scrolling `.modalBody` (everything else) - the X
+                    lives in space the header owns permanently, so content can never scroll under it
+                    or vice versa, structurally, not by a tuned sticky offset. `.modalCard>
+                    .overlayXBtn{position:sticky}` and the padding-right:52px "title-crowding" hack
+                    are both GONE - flexbox's own layout (h3 flex:1, X flex:0 0 auto) reserves the
+                    X's column for free, so a long title just wraps instead of needing arithmetic.
+                    .confirmCard/#btnWinClose are UNCHANGED (see § STYLE for why neither needed this).
+                    Item 1b, same pass: 12 of the 19 X buttons are REMOVED entirely (see
+                    OVERLAY_X_WIRING right after this comment block) - every overlay whose safe
+                    button was actually an ACTION (Ok/Cancel/Continue as guest) rather than a plain
+                    Close, on the reasoning that a second, redundant "leave" affordance next to a
+                    button that already IS the leave affordance adds a decoy, not a convenience;
+                    Close-labeled buttons (7 of 19) keep their X. See HANDOFF.md "v0.60" for the full
+                    12/7 split and reasoning per overlay. `#verTap` bumped `v0.59` -> `v0.60`.
     Autotest: open with #autotest (4p FFA all-CPU) or #autotest6 (6p teams) - fast-forwards a full game.
     Preview the real site while the gate is up: append ?preview=1 to the URL (v0.43).
 
@@ -1374,6 +1429,15 @@ button{font:inherit;cursor:pointer}
 .btn.primary{background:var(--gold);color:#3a2c05;box-shadow:0 6px 18px rgba(0,0,0,.35)}
 .btn.ghost{background:rgba(255,255,255,.1);color:var(--cream);border:1px solid rgba(255,255,255,.22)}
 .btn:disabled{opacity:.4;cursor:default}
+/* 2026-07-31 (v0.60, item 4): the ONE existing "looks disabled" rule, above, only ever covered the
+   native `disabled` attribute - there was no aria-disabled precedent in this file before this pass.
+   `.shopBuyBtn`/`#acctOnlineBuyBtn` now use aria-disabled instead of disabled when unaffordable
+   (see catItemRow()'s and paintOnlineAccess()'s own comments) specifically so the click still
+   fires and can answer with a real toast - this rule makes that button look IDENTICAL to the old
+   native-disabled one for a sighted user (same opacity, same cursor), while a real `<button
+   disabled>` elsewhere in the app (this rule above) is completely untouched, still native-disabled,
+   still un-clickable - the two never mix. */
+.btn[aria-disabled="true"]{opacity:.4;cursor:default}
 .est{margin-top:26px;font-size:12px;letter-spacing:.2em;color:#7fae8d;text-transform:uppercase}
 
 /* ---------- Game chrome ---------- */
@@ -2453,26 +2517,38 @@ button{font:inherit;cursor:pointer}
   background:rgba(0,0,0,.35);color:var(--cream);font-size:19px;line-height:1;
   display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:2}
 .winCloseBtn{position:absolute;top:calc(env(safe-area-inset-top) + 14px);right:16px}
-.modalCard>.overlayXBtn{position:sticky;top:8px;margin:0 8px -44px auto}
+/* 2026-07-31 (v0.60, item 1a): the v0.58 `.modalCard>.overlayXBtn{position:sticky;...}` rule (and
+   the padding-right:52px "reserve room in the title" hack that went with it) are GONE, replaced by
+   a real structural fix instead of another positioning trick layered on top of the last one.
+   Researched first, not guessed: WCAG 2.2's 2.4.11 (Focus Not Obscured) names exactly this shape of
+   bug - a close button positioned via sticky/absolute OVER content that scrolls underneath it can
+   end up overlapping a focused element or hiding content, or vice versa. Bootstrap's modal docs
+   (sticky header/footer pattern), web.dev's "Building a dialog component" article and the W3C ARIA
+   APG dialog pattern all converge on the same fix: don't let the whole card be the scroll
+   container. Make the dialog a flex COLUMN with a non-scrolling header (title + close button) and a
+   separate scrollable body below it - the close button then lives in space the header owns
+   permanently, content scrolls in the body, under nothing, so it can structurally never cover the
+   button or vice versa. The v0.58 sticky-badge trick was real and it worked (measured, see
+   HANDOFF.md "v0.58"), but it was still exactly the pattern WCAG flags: one scroll container with a
+   pinned child riding on top of it, relying on z-index and a hand-tuned negative margin to never
+   let anything scroll over it. This pass removes that whole class of risk instead of re-verifying
+   it again. See .modalCard/.modalHead/.modalBody below for the new structure, and every overlay's
+   own markup (grep class="modalHead") for the split - h3 + the X (when present) inside modalHead,
+   everything else inside modalBody. #btnWinClose (winOverlay) and .confirmCard are UNCHANGED - see
+   their own rules/comments; neither one has a modalCard-style whole-card scroll to begin with. */
 .confirmCard>.overlayXBtn{position:absolute;top:8px;right:8px}
-/* v0.54: reserve room in every X-bearing modalCard's own title so the title's text can never
-   grow into the X's corner at any width, including 320px - measured directly (Playwright,
-   test_x_overlap.js) rather than assumed. Scoped by ID (this codebase's usual pattern for a
-   handful of specific overlays, see the .confirmCard .sign overrides above) to exactly the
-   modalCard overlays that got an X - every OTHER modalCard (speed pickers, the nickname gate,
-   reclaim/pause) is untouched. confirmCard overlays don't need this: their heading (.sign) is a
-   short, centered badge nowhere near the right edge (checked, not assumed - see HANDOFF.md).
-   2026-07-30 (v0.58): value re-verified, not just carried forward, now that the X sits INSET INTO
-   the card instead of fixed to the screen edge (see .overlayXBtn's own comment above) - the number
-   still works and is unchanged: .modalCard>.overlayXBtn's own margin-right (8px) plus its width
-   (44px) reach exactly 52px in from the card's content-box right edge, the identical distance this
-   padding-right already reserves, so the title and the X's own left edge land flush with zero
-   overlap by construction, not by coincidence - reconfirmed with real getBoundingClientRect()
-   measurements at 320px width on every overlay in this list (see HANDOFF.md "v0.58"). */
-#rulesOverlay h3,#lbOverlay h3,#shopOverlay h3,#accountOverlay h3,#adminOverlay h3,
-#onlineRulesOverlay h3,#onlineOverlay h3,#roomOverlay h3,#joinOverlay h3,
-#offlineSeatOverlay h3,#hostSpeedOverlay h3,#welcomeOverlay h3,#reunionOverlay h3
-  {padding-right:52px}
+.modalCard>.modalHead{flex:0 0 auto;display:flex;align-items:flex-start;justify-content:space-between;
+  gap:10px;padding:22px 22px 0}
+.modalCard>.modalHead>h3{flex:1 1 auto;min-width:0}
+/* min-width:0 lets a long title WRAP inside its own flex column instead of forcing the row wider
+   than the card (the usual flexbox "min-width:auto by default" trap) - no padding-right arithmetic
+   needed anymore: flexbox itself reserves the X's own 44px+gap column, so a title can never grow
+   into the X's corner at any width, by construction, the same way it could before only by a
+   hand-tuned number that happened to still be correct (see the deleted comment above, now in git
+   history). Verified at 320px on every overlay - see HANDOFF.md "v0.60" testing. */
+.modalCard>.modalHead>.overlayXBtn{order:2;flex:0 0 auto}
+.modalCard>.modalBody{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  padding:0 22px 22px}
 /* 2026-07-30 (v0.58): the v0.54 padding-top rule and the v0.54/v0.57 margin-top:0 rule that used
    to live here (both scoped to the same ~19 X-bearing overlay ids) are DELETED ENTIRELY, not just
    carved out further - see the .overlayXBtn header comment above for why: now that the X moves
@@ -2505,9 +2581,14 @@ button{font:inherit;cursor:pointer}
 /* 2026-07-30 (v0.58): position:relative added - the containing block for .overlayXBtn now that
    the X lives INSIDE the card (see that rule's own header comment, right after .winCloseBtn/
    .overlayXBtn below, for the full story). Doesn't change layout at all on its own (no top/left
-   set here) - it only gives an absolutely/stickily positioned child something to anchor to. */
+   set here) - it only gives an absolutely/stickily positioned child something to anchor to.
+   2026-07-31 (v0.60, item 1a): display:flex;flex-direction:column;overflow:hidden replace the old
+   overflow-y:auto/padding:22px - the CARD no longer scrolls itself. Scrolling and padding both move
+   to the two children below (.modalHead, non-scrolling; .modalBody, flex:1 1 auto;overflow-y:auto) -
+   see the .overlayXBtn header comment, above, for the full "why". text-align:left stays here (it's
+   a card-wide default both children inherit). */
 .modalCard{position:relative;background:var(--feltSurface);border:1px solid rgba(255,255,255,.18);border-radius:18px;max-width:520px;
-  width:100%;max-height:82vh;overflow-y:auto;padding:22px;text-align:left}
+  width:100%;max-height:82vh;display:flex;flex-direction:column;overflow:hidden;text-align:left}
 .modalCard h3{margin:2px 0 12px;font-size:21px}
 .modalCard h4{margin:16px 0 4px;color:var(--gold);font-size:15px}
 .modalCard p,.modalCard li{font-size:14.5px;line-height:1.55;color:#dcefe1}
@@ -2600,7 +2681,12 @@ button{font:inherit;cursor:pointer}
    with item R's "more below - swipe up" hint painted on it (see .overlay.canScroll, § STYLE) -
    the same answer the rules panel and the leaderboard already give at that size. */
 @media (max-height:700px){
-  #accountOverlay .modalCard{padding:14px}
+  /* 2026-07-31 (v0.60): split from the old single `.modalCard{padding:14px}` override now that
+     padding lives on .modalHead/.modalBody separately - same 14px on every side, just applied to
+     the two boxes that actually have padding now (top on the head, bottom on the body, sides on
+     both) instead of one box that no longer takes its own padding at all. */
+  #accountOverlay .modalCard>.modalHead{padding:14px 14px 0}
+  #accountOverlay .modalCard>.modalBody{padding:0 14px 14px}
   .acctHead{margin-bottom:10px}
   .acctRows,.acctSoon{gap:6px}
   .acctSoon{margin-top:10px;padding-top:9px}
@@ -2624,6 +2710,12 @@ button{font:inherit;cursor:pointer}
    underneath), and every sentence a real sentence rather than fine print. */
 .overlay.solid{background:radial-gradient(120% 95% at 50% 28%,var(--felt1),var(--felt2) 78%)}
 #welcomeOverlay .modalCard{max-width:420px}
+/* 2026-07-31 (v0.60): welcomeOverlay has no .modalHead (see its own markup comment) - everything,
+   including the top padding every OTHER overlay gets from .modalHead, lives in one .modalBody.
+   22px matches .modalHead's own default top padding exactly, so this screen's spacing is
+   unchanged from before this pass at normal heights; the two @media overrides below (10px, then
+   10px again) carry the same "add padding-top back" fix at the two short-screen breakpoints. */
+#welcomeOverlay .modalCard>.modalBody{padding-top:22px}
 /* v0.38 (2026-07-26, Blake): "Add more space beneath the nasty badge and the welcome to nasty
    message." It read as cramped - the badge, the heading and the first sentence were stacked at
    6/2/10px and looked like one block of text with a logo jammed on top. Both gaps open up: 6 ->
@@ -2734,7 +2826,10 @@ button{font:inherit;cursor:pointer}
      land NO LOWER at 320x568 than it did in v0.38 despite carrying one more sentence. Tap targets
      and the frozen badge/heading spacing are untouched; see the max-height:700px block below for
      where the real room came from. */
-  #welcomeOverlay .modalCard{padding:10px 14px}
+  /* 2026-07-31 (v0.60): welcomeOverlay has no .modalHead (see its own markup comment and the
+     base #welcomeOverlay .modalCard>.modalBody{padding-top:22px} rule above) - one box, all four
+     sides, same numbers the old single `.modalCard{padding:10px 14px}` override used here. */
+  #welcomeOverlay .modalCard>.modalBody{padding:10px 14px}
   .welcomeFine{margin-top:5px}
   .welcomeBtns{margin-top:10px;gap:7px}
   .welcomeBtns .btn{min-height:46px;font-size:15px}
@@ -3072,6 +3167,12 @@ button{font:inherit;cursor:pointer}
 .shopItemText{min-width:0}
 .shopItemName{font-size:14.5px;font-weight:700;color:var(--cream);white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
+/* 2026-07-31 (v0.60, item 2): online_month's own second name line ("(1 month)", under "Online
+   Play") - same idea as .shopItemMeta (quieter, smaller) but its own class since .shopItemMeta
+   is reserved for the "Owned"/"You have N" state text and the two can appear on the SAME row
+   (a held/owned online_month row never happens today, but this keeps them visually distinct on
+   principle rather than reusing one class for two different meanings). */
+.shopItemNameSub{font-size:12.5px;color:#a9d2b5;margin-top:0}
 .shopItemMeta{font-size:12px;color:#a9d2b5;margin-top:1px}
 .shopSwatchRow{display:flex;gap:2px;flex:0 0 auto}
 .shopSwatch{width:14px;height:14px;border-radius:50%;border:1px solid rgba(255,255,255,.3);flex:0 0 auto}
@@ -3093,6 +3194,11 @@ button{font:inherit;cursor:pointer}
   padding:10px;border-radius:10px;background:rgba(40,28,0,.4);border:1px solid rgba(244,197,66,.35);
   font-size:13px;color:#ffe9a8}
 .shopPacksHint{font-size:12.5px;color:#a9d2b5;margin:2px 0 6px}
+/* 2026-07-31 (v0.60, item 2): the live days-left/tokens-owned line under the "Extend Online
+   Access" header - see shopOnlineAccessSubline(), § SHOP. Same size/color/spacing idiom as
+   .shopPacksHint right above (a quiet informational line under a category header), its own class
+   since the two are conceptually different notes that could in principle both exist on screen. */
+.shopOnlineNote{font-size:12.5px;color:#a9d2b5;margin:2px 0 6px;line-height:1.45}
 
 /* ---- v0.51 (Blake: "for the designations (ie rookie) you can buy in the shop, don't make this
    something that goes next to your name in the leaderboard. Make it more like a badge icon or
@@ -3269,7 +3375,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.59</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.60</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -3435,76 +3541,84 @@ button{font:inherit;cursor:pointer}
        reuse btnRulesClose's own click (closeOverlay('rulesOverlay')) - see § UTIL's overlayXWire()
        for the shared wiring, and HANDOFF.md "v0.54" for the full inventory. -->
   <div class="modalCard">
-    <button id="btnRulesX" class="overlayXBtn" aria-label="Close">✕</button>
-    <h3>How to play Nasty</h3>
-    <p>Get all <b>5 of your tees</b> from your base, once around the board clockwise, and into your <b>home row</b> before anyone else. Teams: you and the player straight across win together.</p>
-    <h4>Getting out</h4>
-    <ul><li><b>King or Ace</b> brings a tee out of your base and onto your starting block - the first hole of your lap.</li></ul>
-    <h4>Cards</h4>
-    <ul>
-      <li><b>Ace</b> - come out, or move 1.</li>
-      <li><b>King</b> - come out only.</li>
-      <li><b>Queen</b> - move 12.</li>
-      <li><b>Jack</b> - trade places with any other tee on the board.</li>
-      <li><b>3</b> - move one of your tees 3 holes <i>backwards</i> (never behind your own starting block).</li>
-      <li><b>Everything else</b> - move that many holes forward.</li>
-    </ul>
-    <h4>The nasty part</h4>
-    <ul>
-      <li>Land exactly on an <b>opponent's tee</b> and it's <b>blasted back to base</b>!</li>
-      <li>You can <b>never pass your own tee</b> - or your partner's, in teams - and you can <b>never land on your own tee</b>. Any play that would do either simply isn't allowed.</li>
-      <li>Landing on your <b>partner's tee</b> is a last resort - it's only allowed when it's the ONLY play you have left, and then their tee goes back to base. Sorry, partner!</li>
-    </ul>
-    <h4>Home row</h4>
-    <ul>
-      <li>Exact count only - if your card is too big, that tee can't use it.</li>
-      <li>A tee that's <b>snug</b> (pushed all the way up) is safe forever.</li>
-      <li>A tee that's <b>not snug</b> can still be forced back out by your own 3.</li>
-    </ul>
-    <h4>Turns</h4>
-    <ul>
-      <li>Cards get dealt in rounds. <b>4 players:</b> 5, then 4, then 4 (all 52 cards used). <b>6 players:</b> 4, then 4 (48 of 52 used - the leftover 4 sit unused in the dealer's pile until the deck passes to the next dealer and gets reshuffled). Play one card per turn.</li>
-      <li>No playable card? You're skipped automatically until the next deal.</li>
-      <li>If a partner finishes, they keep playing to move their partner's tees.</li>
-    </ul>
-    <div class="bigBtns"><button class="btn primary" id="btnRulesClose">Got it</button></div>
+    <div class="modalHead">
+      <button id="btnRulesX" class="overlayXBtn" aria-label="Close">✕</button>
+      <h3>How to play Nasty</h3>
+    </div>
+    <div class="modalBody">
+      <p>Get all <b>5 of your tees</b> from your base, once around the board clockwise, and into your <b>home row</b> before anyone else. Teams: you and the player straight across win together.</p>
+      <h4>Getting out</h4>
+      <ul><li><b>King or Ace</b> brings a tee out of your base and onto your starting block - the first hole of your lap.</li></ul>
+      <h4>Cards</h4>
+      <ul>
+        <li><b>Ace</b> - come out, or move 1.</li>
+        <li><b>King</b> - come out only.</li>
+        <li><b>Queen</b> - move 12.</li>
+        <li><b>Jack</b> - trade places with any other tee on the board.</li>
+        <li><b>3</b> - move one of your tees 3 holes <i>backwards</i> (never behind your own starting block).</li>
+        <li><b>Everything else</b> - move that many holes forward.</li>
+      </ul>
+      <h4>The nasty part</h4>
+      <ul>
+        <li>Land exactly on an <b>opponent's tee</b> and it's <b>blasted back to base</b>!</li>
+        <li>You can <b>never pass your own tee</b> - or your partner's, in teams - and you can <b>never land on your own tee</b>. Any play that would do either simply isn't allowed.</li>
+        <li>Landing on your <b>partner's tee</b> is a last resort - it's only allowed when it's the ONLY play you have left, and then their tee goes back to base. Sorry, partner!</li>
+      </ul>
+      <h4>Home row</h4>
+      <ul>
+        <li>Exact count only - if your card is too big, that tee can't use it.</li>
+        <li>A tee that's <b>snug</b> (pushed all the way up) is safe forever.</li>
+        <li>A tee that's <b>not snug</b> can still be forced back out by your own 3.</li>
+      </ul>
+      <h4>Turns</h4>
+      <ul>
+        <li>Cards get dealt in rounds. <b>4 players:</b> 5, then 4, then 4 (all 52 cards used). <b>6 players:</b> 4, then 4 (48 of 52 used - the leftover 4 sit unused in the dealer's pile until the deck passes to the next dealer and gets reshuffled). Play one card per turn.</li>
+        <li>No playable card? You're skipped automatically until the next deal.</li>
+        <li>If a partner finishes, they keep playing to move their partner's tees.</li>
+      </ul>
+      <div class="bigBtns"><button class="btn primary" id="btnRulesClose">Got it</button></div>
+    </div>
   </div>
 </div>
 
 <div id="lbOverlay" class="overlay hidden">
   <!-- 2026-07-29 (v0.54): Bucket A. See rulesOverlay's own comment above for the pattern. -->
   <div class="modalCard">
-    <button id="btnLbX" class="overlayXBtn" aria-label="Close">✕</button>
-    <h3>Leaderboard</h3>
-    <!-- 2026-07-24 (Blake's item 9): 3rd tab, "KOs" - lifetime knockouts dealt/suffered, see
-         renderLbKo() below. Same .seg visual style as Solo/Teams, just one more button in the
-         same flex row - "KOs" kept deliberately short (not "Knockouts") so 3 tabs fit as
-         comfortably on a narrow phone as 2 did (see .seg's CSS, § STYLE).
-         v0.49: a 4th tab, "Total" - Solo+Teams combined, same points ranking the you card (§ MENU)
-         already shows. Sits BETWEEN Teams and KOs on purpose: it's still a points/wins/games tab
-         like Solo/Teams (just the combined view of the same two), while KOs is a genuinely
-         different, non-competitive "fun stat" pair that was always meant to read as its own last
-         category (see renderLbKo()'s own comment) - moving it earlier would blur that line. .segs
-         already wraps onto a 2nd row on its own (flex-wrap:wrap, § STYLE) if 4 buttons ever don't
-         fit one line on a narrow phone, so no new CSS was needed for the 4th button.
-         v0.51: a 5th tab, "Monthly" - wins/losses for the CURRENT CALENDAR MONTH only, a separate
-         mini ranking meant to re-engage people each month (starting August 2026), not another
-         slice of the lifetime record. Sits between Total and KOs for the same reason Total sits
-         between Teams and KOs above: it's a real ranking table (Player/Games/Wins/Losses/Points,
-         see renderLbMonthlyPaint()), so it belongs with the other ranking tabs rather than after
-         the "fun stat" KOs tab. Fed by a DIFFERENT endpoint (GET /leaderboard/monthly) than the
-         other four tabs - see loadMonthlyTab()/fetchMonthlyLeaderboard(), § LEADERBOARD, right
-         next to renderLb()'s own guard for why this tab is never painted from lbLastStats. -->
-    <div class="segs" style="margin-bottom:8px">
-      <button class="seg on" id="lbTabSolo">Solo</button>
-      <button class="seg" id="lbTabTeams">Teams</button>
-      <button class="seg" id="lbTabTotal">Total</button>
-      <button class="seg" id="lbTabMonthly">Monthly</button>
-      <button class="seg" id="lbTabKo">KOs</button>
+    <div class="modalHead">
+      <button id="btnLbX" class="overlayXBtn" aria-label="Close">✕</button>
+      <h3>Leaderboard</h3>
     </div>
-    <div id="lbBody"></div>
-    <p id="lbCaption" style="font-size:12.5px;color:#9ec7aa">Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a person - people only, CPUs never show up here.</p>
-    <div class="bigBtns"><button class="btn primary" id="btnLbClose">Close</button></div>
+    <div class="modalBody">
+      <!-- 2026-07-24 (Blake's item 9): 3rd tab, "KOs" - lifetime knockouts dealt/suffered, see
+           renderLbKo() below. Same .seg visual style as Solo/Teams, just one more button in the
+           same flex row - "KOs" kept deliberately short (not "Knockouts") so 3 tabs fit as
+           comfortably on a narrow phone as 2 did (see .seg's CSS, § STYLE).
+           v0.49: a 4th tab, "Total" - Solo+Teams combined, same points ranking the you card (§ MENU)
+           already shows. Sits BETWEEN Teams and KOs on purpose: it's still a points/wins/games tab
+           like Solo/Teams (just the combined view of the same two), while KOs is a genuinely
+           different, non-competitive "fun stat" pair that was always meant to read as its own last
+           category (see renderLbKo()'s own comment) - moving it earlier would blur that line. .segs
+           already wraps onto a 2nd row on its own (flex-wrap:wrap, § STYLE) if 4 buttons ever don't
+           fit one line on a narrow phone, so no new CSS was needed for the 4th button.
+           v0.51: a 5th tab, "Monthly" - wins/losses for the CURRENT CALENDAR MONTH only, a separate
+           mini ranking meant to re-engage people each month (starting August 2026), not another
+           slice of the lifetime record. Sits between Total and KOs for the same reason Total sits
+           between Teams and KOs above: it's a real ranking table (Player/Games/Wins/Losses/Points,
+           see renderLbMonthlyPaint()), so it belongs with the other ranking tabs rather than after
+           the "fun stat" KOs tab. Fed by a DIFFERENT endpoint (GET /leaderboard/monthly) than the
+           other four tabs - see loadMonthlyTab()/fetchMonthlyLeaderboard(), § LEADERBOARD, right
+           next to renderLb()'s own guard for why this tab is never painted from lbLastStats. -->
+      <div class="segs" style="margin-bottom:8px">
+        <button class="seg on" id="lbTabSolo">Solo</button>
+        <button class="seg" id="lbTabTeams">Teams</button>
+        <button class="seg" id="lbTabTotal">Total</button>
+        <button class="seg" id="lbTabMonthly">Monthly</button>
+        <button class="seg" id="lbTabKo">KOs</button>
+      </div>
+      <div id="lbBody"></div>
+      <p id="lbCaption" style="font-size:12.5px;color:#9ec7aa">Points per win: 1 for each Easy CPU you beat, 2 for Tricky, 3 for Nasty or a person - people only, CPUs never show up here.</p>
+      <div class="bigBtns"><button class="btn primary" id="btnLbClose">Close</button></div>
+    </div>
   </div>
 </div>
 
@@ -3518,11 +3632,15 @@ button{font:inherit;cursor:pointer}
        button that actually proves the "stays visible while scrolling" requirement - see
        test_shop_scroll.js. -->
   <div class="modalCard">
-    <button id="btnShopX" class="overlayXBtn" aria-label="Close">✕</button>
-    <h3>Shop</h3>
-    <div class="shopBalanceBox" id="shopBalanceBox"></div>
-    <div id="shopBody"></div>
-    <div class="bigBtns"><button class="btn primary" id="btnShopClose">Close</button></div>
+    <div class="modalHead">
+      <button id="btnShopX" class="overlayXBtn" aria-label="Close">✕</button>
+      <h3>Shop</h3>
+    </div>
+    <div class="modalBody">
+      <div class="shopBalanceBox" id="shopBalanceBox"></div>
+      <div id="shopBody"></div>
+      <div class="bigBtns"><button class="btn primary" id="btnShopClose">Close</button></div>
+    </div>
   </div>
 </div>
 
@@ -3530,23 +3648,27 @@ button{font:inherit;cursor:pointer}
   <!-- 2026-07-29 (v0.54): Bucket A - a plain Host/Join choice screen, already closeable via
        btnOnlineClose with zero side effects; X reuses that same click. -->
   <div class="modalCard">
-    <button id="btnOnlineX" class="overlayXBtn" aria-label="Close">✕</button>
-    <h3>Play online</h3>
-    <p>Host a game - you'll get a link to text around so everyone plays from their own phone - or join a game someone else started.</p>
-    <!-- 2026-07-29 (v0.56, NEW - Blake: "a countdown clock of when they'll need to buy the token
-         to access [...] on the board settings and the online popup"). This is the SECOND of the
-         two places that countdown shows (the Admin panel's #acctOnline is the first) - a quiet
-         always-current line, painted fresh every time this screen opens by paintOnlineOverlayNote()
-         (§ SHOP), never gated on "once per session" the way the caveat popup below is. Starts
-         empty/hidden - a signed-out or not-yet-known state simply shows nothing here rather than
-         guessing. -->
-    <div id="onlineAccessNote" class="onlineGateNote hidden"></div>
-    <div id="onlineErr" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
-    <div class="bigBtns">
-      <button class="btn primary" id="btnHostGame">Host a game</button>
-      <button class="btn ghost" id="btnJoinGame">Join a game</button>
+    <div class="modalHead">
+      <button id="btnOnlineX" class="overlayXBtn" aria-label="Close">✕</button>
+      <h3>Play online</h3>
     </div>
-    <div class="bigBtns"><button class="btn ghost" id="btnOnlineClose">Close</button></div>
+    <div class="modalBody">
+      <p>Host a game - you'll get a link to text around so everyone plays from their own phone - or join a game someone else started.</p>
+      <!-- 2026-07-29 (v0.56, NEW - Blake: "a countdown clock of when they'll need to buy the token
+           to access [...] on the board settings and the online popup"). This is the SECOND of the
+           two places that countdown shows (the Admin panel's #acctOnline is the first) - a quiet
+           always-current line, painted fresh every time this screen opens by paintOnlineOverlayNote()
+           (§ SHOP), never gated on "once per session" the way the caveat popup below is. Starts
+           empty/hidden - a signed-out or not-yet-known state simply shows nothing here rather than
+           guessing. -->
+      <div id="onlineAccessNote" class="onlineGateNote hidden"></div>
+      <div id="onlineErr" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
+      <div class="bigBtns">
+        <button class="btn primary" id="btnHostGame">Host a game</button>
+        <button class="btn ghost" id="btnJoinGame">Join a game</button>
+      </div>
+      <div class="bigBtns"><button class="btn ghost" id="btnOnlineClose">Close</button></div>
+    </div>
   </div>
 </div>
 
@@ -3560,11 +3682,12 @@ button{font:inherit;cursor:pointer}
      exact "comfortable" definition) - this is a heads-up, not a nag, and it never blocks or delays
      the actual game start beyond the one round trip to check status. -->
 <div id="onlineCaveatOverlay" class="overlay hidden">
-  <!-- Bucket A - purely informational, nothing to confirm. X does exactly what "Got it" does
-       (proceeds into the game) - dismissing this must never cancel starting the online game,
-       it only ever skips ahead past the one-time notice. -->
+  <!-- Bucket A - purely informational, nothing to confirm.
+       2026-07-31 (v0.60, item 1b): the X is REMOVED - "Got it, let's play" is the only button on
+       this card and it already does exactly what an X would (proceeds into the game, never
+       cancels it) - a second corner button clicking the same one thing was a decoy, not a real
+       second option, so per this pass's 12/7 split (see OVERLAY_X_WIRING's own comment) it's gone. -->
   <div class="confirmCard">
-    <button id="btnOnlineCaveatX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b>BEFORE YOU PLAY</b></div>
     <p id="onlineCaveatText"></p>
     <div class="bigBtns"><button class="btn primary" id="btnOnlineCaveatOk">Got it, let's play</button></div>
@@ -3579,10 +3702,11 @@ button{font:inherit;cursor:pointer}
      opens, so the player is safely back on the menu underneath it - this overlay only ever adds an
      explanation and a next step, never a second cleanup path. -->
 <div id="onlineAccessBlockedOverlay" class="overlay hidden">
-  <!-- Bucket A - X reuses btnOnlineBlockedOk's own click, the plain "I've seen this" dismissal -
-       there is no destructive action anywhere on this card. -->
+  <!-- Bucket A.
+       2026-07-31 (v0.60, item 1b): the X is REMOVED - "OK" is the plain "I've seen this"
+       dismissal already sitting right on this card, so a corner X would only ever click that
+       same button a second way. See OVERLAY_X_WIRING's own comment for the full 12/7 reasoning. -->
   <div class="confirmCard">
-    <button id="btnOnlineBlockedX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b>CAN'T START THAT GAME</b></div>
     <p id="onlineBlockedText"></p>
     <div class="bigBtns">
@@ -3594,28 +3718,33 @@ button{font:inherit;cursor:pointer}
 
 <!-- Host: room created, waiting for guests -->
 <div id="roomOverlay" class="overlay hidden">
-  <!-- 2026-07-29 (v0.54): Bucket A - X reuses btnRoomCancel's own click (leaveOnlineToMenu()),
-       the exact same cleanup the existing Cancel button already does (closes the socket, clears
-       online state, lands on the menu) - never a new/parallel exit path. -->
+  <!-- 2026-07-29 (v0.54): Bucket A.
+       2026-07-31 (v0.60, item 1b): the X is REMOVED - Cancel (leaveOnlineToMenu()) already does
+       everything an X would (closes the socket, clears online state, lands on the menu), so a
+       corner X clicking that same button was a decoy, not a second option. See
+       OVERLAY_X_WIRING's own comment for the full 12/7 reasoning. -->
   <div class="modalCard">
-    <button id="btnRoomX" class="overlayXBtn" aria-label="Close">✕</button>
-    <h3>Your room is open!</h3>
-    <p>Tell everyone this code, or just text them the link - it fills in the code for them.</p>
-    <div style="text-align:center;margin:14px 0">
-      <div id="roomCode" style="font-family:'Arial Black',sans-serif;font-size:44px;letter-spacing:.16em;
-        color:var(--gold);background:rgba(0,0,0,.3);border-radius:14px;padding:10px 0">----</div>
+    <div class="modalHead">
+      <h3>Your room is open!</h3>
     </div>
-    <div class="bigBtns"><button class="btn primary" id="btnRoomText">Text an invite</button></div>
-    <h4>Seats</h4>
-    <!-- 2026-07-24 (Blake's item 14): plain-language mode line + (Teams only) a live partner
-         pairing note - see lobbyModeText()/lobbyPairingText(), § NET, and renderRoomScreen(). -->
-    <div id="roomModeNote" style="font-size:13px;color:#cfe8d6;margin:2px 2px 4px"></div>
-    <div id="roomTeamNote" style="font-size:13px;color:#ffe9a8;margin:0 2px 8px;min-height:16px"></div>
-    <div id="roomSeatList"></div>
-    <div id="roomNote" style="font-size:13px;color:#ffe9a8;min-height:18px;margin-top:6px"></div>
-    <div class="bigBtns">
-      <button class="btn primary" id="btnRoomStart">Start game</button>
-      <button class="btn ghost" id="btnRoomCancel">Cancel</button>
+    <div class="modalBody">
+      <p>Tell everyone this code, or just text them the link - it fills in the code for them.</p>
+      <div style="text-align:center;margin:14px 0">
+        <div id="roomCode" style="font-family:'Arial Black',sans-serif;font-size:44px;letter-spacing:.16em;
+          color:var(--gold);background:rgba(0,0,0,.3);border-radius:14px;padding:10px 0">----</div>
+      </div>
+      <div class="bigBtns"><button class="btn primary" id="btnRoomText">Text an invite</button></div>
+      <h4>Seats</h4>
+      <!-- 2026-07-24 (Blake's item 14): plain-language mode line + (Teams only) a live partner
+           pairing note - see lobbyModeText()/lobbyPairingText(), § NET, and renderRoomScreen(). -->
+      <div id="roomModeNote" style="font-size:13px;color:#cfe8d6;margin:2px 2px 4px"></div>
+      <div id="roomTeamNote" style="font-size:13px;color:#ffe9a8;margin:0 2px 8px;min-height:16px"></div>
+      <div id="roomSeatList"></div>
+      <div id="roomNote" style="font-size:13px;color:#ffe9a8;min-height:18px;margin-top:6px"></div>
+      <div class="bigBtns">
+        <button class="btn primary" id="btnRoomStart">Start game</button>
+        <button class="btn ghost" id="btnRoomCancel">Cancel</button>
+      </div>
     </div>
   </div>
 </div>
@@ -3629,31 +3758,35 @@ button{font:inherit;cursor:pointer}
        done with this, put me on the menu" on EVERY step of this overlay (code entry or seat
        picked) - see that handler's own v0.37 comment for why it was hardened this way. -->
   <div class="modalCard">
-    <button id="btnJoinX" class="overlayXBtn" aria-label="Close">✕</button>
-    <h3>Join a game</h3>
-    <div id="joinCodeStep">
-      <p>Enter the 4-letter room code your host sent you.</p>
-      <p style="font-size:13px;color:#9ec7aa">Had a game going? Enter its 4-letter code - if your seat's still open, you'll be back in.</p>
-      <div class="optRow"><label>Room code</label>
-        <input id="joinCodeInput" maxlength="4" style="text-transform:uppercase;font-size:20px;letter-spacing:.14em;
-          width:110px;text-align:center;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.2);
-          border-radius:8px;color:var(--cream);padding:8px"></div>
-      <div class="bigBtns"><button class="btn primary" id="btnJoinCodeNext">Continue</button></div>
+    <div class="modalHead">
+      <button id="btnJoinX" class="overlayXBtn" aria-label="Close">✕</button>
+      <h3>Join a game</h3>
     </div>
-    <div id="joinSeatStep" class="hidden">
-      <p>Pick an open seat.</p>
-      <!-- 2026-07-24 (Blake's item 14): same mode line + partner pairing note as the host's
-           room screen - see renderJoinSeatStep(). -->
-      <div id="joinModeNote" style="font-size:13px;color:#cfe8d6;margin:2px 2px 4px"></div>
-      <div id="joinTeamNote" style="font-size:13px;color:#ffe9a8;margin:0 2px 8px;min-height:16px"></div>
-      <div id="joinSeatList"></div>
-      <div id="joinNote" style="font-size:13px;color:#ffe9a8;min-height:34px;margin-top:6px"></div>
-      <!-- v0.25 item 1: readiness lives right here on the seat screen now - no separate
-           "everyone ready?" page. Shown once a seat is claimed; tapping it locks the seat in. -->
-      <div class="bigBtns"><button class="btn primary hidden" id="btnJoinReady">Ready up</button></div>
+    <div class="modalBody">
+      <div id="joinCodeStep">
+        <p>Enter the 4-letter room code your host sent you.</p>
+        <p style="font-size:13px;color:#9ec7aa">Had a game going? Enter its 4-letter code - if your seat's still open, you'll be back in.</p>
+        <div class="optRow"><label>Room code</label>
+          <input id="joinCodeInput" maxlength="4" style="text-transform:uppercase;font-size:20px;letter-spacing:.14em;
+            width:110px;text-align:center;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.2);
+            border-radius:8px;color:var(--cream);padding:8px"></div>
+        <div class="bigBtns"><button class="btn primary" id="btnJoinCodeNext">Continue</button></div>
+      </div>
+      <div id="joinSeatStep" class="hidden">
+        <p>Pick an open seat.</p>
+        <!-- 2026-07-24 (Blake's item 14): same mode line + partner pairing note as the host's
+             room screen - see renderJoinSeatStep(). -->
+        <div id="joinModeNote" style="font-size:13px;color:#cfe8d6;margin:2px 2px 4px"></div>
+        <div id="joinTeamNote" style="font-size:13px;color:#ffe9a8;margin:0 2px 8px;min-height:16px"></div>
+        <div id="joinSeatList"></div>
+        <div id="joinNote" style="font-size:13px;color:#ffe9a8;min-height:34px;margin-top:6px"></div>
+        <!-- v0.25 item 1: readiness lives right here on the seat screen now - no separate
+             "everyone ready?" page. Shown once a seat is claimed; tapping it locks the seat in. -->
+        <div class="bigBtns"><button class="btn primary hidden" id="btnJoinReady">Ready up</button></div>
+      </div>
+      <div id="joinErr" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
+      <div class="bigBtns"><button class="btn ghost" id="btnJoinClose">Cancel</button></div>
     </div>
-    <div id="joinErr" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
-    <div class="bigBtns"><button class="btn ghost" id="btnJoinClose">Cancel</button></div>
   </div>
 </div>
 
@@ -3674,23 +3807,28 @@ button{font:inherit;cursor:pointer}
      game (bootGameFromSnapshot() never shows it). See maybeShowOnlineRules(), § NET. -->
 <div id="onlineRulesOverlay" class="overlay hidden">
   <!-- 2026-07-29 (v0.54): Bucket A - a one-time informational tutorial with a single
-       acknowledgment button; X reuses btnOnlineRulesOk's own click (same continuation - hands
-       the join/room screen back, maybeSendSeated(), maybeRequestPushPermission() - identical to
-       tapping "Got it", never a shortcut around it). -->
+       acknowledgment button.
+       2026-07-31 (v0.60, item 1b): the X is REMOVED - "Got it, let's play" already does exactly
+       what an X would (hands the join/room screen back, maybeSendSeated(),
+       maybeRequestPushPermission()), so a corner X clicking that same button was a decoy. See
+       OVERLAY_X_WIRING's own comment for the full 12/7 reasoning. -->
   <div class="modalCard">
-    <button id="btnOnlineRulesX" class="overlayXBtn" aria-label="Close">✕</button>
-    <h3>Online games work a little differently</h3>
-    <ul style="text-align:left;font-size:14.5px;line-height:1.6;padding-left:22px;margin:12px 0">
-      <li>No Skip button - everyone watches the same game at the same speed.</li>
-      <li>The host picks the game speed for the table.</li>
-      <li>Anyone can pause for everyone.</li>
-      <li>You can switch apps anytime. The game keeps going and catches you up when you return. If your board ever looks stuck, close and reopen the app.</li>
-      <!-- 2026-07-26 (v0.36 item 4): the rules panel is the only place the app explains the
-           plaque colours, so it has to describe BOTH of them now, not just the red one. -->
-      <li>Everyone else's name plate has a soft green glow while they are connected. If a name turns red, that person has dropped off. The game keeps going and they catch up when they come back.</li>
-      <li>Need to leave for good? Hand your seat to a CPU (under Pause).</li>
-    </ul>
-    <div class="bigBtns"><button class="btn primary" id="btnOnlineRulesOk">Got it, let's play</button></div>
+    <div class="modalHead">
+      <h3>Online games work a little differently</h3>
+    </div>
+    <div class="modalBody">
+      <ul style="text-align:left;font-size:14.5px;line-height:1.6;padding-left:22px;margin:12px 0">
+        <li>No Skip button - everyone watches the same game at the same speed.</li>
+        <li>The host picks the game speed for the table.</li>
+        <li>Anyone can pause for everyone.</li>
+        <li>You can switch apps anytime. The game keeps going and catches you up when you return. If your board ever looks stuck, close and reopen the app.</li>
+        <!-- 2026-07-26 (v0.36 item 4): the rules panel is the only place the app explains the
+             plaque colours, so it has to describe BOTH of them now, not just the red one. -->
+        <li>Everyone else's name plate has a soft green glow while they are connected. If a name turns red, that person has dropped off. The game keeps going and they catch up when they come back.</li>
+        <li>Need to leave for good? Hand your seat to a CPU (under Pause).</li>
+      </ul>
+      <div class="bigBtns"><button class="btn primary" id="btnOnlineRulesOk">Got it, let's play</button></div>
+    </div>
   </div>
 </div>
 
@@ -3708,23 +3846,28 @@ button{font:inherit;cursor:pointer}
      the deal - see startGame()'s comment. -->
 <div id="offlineSeatOverlay" class="overlay hidden">
   <!-- 2026-07-29 (v0.54): Bucket A - this is a step in starting a NEW offline game, nothing has
-       happened yet (no network, no deal) - X reuses btnOfflineSeatCancel's own click
-       (closeOverlay('offlineSeatOverlay')), backing out to the setup screen exactly like Cancel
-       already does. NOT the same category as the nickname gate/speed picker below (§ NEXT) -
-       this one already has a safe way out. -->
+       happened yet (no network, no deal); Cancel already backs out to the setup screen safely.
+       2026-07-31 (v0.60, item 1b): the X is REMOVED - Cancel (closeOverlay('offlineSeatOverlay'))
+       already does everything an X would, so a corner X clicking that same button was a decoy.
+       See OVERLAY_X_WIRING's own comment for the full 12/7 reasoning. NOT the same category as
+       the nickname gate/speed picker below (§ NEXT) - this one already has a safe way out, it
+       just no longer duplicates it in the corner too. -->
   <div class="modalCard">
-    <button id="btnOfflineSeatX" class="overlayXBtn" aria-label="Close">✕</button>
-    <h3>Pick your seat</h3>
-    <!-- 2026-07-27 (v0.44, Blake: "you still have them there to decide the CPU difficulty. This
-         should be done where you select your player, and pick the difficulty for each CPU right
-         then and there.") - so this sentence now says both things this screen does. -->
-    <p>Everyone else at the table plays as a CPU - tap a color to sit there, and set each CPU's difficulty right here.</p>
-    <div id="offlineSeatModeNote" style="font-size:13px;color:#cfe8d6;margin:2px 2px 4px"></div>
-    <div id="offlineSeatTeamNote" style="font-size:13px;color:#ffe9a8;margin:0 2px 8px;min-height:16px"></div>
-    <div id="offlineSeatList"></div>
-    <div class="bigBtns">
-      <button class="btn primary" id="btnOfflineSeatStart">Start game</button>
-      <button class="btn ghost" id="btnOfflineSeatCancel">Cancel</button>
+    <div class="modalHead">
+      <h3>Pick your seat</h3>
+    </div>
+    <div class="modalBody">
+      <!-- 2026-07-27 (v0.44, Blake: "you still have them there to decide the CPU difficulty. This
+           should be done where you select your player, and pick the difficulty for each CPU right
+           then and there.") - so this sentence now says both things this screen does. -->
+      <p>Everyone else at the table plays as a CPU - tap a color to sit there, and set each CPU's difficulty right here.</p>
+      <div id="offlineSeatModeNote" style="font-size:13px;color:#cfe8d6;margin:2px 2px 4px"></div>
+      <div id="offlineSeatTeamNote" style="font-size:13px;color:#ffe9a8;margin:0 2px 8px;min-height:16px"></div>
+      <div id="offlineSeatList"></div>
+      <div class="bigBtns">
+        <button class="btn primary" id="btnOfflineSeatStart">Start game</button>
+        <button class="btn ghost" id="btnOfflineSeatCancel">Cancel</button>
+      </div>
     </div>
   </div>
 </div>
@@ -3742,14 +3885,18 @@ button{font:inherit;cursor:pointer}
      other affordance anywhere on it that closes it. -->
 <div id="nicknameGateOverlay" class="overlay solid hidden">
   <div class="modalCard">
-    <h3>Pick your leaderboard name</h3>
-    <p>This is the name everyone will see for you - on the table and on the leaderboard. You can change it later (Admin -&gt; Change your name), up to once every 30 days.</p>
-    <div class="optRow"><label>Your name</label>
-      <input id="nickGateInput" maxlength="10" aria-label="Your name" autocomplete="off" autocapitalize="words"
-        style="font-size:16px;width:160px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.2);
-        border-radius:8px;color:var(--cream);padding:8px"></div>
-    <div id="nickGateWarn" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
-    <div class="bigBtns"><button class="btn primary" id="btnNickGateSave">Save and play</button></div>
+    <div class="modalHead">
+      <h3>Pick your leaderboard name</h3>
+    </div>
+    <div class="modalBody">
+      <p>This is the name everyone will see for you - on the table and on the leaderboard. You can change it later (Admin -&gt; Change your name), up to once every 30 days.</p>
+      <div class="optRow"><label>Your name</label>
+        <input id="nickGateInput" maxlength="10" aria-label="Your name" autocomplete="off" autocapitalize="words"
+          style="font-size:16px;width:160px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.2);
+          border-radius:8px;color:var(--cream);padding:8px"></div>
+      <div id="nickGateWarn" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
+      <div class="bigBtns"><button class="btn primary" id="btnNickGateSave">Save and play</button></div>
+    </div>
   </div>
 </div>
 
@@ -3764,16 +3911,20 @@ button{font:inherit;cursor:pointer}
      tiles is tapped) - Bucket B, same as the nickname gate. NO X, NO Escape-to-close added. -->
 <div id="speedPickerOverlay" class="overlay hidden">
   <div class="modalCard">
-    <h3>How fast should the game play?</h3>
-    <p>Pick a pace for moves and animations. You can change it anytime during the game - tap ADMIN in the top corner, then Table speed.</p>
-    <!-- 2026-07-25 (item N of the UI polish batch): this is now the same 2x2 grid the host
-         speed picker uses (#speedPickerBtns shares #hostSpeedBtns' rule, § STYLE) instead of a
-         .bigBtns flex-wrap pile that came out four different widths. The four tiles' labels and
-         subtitles are no longer hardcoded here either - they are built from SPEED_OPTS (§ UTIL),
-         the exact same source the host picker reads, so the app can never again ask the same
-         question twice with different wording. The four btnSpeedPick<i> ids are unchanged and
-         still bound by index, same as v0.19. -->
-    <div class="bigBtns" id="speedPickerBtns"></div>
+    <div class="modalHead">
+      <h3>How fast should the game play?</h3>
+    </div>
+    <div class="modalBody">
+      <p>Pick a pace for moves and animations. You can change it anytime during the game - tap ADMIN in the top corner, then Table speed.</p>
+      <!-- 2026-07-25 (item N of the UI polish batch): this is now the same 2x2 grid the host
+           speed picker uses (#speedPickerBtns shares #hostSpeedBtns' rule, § STYLE) instead of a
+           .bigBtns flex-wrap pile that came out four different widths. The four tiles' labels and
+           subtitles are no longer hardcoded here either - they are built from SPEED_OPTS (§ UTIL),
+           the exact same source the host picker reads, so the app can never again ask the same
+           question twice with different wording. The four btnSpeedPick<i> ids are unchanged and
+           still bound by index, same as v0.19. -->
+      <div class="bigBtns" id="speedPickerBtns"></div>
+    </div>
   </div>
 </div>
 
@@ -3786,30 +3937,36 @@ button{font:inherit;cursor:pointer}
   <!-- 2026-07-29 (v0.54): Bucket A, NOT the same category as the speed picker above - this one
        already has a real Cancel (btnHostSpeedCancel) and no online room exists yet at this point
        (host picks speed BEFORE the room is created, per this comment's own opening line), so
-       backing out has zero side effects. X reuses that same click. -->
+       backing out has zero side effects.
+       2026-07-31 (v0.60, item 1b): the X is REMOVED - Cancel already covers this with zero side
+       effects, so a corner X clicking that same button was a decoy. See OVERLAY_X_WIRING's own
+       comment for the full 12/7 reasoning. -->
   <div class="modalCard">
-    <button id="btnHostSpeedX" class="overlayXBtn" aria-label="Close">✕</button>
-    <h3>Set up your online game</h3>
-    <!-- 2026-07-24 (Blake's item 14): "can you set it up so I can choose to play a team game
-         online as well?" - Players + Game type were already fully wired end to end (the SAME
-         CFG.n/CFG.teams the offline setup screen uses, already sent in the 'host' message,
-         already paired server-side) - the real gap was that choosing them was invisible and
-         easy to lose track of on the way to hosting an online game. This screen (shown right
-         before the room is created - the one screen every host flow already passes through)
-         now shows and lets you change both, live partner-pairing preview included, so the
-         choice is obvious and can never be accidentally stale. See renderHostSetup(), § MENU. -->
-    <div class="optRow"><label>Players</label>
-      <div class="segs"><button class="seg" id="hostP4">4 players</button><button class="seg" id="hostP6">6 players</button></div>
+    <div class="modalHead">
+      <h3>Set up your online game</h3>
     </div>
-    <div class="optRow"><label>Game type</label>
-      <!-- 2026-07-26 (v0.36 item 6): the host's own setup reads the same as the offline one. -->
-      <div class="segs"><button class="seg" id="hostFFA">Free-for-All</button><button class="seg" id="hostTeams">Teams</button></div>
+    <div class="modalBody">
+      <!-- 2026-07-24 (Blake's item 14): "can you set it up so I can choose to play a team game
+           online as well?" - Players + Game type were already fully wired end to end (the SAME
+           CFG.n/CFG.teams the offline setup screen uses, already sent in the 'host' message,
+           already paired server-side) - the real gap was that choosing them was invisible and
+           easy to lose track of on the way to hosting an online game. This screen (shown right
+           before the room is created - the one screen every host flow already passes through)
+           now shows and lets you change both, live partner-pairing preview included, so the
+           choice is obvious and can never be accidentally stale. See renderHostSetup(), § MENU. -->
+      <div class="optRow"><label>Players</label>
+        <div class="segs"><button class="seg" id="hostP4">4 players</button><button class="seg" id="hostP6">6 players</button></div>
+      </div>
+      <div class="optRow"><label>Game type</label>
+        <!-- 2026-07-26 (v0.36 item 6): the host's own setup reads the same as the offline one. -->
+        <div class="segs"><button class="seg" id="hostFFA">Free-for-All</button><button class="seg" id="hostTeams">Teams</button></div>
+      </div>
+      <div id="hostTeamNote" style="font-size:13px;color:#ffe9a8;margin:2px 2px 10px;min-height:18px"></div>
+      <h4 style="margin:14px 0 4px;color:var(--gold);font-size:15px">How fast should the table play?</h4>
+      <p>This sets the game speed for everyone at your table. You can change it anytime during the game - tap ADMIN in the top corner, then Table speed.</p>
+      <div class="bigBtns" id="hostSpeedBtns"></div>
+      <div class="bigBtns"><button class="btn ghost" id="btnHostSpeedCancel">Cancel</button></div>
     </div>
-    <div id="hostTeamNote" style="font-size:13px;color:#ffe9a8;margin:2px 2px 10px;min-height:18px"></div>
-    <h4 style="margin:14px 0 4px;color:var(--gold);font-size:15px">How fast should the table play?</h4>
-    <p>This sets the game speed for everyone at your table. You can change it anytime during the game - tap ADMIN in the top corner, then Table speed.</p>
-    <div class="bigBtns" id="hostSpeedBtns"></div>
-    <div class="bigBtns"><button class="btn ghost" id="btnHostSpeedCancel">Cancel</button></div>
   </div>
 </div>
 
@@ -3827,18 +3984,22 @@ button{font:inherit;cursor:pointer}
        deliberately NOT wired to btnReunionResume ("I'm ready"), which commits this player as
        present/ready and is the one choice on this screen that is not a plain "leave". -->
   <div class="modalCard">
-    <button id="btnReunionX" class="overlayXBtn" aria-label="Close">✕</button>
-    <h3>Getting the table back together</h3>
-    <p>Tap Ready up when you're at the table - play picks back up on its own once everyone connected is ready. Missing someone? Send them a rejoin link, or hand their seat to a CPU.</p>
-    <!-- 2026-07-24 (Blake's item 14): if this game is Teams, say so - a rejoin already
-         correctly restores the real team pairing (it's just part of the same saved game state
-         every reconnect already restores), this just makes that visible. -->
-    <div id="reunionTeamNote" style="font-size:13px;color:#cfe8d6;margin:2px 2px 8px;min-height:16px"></div>
-    <div id="reunionSeats"></div>
-    <div id="reunionNote" style="font-size:13px;color:#ffe9a8;min-height:18px;margin-top:6px"></div>
-    <div class="bigBtns">
-      <button class="btn primary" id="btnReunionResume">I'm ready</button>
-      <button class="btn ghost" id="btnReunionClose">Keep waiting in background</button>
+    <div class="modalHead">
+      <button id="btnReunionX" class="overlayXBtn" aria-label="Close">✕</button>
+      <h3>Getting the table back together</h3>
+    </div>
+    <div class="modalBody">
+      <p>Tap Ready up when you're at the table - play picks back up on its own once everyone connected is ready. Missing someone? Send them a rejoin link, or hand their seat to a CPU.</p>
+      <!-- 2026-07-24 (Blake's item 14): if this game is Teams, say so - a rejoin already
+           correctly restores the real team pairing (it's just part of the same saved game state
+           every reconnect already restores), this just makes that visible. -->
+      <div id="reunionTeamNote" style="font-size:13px;color:#cfe8d6;margin:2px 2px 8px;min-height:16px"></div>
+      <div id="reunionSeats"></div>
+      <div id="reunionNote" style="font-size:13px;color:#ffe9a8;min-height:18px;margin-top:6px"></div>
+      <div class="bigBtns">
+        <button class="btn primary" id="btnReunionResume">I'm ready</button>
+        <button class="btn ghost" id="btnReunionClose">Keep waiting in background</button>
+      </div>
     </div>
   </div>
 </div>
@@ -3863,11 +4024,15 @@ button{font:inherit;cursor:pointer}
      it alone and flag it"), it is unchanged. -->
 <div id="reclaimReqOverlay" class="overlay hidden" style="z-index:90">
   <div class="modalCard">
-    <h3>Someone wants back in</h3>
-    <p id="reclaimReqText"></p>
-    <div class="bigBtns">
-      <button class="btn primary" id="btnReclaimApprove">Let them in</button>
-      <button class="btn ghost" id="btnReclaimDeny">No, keep their seat as is</button>
+    <div class="modalHead">
+      <h3>Someone wants back in</h3>
+    </div>
+    <div class="modalBody">
+      <p id="reclaimReqText"></p>
+      <div class="bigBtns">
+        <button class="btn primary" id="btnReclaimApprove">Let them in</button>
+        <button class="btn ghost" id="btnReclaimDeny">No, keep their seat as is</button>
+      </div>
     </div>
   </div>
 </div>
@@ -3889,20 +4054,31 @@ button{font:inherit;cursor:pointer}
 <div id="welcomeOverlay" class="overlay solid hidden">
   <!-- 2026-07-29 (v0.54): Bucket A - reached only while signed out and always has a genuine
        no-strings-attached way out already (chooseGuest(), "Continue as a guest" - drops the
-       pending online action for good, per that function's own comment). X reuses that exact
-       click - never the Sign in with Apple button. -->
+       pending online action for good, per that function's own comment).
+       2026-07-31 (v0.60, item 1b): the X is REMOVED - "Continue as a guest" already IS that exact
+       way out, so a corner X clicking it too was a decoy, never the Sign in with Apple button
+       either way. See OVERLAY_X_WIRING's own comment for the full 12/7 reasoning. -->
+  <!-- 2026-07-31 (v0.60): NO .modalHead here, unlike every other modalCard overlay - the sign
+       badge and h3 stack VERTICALLY as a decorative unit on this screen (see all the hand-tuned
+       badge/heading spacing comments below, § STYLE), not side-by-side like a title-plus-X row,
+       so the generic flex-ROW modalHead would lay them out wrong (and this overlay's X is REMOVED
+       anyway - item 1b, above - so there is no title-row to build in the first place). Everything
+       lives in ONE .modalBody instead, in the exact original order, with its own top padding
+       added back (see #welcomeOverlay .modalCard>.modalBody{padding-top} overrides, § STYLE) since
+       there is no .modalHead here to own it. -->
   <div class="modalCard">
-    <button id="btnWelcomeX" class="overlayXBtn" aria-label="Close">✕</button>
-    <div class="sign"><b>NASTY</b></div>
-    <h3 id="welcomeTitle">Sign in to play online</h3>
-    <p class="welcomeNote" id="welcomeNote">Online games need an account, so your wins, points and leaderboard spot are all yours. Sign in with Apple, or keep playing offline as a guest.</p>
-    <div class="welcomeBtns">
-      <button class="btn primary" id="btnWelcomeApple">Sign in with Apple</button>
-      <button class="btn ghost" id="btnWelcomeGuest">Continue as a guest</button>
+    <div class="modalBody">
+      <div class="sign"><b>NASTY</b></div>
+      <h3 id="welcomeTitle">Sign in to play online</h3>
+      <p class="welcomeNote" id="welcomeNote">Online games need an account, so your wins, points and leaderboard spot are all yours. Sign in with Apple, or keep playing offline as a guest.</p>
+      <div class="welcomeBtns">
+        <button class="btn primary" id="btnWelcomeApple">Sign in with Apple</button>
+        <button class="btn ghost" id="btnWelcomeGuest">Continue as a guest</button>
+      </div>
+      <p class="welcomeFine" id="welcomeAppleNote">New here? It creates your account. Been here before? It signs you back in.</p>
+      <p class="welcomeFine" id="welcomeWebNote">Signing in is coming soon on the website. In the iPhone app you can sign in with Apple.</p>
+      <p class="welcomeFine" id="welcomeAgeNote">Accounts are for ages 13 and up. Anyone younger should continue as a guest.</p>
     </div>
-    <p class="welcomeFine" id="welcomeAppleNote">New here? It creates your account. Been here before? It signs you back in.</p>
-    <p class="welcomeFine" id="welcomeWebNote">Signing in is coming soon on the website. In the iPhone app you can sign in with Apple.</p>
-    <p class="welcomeFine" id="welcomeAgeNote">Accounts are for ages 13 and up. Anyone younger should continue as a guest.</p>
   </div>
 </div>
 
@@ -3940,186 +4116,201 @@ button{font:inherit;cursor:pointer}
        is NOT the god-mode #adminOverlay (§ ADMIN, reached by tapping the version number 7 times),
        a completely separate developer-only tool that keeps its own name untouched either way. -->
   <div class="modalCard">
-    <button id="btnAcctX" class="overlayXBtn" aria-label="Close">✕</button>
-    <!-- 2026-07-26 (v0.36 item 2): the button that opens this panel says ADMIN, so the panel says
-         Admin too - a player who taps a button called ADMIN and lands on an untitled page has no
-         way to know they arrived. The coloured initial that used to be the top-bar circle is the
-         avatar right below it. Unchanged by v0.56 - see the #accountOverlay markup comment above. -->
-    <h3 id="acctTitle">Admin</h3>
-    <div class="acctHead">
-      <div class="acctAvatar" id="acctAvatar">?</div>
-      <div class="acctWho"><b id="acctWhoName">Player</b><small id="acctWhoSub">Playing on this phone</small></div>
+    <div class="modalHead">
+      <button id="btnAcctX" class="overlayXBtn" aria-label="Close">✕</button>
+      <!-- 2026-07-26 (v0.36 item 2): the button that opens this panel says ADMIN, so the panel says
+           Admin too - a player who taps a button called ADMIN and lands on an untitled page has no
+           way to know they arrived. The coloured initial that used to be the top-bar circle is the
+           avatar right below it. Unchanged by v0.56 - see the #accountOverlay markup comment above. -->
+      <h3 id="acctTitle">Admin</h3>
     </div>
-    <!-- 2026-07-28 (v0.50, Blake: "the admin page needs to show points earned and points
-         remaining (points earned will always show on leaderboard, and won't diminish as they
-         spend - that's just for them to know)"). Hidden entirely for a guest - there is no wallet
-         to show. Filled in (and re-fetched) by refreshAcctWallet(), § SHOP, called from
-         openAccountPanel() every time this panel opens - never hand-edited past this shell. -->
-    <!-- 2026-07-30 (v0.59, Blake's decision): the word is CREDITS everywhere money-like numbers
-         are shown - "points" stays ONLY for leaderboard standing, which measures earned game
-         performance and is a separate concept real money can never touch. The ids keep their
-         old Pts names on purpose (renaming ids buys nothing and risks breaking JS references).
-         The new bought row is hidden until the account has actually bought credits with real
-         money (Apple In-App Purchase, iPhone app only) - see paintAcctWalletNumbers(), § SHOP. -->
-    <div class="acctWallet hidden" id="acctWallet">
-      <div class="acctWalletRow"><span>Credits earned</span><b id="acctPtsEarned">0</b></div>
-      <div class="acctWalletRow hidden" id="acctPtsBoughtRow"><span>Credits bought</span><b id="acctPtsBought">0</b></div>
-      <div class="acctWalletRow"><span>Credits remaining</span><b id="acctPtsRemaining">0</b></div>
-      <div class="acctWalletNote">Earned credits match your leaderboard points and never go down as you spend. Remaining is what's left to spend in the Shop.</div>
-    </div>
-    <!-- 2026-07-29 (v0.56, NEW - Blake: "add a greyed out section on the board settings [...]
-         that is a token you can buy to play online. Saying that it's free for the first full
-         calendar month but after that they either need to have earned enough credits to buy the
-         token."). Lives right under the points wallet (spending context) and directly adjacent to
-         "Personalizations" (#acctEquip, right below - the OTHER thing bought from the Shop) - never
-         hidden entirely, even for a guest, because a guest still needs to be told what unlocks this
-         (see the guest state below, which is why this box does NOT follow #acctWallet/#acctEquip's
-         own "hidden for guest" pattern). Filled in by refreshAcctOnline() (§ SHOP), called from
-         openAccountPanel() same as the other two boxes, and re-painted on a slow interval while
-         this panel stays open (see the setInterval right after buyOnlineAccess(), § SHOP) so a
-         countdown never goes stale while the app just sits here. Six honest states, all
-         server-driven, none guessed - see refreshAcctOnline()'s own header comment for the full
-         list and HANDOFF.md "v0.56" for the whole feature. -->
-    <div class="acctOnline" id="acctOnline">
-      <div class="acctOnlineHead">Online Access</div>
-      <div id="acctOnlineBody"></div>
-    </div>
-    <!-- 2026-07-28 (v0.51, Blake: "add a section to the admin panel for people to switch between
-         board settings that they got from the shop"). Equipping used to only be reachable from
-         inside the Shop itself - this is a second door onto the exact same EQUIP/equipToggle()
-         mechanism (§ SHOP), not a second implementation. Hidden entirely for a guest (there is
-         nothing owned to switch between). Filled in by refreshAcctEquip(), § SHOP, called from
-         openAccountPanel() every time this panel opens, same as #acctWallet above.
-         2026-07-29 (v0.53, Blake: "don't have the shop stuff auto open in the admin page... make
-         it something they have to click and then it opens - otherwise it dominates the admin
-         page"). This used to render the full catalog body open every time. It is now a real
-         <button> (keyboard-operable for free, no custom key handling needed) that toggles
-         #acctEquipBody's `hidden` class and its own aria-expanded - nothing else on the page reacts
-         to it, so it can never trap focus. refreshAcctEquip() (§ SHOP) forces it back to collapsed
-         at the TOP of every call - and it is called every single time this panel opens
-         (openAccountPanel()) - so collapsed is the only state a fresh opening of this panel can
-         ever show, exactly matching Blake's ask that it never remember being left open.
-         2026-07-29 (v0.56, Blake: "[the board settings section] should be changed to
-         personalizations"): heading text changed from "Your board settings" to "Personalizations" -
-         this is the ONE thing that rename actually meant (this narrower section - palettes/felts/
-         titles specifically), NOT the panel itself or the button that opens it, both of which stay
-         "Admin" (see the #accountOverlay markup comment above for the corrected story and
-         HANDOFF.md "v0.56").
-         2026-07-30 (v0.59, Blake verbatim: "Change personalization's to 'Shop Customizations' and
-         make sure that within the customizations tab you also have the ability for people to buy
-         nickname changes (that take place right away - even mid game) and online access/tokens. I
-         only see these in the shop button from the menu."): renamed again per that ask, and
-         refreshAcctEquip() (§ SHOP) now renders the two consumable tokens as REAL buyable rows at
-         the top of this section's body - the same catItemRow() rows the Shop itself uses (same
-         confirm step, same can't-afford handling, same real-money branch on iPhone), never a
-         second implementation. The "right away - even mid game" half is § LIVE RENAME (server
-         playerRenamed broadcast + this file's handleNetMessage case + applyLocalRenameNow()). -->
-    <div class="acctEquip hidden" id="acctEquip">
-      <button type="button" class="btn ghost acctRow acctEquipToggle" id="acctEquipToggleBtn"
-        aria-expanded="false" aria-controls="acctEquipBody">
-        <span class="acctEquipHead">Shop Customizations</span>
-        <span class="acctEquipChevron" aria-hidden="true">&#9662;</span>
-      </button>
-      <div id="acctEquipBody" class="hidden"></div>
-    </div>
-    <!-- 2026-07-26 (v0.36 item 3): THE ONE-TIME NAME CLAIM. Hidden unless the server says the
-         window is open AND there really is history sitting under this account's name. Blake:
-         "only allowed to do this once and claim 1 name - no going back." Two steps: the offer,
-         then a confirm that says it cannot be undone in exactly those words. Written by
-         renderAccountClaim(), § ACCOUNT SIGN-IN - nothing here is ever shown by markup alone.
-         Nothing is deleted either way: names nobody claims stay on the board as history, and
-         the copy says so rather than leaving anyone guessing.
-         WHY IT IS UP HERE, above the settings rows: the window is open for days, not forever,
-         and measured at 390x844 the panel already scrolls - put at the bottom this landed below
-         the fold, which for a time-limited offer is the same as not offering it. -->
-    <div class="acctClaim hidden" id="acctClaim">
-      <b id="acctClaimTitle">Is this you?</b>
-      <p id="acctClaimText"></p>
-      <p id="acctClaimWarn" class="hidden">This cannot be undone. You can only do this once, for one name, and the offer goes away for good afterwards.</p>
-      <div class="acctClaimBtns" id="acctClaimOffer">
-        <button class="btn primary" id="btnAcctClaimYes">Yes, that is me</button>
-        <button class="btn ghost" id="btnAcctClaimNo">No, start fresh</button>
+    <div class="modalBody">
+      <div class="acctHead">
+        <div class="acctAvatar" id="acctAvatar">?</div>
+        <div class="acctWho"><b id="acctWhoName">Player</b><small id="acctWhoSub">Playing on this phone</small></div>
       </div>
-      <div class="acctClaimBtns hidden" id="acctClaimConfirm">
-        <button class="btn danger" id="btnAcctClaimSure">Yes, move it</button>
-        <button class="btn ghost" id="btnAcctClaimBack">Go back</button>
+      <!-- 2026-07-28 (v0.50, Blake: "the admin page needs to show points earned and points
+           remaining (points earned will always show on leaderboard, and won't diminish as they
+           spend - that's just for them to know)"). Hidden entirely for a guest - there is no wallet
+           to show. Filled in (and re-fetched) by refreshAcctWallet(), § SHOP, called from
+           openAccountPanel() every time this panel opens - never hand-edited past this shell. -->
+      <!-- 2026-07-30 (v0.59, Blake's decision): the word is CREDITS everywhere money-like numbers
+           are shown - "points" stays ONLY for leaderboard standing, which measures earned game
+           performance and is a separate concept real money can never touch. The ids keep their
+           old Pts names on purpose (renaming ids buys nothing and risks breaking JS references).
+           The new bought row is hidden until the account has actually bought credits with real
+           money (Apple In-App Purchase, iPhone app only) - see paintAcctWalletNumbers(), § SHOP. -->
+      <div class="acctWallet hidden" id="acctWallet">
+        <div class="acctWalletRow"><span>Credits earned</span><b id="acctPtsEarned">0</b></div>
+        <div class="acctWalletRow hidden" id="acctPtsBoughtRow"><span>Credits bought</span><b id="acctPtsBought">0</b></div>
+        <div class="acctWalletRow"><span>Credits remaining</span><b id="acctPtsRemaining">0</b></div>
+        <div class="acctWalletNote">Earned credits match your leaderboard points and never go down as you spend. Remaining is what's left to spend in the Shop.</div>
       </div>
-    </div>
-    <div class="acctRows">
-      <button class="btn ghost acctRow" id="btnAcctRules">How to play</button>
-      <button class="btn ghost acctRow" id="btnAcctSound">Sound: on</button>
-      <!-- 2026-07-25 (Blake's top-row feedback): SPEED left the top bar and landed here, next to
-           Sound, because it is the same kind of thing - a setting for this phone, not an action
-           in the game. Behaviour is character-for-character the old top-bar button's: tap to
-           step to the next speed, and in an ONLINE game only the host may change the table
-           speed. Everyone else sees that written on the row itself (a toast would be invisible
-           behind this full-screen panel) and the row is disabled for them. See
-           $('btnAcctSpeed') and speedRowLabel(), § MENU. -->
-      <button class="btn ghost acctRow" id="btnAcctSpeed">Table speed: Normal</button>
-      <!-- 2026-07-27 (v0.42): a GUEST has no name to change anymore - guests never had a
-           persistent nickname to begin with (only their seat's stock name, which they can't set)
-           - so this row is disabled for them with the <small> line saying why, instead of opening
-           an editor that would have nothing real to save. See renderAccountRows(). v0.45: the
-           who-name this panel shows above now reads the literal word "Guest" for them
-           (chosenName(), § ACCOUNT) rather than a stock name - see that function's header
-           comment. -->
-      <button class="btn ghost acctRow" id="btnAcctName">Change your name<small></small></button>
-      <button class="btn ghost acctRow hidden" id="btnAcctReset">Fix my connection<small>Reconnects this phone to the online game</small></button>
-      <!-- 2026-07-25 (the top-row rebuild): once the game is OVER the top row's left slot shows
-           RESULTS, so the way back to the menu lives here (and on the win popup's own "Back to
-           menu" button). Hidden during play - there is a whole PAUSED screen for leaving a game
-           that is still going, with the right warnings on it. -->
-      <button class="btn ghost acctRow hidden" id="btnAcctMenu">Back to the menu<small>This game is finished - nothing left to lose</small></button>
-    </div>
-    <div class="acctNameEdit hidden" id="acctNameEdit">
-      <input id="acctNameInput" maxlength="10" aria-label="Your name" autocomplete="off" autocapitalize="words">
-      <!-- 2026-07-28 (v0.51, Blake: "make the name change token easier to understand - and make
-           it something that's obvious I need to redeem when clicking the change nickname button
-           ... I don't see anything about it there"). Filled in by refreshNameCreditInfo(), § SHOP,
-           the INSTANT this box opens (openAccountNameEdit()) - not just after a cooldown blocks a
-           rename, which is where this info used to be hidden until v0.51. Always states the plain
-           30-day rule truthfully; adds the held-token count only when the account actually has
-           one or more. -->
-      <div class="acctNameCreditNote hidden" id="acctNameCreditNote"></div>
-      <div class="acctWarn" id="acctNameWarn"></div>
-      <!-- 2026-07-30 (v0.59, Blake's item 6, verbatim: "you currently have 3 buttons for nickname
-           change (cancel, change name, and redeem token). Get rid of the token button and just
-           have the first 2"). The v0.50/v0.51 always-visible redeem button (#btnAcctNameUseCredit)
-           is DELETED, not hidden - the whole flow now runs off the ONE "Change name" button, with
-           every branch (the free-change heads-up, the explicit token-redeem confirmation, the
-           buy-a-token offer when none is held) staged into #acctNameConfirm below, each needing
-           an explicit accept - see $('btnAcctNameSave').onclick and its helpers, § SHOP area. -->
-      <div class="acctNameConfirm hidden" id="acctNameConfirm"></div>
-      <div class="acctNameBtns">
-        <button class="btn primary" id="btnAcctNameSave">Change name</button>
-        <button class="btn ghost" id="btnAcctNameCancel">Cancel</button>
+      <!-- 2026-07-29 (v0.56, NEW - Blake: "add a greyed out section on the board settings [...]
+           that is a token you can buy to play online. Saying that it's free for the first full
+           calendar month but after that they either need to have earned enough credits to buy the
+           token."). Lives right under the points wallet (spending context) and directly adjacent to
+           "Personalizations" (#acctEquip, right below - the OTHER thing bought from the Shop) - never
+           hidden entirely, even for a guest, because a guest still needs to be told what unlocks this
+           (see the guest state below, which is why this box does NOT follow #acctWallet/#acctEquip's
+           own "hidden for guest" pattern). Filled in by refreshAcctOnline() (§ SHOP), called from
+           openAccountPanel() same as the other two boxes, and re-painted on a slow interval while
+           this panel stays open (see the setInterval right after buyOnlineAccess(), § SHOP) so a
+           countdown never goes stale while the app just sits here. Six honest states, all
+           server-driven, none guessed - see refreshAcctOnline()'s own header comment for the full
+           list and HANDOFF.md "v0.56" for the whole feature. -->
+      <div class="acctOnline" id="acctOnline">
+        <div class="acctOnlineHead">Online Access</div>
+        <div id="acctOnlineBody"></div>
       </div>
-    </div>
-    <div class="acctSoon">
-      <button class="btn ghost acctRow" id="btnAcctSignIn" disabled>Sign in</button>
-      <button class="btn ghost acctRow" id="btnAcctSignOut" disabled>Sign out</button>
-      <button class="btn ghost acctRow" id="btnAcctDelete" disabled>Delete account</button>
-      <!-- Deleting is the only thing in this panel that cannot be undone, so it asks first, and
-           it asks INSIDE this panel rather than as a second full-screen page. The tick box is
-           what makes privacy.html's promise true: the account always goes; the row on the family
-           board goes too only if you say so. -->
-      <div class="acctConfirm hidden" id="acctDelConfirm">
-        <p id="acctDelText">Delete your account? Your Apple sign-in and every signed-in session go straight away, and this cannot be undone. You can keep playing without an account.</p>
-        <label><input type="checkbox" id="acctDelBoard"><span>Also take my name off the leaderboard</span></label>
-        <div class="acctConfirmBtns">
-          <button class="btn danger" id="btnAcctDelYes">Delete account</button>
-          <button class="btn ghost" id="btnAcctDelNo">Keep my account</button>
+      <!-- 2026-07-28 (v0.51, Blake: "add a section to the admin panel for people to switch between
+           board settings that they got from the shop"). Equipping used to only be reachable from
+           inside the Shop itself - this is a second door onto the exact same EQUIP/equipToggle()
+           mechanism (§ SHOP), not a second implementation. Hidden entirely for a guest (there is
+           nothing owned to switch between). Filled in by refreshAcctEquip(), § SHOP, called from
+           openAccountPanel() every time this panel opens, same as #acctWallet above.
+           2026-07-29 (v0.53, Blake: "don't have the shop stuff auto open in the admin page... make
+           it something they have to click and then it opens - otherwise it dominates the admin
+           page"). This used to render the full catalog body open every time. It is now a real
+           <button> (keyboard-operable for free, no custom key handling needed) that toggles
+           #acctEquipBody's `hidden` class and its own aria-expanded - nothing else on the page reacts
+           to it, so it can never trap focus. refreshAcctEquip() (§ SHOP) forces it back to collapsed
+           at the TOP of every call - and it is called every single time this panel opens
+           (openAccountPanel()) - so collapsed is the only state a fresh opening of this panel can
+           ever show, exactly matching Blake's ask that it never remember being left open.
+           2026-07-29 (v0.56, Blake: "[the board settings section] should be changed to
+           personalizations"): heading text changed from "Your board settings" to "Personalizations" -
+           this is the ONE thing that rename actually meant (this narrower section - palettes/felts/
+           titles specifically), NOT the panel itself or the button that opens it, both of which stay
+           "Admin" (see the #accountOverlay markup comment above for the corrected story and
+           HANDOFF.md "v0.56").
+           2026-07-30 (v0.59, Blake verbatim: "Change personalization's to 'Shop Customizations' and
+           make sure that within the customizations tab you also have the ability for people to buy
+           nickname changes (that take place right away - even mid game) and online access/tokens. I
+           only see these in the shop button from the menu."): renamed again per that ask, and
+           refreshAcctEquip() (§ SHOP) now renders the two consumable tokens as REAL buyable rows at
+           the top of this section's body - the same catItemRow() rows the Shop itself uses (same
+           confirm step, same can't-afford handling, same real-money branch on iPhone), never a
+           second implementation. The "right away - even mid game" half is § LIVE RENAME (server
+           playerRenamed broadcast + this file's handleNetMessage case + applyLocalRenameNow()). -->
+      <div class="acctEquip hidden" id="acctEquip">
+        <button type="button" class="btn ghost acctRow acctEquipToggle" id="acctEquipToggleBtn"
+          aria-expanded="false" aria-controls="acctEquipBody">
+          <span class="acctEquipHead">Shop Customizations</span>
+          <span class="acctEquipChevron" aria-hidden="true">&#9662;</span>
+        </button>
+        <div id="acctEquipBody" class="hidden"></div>
+      </div>
+      <!-- 2026-07-26 (v0.36 item 3): THE ONE-TIME NAME CLAIM. Hidden unless the server says the
+           window is open AND there really is history sitting under this account's name. Blake:
+           "only allowed to do this once and claim 1 name - no going back." Two steps: the offer,
+           then a confirm that says it cannot be undone in exactly those words. Written by
+           renderAccountClaim(), § ACCOUNT SIGN-IN - nothing here is ever shown by markup alone.
+           Nothing is deleted either way: names nobody claims stay on the board as history, and
+           the copy says so rather than leaving anyone guessing.
+           WHY IT IS UP HERE, above the settings rows: the window is open for days, not forever,
+           and measured at 390x844 the panel already scrolls - put at the bottom this landed below
+           the fold, which for a time-limited offer is the same as not offering it. -->
+      <div class="acctClaim hidden" id="acctClaim">
+        <b id="acctClaimTitle">Is this you?</b>
+        <p id="acctClaimText"></p>
+        <p id="acctClaimWarn" class="hidden">This cannot be undone. You can only do this once, for one name, and the offer goes away for good afterwards.</p>
+        <div class="acctClaimBtns" id="acctClaimOffer">
+          <button class="btn primary" id="btnAcctClaimYes">Yes, that is me</button>
+          <button class="btn ghost" id="btnAcctClaimNo">No, start fresh</button>
+        </div>
+        <div class="acctClaimBtns hidden" id="acctClaimConfirm">
+          <button class="btn danger" id="btnAcctClaimSure">Yes, move it</button>
+          <button class="btn ghost" id="btnAcctClaimBack">Go back</button>
         </div>
       </div>
-      <div class="acctNote" id="acctSoonNote">Accounts are coming soon. Your name and your games are saved on this phone in the meantime.</div>
-      <!-- 2026-07-27 (v0.46): relocated here from the old first-run welcome screen (deleted this
-           same pass, see § WELCOME) - this is one of the two places an account can be created
-           from, the Admin panel's own Sign in row being the other (see #welcomeAgeNote for that
-           one). Shown only while signed out, right under the Sign in row above - see
-           renderAccountRows(), § ACCOUNT. -->
-      <div class="acctNote" id="acctAgeNote">Accounts are for ages 13 and up. Anyone younger should continue as a guest.</div>
+      <div class="acctRows">
+        <button class="btn ghost acctRow" id="btnAcctRules">How to play</button>
+        <button class="btn ghost acctRow" id="btnAcctSound">Sound: on</button>
+        <!-- 2026-07-25 (Blake's top-row feedback): SPEED left the top bar and landed here, next to
+             Sound, because it is the same kind of thing - a setting for this phone, not an action
+             in the game. Behaviour is character-for-character the old top-bar button's: tap to
+             step to the next speed, and in an ONLINE game only the host may change the table
+             speed. Everyone else sees that written on the row itself (a toast would be invisible
+             behind this full-screen panel) and the row is disabled for them. See
+             $('btnAcctSpeed') and speedRowLabel(), § MENU. -->
+        <button class="btn ghost acctRow" id="btnAcctSpeed">Table speed: Normal</button>
+        <!-- 2026-07-27 (v0.42): a GUEST has no name to change anymore - guests never had a
+             persistent nickname to begin with (only their seat's stock name, which they can't set)
+             - so this row is disabled for them with the <small> line saying why, instead of opening
+             an editor that would have nothing real to save. See renderAccountRows(). v0.45: the
+             who-name this panel shows above now reads the literal word "Guest" for them
+             (chosenName(), § ACCOUNT) rather than a stock name - see that function's header
+             comment. -->
+        <button class="btn ghost acctRow" id="btnAcctName">Change your name<small></small></button>
+        <button class="btn ghost acctRow hidden" id="btnAcctReset">Fix my connection<small>Reconnects this phone to the online game</small></button>
+        <!-- 2026-07-25 (the top-row rebuild): once the game is OVER the top row's left slot shows
+             RESULTS, so the way back to the menu lives here (and on the win popup's own "Back to
+             menu" button). Hidden during play - there is a whole PAUSED screen for leaving a game
+             that is still going, with the right warnings on it. -->
+        <button class="btn ghost acctRow hidden" id="btnAcctMenu">Back to the menu<small>This game is finished - nothing left to lose</small></button>
+      </div>
+      <div class="acctNameEdit hidden" id="acctNameEdit">
+        <input id="acctNameInput" maxlength="10" aria-label="Your name" autocomplete="off" autocapitalize="words">
+        <!-- 2026-07-28 (v0.51, Blake: "make the name change token easier to understand - and make
+             it something that's obvious I need to redeem when clicking the change nickname button
+             ... I don't see anything about it there"). Filled in by refreshNameCreditInfo(), § SHOP,
+             the INSTANT this box opens (openAccountNameEdit()) - not just after a cooldown blocks a
+             rename, which is where this info used to be hidden until v0.51. Always states the plain
+             30-day rule truthfully; adds the held-token count only when the account actually has
+             one or more. -->
+        <div class="acctNameCreditNote hidden" id="acctNameCreditNote"></div>
+        <div class="acctWarn" id="acctNameWarn"></div>
+        <!-- 2026-07-30 (v0.59, Blake's item 6, verbatim: "you currently have 3 buttons for nickname
+             change (cancel, change name, and redeem token). Get rid of the token button and just
+             have the first 2"). The v0.50/v0.51 always-visible redeem button (#btnAcctNameUseCredit)
+             is DELETED, not hidden - the whole flow now runs off the ONE "Change name" button, with
+             every branch (the free-change heads-up, the explicit token-redeem confirmation, the
+             buy-a-token offer when none is held) staged into #acctNameConfirm below, each needing
+             an explicit accept - see $('btnAcctNameSave').onclick and its helpers, § SHOP area. -->
+        <div class="acctNameConfirm hidden" id="acctNameConfirm"></div>
+        <div class="acctNameBtns">
+          <button class="btn primary" id="btnAcctNameSave">Change name</button>
+          <button class="btn ghost" id="btnAcctNameCancel">Cancel</button>
+        </div>
+      </div>
+      <div class="acctSoon">
+        <button class="btn ghost acctRow" id="btnAcctSignIn" disabled>Sign in</button>
+        <button class="btn ghost acctRow" id="btnAcctSignOut" disabled>Sign out</button>
+        <button class="btn ghost acctRow" id="btnAcctDelete" disabled>Delete account</button>
+        <!-- Deleting is the only thing in this panel that cannot be undone, so it asks first, and
+             it asks INSIDE this panel rather than as a second full-screen page. The tick box is
+             what makes privacy.html's promise true: the account always goes; the row on the family
+             board goes too only if you say so.
+             2026-07-31 (v0.60, item 3): the warning now says plainly what deleting actually costs.
+             Confirmed by reading the server code directly, not assumed: deleteAccountRecord()
+             (server/server.js AND server/cloud/server.ts - checked both, true twins) unconditionally
+             does `delete accounts[uid]` regardless of the eraseBoard flag, and every wallet field
+             (walletOwned, walletSpent, walletPurchasedCredits, walletOnlineMonths,
+             walletNamechangeCredits) lives directly on that same account record - eraseBoard only
+             controls the LEADERBOARD row, never the wallet. So deleting an account destroys the
+             ENTIRE credit balance, earned AND purchased with real money, and everything bought with
+             it, permanently, with no way back - Apple does not refund a purchase just because the
+             account that spent it is gone. This is copy-only: no server change, the behavior it
+             describes was already exactly this before this pass. -->
+        <div class="acctConfirm hidden" id="acctDelConfirm">
+          <p id="acctDelText">Delete your account? Your Apple sign-in and every signed-in session go straight away. Every credit you have - including any you paid real money for - is gone for good too, with no way to get it back and no refund. This cannot be undone. You can keep playing without an account.</p>
+          <label><input type="checkbox" id="acctDelBoard"><span>Also take my name off the leaderboard</span></label>
+          <div class="acctConfirmBtns">
+            <button class="btn danger" id="btnAcctDelYes">Delete account</button>
+            <button class="btn ghost" id="btnAcctDelNo">Keep my account</button>
+          </div>
+        </div>
+        <div class="acctNote" id="acctSoonNote">Accounts are coming soon. Your name and your games are saved on this phone in the meantime.</div>
+        <!-- 2026-07-27 (v0.46): relocated here from the old first-run welcome screen (deleted this
+             same pass, see § WELCOME) - this is one of the two places an account can be created
+             from, the Admin panel's own Sign in row being the other (see #welcomeAgeNote for that
+             one). Shown only while signed out, right under the Sign in row above - see
+             renderAccountRows(), § ACCOUNT. -->
+        <div class="acctNote" id="acctAgeNote">Accounts are for ages 13 and up. Anyone younger should continue as a guest.</div>
+      </div>
+      <div class="bigBtns"><button class="btn primary" id="btnAcctClose">Close</button></div>
     </div>
-    <div class="bigBtns"><button class="btn primary" id="btnAcctClose">Close</button></div>
   </div>
 </div>
 
@@ -4132,11 +4323,13 @@ button{font:inherit;cursor:pointer}
      $('btnAcctSignOut').onclick, § ACCOUNT SIGN-IN. Cancel hands #accountOverlay back
      (openOverlay's backTo mechanism, § OVERLAY LAYER) rather than closing to the menu/game. -->
 <div id="signOutWarnOverlay" class="overlay hidden">
-  <!-- 2026-07-29 (v0.54): Bucket C - X reuses btnSignOutCancel's own click, the unambiguous safe
-       choice (hands #accountOverlay back, never signs out). NEVER wired to the destructive
+  <!-- 2026-07-29 (v0.54): Bucket C.
+       2026-07-31 (v0.60, item 1b): the X is REMOVED - Cancel is the unambiguous safe choice
+       already on this card (hands #accountOverlay back, never signs out); a corner X clicking
+       that same button was a decoy next to it, not a second option. See OVERLAY_X_WIRING's own
+       comment for the full 12/7 reasoning. NEVER wire anything here to the destructive
        "Sign out anyway" button. -->
   <div class="confirmCard">
-    <button id="btnSignOutX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b>SIGN OUT?</b></div>
     <p id="signOutWarnText"></p>
     <div class="bigBtns">
@@ -4194,11 +4387,13 @@ button{font:inherit;cursor:pointer}
      was never a leave-the-game choice and did not belong in a list of ways to leave (Blake's
      ask). Same online-only gating, same hardResetConnection() call, new home. -->
 <div id="leaveConfirmOverlay" class="overlay hidden">
-  <!-- 2026-07-29 (v0.54): Bucket C - X reuses btnLeaveCancel's own click ("Return to game" - the
-       first, primary-styled, explicitly safe option on this sheet, per its own v0.27.1 comment
-       above). NEVER wired to Save & leave / Leave without saving / Hand my seat to a CPU. -->
+  <!-- 2026-07-29 (v0.54): Bucket C.
+       2026-07-31 (v0.60, item 1b): the X is REMOVED - "Return to game" (btnLeaveCancel, first,
+       primary-styled, per its own v0.27.1 comment above) is already the explicitly safe way out
+       of this sheet, so a corner X clicking that same button was a decoy, not a second option.
+       See OVERLAY_X_WIRING's own comment for the full 12/7 reasoning. NEVER wire anything here to
+       Save & leave / Leave without saving / Hand my seat to a CPU. -->
   <div class="confirmCard">
-    <button id="btnLeaveX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b>PAUSED</b></div>
     <p id="leaveConfirmText">Your game is holding right here. Jump back in, or step away for now.</p>
     <div class="bigBtns">
@@ -4226,12 +4421,13 @@ button{font:inherit;cursor:pointer}
      before they commit, not just silently skip the stat write. The strings below are the
      DEFAULT/fallback (first-surrenderer) copy only. -->
 <div id="surrenderConfirmOverlay" class="overlay hidden">
-  <!-- 2026-07-29 (v0.54): Bucket C - X reuses btnSurrenderCancel's own click ("Keep playing" -
-       first, primary, the explicitly safe option per the item-E comment above). NEVER wired to
-       "Save & leave instead" or "Concede"/"Leave" (the no-fault-exit variant) - both of those end
-       the game; only Cancel does not. -->
+  <!-- 2026-07-29 (v0.54): Bucket C.
+       2026-07-31 (v0.60, item 1b): the X is REMOVED - "Keep playing" (btnSurrenderCancel, first,
+       primary, per the item-E comment above) is already the explicitly safe option on this card,
+       so a corner X clicking that same button was a decoy. See OVERLAY_X_WIRING's own comment for
+       the full 12/7 reasoning. NEVER wire anything here to "Save & leave instead" or "Concede"/
+       "Leave" (the no-fault-exit variant) - both of those end the game; only Cancel does not. -->
   <div class="confirmCard">
-    <button id="btnSurrenderX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b id="surrenderConfirmHeading">CONCEDE?</b></div>
     <p id="surrenderConfirmText">Are you sure you want to concede? This will count as a loss on the leaderboard.</p>
     <!-- 2026-07-25 (item E of the UI polish batch), two changes:
@@ -4267,10 +4463,12 @@ button{font:inherit;cursor:pointer}
      slotReplaceOverlay below), so this warning is only about ONLINE games - hosting or joining
      a different online game replaces the one online room you can still get back into. -->
 <div id="overwriteWarnOverlay" class="overlay hidden">
-  <!-- 2026-07-29 (v0.54): Bucket C - X reuses btnOverwriteCancel's own click. NEVER wired to
-       "Go ahead" (which replaces the existing online game). -->
+  <!-- 2026-07-29 (v0.54): Bucket C.
+       2026-07-31 (v0.60, item 1b): the X is REMOVED - Cancel is already the safe way out; a
+       corner X clicking it too was a decoy. See OVERLAY_X_WIRING's own comment for the full 12/7
+       reasoning. NEVER wire anything here to "Go ahead" (which replaces the existing online
+       game). -->
   <div class="confirmCard">
-    <button id="btnOverwriteX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b>REPLACE GAME?</b></div>
     <p>You have an online game you can still get back into - starting another online game will replace it. Go ahead?</p>
     <div class="bigBtns">
@@ -4293,10 +4491,12 @@ button{font:inherit;cursor:pointer}
      recordOfflineSurrenderLoss()'s comment, § MENU, for why offline has no "someone else already
      left" race to begin with). -->
 <div id="slotReplaceOverlay" class="overlay hidden">
-  <!-- 2026-07-29 (v0.54): Bucket C - X reuses btnReplaceCancel's own click. NEVER wired to either
-       "Replace slot" button (both give up a saved game for good). -->
+  <!-- 2026-07-29 (v0.54): Bucket C.
+       2026-07-31 (v0.60, item 1b): the X is REMOVED - Cancel is already the safe way out; a
+       corner X clicking it too was a decoy. See OVERLAY_X_WIRING's own comment for the full 12/7
+       reasoning. NEVER wire anything here to either "Replace slot" button (both give up a saved
+       game for good). -->
   <div class="confirmCard">
-    <button id="btnSlotReplaceX" class="overlayXBtn" aria-label="Close">✕</button>
     <div class="sign"><b>REPLACE A SAVE?</b></div>
     <p>Both save spots are full. Starting a new game means giving up one of your saved games for good - that counts as conceding (a loss on the leaderboard) for whoever was playing it. Pick which one to give up, or cancel to keep both.</p>
     <div class="bigBtns">
@@ -4320,33 +4520,37 @@ button{font:inherit;cursor:pointer}
        right corner of the actual window... it should overlap with the corner of the window and
        stay there as you scroll"). -->
   <div class="modalCard" style="max-width:560px">
-    <button id="btnAdminX" class="overlayXBtn" aria-label="Close">✕</button>
-    <!-- 2026-07-26 (v0.36 item 2): retitled "God mode". The player-facing settings panel is
-         called Admin now (Blake's word, on his own button), and two different pages both headed
-         "Admin" would be genuinely confusing for the one person who ever sees both. Nothing else
-         about this developer panel changed: same secret 7-tap gesture, same token, same ids. -->
-    <h3>God mode</h3>
-    <div id="adminLocked">
-      <p>Enter the admin token (saved on this device after the first time).</p>
-      <div class="optRow"><label>Token</label>
-        <input id="adminTokenInput" type="password" style="font-size:14px;width:220px;background:rgba(0,0,0,.25);
-          border:1px solid rgba(255,255,255,.2);border-radius:8px;color:var(--cream);padding:8px"></div>
-      <div id="adminErr" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
-      <div class="bigBtns"><button class="btn primary" id="btnAdminUnlock">Unlock</button>
-        <button class="btn ghost" id="btnAdminClose">Close</button></div>
+    <div class="modalHead">
+      <button id="btnAdminX" class="overlayXBtn" aria-label="Close">✕</button>
+      <!-- 2026-07-26 (v0.36 item 2): retitled "God mode". The player-facing settings panel is
+           called Admin now (Blake's word, on his own button), and two different pages both headed
+           "Admin" would be genuinely confusing for the one person who ever sees both. Nothing else
+           about this developer panel changed: same secret 7-tap gesture, same token, same ids. -->
+      <h3>God mode</h3>
     </div>
-    <div id="adminUnlocked" class="hidden">
-      <h4>Rooms</h4>
-      <div id="adminRooms" style="font-size:13.5px"></div>
-      <h4>Global leaderboard</h4>
-      <div id="adminLb" style="font-size:13.5px"></div>
-      <div id="adminLbEpoch" style="font-size:12px;color:var(--cream2);margin:4px 0"></div>
-      <!-- v0.13: "new season" - wipes the shared board AND bumps the epoch, which clears
-           every device's own local leaderboard cache the next time it talks to the server
-           (see index.html § LEADERBOARD EPOCH / server.js "§ LEADERBOARD EPOCH"). -->
-      <button class="btn ghost" id="btnAdminResetLb" style="margin-bottom:8px">Reset leaderboard (new season)</button>
-      <div class="bigBtns"><button class="btn ghost" id="btnAdminRefresh">Refresh</button>
-        <button class="btn ghost" id="btnAdminClose2">Close</button></div>
+    <div class="modalBody">
+      <div id="adminLocked">
+        <p>Enter the admin token (saved on this device after the first time).</p>
+        <div class="optRow"><label>Token</label>
+          <input id="adminTokenInput" type="password" style="font-size:14px;width:220px;background:rgba(0,0,0,.25);
+            border:1px solid rgba(255,255,255,.2);border-radius:8px;color:var(--cream);padding:8px"></div>
+        <div id="adminErr" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
+        <div class="bigBtns"><button class="btn primary" id="btnAdminUnlock">Unlock</button>
+          <button class="btn ghost" id="btnAdminClose">Close</button></div>
+      </div>
+      <div id="adminUnlocked" class="hidden">
+        <h4>Rooms</h4>
+        <div id="adminRooms" style="font-size:13.5px"></div>
+        <h4>Global leaderboard</h4>
+        <div id="adminLb" style="font-size:13.5px"></div>
+        <div id="adminLbEpoch" style="font-size:12px;color:var(--cream2);margin:4px 0"></div>
+        <!-- v0.13: "new season" - wipes the shared board AND bumps the epoch, which clears
+             every device's own local leaderboard cache the next time it talks to the server
+             (see index.html § LEADERBOARD EPOCH / server.js "§ LEADERBOARD EPOCH"). -->
+        <button class="btn ghost" id="btnAdminResetLb" style="margin-bottom:8px">Reset leaderboard (new season)</button>
+        <div class="bigBtns"><button class="btn ghost" id="btnAdminRefresh">Refresh</button>
+          <button class="btn ghost" id="btnAdminClose2">Close</button></div>
+      </div>
     </div>
   </div>
 </div>
@@ -4854,30 +5058,28 @@ function enforceSingleOverlay(){
    purpose and stay completely unreachable by X or Escape; nor is #reclaimReqOverlay (a real,
    consequential decision with no safe default - see its own markup comment) or #pauseOverlay/
    #passOverlay (already a zero-friction tap-anywhere dismissal, an X would be redundant - see
-   their own comments). */
+   their own comments).
+   2026-07-31 (v0.60, item 1b): 12 of the original 19 entries below are REMOVED, not just
+   relabeled. Reasoning: an X that fires an ACTION button (Ok/Cancel/"Continue as guest"/etc.)
+   only ever exists to give a SECOND way to reach a button that is already sitting right there on
+   the same card - a decoy shortcut, not a real convenience, and worse, an X in the corner reads
+   as "close/dismiss" to a user even when what it actually does is something more specific (accept
+   a caveat, back out of a multi-step flow, decline a destructive prompt). Kept: the 7 overlays
+   whose safe button is a genuine, unambiguous "Close" (rulesOverlay/lbOverlay/shopOverlay/
+   accountOverlay/onlineOverlay/joinOverlay/reunionOverlay) - an X that clicks a button literally
+   labeled Close is not a decoy, it is the same affordance twice, which is exactly what Blake's
+   original v0.54 ask ("get out of the window at anytime") was for. See HANDOFF.md "v0.60" for the
+   overlay-by-overlay list of what was removed and why; #reclaimReqOverlay/#pauseOverlay/
+   #passOverlay/the two gates above were never in this list and stay untouched either way. */
 const OVERLAY_X_WIRING=[
   // [overlay id, its own X button id, the existing SAFE button id this X clicks]
   ['rulesOverlay','btnRulesX','btnRulesClose'],
   ['lbOverlay','btnLbX','btnLbClose'],
   ['shopOverlay','btnShopX','btnShopClose'],
   ['accountOverlay','btnAcctX','btnAcctClose'],
-  ['onlineRulesOverlay','btnOnlineRulesX','btnOnlineRulesOk'],
   ['onlineOverlay','btnOnlineX','btnOnlineClose'],
-  ['roomOverlay','btnRoomX','btnRoomCancel'],
   ['joinOverlay','btnJoinX','btnJoinClose'],
-  ['offlineSeatOverlay','btnOfflineSeatX','btnOfflineSeatCancel'],
-  ['hostSpeedOverlay','btnHostSpeedX','btnHostSpeedCancel'],
-  ['welcomeOverlay','btnWelcomeX','btnWelcomeGuest'],
   ['reunionOverlay','btnReunionX','btnReunionClose'],
-  ['signOutWarnOverlay','btnSignOutX','btnSignOutCancel'],
-  ['leaveConfirmOverlay','btnLeaveX','btnLeaveCancel'],
-  ['surrenderConfirmOverlay','btnSurrenderX','btnSurrenderCancel'],
-  ['overwriteWarnOverlay','btnOverwriteX','btnOverwriteCancel'],
-  ['slotReplaceOverlay','btnSlotReplaceX','btnReplaceCancel'],
-  // v0.56: both purely informational (see each overlay's own markup comment) - the X does
-  // exactly what the primary button does, never a second/different close path.
-  ['onlineCaveatOverlay','btnOnlineCaveatX','btnOnlineCaveatOk'],
-  ['onlineAccessBlockedOverlay','btnOnlineBlockedX','btnOnlineBlockedOk'],
 ];
 OVERLAY_X_WIRING.forEach(([ovId,xId,safeId])=>{
   const xBtn=$(xId);
@@ -4931,10 +5133,15 @@ function syncAmbientPause(){
    How this works: an overlay is marked .canScroll (see its CSS, § STYLE, which paints a bottom
    fade plus a "more below - swipe up" nudge) whenever EITHER the overlay itself OR the card
    inside it has more content than fits AND is not already scrolled to the bottom. Both parts
-   matter - .overlay scrolls (a card taller than the screen) and .modalCard scrolls
-   independently (max-height:82vh + overflow-y:auto), so checking only one would miss half the
-   real cases. The "not already at the bottom" half is what makes the hint disappear once the
-   player has actually reached the end, instead of nagging forever.
+   matter - .overlay scrolls (a card taller than the screen) and .modalBody scrolls
+   independently (max-height:82vh on .modalCard, but the scroll box itself moved to .modalBody -
+   see § STYLE, v0.60 item 1a), so checking only one would miss half the real cases. The "not
+   already at the bottom" half is what makes the hint disappear once the player has actually
+   reached the end, instead of nagging forever.
+   2026-07-31 (v0.60): the scanned selector below changed from `.modalCard,.confirmCard` to
+   `.modalBody,.confirmCard` - .modalCard itself no longer scrolls (overflow:hidden now, see its
+   own rule) so its scrollHeight===clientHeight always and it would never trip this check; the
+   box that actually scrolls now is .modalBody.
    Re-run on: any scroll anywhere (capture phase, because these scrolls happen on inner
    elements and don't bubble), any resize/orientation change, and any class change on an
    overlay - that last one is how OPENING a dialog triggers it, without having to find and edit
@@ -4966,7 +5173,7 @@ function updateScrollHintsInner(){
       return;
     }
     let more=false;
-    const boxes=[ov,...ov.querySelectorAll('.modalCard,.confirmCard')];
+    const boxes=[ov,...ov.querySelectorAll('.modalBody,.confirmCard')];
     for(const el of boxes){
       if(el.scrollHeight-el.clientHeight>SCROLL_HINT_SLACK&&
          el.scrollHeight-el.clientHeight-el.scrollTop>SCROLL_HINT_SLACK){ more=true; break; }
@@ -14081,7 +14288,7 @@ function paintOnlineAccess(status,wallet){
     body.innerHTML=`<div class="acctOnlineMsg">You're covered through ${esc(formatChicagoMonth(status.accessUntil))}${esc(aheadTxt)}.</div>
       <div class="acctOnlineCountdown">${esc(accessCountdownText(status.accessUntil))}</div>
       <div class="acctOnlineActions">
-        <button class="btn ghost" id="acctOnlineBuyBtn" data-item="${esc(itemId)}" ${canAfford?'':'disabled'}>Buy another month - ${cost} credits</button>
+        <button class="btn ghost" id="acctOnlineBuyBtn" data-item="${esc(itemId)}" data-cost="${cost}" data-balance="${wallet?wallet.balance:0}" ${canAfford?'':'aria-disabled="true"'}>Buy another month - ${cost} credits</button>
       </div>
       <div class="acctOnlineConfirm hidden" id="acctOnlineConfirmRow">
         <span>Buy another month of Online Access for ${cost} credits? Spending can't be undone.</span>
@@ -14097,7 +14304,7 @@ function paintOnlineAccess(status,wallet){
   body.innerHTML=`<div class="acctOnlineMsg">Your free period has ended - online play now needs an Online Access token. One token is ${cost} credits and covers a full calendar month.</div>
     ${canAfford?'':'<div class="acctOnlineNote">You earn credits by winning games - keep playing to earn enough for a token.</div>'}
     <div class="acctOnlineActions">
-      <button class="btn primary" id="acctOnlineBuyBtn" data-item="${esc(itemId)}" ${canAfford?'':'disabled'}>Buy Online Access - ${cost} credits</button>
+      <button class="btn primary" id="acctOnlineBuyBtn" data-item="${esc(itemId)}" data-cost="${cost}" data-balance="${wallet?wallet.balance:0}" ${canAfford?'':'aria-disabled="true"'}>Buy Online Access - ${cost} credits</button>
     </div>
     <div class="acctOnlineConfirm hidden" id="acctOnlineConfirmRow">
       <span>Buy Online Access for ${cost} credits? Spending can't be undone.</span>
@@ -14108,9 +14315,18 @@ function paintOnlineAccess(status,wallet){
 }
 // Same confirm-in-place idiom the Shop's own showShopConfirm()/hideShopConfirm() use (above) -
 // re-wired every paint since #acctOnlineBody's innerHTML is rebuilt from scratch each time.
+// 2026-07-31 (v0.60, item 4): the identical dead-button problem catItemRow()/shopRowClickHandler()
+// had - this box's own Buy button used the native `disabled` attribute too, so a tap did nothing.
+// Same fix, same reasoning: aria-disabled instead of disabled (see paintOnlineAccess(), above),
+// and now an aria-disabled tap gets a real toast instead of silently doing nothing.
 function wireAcctOnlineBuy(){
   const buyBtn=$('acctOnlineBuyBtn');
-  if(buyBtn&&!buyBtn.disabled)buyBtn.onclick=()=>{ const row=$('acctOnlineConfirmRow'); if(row)row.classList.remove('hidden'); };
+  if(!buyBtn)return;
+  if(buyBtn.getAttribute('aria-disabled')==='true'){
+    buyBtn.onclick=()=>toast(`Online Access costs ${buyBtn.dataset.cost} credits and you have ${buyBtn.dataset.balance}.`);
+  }else{
+    buyBtn.onclick=()=>{ const row=$('acctOnlineConfirmRow'); if(row)row.classList.remove('hidden'); };
+  }
   const yes=$('acctOnlineConfirmYes'), no=$('acctOnlineConfirmNo');
   if(yes)yes.onclick=()=>{ const row=$('acctOnlineConfirmRow'); if(row)row.classList.add('hidden'); buyOnlineAccess(); };
   if(no)no.onclick=()=>{ const row=$('acctOnlineConfirmRow'); if(row)row.classList.add('hidden'); };
@@ -14221,8 +14437,16 @@ let SHOP_BUSY=false;
 // (this row, its Buy confirm text, buyItem()'s own toasts below) reads it through this one
 // function rather than `item.name` directly, so the friendlier name is consistent everywhere and
 // there is exactly one place to change it again later.
+// 2026-07-31 (v0.60, item 2): 'online_month' added as a second display-only rename, same pattern
+// as namechange_credit above - the server's own catalog id (online_month) and catalog NAME
+// ("Online Access (1 month)") are both untouched, this is purely what a player sees. Used
+// wherever a single-line sentence needs the item's name (confirm text, toasts); catItemRow()
+// below renders the SHOP ROW's own name as two lines ("Online Play" / "(1 month)") instead of
+// reading this string directly, since a two-line treatment doesn't fit a plain sentence.
 function shopDisplayName(item){
-  return (item&&item.id==='namechange_credit')?'Nickname Change':(item?item.name:'');
+  if(item&&item.id==='namechange_credit')return 'Nickname Change';
+  if(item&&item.id==='online_month')return 'Online Play (1 month)';
+  return item?item.name:'';
 }
 // v0.59: `opts.showHeld` (the Admin panel's Shop Customizations rows only) adds a "You have N"
 // line for the nickname token - the count IS the actionable information there (see the v0.51
@@ -14254,15 +14478,27 @@ function catItemRow(item,wallet,opts){
   // nor online_month ever lands in wallet.owned at all (server.js's /account/purchase pushes
   // consumables into walletNamechangeCredits/walletOnlineMonths instead, never walletOwned), so
   // `owned` is always false for both today - but this stays the right, defensive, DRY check.
+  // 2026-07-31 (v0.60, item 4): unaffordable is `aria-disabled="true"` now, NOT the native
+  // `disabled` attribute - see shopRowClickHandler()'s own comment, below, for the full reasoning
+  // (a real `disabled` attribute swallows the click before it ever fires, which is why tapping a
+  // greyed button used to do nothing at all). `.btn[aria-disabled="true"]` (§ STYLE) reproduces
+  // `.btn:disabled`'s exact greyed look, so nothing changes for a sighted user - only that the
+  // button is now genuinely tappable, and a tap on it means something (see shopRowClickHandler()).
+  const buyDisabledAttr=canAfford?'':'aria-disabled="true"';
+  // data-balance rides on the button itself so shopRowClickHandler() (below) can build an exact
+  // "you have N" toast off the SAME wallet.balance this row was actually drawn against, whichever
+  // of the two surfaces (the Shop's own SHOP_STATE.wallet, or the Admin panel's own
+  // refreshAcctEquip() wallet fetch) rendered it - no second wallet lookup, no risk of the two
+  // ever disagreeing.
   if(item.consumable){
-    actionHtml=`<button class="btn primary shopBuyBtn" data-id="${item.id}" ${canAfford?'':'disabled'}>Buy - ${item.cost} credits</button>`;
+    actionHtml=`<button class="btn primary shopBuyBtn" data-id="${item.id}" data-balance="${wallet.balance}" ${buyDisabledAttr}>Buy - ${item.cost} credits</button>`;
   }else if(owned){
     metaBits.push('Owned');
     actionHtml=isEquipped
       ?`<button class="btn primary shopEquipBtn" data-id="${item.id}" aria-label="Equipped - tap to remove">Equipped</button>`
       :`<button class="btn ghost shopEquipBtn" data-id="${item.id}">Equip</button>`;
   }else{
-    actionHtml=`<button class="btn primary shopBuyBtn" data-id="${item.id}" ${canAfford?'':'disabled'}>Buy - ${item.cost} credits</button>`;
+    actionHtml=`<button class="btn primary shopBuyBtn" data-id="${item.id}" data-balance="${wallet.balance}" ${buyDisabledAttr}>Buy - ${item.cost} credits</button>`;
   }
   const dispName=shopDisplayName(item);
   /* 2026-07-30 (v0.59) § REAL MONEY: an item you can't afford is no longer just a dead disabled
@@ -14286,8 +14522,14 @@ function catItemRow(item,wallet,opts){
       </div>`;
     }
   }
+  // 2026-07-31 (v0.60, item 2): online_month's row shows "Online Play" then "(1 month)" on its
+  // own line beneath, display-only (see shopDisplayName()'s own comment above) - every other
+  // item keeps the single-line name it always had.
+  const nameHtml=(item.id==='online_month')
+    ?`<div class="shopItemName">Online Play</div><div class="shopItemNameSub">(1 month)</div>`
+    :`<div class="shopItemName">${esc(dispName)}</div>`;
   return `<div class="shopItem" data-id="${item.id}">
-    <div class="shopItemInfo">${swatch}<div class="shopItemText"><div class="shopItemName">${esc(dispName)}</div>
+    <div class="shopItemInfo">${swatch}<div class="shopItemText">${nameHtml}
       ${metaBits.length?`<div class="shopItemMeta">${esc(metaBits.join(' · '))}</div>`:''}</div></div>
     <div class="shopItemAction">${actionHtml}${moneyHtml}</div>
     <div class="shopConfirmRow hidden" data-id="${item.id}">
@@ -14308,8 +14550,11 @@ function catItemRow(item,wallet,opts){
 // nickname change) lead the list, cosmetics (palettes/felts/titles) come after - this is also
 // refreshAcctEquip()'s own category order (below), but both consumable categories are filtered out
 // of THAT view entirely, so the reorder is harmless there.
+// 2026-07-31 (v0.60, item 2): label changed to exactly "Extend Online Access" (Blake's own
+// wording) - see shopOnlineAccessSubline()/paintShop() right below for the live days-left/
+// tokens-owned line this pass adds directly under this header.
 const SHOP_CATEGORY_LABELS=[
-  ['online','Online access - one calendar month of online play'],
+  ['online','Extend Online Access'],
   ['namechange','Nickname changes'],
   ['palette','Palettes - swap your seat colors'],
   ['felt','Table felt - change the board background'],
@@ -14317,6 +14562,38 @@ const SHOP_CATEGORY_LABELS=[
   // (.lbTitleBadge, § STYLE), not inline text - see titledNameHtml()'s own comment, § SHOP.
   ['title','Titles - shown as a badge next to your name'],
 ];
+/* 2026-07-31 (v0.60, item 2): the live days-left/tokens-owned line under the Shop's "Extend
+   Online Access" header. Reuses the EXACT same fetchOnlineStatus()/accessCountdownText()/
+   humanDuration()/formatMonthKey()/formatChicagoMonth() functions the Admin panel's own
+   #acctOnline box (paintOnlineAccess(), right above) already uses - deliberately not a second
+   copy of that wording logic, so the Shop and the Admin panel can never disagree about what
+   "covered through" or "days left" means for the same account. Text-only (no button here - the
+   online_month item's own Buy row, right below this line, is the one and only buy affordance);
+   this function only ever describes the CURRENT state honestly.
+   "Tokens owned" reads as `monthsAheadCovered` - Blake's own plain-English state, not a raw
+   number: zero months banked ahead is worded as a plain sentence ("nothing extra banked"), never
+   a bare "0" that could misread as broken. status is whatever fetchOnlineStatus() returned -
+   {guest:true} / {unreachable:true} / a real status object - never computed here, only rendered. */
+function shopOnlineAccessSubline(status,wallet){
+  const cost=(status&&status.tokenCost)||ONLINE_ACCESS_COST_FALLBACK;
+  if(!status||status.unreachable){
+    return `<div class="shopOnlineNote">Couldn't check your Online Access right now.</div>`;
+  }
+  if(status.guest){
+    return `<div class="shopOnlineNote">Sign in to see your Online Access.</div>`;
+  }
+  if(status.entitled&&status.reason==='free'){
+    return `<div class="shopOnlineNote">You're in your free period, through ${esc(formatMonthKey(status.freeThroughMonth))} - ${esc(accessCountdownText(status.accessUntil))}. Nothing purchased yet, and you don't need to buy anything until it ends.</div>`;
+  }
+  if(status.entitled&&status.reason==='purchased'){
+    const ahead=status.monthsAheadCovered>0
+      ?`, plus ${status.monthsAheadCovered} extra month${status.monthsAheadCovered===1?'':'s'} banked ahead`
+      :', nothing extra banked ahead yet';
+    return `<div class="shopOnlineNote">You're covered through ${esc(formatChicagoMonth(status.accessUntil))}${ahead} - ${esc(accessCountdownText(status.accessUntil))}.</div>`;
+  }
+  // Not entitled, reason 'none' - free period over, nothing purchased.
+  return `<div class="shopOnlineNote">Your free period has ended and you haven't bought Online Access yet - one token is ${cost} credits and covers a full calendar month.</div>`;
+}
 function paintShop(){
   const balBox=$('shopBalanceBox'), body=$('shopBody');
   if(!balBox||!body)return;
@@ -14382,23 +14659,34 @@ function paintShop(){
   SHOP_CATEGORY_LABELS.forEach(([cat,label])=>{
     const list=items.filter(i=>i.category===cat);
     if(!list.length)return;
-    html+=`<div class="shopCatHead">${esc(label)}</div>`+list.map(i=>catItemRow(i,wallet)).join('');
+    html+=`<div class="shopCatHead">${esc(label)}</div>`;
+    // 2026-07-31 (v0.60, item 2): the live days-left/tokens-owned line, 'online' category only -
+    // see shopOnlineAccessSubline()'s own comment, right above. st.onlineStatus is fetched
+    // alongside the catalog/wallet in openShopOverlay() below, never computed here.
+    if(cat==='online')html+=shopOnlineAccessSubline(st.onlineStatus,wallet);
+    html+=list.map(i=>catItemRow(i,wallet)).join('');
   });
   body.innerHTML=html||'<p class="shopMsg">Nothing in the shop right now.</p>';
 }
 async function openShopOverlay(){
   openOverlay('shopOverlay');
   const seq=++SHOP_LOAD_SEQ;
-  SHOP_STATE={phase:'loading',catalog:null,wallet:null};
+  SHOP_STATE={phase:'loading',catalog:null,wallet:null,onlineStatus:null};
   paintShop();
   const catalogP=fetchShopCatalog();
   const walletP=isAccountReady()?fetchWalletResult():Promise.resolve({signedOut:true});
-  const [catalog,wr]=await Promise.all([catalogP,walletP]);
+  // 2026-07-31 (v0.60, item 2): fetched alongside the catalog/wallet - fetchOnlineStatus() already
+  // handles guest ({guest:true}, no network touched) and a failed fetch ({unreachable:true}) on
+  // its own, same convention as fetchWalletResult()/fetchShopCatalog() - never a second/parallel
+  // "what does this state mean" implementation. Cached (ONLINE_STATUS_CACHE) same as every other
+  // consumer of this function - no second cache, no second TTL.
+  const onlineP=fetchOnlineStatus();
+  const [catalog,wr,onlineStatus]=await Promise.all([catalogP,walletP,onlineP]);
   if(seq!==SHOP_LOAD_SEQ)return;   // the overlay was closed/reopened (or account state changed) while this was in flight
-  if(!catalog){ SHOP_STATE={phase:'unreachable',catalog:null,wallet:null}; paintShop(); return; }
-  if(!isAccountReady()||wr.signedOut){ SHOP_STATE={phase:'guest',catalog,wallet:null}; paintShop(); return; }
-  if(!wr.ok){ SHOP_STATE={phase:'wallet-unreachable',catalog,wallet:null}; paintShop(); return; }
-  SHOP_STATE={phase:'ready',catalog,wallet:wr.wallet};
+  if(!catalog){ SHOP_STATE={phase:'unreachable',catalog:null,wallet:null,onlineStatus:null}; paintShop(); return; }
+  if(!isAccountReady()||wr.signedOut){ SHOP_STATE={phase:'guest',catalog,wallet:null,onlineStatus}; paintShop(); return; }
+  if(!wr.ok){ SHOP_STATE={phase:'wallet-unreachable',catalog,wallet:null,onlineStatus}; paintShop(); return; }
+  SHOP_STATE={phase:'ready',catalog,wallet:wr.wallet,onlineStatus};
   paintShop();
   // 2026-07-30 (v0.59) § REAL MONEY: after the shop is painted and usable, quietly (a) probe the
   // native purchase plugin + load Apple's localized prices, repainting once they're known, and
@@ -14652,9 +14940,24 @@ async function buyItem(item){
    (the Admin panel's Shop Customizations section, § ACCOUNT) - and duplicating this logic per
    container is exactly how the two would drift apart. Returns true when it consumed the click so
    each container's own listener can fall through to its container-specific buttons. */
+/* 2026-07-31 (v0.60, item 4): Blake's report - tapping a greyed-out Buy button did nothing at
+   all, no feedback, so it read as broken rather than "you can't afford this." Root cause: the
+   button carried a real `disabled` attribute, which suppresses the click event from ever
+   firing/bubbling in the first place - `!buyBtn.disabled` right below used to be dead-ish
+   documentation, not a real gate, since a disabled button's click never reached this far anyway.
+   FIX: catItemRow() (above) no longer renders `disabled` for an unaffordable item - it renders
+   `aria-disabled="true"` instead (still announced as unavailable to a screen reader, still styled
+   identically via `.btn[aria-disabled="true"]`, § STYLE) - so the click NOW fires, and this
+   handler is what gives it a real answer instead of silently doing nothing. */
 function shopRowClickHandler(e){
   const buyBtn=e.target.closest('.shopBuyBtn');
-  if(buyBtn&&!buyBtn.disabled){ showShopConfirm(buyBtn.dataset.id); return true; }
+  if(buyBtn&&buyBtn.getAttribute('aria-disabled')==='true'){
+    const item=findShopItem(buyBtn.dataset.id);
+    const balance=Number(buyBtn.dataset.balance)||0;
+    if(item)toast(`${shopDisplayName(item)} costs ${item.cost} credits and you have ${balance}.`);
+    return true;
+  }
+  if(buyBtn){ showShopConfirm(buyBtn.dataset.id); return true; }
   const yesBtn=e.target.closest('.shopConfirmYes');
   if(yesBtn){
     const id=yesBtn.dataset.id;
