@@ -42,6 +42,12 @@ If this does not work, do not submit. Tell me and I will fix it.
 
 ## STEP 3 - Redo the App Privacy questionnaire
 
+**IMPORTANT ORDERING CHANGE (2026-07-31):** do this step AFTER the free-month anti-abuse
+work ships, not before. That change makes the app keep a scrambled record about someone even
+after they delete their account, which is exactly the kind of thing this questionnaire and the
+privacy policy have to disclose. If you already answered it, revisit it once that build lands.
+
+
 You answered this in July, before accounts, Sign in with Apple, the leaderboard and real money
 existed. It is almost certainly out of date now, and Apple takes this section seriously.
 
@@ -69,15 +75,28 @@ fix, not a rebuild.
 
 ## STEP 5 - The moment it is approved (my step)
 
-Tell me it is approved. I flip one switch and push:
+Tell me it is approved. I do three things, in this order:
 
-- `NASTY_APPSTORE_LIVE` in index.html goes from `false` to `true`.
-- nastyboardgame.com changes from "coming soon" to "now live on the App Store".
-- The QR code on that page already points at your real listing
-  (apps.apple.com/app/id6790999186) and has been verified to scan correctly, so it starts
-  working the instant Apple flips the app live.
+1. **Back up every account and the leaderboard**, so the wipe below is recoverable if anything
+   goes wrong.
+2. **Run the launch wipe** (Blake, 2026-07-31: "when the app officially launches on the app
+   store, I want everyone to start from square 1 - meaning even having to make new accounts").
+   This deletes every account, wallet, owned item and leaderboard row, and ALSO clears the
+   free-month records so everyone who signs up after launch gets their full free month. It is
+   ONE-SHOT and guarded so it can never run twice or fire accidentally once real players exist.
+3. **Flip the website live**: `NASTY_APPSTORE_LIVE` in index.html goes `false` to `true`,
+   nastyboardgame.com changes from "coming soon" to "now live on the App Store". The QR already
+   points at apps.apple.com/app/id6790999186 and is verified to scan.
 
-Takes about a minute. Do not flip it before approval or the QR leads to a dead page.
+Takes about a minute. Do not flip before approval or the QR leads to a dead page.
+
+**Why the wipe has to happen at launch and not later:** right now nobody has spent real money
+(TestFlight purchases are sandbox and free), so wiping destroys nothing of value. Once real
+customers exist, wiping accounts would destroy credits people actually paid for. This is the
+last safe moment.
+
+**You will have to make a new account too**, and so will everyone in the family. That is the
+point of it.
 
 ---
 
