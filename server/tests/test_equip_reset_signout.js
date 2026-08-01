@@ -51,9 +51,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Real palette/felt/title bought this session, straight from production's own SHOP_CATALOG ids
 // (curled from https://play.nastyboardgame.com/shop and cross-checked against server/server.js -
-// not invented ids). Sunset's four-seat colors4[0] is a distinctive orange-red (#c4431c) so a
+// not invented ids). Sunset's four-seat colors4[0] is a distinctive orange (v0.66 "Sunfire",
+// #cc4a14 - was "Coral" #c4431c before the v0.66 all-palettes brightness rebuild) so a
 // real tee's rendered pixel color is an unambiguous, easy assertion.
-const PALETTE_ID = "palette_sunset", PALETTE_SEAT0_C = "#c4431c";
+const PALETTE_ID = "palette_sunset", PALETTE_SEAT0_C = "#cc4a14";
 const FELT_ID = "felt_navy", FELT_C = "#23456b";
 const TITLE_ID = "title_rookie";
 

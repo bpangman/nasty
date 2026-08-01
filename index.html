@@ -735,6 +735,21 @@
                         it starts from defaults like any other sign-in, consistent with sign-out
                         always meaning defaults. See `resetEquipToDefaults()`'s own header comment
                         for the full reasoning, and HANDOFF.md "v0.65" for the verification.
+                      - v0.66 (2026-08-02, server-catalog work, not this file), Blake: "fix the
+                        color scheme of the pegs (for all of them)... the colors are often just
+                        too similar to eachother. we need stark contrasts between colors so it's
+                        blatantly obvious." All five Shop palettes rebuilt around BRIGHTNESS in
+                        SHOP_CATALOG (server/server.js + the server/cloud/server.ts twin) - the
+                        real diagnosis was that prior passes went too dark, and below ~0.08
+                        relative luminance every saturated peg collapses into the same
+                        near-black blob at phone size. Vivid seats now live at luminance
+                        0.10-0.195 with board-game hue spread; each palette keeps at most one
+                        deliberate near-black anchor and one neutral. Midnight is RENAMED
+                        Galaxy (display name only - the palette_midnight id is the ownership
+                        key and never changes). Nothing in this file changed except this note,
+                        the teeBubbleBg() addendum and `#verTap` `v0.65` -> `v0.66`; the client
+                        has no palette data of its own (GET /shop drives everything). Full
+                        writeup + renders: HANDOFF.md "v0.66".
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -3863,7 +3878,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.65</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.66</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -9581,7 +9596,13 @@ function currentBoardScale(){
         default - the full lighten). A borderline color (Forest's Pine, Sunset's Crimson) gets a
         subtle push; a truly invisible one (Midnight, Ocean's Deep Blue) gets the full lift.
    Checked across every shipped palette (both colors4 and colors6) and both board sizes - see
-   HANDOFF.md "v0.64" for the full before/after contrast table and the real rendered screenshots. */
+   HANDOFF.md "v0.64" for the full before/after contrast table and the real rendered screenshots.
+   2026-08-02 (v0.66) addendum: the hexes named above (old Midnight #0c1445, Ocean's Deep Blue
+   #000e47, etc.) are the REJECTED, pre-v0.66 catalog - kept here as the record of why this
+   function exists. The v0.66 palette rebuild (SHOP_CATALOG, server/server.js) made most seats
+   bright enough to clear the floor untouched; the mechanism still auto-lifts the handful of
+   deliberate near-black anchors (Sunset's Twilight, Ocean's Abyss, Forest's Bark, Royal's Onyx,
+   Galaxy's Void) exactly as designed - derived from the color, so no list here to maintain. */
 const TEE_BUBBLE_BG=[15,10,6];          // rgba(15,10,6) - .teeBubble's own default fill, § STYLE - matched here (not re-hardcoded blind) so a future CSS tweak to that default is one place to also update
 const TEE_BUBBLE_BG_LIT=[92,86,74];     // a lightened, still-dark, same warm-gray family - the bubble stays "the bubble," just readable
 const TEE_BUBBLE_CONTRAST_FLOOR=2.2;    // a floor, not the test (same discipline the Shop's own palette work uses) - re-checked by eye on the real 4p/6p renders, every palette, before trusting this number

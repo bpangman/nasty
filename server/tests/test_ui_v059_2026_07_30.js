@@ -243,7 +243,9 @@ async function main() {
     check(/Online Play/.test(eqBody), "U3f and the Online Play (online access) token row is there too");
     check(await page.locator('#acctEquipBody .shopItem[data-id="online_month"] .shopBuyBtn').count() === 1,
       "U3g both rows carry real Buy buttons inside the panel");
-    check(/Midnight/.test(eqBody), "U3h the money-bought Midnight palette shows up as an owned customization");
+    // 2026-08-02 (v0.66): the palette_midnight item's DISPLAY name is now "Galaxy" (the id, the
+    // ownership key, is unchanged) - this regex tracks the display name the panel actually shows.
+    check(/Galaxy/.test(eqBody), "U3h the money-bought Galaxy palette shows up as an owned customization");
     await shot(page, "04_admin_customizations_390.png");
 
     // Buy a nickname token right here in the panel (through the same confirm the Shop uses).
