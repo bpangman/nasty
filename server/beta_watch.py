@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '06cb1af7-3f0d-4267-8cc1-93769fe0c466'
+BUILD_SUBMISSION_ID = 'f4a659c0-eeb1-435f-9d04-e120b0bfa583'
 
 
 def current_build():
@@ -109,7 +109,8 @@ try:
 <p>Apple approved the beta - everyone can install the real app right now.</p>
 <p>What's in this build:</p>
 <ul>
-<li><b>Signing out (or deleting your account) now resets every equipped cosmetic</b> - board colors, table felt, and title all go back to the standard look immediately, even if you were in the middle of a game. Before this, a previous account's palette/felt/title could keep showing after you signed out.</li>
+<li><b>Every Shop peg palette got a full color makeover.</b> The colors in each set are now bright and boldly different from each other, so you can always tell whose peg is whose at a glance - no more squinting at five nearly-black pegs.</li>
+<li><b>The Midnight palette is now called Galaxy</b> - nebula pink, comet blue, aurora green, solar amber, nebula purple, and deep space black. If you already owned Midnight, you own Galaxy automatically, nothing to re-buy.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
