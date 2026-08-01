@@ -750,6 +750,21 @@
                         the teeBubbleBg() addendum and `#verTap` `v0.65` -> `v0.66`; the client
                         has no palette data of its own (GET /shop drives everything). Full
                         writeup + renders: HANDOFF.md "v0.66".
+                      - v0.67 (2026-08-02, server-catalog work, not this file), Blake, verbatim:
+                        "Keep the strong contrast exactly as is, give those two palettes names
+                        that actually describe them - the same move that made Galaxy work." Two
+                        of v0.66's five rebuilt palettes kept names that no longer matched their
+                        colors: "Sunset" (an orange/magenta/violet/navy set with no sunset in it)
+                        is renamed MARBLES, and "Forest" (orange/magenta/blue alongside its one
+                        green) is renamed PATCHWORK QUILT - display name only, same as Galaxy;
+                        the ids (palette_sunset, palette_forest), every hex, and every cost are
+                        completely unchanged. Both SHOP_CATALOG twins updated (server/server.js +
+                        server/cloud/server.ts), plus appstore/index.html's board6 caption and
+                        two test files' descriptive comment/message strings that said "Sunset" as
+                        flavor text. Nothing in this file changed except this note and `#verTap`
+                        `v0.66` -> `v0.67`; the client still has no palette data of its own. Full
+                        writeup, the render verification, and the full regression run: HANDOFF.md
+                        "v0.67".
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -3878,7 +3893,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.66</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.67</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================

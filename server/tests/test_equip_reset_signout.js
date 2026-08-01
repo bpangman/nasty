@@ -51,7 +51,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Real palette/felt/title bought this session, straight from production's own SHOP_CATALOG ids
 // (curled from https://play.nastyboardgame.com/shop and cross-checked against server/server.js -
-// not invented ids). Sunset's four-seat colors4[0] is a distinctive orange (v0.66 "Sunfire",
+// not invented ids). Marbles's (palette_sunset, renamed from "Sunset" in v0.67 - display name
+// only, id/hex unaffected) four-seat colors4[0] is a distinctive orange (v0.66 "Sunfire",
 // #cc4a14 - was "Coral" #c4431c before the v0.66 all-palettes brightness rebuild) so a
 // real tee's rendered pixel color is an unambiguous, easy assertion.
 const PALETTE_ID = "palette_sunset", PALETTE_SEAT0_C = "#cc4a14";
@@ -90,7 +91,7 @@ async function main() {
   await K.waitHealthy(base);
   const c = K.makeClient(base);
 
-  // Account 1: "Baker" - buys and equips Sunset/Navy Felt/Rookie, then signs out mid-game.
+  // Account 1: "Baker" - buys and equips Marbles/Navy Felt/Rookie, then signs out mid-game.
   const baker = await c.signIn(key, { sub: "001777.baker.0001" });
   if (baker.status !== 200) throw new Error("sign-in failed: " + JSON.stringify(baker.body));
   const bakerToken = baker.body.sessionToken;
@@ -156,9 +157,9 @@ async function main() {
       titleBadgeShown: !!document.querySelector(".youTitlePanel"),
       gameVisible: !document.getElementById("game").classList.contains("hidden"),
     }));
-    check(before.colors4_0 === PALETTE_SEAT0_C, "R1a COLORS4[0] is the equipped Sunset color before sign-out: " + before.colors4_0);
+    check(before.colors4_0 === PALETTE_SEAT0_C, "R1a COLORS4[0] is the equipped Marbles color before sign-out: " + before.colors4_0);
     check(before.felt1.toLowerCase() === FELT_C.toLowerCase(), "R1b --felt1 is the equipped Navy Felt color before sign-out: " + before.felt1);
-    check(before.equip.palette && before.equip.palette.id === PALETTE_ID, "R1c EQUIP.palette is Sunset before sign-out");
+    check(before.equip.palette && before.equip.palette.id === PALETTE_ID, "R1c EQUIP.palette is Marbles before sign-out");
     check(before.equip.felt && before.equip.felt.id === FELT_ID, "R1d EQUIP.felt is Navy before sign-out");
     check(before.equip.title && before.equip.title.id === TITLE_ID, "R1e EQUIP.title is Rookie before sign-out");
     check((before.teeFill || "").toLowerCase() === PALETTE_SEAT0_C.toLowerCase(), `R1f a REAL on-screen tee's rendered SVG fill is the equipped color: ${before.teeFill}`);
@@ -251,7 +252,7 @@ async function main() {
     // token server-side (server.js/server.ts "§ ACCOUNT SIGN-IN"), so re-signing in as the same
     // Apple identity (same `sub`) for a fresh session token is the only way back in - exactly
     // what a real person re-opening the app and tapping "Sign in with Apple" again would get.
-    // Baker already owns Sunset from setup, so this only needs to equip it and delete.
+    // Baker already owns Marbles from setup, so this only needs to equip it and delete.
     const bakerAgain = await c.signIn(key, { sub: "001777.baker.0001" });
     if (bakerAgain.status !== 200) throw new Error("Baker re-sign-in failed: " + JSON.stringify(bakerAgain.body));
     const bakerToken2 = bakerAgain.body.sessionToken;
@@ -279,7 +280,7 @@ async function main() {
       return b && /Equipped/.test(b.textContent);
     }, PALETTE_ID, { timeout: 10000 });
     const beforeDelete = await page2.evaluate(() => JSON.parse(JSON.stringify(EQUIP || {})));
-    check(beforeDelete.palette && beforeDelete.palette.id === PALETTE_ID, "R7 setup: Baker has Sunset equipped again (fresh page), going into account delete");
+    check(beforeDelete.palette && beforeDelete.palette.id === PALETTE_ID, "R7 setup: Baker has Marbles equipped again (fresh page), going into account delete");
     await page2.waitForSelector("#btnAcctDelete:not([disabled])", { timeout: 10000 });
     await page2.click("#btnAcctDelete");
     await page2.waitForSelector("#acctDelConfirm:not(.hidden)", { timeout: 5000 });

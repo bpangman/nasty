@@ -1325,7 +1325,7 @@ const SHOP_CATALOG = [
     // verbatim (kept from v0.63, it always read clearly); Palm = Tailwind green-700, nudged
     // warmer; Twilight = the real named "Oxford Blue" family, lightened a touch - this
     // palette's one near-black anchor; Smoke = CSS DimGray, warmed - the one neutral.
-    id: "palette_sunset", category: "palette", name: "Sunset", cost: 50,
+    id: "palette_sunset", category: "palette", name: "Marbles", cost: 50,
     colors4: [
       { name: "Sunfire", c: "#cc4a14", dark: "#66250a" },
       { name: "Rose", c: "#c21c7a", dark: "#610e3d" },
@@ -1376,7 +1376,7 @@ const SHOP_CATALOG = [
     // a blue jay's wing, Tailwind blue-700 family nudged brighter; Bark = the real "Bark
     // Brown" from the old catalog, deepened into this palette's one near-black anchor;
     // Birch = v0.63's birch-bark warm gray, UNCHANGED (hex and all) - it always worked.
-    id: "palette_forest", category: "palette", name: "Forest", cost: 80,
+    id: "palette_forest", category: "palette", name: "Patchwork Quilt", cost: 80,
     colors4: [
       { name: "Pine", c: "#23703f", dark: "#123820" },
       { name: "Fox", c: "#c05a12", dark: "#602d09" },
