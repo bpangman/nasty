@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = 'f4a659c0-eeb1-435f-9d04-e120b0bfa583'
+BUILD_SUBMISSION_ID = '0b12698f-438a-4526-a13d-6c0c4995b071'
 
 
 def current_build():
@@ -97,20 +97,16 @@ try:
         sys.exit(0)
 
     body = '/tmp/nasty_beta_live.html'
-    # 2026-08-02 (v0.65 ship): the old body's "browser link... app players and browser players
-    # share tables" line was WRONG and had apparently been copied forward unedited since v0.43
-    # (2026-07-27) added the coming-soon website gate - a plain browser visitor to
-    # nastyboardgame.com has not been able to reach #menu/#game at all since then, only the
-    # coming-soon screen. Caught and fixed while touching this file for the v0.65 release;
-    # replaced with an honest line about what the website shows today.
+    # 2026-08-02 (v0.67 ship): "what is in this build" bullets rewritten for the Sunset/Forest
+    # rename - same pattern every build since 2 has followed (rewrite, do not accumulate old
+    # bullets from prior builds).
     open(body, 'w').write(f'''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
 <p>What's in this build:</p>
 <ul>
-<li><b>Every Shop peg palette got a full color makeover.</b> The colors in each set are now bright and boldly different from each other, so you can always tell whose peg is whose at a glance - no more squinting at five nearly-black pegs.</li>
-<li><b>The Midnight palette is now called Galaxy</b> - nebula pink, comet blue, aurora green, solar amber, nebula purple, and deep space black. If you already owned Midnight, you own Galaxy automatically, nothing to re-buy.</li>
+<li><b>Two Shop peg palettes got new names.</b> Sunset is now called Marbles, and Forest is now called Patchwork Quilt - the colors themselves haven't changed at all, just the names, so they actually describe what you see on the board.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
