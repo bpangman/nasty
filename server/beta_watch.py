@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '0b12698f-438a-4526-a13d-6c0c4995b071'
+BUILD_SUBMISSION_ID = 'a926bb58-8f2d-4499-9f4b-f0a47edc6894'
 
 
 def current_build():
@@ -97,16 +97,17 @@ try:
         sys.exit(0)
 
     body = '/tmp/nasty_beta_live.html'
-    # 2026-08-02 (v0.67 ship): "what is in this build" bullets rewritten for the Sunset/Forest
-    # rename - same pattern every build since 2 has followed (rewrite, do not accumulate old
-    # bullets from prior builds).
+    # 2026-07-31 (v0.68 ship): "what is in this build" bullets rewritten for the free-month
+    # loophole + invite-link work - same pattern every build since 2 has followed (rewrite, do
+    # not accumulate old bullets from prior builds).
     open(body, 'w').write(f'''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
 <p>What's in this build:</p>
 <ul>
-<li><b>Two Shop peg palettes got new names.</b> Sunset is now called Marbles, and Forest is now called Patchwork Quilt - the colors themselves haven't changed at all, just the names, so they actually describe what you see on the board.</li>
+<li><b>The free-month loophole is closed.</b> Deleting an account and making a new one with the same Apple sign-in no longer hands out another free month of online play - the app keeps a scrambled, can't-be-traced-back record of "this sign-in already used its free month," and tells the person plainly at sign-in. Honest reinstalls inside the free window keep the rest of it.</li>
+<li><b>Invite links behave for signed-in players.</b> Tapping a game invite right after launching the app used to sometimes show a pointless sign-in screen to someone already signed in - now it waits for the account check and goes straight to the right place. Blocked players also see "credits" (not the old "points") in the explanation.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
