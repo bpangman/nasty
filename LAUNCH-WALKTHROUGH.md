@@ -84,6 +84,19 @@ Tell me it is approved. I do three things, in this order:
    This deletes every account, wallet, owned item and leaderboard row, and ALSO clears the
    free-month records so everyone who signs up after launch gets their full free month. It is
    ONE-SHOT and guarded so it can never run twice or fire accidentally once real players exist.
+
+   **Built and shipped in v0.68 - steps 1 and 2 are now ONE command:**
+
+   ```
+   cd /Users/jarvis/nasty-game/server && ./launch-reset.sh
+   ```
+
+   It downloads the full backup to a local file first (and refuses to continue without it),
+   asks for the phrase `WIPE EVERYTHING FOR LAUNCH` typed by hand, runs the wipe, and then
+   verifies the leaderboard and account list really are empty. The server keeps its own copy
+   of the backup too, and refuses a second run forever. The Apple purchase ledger is
+   deliberately NOT wiped - that is what stops an old receipt being replayed against a new
+   account for free credits. `./launch-reset.sh --status` is a safe read-only check any time.
 3. **Flip the website live**: `NASTY_APPSTORE_LIVE` in index.html goes `false` to `true`,
    nastyboardgame.com changes from "coming soon" to "now live on the App Store". The QR already
    points at apps.apple.com/app/id6790999186 and is verified to scan.

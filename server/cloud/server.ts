@@ -1252,6 +1252,15 @@ type AccountRecord = {
   // months. Optional/defaulted with Array.isArray(...) exactly like walletOwned, so an account
   // record written before this feature existed still parses correctly.
   walletOnlineMonths?: string[];
+  // 2026-07-31 v0.68 § FREE MONTH TOMBSTONE (Blake: "close the loophole of people deleting
+  // their account and just creating a new one with the same Apple SSO to get another free
+  // month"). Set ONLY when this account was created for an identity that already burned its
+  // free month on an earlier, since-deleted account: the "YYYY-MM" month that ORIGINAL free
+  // period ran through, inherited from the tombstone at creation. onlineFreeMonths() caps the
+  // derived free window at this month, so the free month can never be re-earned by
+  // delete-and-recreate. Absent (the normal case) means "no inherited history, derive as
+  // always". Twin of server.js's field of the same name.
+  onlineFreeThrough?: string;
 };
 type SessionRecord = { uid: string; exp: number };
 type EmailChallenge = { hash: string; exp: number; attempts: number; sentAt: number; sentToday: number; dayStart: number };
@@ -1566,8 +1575,16 @@ async function revokeAllSessionsFor(uid: string): Promise<number> {
 }
 
 /* --- accounts. A provider's `sub` is an INDEX KEY, never the account id - see server.js. --- */
+// 2026-07-31 v0.68: test-only override for the `created` stamp, same convention (and same
+// warning) as NASTY_MONTHLY_NOW_MS - never set in production. It exists because the free-month
+// tombstone cannot be tested honestly without an account whose signup month is in the past, and
+// `created` was previously un-fakeable. See server.js's twin for the longer note.
+function accountCreatedNowMs(): number {
+  const override = Number(Deno.env.get("NASTY_ACCOUNT_CREATED_MS"));
+  return Number.isFinite(override) && override > 0 ? override : Date.now();
+}
 function newAccountRecord(provider: string, sub: string): AccountRecord {
-  const now = Date.now();
+  const now = accountCreatedNowMs();
   return {
     uid: accountsRandHex(16), provider, sub,
     identities: [{ provider, sub, linkedAt: now }],
@@ -1630,8 +1647,18 @@ async function attachIdentity(acct: AccountRecord, provider: string, sub: string
   }
   await kv.set(accountKey(acct.uid), acct);
   await kv.set(identityIdxKey(provider, sub), acct.uid);
+  // 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: a newly linked sign-in method inherits the
+  // account's free-month record the moment it is attached - otherwise "link Google, delete the
+  // account, come back through Google" would be a fresh free month through the side door. Twin
+  // of server.js's.
+  try { await writeFreeMonthTombstoneIfAbsent(provider, sub, accountFreeThroughMonth(acct)); }
+  catch (e) { log("free-month tombstone write failed on link", acct.uid, provider, e); }
 }
-type ResolvedAccount = { account: AccountRecord; created: boolean; linked: boolean };
+// 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: freeMonthAlreadyUsed is true only when a BRAND-NEW
+// account inherited a tombstone whose free window is already over - i.e. the person the notice
+// actually helps. A returning identity still inside its original free window inherits silently
+// (nothing changed for them, so there is nothing to announce).
+type ResolvedAccount = { account: AccountRecord; created: boolean; linked: boolean; freeMonthAlreadyUsed?: boolean };
 async function resolveAccountForIdentity(provider: string, v: ProviderIdentity): Promise<ResolvedAccount> {
   const idx = await kv.get<string>(identityIdxKey(provider, v.sub));
   if (typeof idx.value === "string" && idx.value) {
@@ -1650,6 +1677,12 @@ async function resolveAccountForIdentity(provider: string, v: ProviderIdentity):
     }
   }
   const rec = newAccountRecord(provider, v.sub);
+  // 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: consulted BEFORE the record is committed, so the
+  // inherited cap is part of the very first write and no window exists where the new account
+  // reads as freshly entitled. Read the block's own header (above deleteAccountRecord) for the
+  // full design; twin of server.js's.
+  const tomb = await readFreeMonthTombstone(provider, v.sub);
+  if (tomb) rec.onlineFreeThrough = tomb.freeThroughMonth;
   // check() on the index so two isolates racing a brand-new sub cannot both create an account.
   const ok = await kv.atomic().check(idx).set(accountKey(rec.uid), rec).set(identityIdxKey(provider, v.sub), rec.uid).commit();
   if (!ok.ok) {
@@ -1662,8 +1695,14 @@ async function resolveAccountForIdentity(provider: string, v: ProviderIdentity):
     await kv.set(identityIdxKey(provider, v.sub), rec.uid);
   }
   await rememberAccountEmail(rec, provider, v);
-  log("new account created", rec.uid, provider);
-  return { account: rec, created: true, linked: false };
+  // No tombstone yet for this identity: write one NOW, at creation, so the record exists even
+  // if this account is never deleted (and deletion cannot race or crash it away later).
+  if (!tomb) {
+    try { await writeFreeMonthTombstoneIfAbsent(provider, v.sub, accountFreeThroughMonth(rec)); }
+    catch (e) { log("free-month tombstone write failed on create", rec.uid, provider, e); }
+  }
+  log("new account created", rec.uid, provider, tomb ? "(free month already used - through " + tomb.freeThroughMonth + ")" : "");
+  return { account: rec, created: true, linked: false, freeMonthAlreadyUsed: !!tomb && !onlineEntitledNow(rec) };
 }
 async function accountForAppleSub(sub: string): Promise<AccountRecord> {
   return (await resolveAccountForIdentity("apple", { sub })).account;
@@ -1777,12 +1816,115 @@ async function undoAccountClaim(uid: string): Promise<{ ok: boolean; error?: str
   return { ok: true, restored: Object.keys(j.rows) };
 }
 
+/* =======================================================================================
+ * 2026-07-31 v0.68 § FREE MONTH TOMBSTONE - twin of server.js's block of the same name.
+ *
+ * THE LOOPHOLE THIS CLOSES, in Blake's words: "make sure you close the loophole of people
+ * deleting their account and just creating a new one with the same Apple SSO to get another
+ * free month. While the old account is deleted, we should still store an infinite record of
+ * 'this Apple account has already used their free month' and let it be known when they create
+ * their new account." onlineFreeMonths() derives the free window from acct.created, so before
+ * this block, delete + re-sign-in produced a brand-new `created` and a brand-new free month,
+ * repeatable forever.
+ *
+ * WHAT IS STORED - the minimum, and Blake chose the shape: "a one-way scrambled version of
+ * their Apple ID plus which month their free trial covered... the stored value cannot be
+ * turned back into who they are." One record per sign-in identity, keyed by a SHA-256 hash of
+ * salt + provider + provider's stable subject id, holding ONLY {freeThroughMonth, ts}. Never
+ * the raw identifier, never the uid, never a name or email. SHA-256 because it is the
+ * one-way cryptographic hash both runtimes already ship (the email-code hash next door uses
+ * the same primitive); the salt (below) means even someone holding BOTH the KV data and
+ * Apple's raw `sub` for a person cannot confirm a match without also holding the server's
+ * salt. Apple's `sub` is stable per Apple ID per app, so the same human returning always
+ * re-derives the same hash - that stability is the whole mechanism.
+ *
+ * WHEN IT IS WRITTEN - three moments, all if-absent (the FIRST record wins, forever):
+ *   1. account creation (so the record exists even for someone who never deletes),
+ *   2. linking a second sign-in method (so "link Google, delete, return via Google" cannot
+ *      dodge it - every identity that ever pointed at an account carries the same record),
+ *   3. account deletion (belt and suspenders for accounts created before this feature).
+ *
+ * WHEN IT IS READ - once, at account creation. A hit copies freeThroughMonth onto the new
+ * record as onlineFreeThrough, and onlineFreeMonths() caps the derived window there. Deleting
+ * mid-free-period and reinstalling therefore keeps the REMAINDER of the original window (fair
+ * to reinstallers - most people hitting this are reinstalling, not cheating); once the
+ * original window has passed, a recreated account gets no new free month, ever. The sign-in
+ * response says so plainly the moment the new account is created - see FREE_MONTH_USED_NOTICE.
+ *
+ * NEVER deleted by account deletion ("an infinite record"). The ONE thing that clears these
+ * is the explicit launch reset (§ LAUNCH RESET below) - Blake's decision: at launch everyone
+ * starts from square one, free month included, or launch day would open with every returning
+ * tester instantly paywalled.
+ *
+ * THE SALT: NASTY_FREEMONTH_SALT env (a Deploy secret) when set; otherwise generated once and
+ * kept in KV under ["freemonthsalt"] (atomic create, so racing isolates agree). The salt must
+ * NEVER change once tombstones exist - a new salt orphans every old record (the hashes stop
+ * matching), silently reopening the loophole. Keeping the generated salt in KV beside the
+ * data is a deliberate trade: it protects the hashes if a DUMP of the tombstone records
+ * leaks, and unlike an env secret it cannot be lost by a dashboard misclick.
+ * ===================================================================================== */
+type FreeMonthTombstone = { freeThroughMonth: string; ts: number };
+function freeMonthTombstoneKey(hash: string): Deno.KvKey { return ["freemonth", hash]; }
+const FREEMONTH_SALT_KEY: Deno.KvKey = ["freemonthsalt"];
+let freeMonthSaltCache: string | null = (Deno.env.get("NASTY_FREEMONTH_SALT") || "").trim() || null;
+async function freeMonthSalt(): Promise<string> {
+  if (freeMonthSaltCache) return freeMonthSaltCache;
+  const cur = await kv.get<string>(FREEMONTH_SALT_KEY);
+  if (typeof cur.value === "string" && cur.value) { freeMonthSaltCache = cur.value; return cur.value; }
+  const fresh = accountsRandHex(32);
+  const ok = await kv.atomic().check(cur).set(FREEMONTH_SALT_KEY, fresh).commit();
+  if (ok.ok) { freeMonthSaltCache = fresh; return fresh; }
+  const again = await kv.get<string>(FREEMONTH_SALT_KEY);   // another isolate won the race - use its salt
+  freeMonthSaltCache = typeof again.value === "string" && again.value ? again.value : fresh;
+  return freeMonthSaltCache;
+}
+async function freeMonthIdentityHash(provider: string, sub: string): Promise<string> {
+  const salt = await freeMonthSalt();
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(salt + ":" + provider + ":" + sub));
+  return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function readFreeMonthTombstone(provider: string, sub: string): Promise<FreeMonthTombstone | null> {
+  if (!provider || !sub) return null;
+  const cur = await kv.get<FreeMonthTombstone>(freeMonthTombstoneKey(await freeMonthIdentityHash(provider, sub)));
+  return cur.value && typeof cur.value.freeThroughMonth === "string" ? cur.value : null;
+}
+// If-absent on purpose: the FIRST record for an identity is the truth forever. Overwriting on a
+// later delete would let a recreate-then-delete cycle push freeThroughMonth forward.
+async function writeFreeMonthTombstoneIfAbsent(provider: string, sub: string, freeThroughMonth: string): Promise<void> {
+  if (!provider || !sub || !freeThroughMonth) return;
+  const key = freeMonthTombstoneKey(await freeMonthIdentityHash(provider, sub));
+  const cur = await kv.get<FreeMonthTombstone>(key);
+  if (cur.value) return;
+  // No expireIn - Blake asked for "an infinite record", and it is nothing but a hash and a month.
+  await kv.atomic().check(cur).set(key, { freeThroughMonth, ts: Date.now() } as FreeMonthTombstone).commit();
+}
+/* Blake's decision on what the returning person is told, verbatim: "A clear line when the new
+   account is created: their free online month was already used, so online play needs a token.
+   No surprise later when they try to join a game." Worded for the honest majority - someone
+   reinstalling after deleting - not as an accusation. Twin of server.js's. */
+const FREE_MONTH_USED_NOTICE =
+  "Welcome back! A previous account on this sign-in already used its free month of online play, " +
+  "so online games now take an Online Access token from the Shop. Everything else, including all " +
+  "offline play, stays free.";
+
 /* --- deletion. Twin of server.js's: by default the leaderboard row SURVIVES, converted back
    into an ordinary unclaimed name row; `eraseBoard:true` removes the counters too. Apple token
    revocation waits on the .p8 key Blake has not created yet, which Apple's own guidance
    explicitly allows - so in-app deletion is compliant from day one. --- */
 async function deleteAccountRecord(acct: AccountRecord, eraseBoard: boolean): Promise<{ keptOnBoard: boolean }> {
   const uid = acct.uid;
+  // 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: written FIRST, before anything is removed, so a
+  // crash mid-delete can never lose the anti-abuse record. One per linked identity - deleting
+  // an Apple+Google account tombstones BOTH doors back in. If-absent, so the record the account
+  // got at creation (the normal case) is never overwritten; this write only matters for
+  // accounts that predate the tombstone feature. Twin of server.js's.
+  {
+    const through = accountFreeThroughMonth(acct);
+    for (const id of accountIdentities(acct)) {
+      try { await writeFreeMonthTombstoneIfAbsent(id.provider, id.sub, through); }
+      catch (e) { log("free-month tombstone write failed on delete", uid, id.provider, e); }
+    }
+  }
   const row = await accountRowFor(uid);
   let keptOnBoard = false;
   if (!eraseBoard && acct.gameName && Object.keys(row).length) {
@@ -1944,7 +2086,22 @@ function onlineFreeMonths(acct: AccountRecord): string[] {
   let m = chicagoMonthKey((acct && acct.created) || Date.now());
   months.push(m);
   for (let i = 0; i < ONLINE_FREE_EXTRA_MONTHS; i++) { m = nextMonthKey(m); months.push(m); }
-  return months;
+  // 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: an account that inherited a tombstone at creation
+  // has its free window CAPPED at the original account's freeThroughMonth - the "YYYY-MM"
+  // string compare is safe because the format is fixed-width and zero-padded. A returning
+  // identity still inside its original window keeps the remainder; one past it gets an empty
+  // free list. Accounts with no inherited history (cap null) are completely untouched. Twin of
+  // server.js's.
+  const cap = acct && typeof acct.onlineFreeThrough === "string" && acct.onlineFreeThrough ? acct.onlineFreeThrough : null;
+  return cap ? months.filter((mm) => mm <= cap) : months;
+}
+// 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: the single answer to "which month does this
+// account's free online play run through" - what tombstones are written with, and what the
+// status view reports even when the capped free list has gone empty. Twin of server.js's.
+function accountFreeThroughMonth(acct: AccountRecord): string {
+  const free = onlineFreeMonths(acct);
+  if (free.length) return free[free.length - 1];
+  return String((acct && acct.onlineFreeThrough) || chicagoMonthKey((acct && acct.created) || Date.now()));
 }
 function onlinePurchasedMonths(acct: AccountRecord): string[] {
   return Array.isArray(acct.walletOnlineMonths) ? acct.walletOnlineMonths.slice() : [];
@@ -1987,15 +2144,27 @@ function onlineAccessView(acct: AccountRecord): OnlineAccessView {
     entitled,
     reason,
     accessUntil: entitled ? chicagoMonthStartMs(cy, cm) : null,
-    freeThroughMonth: freeMonths[freeMonths.length - 1],
+    // v0.68: via accountFreeThroughMonth(), not freeMonths[last] - a tombstone-capped account
+    // can have an EMPTY free list, and this still truthfully reports the original window's end.
+    freeThroughMonth: accountFreeThroughMonth(acct),
     monthsAheadCovered: entitled ? run - 1 : 0,
     tokenCost: ONLINE_ACCESS_COST,
     itemId: ONLINE_ACCESS_ITEM_ID,
   };
 }
-const ONLINE_SIGNIN_MESSAGE = "Sign in with your NASTY account to play online.";
+/* 2026-07-31 v0.68 (task 4): rewritten. The old line ("Sign in with your NASTY account to play
+   online.") had two gaps a brand-new person hits at the worst moment - right after tapping a
+   friend's invite link: it never said HOW to sign in (Apple is the only method there is), and it
+   never said the reassuring part, that a new account's first month of online play is free, so
+   they are not being marched into a paywall. Kept to two short sentences on purpose - this
+   renders inside a toast/overlay on a phone. Twin of server.js's. */
+const ONLINE_SIGNIN_MESSAGE = "Playing online just needs a quick Sign in with Apple. New accounts get their first month of online play free.";
 function onlineAccessDeniedMessage(): string {
-  return "Your free online period has ended. Buy an Online Access token in the Shop (" + ONLINE_ACCESS_COST + " points) to keep playing online this month.";
+  // 2026-07-31 v0.68 (task 3): "points" -> "credits". The currency was renamed app-wide in v0.59
+  // (Blake: "the word is CREDITS everywhere money-like numbers are shown") but this string - the
+  // one a blocked player actually reads - was missed. Leaderboard standing deliberately stays
+  // "points"; this is spendable currency, so it is "credits". Twin of server.js's.
+  return "Your free online period has ended. Buy an Online Access token in the Shop (" + ONLINE_ACCESS_COST + " credits) to keep playing online this month.";
 }
 type OnlineAccessDenial = {
   reason: "signInRequired" | "onlineAccessRequired"; message: string;
@@ -2103,8 +2272,14 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
     if (r.fail) return json(r.fail.status, r.fail.body);
     const resolved = await resolveAccountForIdentity(provider, r.v);
     const s = await issueSession(resolved.account.uid);
+    // 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: told at creation, exactly as Blake chose ("A
+    // clear line when the new account is created... No surprise later when they try to join a
+    // game"). Additive fields - an older client simply ignores them. Twin of server.js's.
+    const usedExtra = resolved.created && resolved.freeMonthAlreadyUsed
+      ? { freeMonthUsed: true, freeMonthNotice: FREE_MONTH_USED_NOTICE } : {};
     return json(200, {
       sessionToken: s.token, provider, linkedToExisting: resolved.linked,
+      ...usedExtra,
       ...accountPublicView(resolved.account, s.exp),
     });
   }
@@ -2198,8 +2373,13 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
     await burnEmailChallenge(email, ch);       // single use, exactly like the sign-in nonce
     const resolved = await resolveAccountForIdentity("email", { sub: email, email, emailVerified: true, privateRelay: false });
     const s = await issueSession(resolved.account.uid);
+    // 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: same additive creation-time notice as the token
+    // sign-in routes above - the email door must not be the one that forgets to mention it.
+    const usedExtra = resolved.created && resolved.freeMonthAlreadyUsed
+      ? { freeMonthUsed: true, freeMonthNotice: FREE_MONTH_USED_NOTICE } : {};
     return json(200, {
       sessionToken: s.token, provider: "email", linkedToExisting: resolved.linked,
+      ...usedExtra,
       ...accountPublicView(resolved.account, s.exp),
     });
   }
@@ -2271,7 +2451,8 @@ async function handleAccountRoute(req: Request, url: URL, ip: string): Promise<R
       const purchased = Math.max(0, Number(acct.walletPurchasedCredits) || 0);
       const balance = Math.max(0, earned + purchased - spentSoFar);
       if (balance < item.cost) {
-        const failBody = { error: "cantafford", message: "Not enough points for that yet.", cost: item.cost, balance, wallet: await walletView(acct) };
+        // 2026-07-31 v0.68 (task 3): "points" -> "credits", the v0.59 rename this string missed.
+        const failBody = { error: "cantafford", message: "Not enough credits for that yet.", cost: item.cost, balance, wallet: await walletView(acct) };
         if (requestId) await kv.set(purchaseKey(me.uid, requestId), { status: 409, body: failBody } as PurchaseSeen, { expireIn: PURCHASE_ID_TTL_MS });
         return json(409, failBody);
       }
@@ -3906,6 +4087,132 @@ async function handleAdminRoute(req: Request, url: URL): Promise<Response> {
       return json(200, respBody);
     }
     return json(500, { error: "server error" });
+  }
+  /* =====================================================================================
+   * 2026-07-31 v0.68 § LAUNCH RESET - Blake, verbatim: "can you reset the leaderboard and all
+   * accounts? when the app officially launches on the app store, I want everyone to start from
+   * square 1 - meaning even having to make new accounts!"
+   *
+   * DELIBERATELY NOT AUTOMATIC. Blake's explicit choice of mechanism: "I back everything up
+   * first, then run it as an explicit step the moment Apple approves, alongside the website
+   * switch. Guarded so it can never run twice or fire by accident after real players exist."
+   * So this is an authenticated admin POST with a typed confirm phrase, NOT anything wired to
+   * NASTY_APPSTORE_LIVE or any client flag - a destructive wipe on a flag is how live player
+   * data gets destroyed later. Run it via server/launch-reset.sh, which downloads the backup
+   * to a local file FIRST and refuses to proceed without it.
+   *
+   * WHAT GOES (backed up first, then deleted): every account, every sign-in index, every
+   * session, every account/name leaderboard row and the folded-name index, the monthly boards,
+   * every claim journal, pending email codes, purchase requestId dedupe records, every room
+   * and room log, and - Blake's explicit decision - the § FREE MONTH TOMBSTONE records, so
+   * every returning tester gets their full free month starting launch day instead of landing
+   * straight in a paywall on day one. The leaderboard epoch is BUMPED (never reset) so every
+   * device that talks to the server afterwards clears its own local cache, exactly like the
+   * existing /admin/leaderboard/reset.
+   *
+   * WHAT SURVIVES, on purpose:
+   *   ["iap", ...]      the Apple transaction replay ledger. Verified against the code, not
+   *                     assumed: /account/iap/verify refuses any transactionId already in the
+   *                     ledger (409 for a different account), so KEEPING it is what stops an
+   *                     old sandbox/production receipt being replayed against a fresh
+   *                     post-launch account for free credits. Deleting it would reopen exactly
+   *                     that minting hole. The dead uids inside old entries are harmless -
+   *                     they make every old entry read as "a different account", which is the
+   *                     correct refusal.
+   *   ["iapevent", ...] the Apple notification audit trail (90-day TTL, evidence).
+   *   ["soloseen", ...] solo-result replay dedupe (anti-replay, same reasoning as the ledger).
+   *   ["freemonthsalt"] the tombstone salt (identity-free; regenerating buys nothing).
+   *   ["launchreset"] / ["launchbackup*"]  this feature's own marker and stored backups.
+   *
+   * THE ONE-SHOT GUARD: ["launchreset"] is claimed with an atomic check(versionstamp null)
+   * BEFORE any deletion, so a second invocation - even a concurrent one on another isolate -
+   * gets a 409 and wipes nothing, forever. There is deliberately no un-arm route.
+   *
+   * THE BACKUP: collected BEFORE the marker is claimed, stored in KV in chunks (values are
+   * capped at 64KiB, so the JSON is split) under ["launchbackup", runId, n] with an index at
+   * ["launchbackupidx", runId], AND returned whole in the response body so the runner script
+   * writes it to a local file too. Restoring is a matter of replaying data[] key/value pairs
+   * back into KV (u64:true values as Deno.KvU64) - documented in HANDOFF.md.
+   * =================================================================================== */
+  if (parts.length >= 2 && parts[1] === "launch-reset") {
+    const LAUNCH_MARKER_KEY: Deno.KvKey = ["launchreset"];
+    type LaunchMarker = { ranAt: number; runId: string; state: string; deleted?: Record<string, number>; epoch?: number };
+    const WIPE_PREFIXES = [
+      "account", "acctidx", "session", "authnonce", "lbacct", "leaderboard", "lbname",
+      "lbmonth", "lbmonthidx", "claimjournal", "emailcode", "purchase", "freemonth",
+      "room", "roomlog",
+    ];
+    async function collectLaunchBackup() {
+      const data: { key: unknown[]; value: unknown; u64?: boolean }[] = [];
+      const counts: Record<string, number> = {};
+      for (const prefix of WIPE_PREFIXES) {
+        let n = 0;
+        for await (const e of kv.list({ prefix: [prefix] })) {
+          const isU64 = e.value instanceof Deno.KvU64;
+          data.push({ key: e.key as unknown[], value: isU64 ? Number((e.value as Deno.KvU64).value) : e.value, ...(isU64 ? { u64: true } : {}) });
+          n++;
+        }
+        counts[prefix] = n;
+      }
+      return { version: 1, server: "deno", takenAt: Date.now(), epoch: await getEpoch(), counts, data };
+    }
+    if (parts.length === 2 && req.method === "GET") {
+      const cur = await kv.get<LaunchMarker>(LAUNCH_MARKER_KEY);
+      if (!cur.value) return json(200, { done: false });
+      return json(200, { done: true, ...cur.value });
+    }
+    if (parts.length === 3 && parts[2] === "backup" && req.method === "GET") {
+      // Read-only preview of exactly what the wipe would take - the runner script saves this
+      // to a local file before it ever sends the POST below.
+      return json(200, await collectLaunchBackup());
+    }
+    if (parts.length === 2 && req.method === "POST") {
+      const body = await req.json().catch(() => ({} as Record<string, unknown>));
+      if ((body as Record<string, unknown>).confirm !== "WIPE EVERYTHING FOR LAUNCH") {
+        return json(400, { error: "confirmrequired", message: 'This wipes every account and leaderboard row. Send {"confirm":"WIPE EVERYTHING FOR LAUNCH"} to really run it.' });
+      }
+      const pre = await kv.get<LaunchMarker>(LAUNCH_MARKER_KEY);
+      if (pre.value) return json(409, { error: "alreadyran", message: "The launch reset already ran and refuses to run twice.", ...pre.value });
+      const backup = await collectLaunchBackup();
+      const runId = Date.now() + "-" + accountsRandHex(4);
+      // Persist the backup into KV BEFORE claiming the marker or deleting anything - 20000
+      // JS chars per chunk keeps every value safely under KV's 64KiB cap even if every char
+      // were 3 UTF-8 bytes.
+      const raw = JSON.stringify(backup);
+      const chunks: string[] = [];
+      for (let i = 0; i < raw.length; i += 20000) chunks.push(raw.slice(i, i + 20000));
+      for (let i = 0; i < chunks.length; i++) await kv.set(["launchbackup", runId, i], chunks[i]);
+      await kv.set(["launchbackupidx", runId], { chunks: chunks.length, takenAt: backup.takenAt, counts: backup.counts });
+      // THE GUARD: atomic claim. Only one invocation can ever get past this line.
+      const claimed = await kv.atomic()
+        .check({ key: LAUNCH_MARKER_KEY, versionstamp: null })
+        .set(LAUNCH_MARKER_KEY, { ranAt: Date.now(), runId, state: "wiping" } as LaunchMarker)
+        .commit();
+      if (!claimed.ok) {
+        const again = await kv.get<LaunchMarker>(LAUNCH_MARKER_KEY);
+        return json(409, { error: "alreadyran", message: "The launch reset already ran and refuses to run twice.", ...(again.value || {}) });
+      }
+      // Rooms first: close live sockets and drop in-memory engines before their KV rows go.
+      for await (const e of kv.list<RoomMeta>({ prefix: ["room"] })) {
+        const code = e.value && e.value.code;
+        if (!code) continue;
+        try { forceCloseRoomSockets(code); } catch (_e) { /* best effort */ }
+        try { dropEngine(code); } catch (_e) { /* best effort */ }
+      }
+      const deleted: Record<string, number> = {};
+      for (const prefix of WIPE_PREFIXES) {
+        let n = 0;
+        for await (const e of kv.list({ prefix: [prefix] })) { await kv.delete(e.key); n++; }
+        deleted[prefix] = n;
+      }
+      const epoch = (await getEpoch()) + 1;
+      await kv.set(EPOCH_KEY, epoch);
+      const doneMarker: LaunchMarker = { ranAt: Date.now(), runId, state: "done", deleted, epoch };
+      await kv.set(LAUNCH_MARKER_KEY, doneMarker);
+      log("LAUNCH RESET completed", "runId=" + runId, JSON.stringify(deleted), "epoch=" + epoch);
+      return json(200, { ok: true, runId, epoch, deleted, backup });
+    }
+    return json(405, { error: "method not allowed" });
   }
   return json(404, { error: "no such admin route" });
 }

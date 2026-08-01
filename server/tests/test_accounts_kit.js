@@ -234,6 +234,15 @@ function serverEnv(kind, scratch, port, adminToken, extra) {
       NASTY_ACCOUNTS_LEADERBOARD_FILE: path.join(scratch, "accounts-leaderboard.json"),
       NASTY_ACCOUNT_CLAIMS_FILE: path.join(scratch, "claims.json"),
       NASTY_EMAIL_CODES_FILE: path.join(scratch, "email-codes.json"),
+      // 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: every account CREATION now writes a tombstone,
+      // so without these overrides every accounts suite would quietly pollute the real
+      // server/free-months.json (and mint a real salt file) on every run.
+      NASTY_FREE_MONTHS_FILE: path.join(scratch, "free-months.json"),
+      NASTY_FREEMONTH_SALT_FILE: path.join(scratch, "free-month-salt.txt"),
+      // 2026-07-31 v0.68 § LAUNCH RESET: same reasoning - the guard marker and backups a suite
+      // triggers must land in scratch, never next to the real server.
+      NASTY_LAUNCH_RESET_DONE_FILE: path.join(scratch, "launch-reset-done.json"),
+      NASTY_LAUNCH_BACKUP_DIR: scratch,
     });
   }
   return Object.assign({}, process.env, base, extra || {});

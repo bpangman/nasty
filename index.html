@@ -765,6 +765,25 @@
                         `v0.66` -> `v0.67`; the client still has no palette data of its own. Full
                         writeup, the render verification, and the full regression run: HANDOFF.md
                         "v0.67".
+                      - v0.68 (2026-07-31, mostly server work - the free-month loophole + the
+                        launch wipe). Blake, verbatim: "make sure you close the loophole of
+                        people deleting their account and just creating a new one with the same
+                        Apple SSO to get another free month" and "when the app officially
+                        launches on the app store, I want everyone to start from square 1".
+                        Both servers now keep a permanent one-way-hashed record per sign-in
+                        identity of the month its free online play ran through (§ FREE MONTH
+                        TOMBSTONE in both server files), consulted at account creation, and an
+                        explicit, admin-token-gated, backed-up, one-shot § LAUNCH RESET wipe
+                        exists for launch day (run via server/launch-reset.sh - deliberately
+                        NOT wired to NASTY_APPSTORE_LIVE or any flag). THIS file's changes:
+                        accountSignIn() shows the server's freeMonthNotice (toast + ACCT_NOTICE)
+                        when a new account's free month was already used; the delete-account
+                        warning now says plainly that deleting does not reset the free month;
+                        privacy.html discloses the scrambled post-deletion record. Server
+                        message fixes ride along: the two blocked-player strings still saying
+                        "points" now say "credits" (the v0.59 rename missed them), and
+                        ONLINE_SIGNIN_MESSAGE now names Apple and mentions the free first
+                        month. `#verTap` `v0.67` -> `v0.68`. Full writeup: HANDOFF.md "v0.68".
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -3893,7 +3912,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.67</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.68</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -4798,8 +4817,14 @@ button{font:inherit;cursor:pointer}
              it, permanently, with no way back - Apple does not refund a purchase just because the
              account that spent it is gone. This is copy-only: no server change, the behavior it
              describes was already exactly this before this pass. -->
+        <!-- 2026-07-31 (v0.68, § FREE MONTH TOMBSTONE): one sentence added, approved by Blake -
+             deleting does NOT reset the free online month. Without this line, the honest-looking
+             move ("delete, re-sign-in, fresh free month") fails silently later at the exact
+             moment they try to play online - the "no surprise later" rule says it belongs HERE,
+             before the deletion, not in an error message after it. privacy.html discloses the
+             scrambled record that makes this true. -->
         <div class="acctConfirm hidden" id="acctDelConfirm">
-          <p id="acctDelText">Delete your account? Your Apple sign-in and every signed-in session go straight away. Every credit you have - including any you paid real money for - is gone for good too, with no way to get it back and no refund. This cannot be undone. You can keep playing without an account.</p>
+          <p id="acctDelText">Delete your account? Your Apple sign-in and every signed-in session go straight away. Every credit you have - including any you paid real money for - is gone for good too, with no way to get it back and no refund. Deleting also does not reset your free month of online play: a new account made with this same sign-in won't get another one. This cannot be undone. You can keep playing without an account.</p>
           <label><input type="checkbox" id="acctDelBoard"><span>Also take my name off the leaderboard</span></label>
           <div class="acctConfirmBtns">
             <button class="btn danger" id="btnAcctDelYes">Delete account</button>
@@ -13128,6 +13153,17 @@ let ACCT_NAME_MODE='local'; // which name the inline editor is editing: this pho
 // that same boot-time comment for the full story). Never true for a phone with no stored token at
 // all - a genuine guest sees the real guest card immediately, with no flash of anything else.
 let ACCT_BOOT_CHECKING=false;
+/* 2026-07-31 (v0.68, task 5's browser proof found this): the boot-time refreshAccount() PROMISE,
+   kept so requireAccountThen() (§ NET) can WAIT for the boot answer instead of guessing. The bug,
+   observed directly in the deep-link test (test_join_link_blocked.js scenario B, first run): a
+   SIGNED-IN phone cold-launching a ?join=CODE invite link ran the boot join synchronously while
+   refreshAccount() was still on the network - ACCT was still null, so requireAccountThen() opened
+   the "Sign in to play online" gate at a player who WAS signed in... and by the time they tapped
+   the Apple button, ACCT had loaded, so accountSignIn()'s own isSignedIn() guard made the button
+   silently do nothing. A genuine dead end, reachable by every signed-in player who ever tapped an
+   invite link with the app fully closed. Null on a phone with no stored token (a real guest waits
+   on nothing). */
+let ACCT_BOOT_PROMISE=null;
 /* 2026-07-27 (v0.46 bug fix - Blake: "the welcome screen said I was signed in but the menu asked
    me to sign in again"). THE ONE predicate for "am I signed in" and THE ONE predicate for "is my
    account fully set up (signed in AND has a nickname)" - every other place in this file that used
@@ -13964,6 +14000,18 @@ async function accountSignIn(){
     }
     ACCT=Object.assign({token:r.body.sessionToken},r.body);
     saveAcctToken(r.body.sessionToken);
+    /* 2026-07-31 (v0.68, § FREE MONTH TOMBSTONE): the server says, once, at the moment a NEW
+       account is created for a sign-in whose free online month was already used on an earlier,
+       since-deleted account. Blake's chosen shape, verbatim: "A clear line when the new account
+       is created: their free online month was already used, so online play needs a token. No
+       surprise later when they try to join a game." Shown TWICE on purpose: a toast right now
+       (the "clear line"), and ACCT_NOTICE so the same sentence sits in the Admin panel where it
+       can be re-read after the toast fades. Most people seeing this are reinstalling, not
+       cheating - the server's wording is friendly and this code adds nothing to it. */
+    if(r.body.freeMonthNotice){
+      ACCT_NOTICE=r.body.freeMonthNotice;
+      toast(r.body.freeMonthNotice);
+    }
     // v0.36 item 3: a fresh sign-in is a fresh account, so any leftover offer from a previous
     // session on this page must not carry over.
     ACCT_CLAIM=null; CLAIM_PROBED=false;
@@ -14253,7 +14301,9 @@ window.__acct={
 // waiting on an unrelated click to notice.
 if(accountsAvailableHere()&&loadAcctToken()){
   ACCT_BOOT_CHECKING=true;
-  refreshAccount().then(()=>{
+  // v0.68: the promise is KEPT (ACCT_BOOT_PROMISE) so a cold-start deep link can wait for this
+  // answer - see the ACCT_BOOT_PROMISE declaration (§ ACCOUNT) and requireAccountThen() (§ NET).
+  ACCT_BOOT_PROMISE=refreshAccount().then(()=>{
     ACCT_BOOT_CHECKING=false;
     // A genuinely signed-in account with no nickname must resolve itself rather than silently
     // reading as a guest forever - route it through the same blocking nickname gate a brand-new
@@ -16130,6 +16180,18 @@ let ONLINE_PENDING=null;   // the online action waiting on a sign-in (or a nickn
 function requireAccountThen(cont){
   if(!accountsAvailableHere()){
     toast('Online play needs an account. Sign in with Apple in the iPhone app to play online.');
+    return;
+  }
+  /* 2026-07-31 (v0.68, task 5): if the boot-time account check is still on the network, WAIT for
+     it and then re-decide, instead of reading ACCT-null as "signed out". Without this, a signed-in
+     phone cold-launching an invite link was shown the sign-in gate - and its Apple button then
+     silently no-opped once the check landed (see ACCT_BOOT_PROMISE's own comment, § ACCOUNT, for
+     the observed dead end). The wait is bounded by refreshAccount()'s own fetch, resolves on both
+     success and failure, and ACCT_BOOT_CHECKING is false by then - so the re-entry below always
+     takes one of the ordinary branches, never loops. renderOnlineGate()'s "Checking your
+     account..." state already covers the visual gap. */
+  if(ACCT_BOOT_CHECKING&&ACCT_BOOT_PROMISE){
+    ACCT_BOOT_PROMISE.then(()=>requireAccountThen(cont)).catch(()=>requireAccountThen(cont));
     return;
   }
   if(isAccountReady()){ beginOnlineAction(cont); return; }

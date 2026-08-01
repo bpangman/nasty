@@ -59,3 +59,13 @@ server/apple-key-id.txt
 # and the server no-ops gracefully when they are absent.
 server/facebook-app-secret.txt
 server/email-api-key.txt
+# 2026-07-31 v0.68 free-month tombstones (dev server): free-months.json holds only one-way
+# hashes + months (no identity), but it is runtime state, not code; the salt file is what keeps
+# those hashes unlinkable and must never reach the public repo.
+server/free-months.json
+server/free-month-salt.txt
+# 2026-07-31 v0.68 launch reset (dev server): the one-shot guard marker and the pre-wipe
+# backups (backups contain real account data - never commit).
+server/launch-reset-done.json
+server/launch-reset-backup-*.json
+server/launch-reset-result-*.json

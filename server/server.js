@@ -1727,6 +1727,12 @@ const STORE_NONCES = registerAccountStore(accountsFilePath("NASTY_AUTH_NONCES_FI
 const STORE_ACCT_BOARD = registerAccountStore(accountsFilePath("NASTY_ACCOUNTS_LEADERBOARD_FILE", "accounts-leaderboard.json"), () => accountBoard, (o) => { accountBoard = o; });
 const STORE_CLAIMS = registerAccountStore(accountsFilePath("NASTY_ACCOUNT_CLAIMS_FILE", "claims.json"), () => claimJournal, (o) => { claimJournal = o; });
 const STORE_EMAIL_CODES = registerAccountStore(accountsFilePath("NASTY_EMAIL_CODES_FILE", "email-codes.json"), () => emailCodes, (o) => { emailCodes = o; });
+// 2026-07-31 v0.68 § FREE MONTH TOMBSTONE - see the block above deleteAccountRecord() for the
+// full design. hash -> {freeThroughMonth, ts}, nothing else. NEVER pruned (Blake: "an infinite
+// record") - only the § LAUNCH RESET clears it. Persisted with persistAccountStoreNow (never
+// the debounce) because losing one of these on a crash reopens the exact loophole it closes.
+let freeMonthUsed = {};
+const STORE_FREE_MONTHS = registerAccountStore(accountsFilePath("NASTY_FREE_MONTHS_FILE", "free-months.json"), () => freeMonthUsed, (o) => { freeMonthUsed = o; });
 function loadAccountStores() { for (const s of accountStores) loadAccountStore(s); pruneAuthNonces(); pruneEmailCodes(); }
 function flushAccountStores() { for (const s of accountStores) if (s.timer) persistAccountStoreNow(s); }
 
@@ -2089,8 +2095,18 @@ function revokeAllSessionsFor(uid) {
 /* --- accounts. The Apple `sub` is an INDEX KEY, not the account id: the leaderboard must never
    be keyed on a provider-specific value, or adding another sign-in method later (or Apple
    changing something) would reach straight into the family's lifetime stats. --- */
+// 2026-07-31 v0.68: test-only override for the `created` stamp, same convention (and the same
+// warning) as NASTY_MONTHLY_NOW_MS - NEVER set in production. It exists because the § FREE
+// MONTH TOMBSTONE cannot be tested honestly without an account whose signup month is genuinely
+// in the past, and `created` was previously un-fakeable. This does NOT change the standing
+// "every account record has ALWAYS carried a real created timestamp" finding below - with the
+// env var unset (production, always) this is byte-for-byte Date.now().
+function accountCreatedNowMs() {
+  const override = Number(process.env.NASTY_ACCOUNT_CREATED_MS);
+  return Number.isFinite(override) && override > 0 ? override : Date.now();
+}
 function newAccountRecord(provider, sub) {
-  const now = Date.now();
+  const now = accountCreatedNowMs();
   return {
     uid: crypto.randomBytes(16).toString("hex"),
     // `provider`/`sub` are the FIRST identity, kept as their own fields purely so a record
@@ -2220,9 +2236,19 @@ function attachIdentity(acct, provider, sub) {
   accountIndex[identityIndexKey(provider, sub)] = acct.uid;
   scheduleAccountStorePersist(STORE_ACCOUNTS);
   scheduleAccountStorePersist(STORE_ACCT_INDEX);
+  // 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: a newly linked sign-in method inherits the
+  // account's free-month record the moment it is attached - otherwise "link Google, delete the
+  // account, come back through Google" would be a fresh free month through the side door. Twin
+  // of server.ts's.
+  try { writeFreeMonthTombstoneIfAbsent(provider, sub, accountFreeThroughMonth(acct)); }
+  catch (e) { log("free-month tombstone write failed on link", acct.uid, provider, e.message); }
 }
 // v is a verified provider result: {sub, email, emailVerified, privateRelay}.
-// Returns {account, created, linked}.
+// Returns {account, created, linked, freeMonthAlreadyUsed?}. 2026-07-31 v0.68:
+// freeMonthAlreadyUsed is true only when a BRAND-NEW account inherited a § FREE MONTH
+// TOMBSTONE whose free window is already over - i.e. the person the sign-up notice actually
+// helps. A returning identity still inside its original free window inherits silently
+// (nothing changed for them, so there is nothing to announce). Twin of server.ts's.
 function resolveAccountForIdentity(provider, v) {
   const known = accountForIdentity(provider, v.sub);
   if (known) {
@@ -2238,13 +2264,24 @@ function resolveAccountForIdentity(provider, v) {
     }
   }
   const rec = newAccountRecord(provider, v.sub);
+  // 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: consulted BEFORE the record is stored, so the
+  // inherited cap is part of the very first write and no window exists where the new account
+  // reads as freshly entitled. See the block above deleteAccountRecord().
+  const tomb = readFreeMonthTombstone(provider, v.sub);
+  if (tomb) rec.onlineFreeThrough = tomb.freeThroughMonth;
   accounts[rec.uid] = rec;
   accountIndex[identityIndexKey(provider, v.sub)] = rec.uid;
   scheduleAccountStorePersist(STORE_ACCOUNTS);
   scheduleAccountStorePersist(STORE_ACCT_INDEX);
   rememberAccountEmail(rec, provider, v);
-  log("new account created", rec.uid, provider);
-  return { account: rec, created: true, linked: false };
+  // No tombstone yet for this identity: write one NOW, at creation, so the record exists even
+  // if this account is never deleted (and deletion cannot race or crash it away later).
+  if (!tomb) {
+    try { writeFreeMonthTombstoneIfAbsent(provider, v.sub, accountFreeThroughMonth(rec)); }
+    catch (e) { log("free-month tombstone write failed on create", rec.uid, provider, e.message); }
+  }
+  log("new account created", rec.uid, provider, tomb ? "(free month already used - through " + tomb.freeThroughMonth + ")" : "");
+  return { account: rec, created: true, linked: false, freeMonthAlreadyUsed: !!tomb && !onlineEntitledNow(rec) };
 }
 // The Stage 1 entry point, kept so nothing that referred to it has to be reworded.
 function accountForAppleSub(sub) { return resolveAccountForIdentity("apple", { sub }).account; }
@@ -2343,6 +2380,70 @@ function undoAccountClaim(uid) {
   return { ok: true, restored: Object.keys(j.rows) };
 }
 
+/* =======================================================================================
+ * 2026-07-31 v0.68 § FREE MONTH TOMBSTONE - twin of server.ts's block of the same name (read
+ * that one for the full design writeup; the reasoning is written once, there, and this copy
+ * stays behaviorally identical).
+ *
+ * Blake, verbatim: "make sure you close the loophole of people deleting their account and just
+ * creating a new one with the same Apple SSO to get another free month. While the old account
+ * is deleted, we should still store an infinite record of 'this Apple account has already used
+ * their free month' and let it be known when they create their new account." And on what may
+ * be stored: "a one-way scrambled version of their Apple ID plus which month their free trial
+ * covered... the stored value cannot be turned back into who they are."
+ *
+ * So: one record per sign-in identity, keyed SHA-256(salt + provider + sub), value
+ * {freeThroughMonth, ts} and nothing else. Written if-absent at account creation, at identity
+ * linking, and at deletion; read once at account creation, where a hit caps the new account's
+ * derived free window via onlineFreeThrough. Node-specific bits: the salt lives in a
+ * gitignored file (free-month-salt.txt, same pattern as admin-token.txt) with the
+ * NASTY_FREEMONTH_SALT env override, and the hash is Node's synchronous crypto - so, unlike
+ * the Deno twin, nothing here is async and resolveAccountForIdentity stays synchronous.
+ * ===================================================================================== */
+const FREEMONTH_SALT_FILE = accountsFilePath("NASTY_FREEMONTH_SALT_FILE", "free-month-salt.txt");
+function loadOrCreateFreeMonthSalt() {
+  const env = String(process.env.NASTY_FREEMONTH_SALT || "").trim();
+  if (env) return env;
+  try {
+    const t = fs.readFileSync(FREEMONTH_SALT_FILE, "utf8").trim();
+    if (t) return t;
+  } catch (e) { /* first run - generate below */ }
+  const t = crypto.randomBytes(32).toString("hex");
+  try {
+    fs.writeFileSync(FREEMONTH_SALT_FILE, t + "\n", { mode: 0o600 });
+    fs.chmodSync(FREEMONTH_SALT_FILE, 0o600);
+  } catch (e) { log("could not persist the free-month salt", e.message); }
+  return t;
+}
+// The salt must NEVER change once tombstones exist - a new salt orphans every record (the
+// hashes stop matching) and silently reopens the loophole. That is why it is persisted.
+const FREEMONTH_SALT = loadOrCreateFreeMonthSalt();
+function freeMonthIdentityHash(provider, sub) {
+  return crypto.createHash("sha256").update(FREEMONTH_SALT + ":" + provider + ":" + sub).digest("hex");
+}
+function readFreeMonthTombstone(provider, sub) {
+  if (!provider || !sub) return null;
+  const t = freeMonthUsed[freeMonthIdentityHash(provider, sub)];
+  return t && typeof t.freeThroughMonth === "string" ? t : null;
+}
+// If-absent on purpose: the FIRST record for an identity is the truth forever. Overwriting on a
+// later delete would let a recreate-then-delete cycle push freeThroughMonth forward.
+function writeFreeMonthTombstoneIfAbsent(provider, sub, freeThroughMonth) {
+  if (!provider || !sub || !freeThroughMonth) return;
+  const h = freeMonthIdentityHash(provider, sub);
+  if (freeMonthUsed[h]) return;
+  freeMonthUsed[h] = { freeThroughMonth, ts: Date.now() };
+  persistAccountStoreNow(STORE_FREE_MONTHS);   // never debounced - see the store's own comment
+}
+/* Blake's decision on what the returning person is told, verbatim: "A clear line when the new
+   account is created: their free online month was already used, so online play needs a token.
+   No surprise later when they try to join a game." Worded for the honest majority - someone
+   reinstalling after deleting - not as an accusation. Twin of server.ts's. */
+const FREE_MONTH_USED_NOTICE =
+  "Welcome back! A previous account on this sign-in already used its free month of online play, " +
+  "so online games now take an Online Access token from the Shop. Everything else, including all " +
+  "offline play, stays free.";
+
 /* --- deletion (App Store guideline 5.1.1(v) - an app that creates accounts must delete them
    in-app). By default the leaderboard ROW SURVIVES, converted back into an ordinary unclaimed
    name row: the counters are the family's shared history and the display name is user-chosen
@@ -2354,6 +2455,18 @@ function undoAccountClaim(uid) {
    Settings > their name > Sign in with Apple. --- */
 function deleteAccountRecord(acct, eraseBoard) {
   const uid = acct.uid;
+  // 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: written FIRST, before anything is removed, so a
+  // crash mid-delete can never lose the anti-abuse record. One per linked identity - deleting
+  // an Apple+Google account tombstones BOTH doors back in. If-absent, so the record the
+  // account got at creation (the normal case) is never overwritten; this write only matters
+  // for accounts that predate the tombstone feature. Twin of server.ts's.
+  {
+    const through = accountFreeThroughMonth(acct);
+    for (const id of accountIdentities(acct)) {
+      try { writeFreeMonthTombstoneIfAbsent(id.provider, id.sub, through); }
+      catch (e) { log("free-month tombstone write failed on delete", uid, id.provider, e.message); }
+    }
+  }
   const row = accountBoard[uid];
   let keptOnBoard = false;
   if (row && !eraseBoard && acct.gameName) {
@@ -2578,7 +2691,22 @@ function onlineFreeMonths(acct) {
   let m = chicagoMonthKey((acct && acct.created) || Date.now());
   months.push(m);
   for (let i = 0; i < ONLINE_FREE_EXTRA_MONTHS; i++) { m = nextMonthKey(m); months.push(m); }
-  return months;
+  // 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: an account that inherited a tombstone at creation
+  // has its free window CAPPED at the original account's freeThroughMonth - the "YYYY-MM"
+  // string compare is safe because the format is fixed-width and zero-padded. A returning
+  // identity still inside its original window keeps the remainder; one past it gets an empty
+  // free list. Accounts with no inherited history (cap null) are completely untouched. Twin of
+  // server.ts's.
+  const cap = acct && typeof acct.onlineFreeThrough === "string" && acct.onlineFreeThrough ? acct.onlineFreeThrough : null;
+  return cap ? months.filter((mm) => mm <= cap) : months;
+}
+// 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: the single answer to "which month does this
+// account's free online play run through" - what tombstones are written with, and what the
+// status view reports even when the capped free list has gone empty. Twin of server.ts's.
+function accountFreeThroughMonth(acct) {
+  const free = onlineFreeMonths(acct);
+  if (free.length) return free[free.length - 1];
+  return String((acct && acct.onlineFreeThrough) || chicagoMonthKey((acct && acct.created) || Date.now()));
 }
 function onlinePurchasedMonths(acct) {
   return Array.isArray(acct && acct.walletOnlineMonths) ? acct.walletOnlineMonths.slice() : [];
@@ -2616,15 +2744,27 @@ function onlineAccessView(acct) {
     entitled,                                            // may this account play online RIGHT NOW
     reason,                                              // "free" | "purchased" | "none"
     accessUntil: entitled ? chicagoMonthStartMs(cy, cm) : null,  // exact ms timestamp access lapses, or null if not entitled
-    freeThroughMonth: freeMonths[freeMonths.length - 1], // last month key covered by the free period
+    // v0.68: via accountFreeThroughMonth(), not freeMonths[last] - a tombstone-capped account
+    // can have an EMPTY free list, and this still truthfully reports the original window's end.
+    freeThroughMonth: accountFreeThroughMonth(acct),     // last month key covered by the free period
     monthsAheadCovered: entitled ? run - 1 : 0,          // how many FUTURE months beyond the current one are already banked
     tokenCost: ONLINE_ACCESS_COST,
     itemId: ONLINE_ACCESS_ITEM_ID,
   };
 }
-const ONLINE_SIGNIN_MESSAGE = "Sign in with your NASTY account to play online.";
+/* 2026-07-31 v0.68 (task 4): rewritten. The old line ("Sign in with your NASTY account to play
+   online.") had two gaps a brand-new person hits at the worst moment - right after tapping a
+   friend's invite link: it never said HOW to sign in (Apple is the only method there is), and it
+   never said the reassuring part, that a new account's first month of online play is free, so
+   they are not being marched into a paywall. Kept to two short sentences on purpose - this
+   renders inside a toast/overlay on a phone. Twin of server.ts's. */
+const ONLINE_SIGNIN_MESSAGE = "Playing online just needs a quick Sign in with Apple. New accounts get their first month of online play free.";
 function onlineAccessDeniedMessage() {
-  return "Your free online period has ended. Buy an Online Access token in the Shop (" + ONLINE_ACCESS_COST + " points) to keep playing online this month.";
+  // 2026-07-31 v0.68 (task 3): "points" -> "credits". The currency was renamed app-wide in v0.59
+  // (Blake: "the word is CREDITS everywhere money-like numbers are shown") but this string - the
+  // one a blocked player actually reads - was missed. Leaderboard standing deliberately stays
+  // "points"; this is spendable currency, so it is "credits". Twin of server.ts's.
+  return "Your free online period has ended. Buy an Online Access token in the Shop (" + ONLINE_ACCESS_COST + " credits) to keep playing online this month.";
 }
 // The front-door gate - called from the "host" and "join" cases ONLY (never rejoin/reclaim; see
 // HANDOFF.md's mid-game-rollover reasoning). Returns null when the connecting player may
@@ -2834,8 +2974,14 @@ async function handleAccountRoute(req, res, url) {
     if (r.fail) { sendJson(res, r.fail.status, r.fail.body); return; }
     const resolved = resolveAccountForIdentity(provider, r.v);
     const s = issueSession(resolved.account.uid);
+    // 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: told at creation, exactly as Blake chose ("A
+    // clear line when the new account is created... No surprise later when they try to join a
+    // game"). Additive fields - an older client simply ignores them. Twin of server.ts's.
+    const usedExtra = resolved.created && resolved.freeMonthAlreadyUsed
+      ? { freeMonthUsed: true, freeMonthNotice: FREE_MONTH_USED_NOTICE } : {};
     sendJson(res, 200, Object.assign(
       { sessionToken: s.token, provider, linkedToExisting: resolved.linked },
+      usedExtra,
       accountPublicView(resolved.account, s.exp),
     ));
     return;
@@ -2942,8 +3088,13 @@ async function handleAccountRoute(req, res, url) {
     // so it is also the strongest possible linking key.
     const resolved = resolveAccountForIdentity("email", { sub: email, email, emailVerified: true, privateRelay: false });
     const s = issueSession(resolved.account.uid);
+    // 2026-07-31 v0.68 § FREE MONTH TOMBSTONE: same additive creation-time notice as the token
+    // sign-in routes above - the email door must not be the one that forgets to mention it.
+    const usedExtra = resolved.created && resolved.freeMonthAlreadyUsed
+      ? { freeMonthUsed: true, freeMonthNotice: FREE_MONTH_USED_NOTICE } : {};
     sendJson(res, 200, Object.assign(
       { sessionToken: s.token, provider: "email", linkedToExisting: resolved.linked },
+      usedExtra,
       accountPublicView(resolved.account, s.exp),
     ));
     return;
@@ -3006,7 +3157,8 @@ async function handleAccountRoute(req, res, url) {
     const purchased = Math.max(0, Number(acct.walletPurchasedCredits) || 0);
     const balance = Math.max(0, earned + purchased - spentSoFar);
     if (balance < item.cost) {
-      const failBody = { error: "cantafford", message: "Not enough points for that yet.", cost: item.cost, balance, wallet: walletView(acct) };
+      // 2026-07-31 v0.68 (task 3): "points" -> "credits", the v0.59 rename this string missed.
+      const failBody = { error: "cantafford", message: "Not enough credits for that yet.", cost: item.cost, balance, wallet: walletView(acct) };
       if (requestId) { purchaseSeen[purchaseIdemKey(acct.uid, requestId)] = { status: 409, body: failBody, ts: Date.now() }; schedulePurchaseSeenPersist(); }
       sendJson(res, 409, failBody);
       return;
@@ -4264,6 +4416,128 @@ async function handleAdminRoute(req, res, url) {
     scheduleAccountStorePersist(STORE_ACCOUNTS);
     log("admin granted every wallet item", uid, "items=" + grantedItems, "credits=" + creditAmount);
     sendJson(res, 200, { ok: true, uid, grantedItems, grantedItemIds, grantedCredits: creditAmount, wallet: walletView(acct) });
+    return true;
+  }
+  /* =====================================================================================
+   * 2026-07-31 v0.68 § LAUNCH RESET - twin of server.ts's block of the same name; read that
+   * one for the full design (Blake's verbatim ask, why it is an explicit admin POST and NOT
+   * anything automatic on a flag, exactly what survives and why). Node-specific shape:
+   *   - the backup is ALSO written to a local file (launch-reset-backup-<runId>.json, next to
+   *     server.js or NASTY_LAUNCH_BACKUP_DIR) before anything is deleted, on top of riding
+   *     back in the response body;
+   *   - the one-shot guard is a small file (launch-reset-done.json / NASTY_LAUNCH_RESET_DONE_FILE),
+   *     written with the exclusive 'wx' flag so even two racing requests cannot both claim it,
+   *     and checked on every attempt - it survives restarts, so this can never run twice;
+   *   - what survives: iapLedger + iapEvents (the Apple replay ledger - keeping it is what
+   *     stops an old receipt being replayed against a fresh post-launch account), soloSeen
+   *     (same anti-replay reasoning), and the free-month SALT (identity-free).
+   * =================================================================================== */
+  if (parts.length >= 2 && parts[1] === "launch-reset") {
+    const doneFile = process.env.NASTY_LAUNCH_RESET_DONE_FILE
+      ? path.resolve(process.env.NASTY_LAUNCH_RESET_DONE_FILE)
+      : path.join(__dirname, "launch-reset-done.json");
+    const backupDir = process.env.NASTY_LAUNCH_BACKUP_DIR
+      ? path.resolve(process.env.NASTY_LAUNCH_BACKUP_DIR)
+      : __dirname;
+    const readMarker = () => {
+      try { return JSON.parse(fs.readFileSync(doneFile, "utf8")); } catch (e) { return null; }
+    };
+    const collectBackup = () => ({
+      version: 1,
+      server: "node",
+      takenAt: Date.now(),
+      epoch: leaderboardEpoch,
+      counts: {
+        accounts: Object.keys(accounts).length,
+        accountIndex: Object.keys(accountIndex).length,
+        sessions: Object.keys(sessions).length,
+        accountBoard: Object.keys(accountBoard).length,
+        leaderboard: Object.keys(globalBoard).length,
+        monthly: Object.keys(monthlyBoard).length,
+        claims: Object.keys(claimJournal).length,
+        emailCodes: Object.keys(emailCodes).length,
+        purchaseSeen: Object.keys(purchaseSeen).length,
+        freeMonthTombstones: Object.keys(freeMonthUsed).length,
+        rooms: rooms.size,
+      },
+      data: {
+        accounts, accountIndex, sessions, authNonces, accountBoard,
+        leaderboard: globalBoard, monthly: monthlyBoard, claims: claimJournal,
+        emailCodes, purchaseSeen, freeMonthTombstones: freeMonthUsed,
+        roomCodes: Array.from(rooms.keys()),
+      },
+    });
+    if (parts.length === 2 && req.method === "GET") {
+      const m = readMarker();
+      sendJson(res, 200, m ? Object.assign({ done: true }, m) : { done: false });
+      return true;
+    }
+    if (parts.length === 3 && parts[2] === "backup" && req.method === "GET") {
+      // Read-only preview of exactly what the wipe would take - the runner script saves this
+      // to a local file before it ever sends the POST below.
+      sendJson(res, 200, collectBackup());
+      return true;
+    }
+    if (parts.length === 2 && req.method === "POST") {
+      const body = await readJsonBody(req);
+      if (!body || body.confirm !== "WIPE EVERYTHING FOR LAUNCH") {
+        sendJson(res, 400, { error: "confirmrequired", message: 'This wipes every account and leaderboard row. Send {"confirm":"WIPE EVERYTHING FOR LAUNCH"} to really run it.' });
+        return true;
+      }
+      const prior = readMarker();
+      if (prior) {
+        sendJson(res, 409, Object.assign({ error: "alreadyran", message: "The launch reset already ran and refuses to run twice." }, prior));
+        return true;
+      }
+      const backup = collectBackup();
+      const runId = Date.now() + "-" + crypto.randomBytes(4).toString("hex");
+      const backupFile = path.join(backupDir, "launch-reset-backup-" + runId + ".json");
+      // Backup file FIRST - if this write fails, nothing has been touched yet.
+      fs.writeFileSync(backupFile, JSON.stringify(backup));
+      // THE GUARD, claimed before any deletion: 'wx' throws EEXIST if any other request (or a
+      // previous run) got here first, so only one invocation can ever pass this line.
+      try {
+        fs.writeFileSync(doneFile, JSON.stringify({ ranAt: Date.now(), runId, state: "wiping", backupFile }), { flag: "wx" });
+      } catch (e) {
+        const again = readMarker();
+        sendJson(res, 409, Object.assign({ error: "alreadyran", message: "The launch reset already ran and refuses to run twice." }, again || {}));
+        return true;
+      }
+      // Rooms: close every live socket, then drop the room records and their files.
+      const deleted = { rooms: rooms.size };
+      for (const room of rooms.values()) {
+        for (const p of room.players.values()) { if (p.ws) { try { p.ws.close(); } catch (e) {} } }
+        deleteRoomFile(room.code);
+      }
+      rooms.clear();
+      const wipeCount = (o) => Object.keys(o).length;
+      deleted.accounts = wipeCount(accounts); accounts = {};
+      deleted.accountIndex = wipeCount(accountIndex); accountIndex = {};
+      deleted.sessions = wipeCount(sessions); sessions = {};
+      deleted.authNonces = wipeCount(authNonces); authNonces = {};
+      deleted.accountBoard = wipeCount(accountBoard); accountBoard = {};
+      deleted.leaderboard = wipeCount(globalBoard); globalBoard = {};
+      deleted.monthly = wipeCount(monthlyBoard); monthlyBoard = {};
+      deleted.claims = wipeCount(claimJournal); claimJournal = {};
+      deleted.emailCodes = wipeCount(emailCodes); emailCodes = {};
+      deleted.purchaseSeen = wipeCount(purchaseSeen); purchaseSeen = {};
+      deleted.freeMonthTombstones = wipeCount(freeMonthUsed); freeMonthUsed = {};
+      rebuildLbNameIndex();
+      // Persist every emptied store NOW - a crash after this response must not resurrect
+      // anything from disk. The IAP ledger and events files are deliberately NOT touched.
+      for (const s of accountStores) persistAccountStoreNow(s);
+      persistLeaderboardNow();
+      persistMonthlyHistoryNow();
+      persistPurchaseSeenNow();
+      leaderboardEpoch += 1;
+      persistLeaderboardEpoch();
+      const doneMarker = { ranAt: Date.now(), runId, state: "done", deleted, epoch: leaderboardEpoch, backupFile };
+      fs.writeFileSync(doneFile, JSON.stringify(doneMarker));
+      log("LAUNCH RESET completed", "runId=" + runId, JSON.stringify(deleted), "epoch=" + leaderboardEpoch);
+      sendJson(res, 200, { ok: true, runId, epoch: leaderboardEpoch, deleted, backupFile, backup });
+      return true;
+    }
+    sendJson(res, 405, { error: "method not allowed" });
     return true;
   }
   sendJson(res, 404, { error: "no such admin route" });
