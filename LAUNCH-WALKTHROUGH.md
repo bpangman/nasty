@@ -49,13 +49,48 @@ privacy policy have to disclose. If you already answered it, revisit it once tha
 
 
 You answered this in July, before accounts, Sign in with Apple, the leaderboard and real money
-existed. It is almost certainly out of date now, and Apple takes this section seriously.
+existed. Apple takes this section seriously. Click by click:
 
-1. App Store Connect > your app > **App Privacy** (left sidebar).
-2. Work through it again. What the app now collects: Apple sign-in identity, your nickname,
-   game results for the leaderboard, and purchase history.
-3. Also give **Pricing and Availability** a 30 second glance while you are in there - confirm
-   the territories look right. Not expected to be a problem.
+1. appstoreconnect.apple.com > **My Apps** > **NASTY**.
+2. **App Privacy** in the left sidebar.
+3. Check the **Privacy Policy URL** at the top reads `https://nastyboardgame.com/privacy.html`.
+   That page is live and already describes everything below, including the scrambled
+   post-deletion record. If the box is empty, paste that URL in.
+4. Next to **Data Collection**, click **Edit**. Answer **Yes** to "Do you or your third-party
+   partners collect data from this app?"
+5. Apple shows a long checklist of data types. Tick exactly these five, leave everything else
+   unticked:
+
+   | Tick this | Why it applies to NASTY |
+   |---|---|
+   | Identifiers > **User ID** | Apple's anonymous ID that recognises a returning player |
+   | Identifiers > **Device ID** | the push notification token |
+   | Purchases > **Purchase History** | credit pack purchases |
+   | Usage Data > **Product Interaction** | wins, points and knockouts for the leaderboard |
+   | User Content > **Other User Content** | the nickname a player types in |
+
+6. Apple then asks the same three questions about each one. The answers are identical for all
+   five:
+   - Used for **App Functionality** (not analytics, not advertising, not personalization)
+   - **Linked** to the user's identity: **Yes**
+   - Used for **tracking**: **NO**, for every single one. Apple defines tracking as sharing data
+     with other companies for advertising. NASTY has no ad networks, no analytics SDK and no
+     data brokers. Nothing is shared with anyone.
+
+7. Say **NO** to everything else, in particular:
+   - **Email Address** - the app deliberately asks Apple for no personal details at sign-in,
+     so none is ever received or stored.
+   - **Payment Info** - Apple processes the money; the app never sees a card number.
+   - Location, Contacts, Health, Photos, Browsing History, Search History, Diagnostics,
+     Sensitive Info - none are touched.
+
+8. Click **Publish**.
+
+**If you are unsure about any item, tick it.** Over-declaring is harmless. Under-declaring is
+what gets apps pulled.
+
+9. While you are in there, give **Pricing and Availability** a 30 second glance - confirm the
+   price is Free and the territories look right. Not expected to be a problem.
 
 ---
 
