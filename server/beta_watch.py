@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = '58e1e24b-d3a3-4284-9de0-257bd116db62'
+BUILD_SUBMISSION_ID = '1607d7db-b3ed-4499-97f9-47a3f65f223a'
 
 
 def current_build():
@@ -97,17 +97,16 @@ try:
         sys.exit(0)
 
     body = '/tmp/nasty_beta_live.html'
-    # 2026-08-14 (v0.69 ship): "what is in this build" bullets rewritten for the Sign in with
-    # Apple compliance fix - same pattern every build since 2 has followed (rewrite, do not
-    # accumulate old bullets from prior builds).
+    # 2026-08-14 (v0.70 ship): "what is in this build" bullets rewritten for the account panel
+    # Sign in with Apple row fix - same pattern every build since 2 has followed (rewrite, do
+    # not accumulate old bullets from prior builds).
     open(body, 'w').write(f'''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
 <p>What's in this build:</p>
 <ul>
-<li><b>The Sign in with Apple button now looks the way Apple requires.</b> It's a proper white button with Apple's own black logo, matching Apple's design rules instead of the app's old plain gold button.</li>
-<li><b>New accounts get their name filled in automatically.</b> Apple already collects a name when someone signs in for the first time, so the app now uses it to pre-fill the "what should we call you" box - you can still edit it before saving, but you no longer have to type it from scratch.</li>
+<li><b>The Sign in with Apple button now disappears from Admin once you are signed in.</b> Before this build it just sat there greyed out, which looked broken - now it's simply gone, and the panel tells you who you're signed in as instead.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
