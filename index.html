@@ -799,6 +799,15 @@
                         explaining where the prefill came from; the gate itself stays mandatory
                         either way. Zero server changes this release. `#verTap` `v0.68` ->
                         `v0.69`. Full writeup: HANDOFF.md "v0.69".
+                      - v0.70 (2026-08-14, account panel polish, no server changes). Blake's
+                        request: a greyed-out white Apple button sitting in the account panel
+                        after sign-in read as broken, not "already done". renderAccountRows()
+                        now hides `#btnAcctSignIn` outright (`.hidden`) once signed in, but only
+                        in the app - the website's plain-text "Sign in" ghost row is untouched,
+                        still always visible and disabled, since there is no native Apple sign-in
+                        to call there. This retires the "rows never hide" rule for this one row
+                        only; Sign out and Delete account still never hide, on either surface.
+                        `#verTap` `v0.69` -> `v0.70`. Full writeup: HANDOFF.md "v0.70".
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -3955,7 +3964,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.69</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.70</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -14196,8 +14205,19 @@ function renderAccountWho(){
   const sub=$('acctWhoSub'), txt=accountSubtitle();
   if(sub&&sub.textContent!==txt)sub.textContent=txt;
 }
-/* The three sign-in rows NEVER move, hide or reorder - signed in, signed out, phone or website -
-   so the panel reads the same everywhere and nothing jumps under a thumb. */
+/* Sign out and Delete account NEVER move, hide or reorder - signed in, signed out, phone or
+   website - so those two rows read the same everywhere and nothing jumps under a thumb.
+   2026-08-15 (Blake, explicit request): the Sign in row is the one exception, and only HERE (the
+   app, where #btnAcctSignIn wears the white .btnApple skin, § ACCOUNT SIGN-IN above) - once
+   isSignedIn() is true it is removed from the panel with .hidden entirely, not just disabled.
+   Before v0.69 a disabled plain-text "Sign in" row read fine sitting there greyed out; a disabled
+   white Apple-branded button sitting there post-sign-in reads as BROKEN, not "already done" - and
+   Apple's own Human Interface Guidelines say signed-in state belongs in a phrase, not a dimmed
+   button. #acctSoonNote already carries that phrase ("Signed in with Apple..."), so hiding the
+   button loses no information. On the website (accountsAvailableHere() false) this row is still
+   the plain "Sign in" ghost row explaining sign-in is coming soon - it stays exactly as before,
+   always visible and always disabled, because there is genuinely no native Sign in with Apple to
+   call there at all. */
 function renderAccountRows(){
   renderAccountWho();
   const si=$('btnAcctSignIn'), so=$('btnAcctSignOut'), del=$('btnAcctDelete'), note=$('acctSoonNote');
@@ -14218,6 +14238,10 @@ function renderAccountRows(){
     si.classList.add('ghost');
     si.textContent='Sign in';
   }
+  // 2026-08-15: hide the row outright once signed in, but ONLY here - see this function's own
+  // header comment for why. On the website `here` is false so this is always false, leaving the
+  // row exactly as visible as it has always been.
+  si.classList.toggle('hidden',here&&on);
   si.disabled=!here||on||ACCT_BUSY;
   so.disabled=!on||ACCT_BUSY;
   del.disabled=!on||ACCT_BUSY;

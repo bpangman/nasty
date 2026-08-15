@@ -213,7 +213,11 @@ async function partB(browser, key, jwks) {
     "B8 a server-issued nonce really was handed to Apple");
 
   rows = await readRows(page);
-  ok(rows.signIn.disabled === true, "B9 signed in: the Sign in row goes quiet");
+  // 2026-08-15: UPDATED, not weakened. Signed in, the Sign in row used to just go disabled/quiet;
+  // Blake's explicit request changed that - it now disappears from the panel entirely (Apple HIG:
+  // no dead white Apple button sitting there after sign-in, say it in a sentence instead -
+  // #acctSoonNote does, checked in B11 right below).
+  ok(rows.signIn.hidden === true, "B9 signed in: the Sign in row disappears entirely");
   ok(rows.signOut.disabled === false && rows.del.disabled === false, "B10 signed in: Sign out and Delete account come alive");
   ok(/signed in with apple/i.test(rows.note) && rows.note.includes("Grandad"),
     `B11 signed in: the panel says who you are ("${rows.note}")`);
@@ -240,8 +244,8 @@ async function partB(browser, key, jwks) {
   rows = await readRows(page);
   const storedAfter = await page.evaluate(() => localStorage.getItem("nasty-account"));
   ok(storedAfter === null, "B17 signing out forgets the session on this phone");
-  ok(rows.signIn.disabled === false && rows.signOut.disabled && rows.del.disabled,
-    "B18 signing out puts the rows straight back to their signed-out state");
+  ok(rows.signIn.hidden === false && rows.signIn.disabled === false && rows.signOut.disabled && rows.del.disabled,
+    "B18 signing out puts the rows straight back to their signed-out state, Sign in reappearing");
   const dead = await api.post("/account/me", { auth: stored });
   ok(dead.status === 401, `B19 the server killed that session too (${dead.status})`);
   const stillPlaying = await page.evaluate(() => !!(window.G && window.G.n));
@@ -277,8 +281,8 @@ async function partB(browser, key, jwks) {
   rows = await readRows(page);
   ok((await page.evaluate(() => localStorage.getItem("nasty-account"))) === null,
     "B27 deleting forgets the session on this phone");
-  ok(rows.signIn.disabled === false && rows.signOut.disabled && rows.del.disabled,
-    "B28 and the rows go back to their signed-out state");
+  ok(rows.signIn.hidden === false && rows.signIn.disabled === false && rows.signOut.disabled && rows.del.disabled,
+    "B28 and the rows go back to their signed-out state, Sign in reappearing");
   ok(/settings/i.test(rows.note) && /sign in with apple/i.test(rows.note),
     `B29 the panel explains the Apple Settings step, which no app can do for you ("${rows.note}")`);
   const gone = await api.post("/account/me", { auth: token2 });
