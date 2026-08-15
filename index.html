@@ -784,6 +784,21 @@
                         "points" now say "credits" (the v0.59 rename missed them), and
                         ONLINE_SIGNIN_MESSAGE now names Apple and mentions the free first
                         month. `#verTap` `v0.67` -> `v0.68`. Full writeup: HANDOFF.md "v0.68".
+                      - v0.69 (2026-08-14, App Store Guideline 4 compliance for Sign in with
+                        Apple - two rejection complaints, no server changes). #1: the app's
+                        Sign in with Apple buttons were the app's own gold .btn.primary with
+                        plain typed text, not Apple's button design - fixed with a new
+                        .btn.btnApple (white background, black logo + title, Apple's official
+                        SIWA glyph mounted from Apple Design Resources) used by all four spots
+                        that show the button (#btnWelcomeApple, #btnAcctSignIn, #youCardSignIn,
+                        #shopSignInBtn). #2: a brand-new account had to type a name Apple's own
+                        sign-in sheet already collected - fixed by requesting the .fullName
+                        scope (never .email) in AppleSignInPlugin.swift and prefilling the
+                        mandatory nickname gate with it (sanitizeAppleGivenName(), Apple's
+                        givenName -> this phone's seat name -> blank), with a small hint line
+                        explaining where the prefill came from; the gate itself stays mandatory
+                        either way. Zero server changes this release. `#verTap` `v0.68` ->
+                        `v0.69`. Full writeup: HANDOFF.md "v0.69".
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -3761,6 +3776,34 @@ button{font:inherit;cursor:pointer}
   width:14px;height:14px;border-radius:50%;background:var(--titleBg,var(--gold));
   color:var(--titleInk,#3a2c05);border:1px solid var(--titleRing,rgba(255,255,255,.35));
   font-size:9px;font-weight:800;line-height:1;vertical-align:1px;margin-left:4px;cursor:pointer}
+
+/* 2026-08-14: the compliant "Sign in with Apple" button (App Store Guideline 4 fix #1 - the old
+   buttons were the app's gold .btn.primary with plain typed text, which is not Apple's own button
+   design). Apple's Human Interface Guidelines for a CUSTOM Sign in with Apple button, applied
+   here: WHITE background with a BLACK logo and BLACK title (the app's felt table is dark green, so
+   the white style is the one that reads against it - the black style is for light backgrounds and
+   is not used anywhere in this app); title exactly "Sign in with Apple"; the system font
+   (-apple-system) at 43% of the button's height (44 * .43 ~= 19px - 44px is also this app's own
+   tap-target floor everywhere else, so nothing here needed a new number); rectangular, with the
+   same 12px corner radius every other button in the app already uses (HIG allows matching your own
+   UI); fixed 44px minimum height, i.e. never smaller than any other sign-in option next to it.
+   Placed last in this stylesheet, and written as two classes together (.btn.btnApple) purely so it
+   reliably wins the cascade over every earlier same-specificity .btn rule (.btn.primary, .btn.ghost,
+   .welcomeBtns .btn, etc.) without needing !important anywhere - source order alone decides ties
+   between two-class selectors, and this is the last one in the file.
+   THE LOGO. .btnAppleLogo holds Apple's own SIWA glyph - see appleBtnInnerHtml(), § ACCOUNT SIGN-IN,
+   for exactly which Apple Design Resources file it came from and why the height is left alone
+   (Apple's asset has its own built-in margin baked into its canvas; setting height:100% of this
+   fixed-height button reproduces Apple's own spacing exactly - cropping it or adding more padding
+   around it would both be wrong). */
+.btn.btnApple{display:flex;align-items:center;justify-content:center;gap:8px;height:44px;
+  min-height:44px;box-sizing:border-box;background:#fff;color:#000;border-radius:12px;
+  border:1px solid rgba(0,0,0,.08);box-shadow:0 4px 14px rgba(0,0,0,.28);
+  font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;
+  font-weight:500;font-size:19px;letter-spacing:normal;padding:0 18px;margin:0 auto;max-width:100%}
+.btn.btnApple:disabled{opacity:.45;cursor:default;box-shadow:none}
+.btnAppleLogo{height:100%;width:auto;flex:0 0 auto;display:block}
+.btnAppleTitle{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 </style>
 
 <!-- ================= MENU ================= -->
@@ -3912,7 +3955,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.68</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.69</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -4435,6 +4478,10 @@ button{font:inherit;cursor:pointer}
         <input id="nickGateInput" maxlength="10" aria-label="Your name" autocomplete="off" autocapitalize="words"
           style="font-size:16px;width:160px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.2);
           border-radius:8px;color:var(--cream);padding:8px"></div>
+      <!-- 2026-08-14: only shown when openNicknameGate() actually had an Apple-supplied name to
+           prefill with - see that function's own comment. Empty text renders as nothing, so this
+           stays invisible on every other path into this gate exactly as it always has. -->
+      <div id="nickGateHint" style="color:#a9d2b5;font-size:12.5px;min-height:14px;margin-top:-2px"></div>
       <div id="nickGateWarn" style="color:#ff9a9a;font-size:13.5px;min-height:16px"></div>
       <div class="bigBtns"><button class="btn primary" id="btnNickGateSave">Save and play</button></div>
     </div>
@@ -4613,7 +4660,9 @@ button{font:inherit;cursor:pointer}
       <h3 id="welcomeTitle">Sign in to play online</h3>
       <p class="welcomeNote" id="welcomeNote">Online games need an account, so your wins, points and leaderboard spot are all yours. Sign in with Apple, or keep playing offline as a guest.</p>
       <div class="welcomeBtns">
-        <button class="btn primary" id="btnWelcomeApple">Sign in with Apple</button>
+        <!-- 2026-08-14: compliant Apple button markup (icon+title), see appleBtnInnerHtml(),
+             § ACCOUNT SIGN-IN, and .btn.btnApple, § STYLE, for the shared implementation. -->
+        <button class="btn btnApple" id="btnWelcomeApple"><svg class="btnAppleLogo" viewBox="0 0 39 44" aria-hidden="true" focusable="false"><path d="M19.8196726,13.1384615 C20.902953,13.1384615 22.2608678,12.406103 23.0695137,11.4296249 C23.8018722,10.5446917 24.3358837,9.30883662 24.3358837,8.07298156 C24.3358837,7.9051494 24.3206262,7.73731723 24.2901113,7.6 C23.0847711,7.64577241 21.6353115,8.4086459 20.7656357,9.43089638 C20.0790496,10.2090273 19.4534933,11.4296249 19.4534933,12.6807374 C19.4534933,12.8638271 19.4840083,13.0469167 19.4992657,13.1079466 C19.5755531,13.1232041 19.6976128,13.1384615 19.8196726,13.1384615 Z M16.0053051,31.6 C17.4852797,31.6 18.1413509,30.6082645 19.9875048,30.6082645 C21.8641736,30.6082645 22.2761252,31.5694851 23.923932,31.5694851 C25.5412238,31.5694851 26.6245041,30.074253 27.6467546,28.6095359 C28.7910648,26.9312142 29.2640464,25.2834075 29.2945613,25.2071202 C29.1877591,25.1766052 26.0904927,23.9102352 26.0904927,20.3552448 C26.0904927,17.2732359 28.5316879,15.8848061 28.6690051,15.7780038 C27.0517133,13.4588684 24.5952606,13.3978385 23.923932,13.3978385 C22.1082931,13.3978385 20.6283185,14.4963764 19.6976128,14.4963764 C18.6906198,14.4963764 17.36322,13.4588684 15.7917006,13.4588684 C12.8012365,13.4588684 9.765,15.9305785 9.765,20.5993643 C9.765,23.4982835 10.8940528,26.565035 12.2824825,28.548506 C13.4725652,30.2268277 14.5100731,31.6 16.0053051,31.6 Z" fill="#000000"></path></svg><span class="btnAppleTitle">Sign in with Apple</span></button>
         <button class="btn ghost" id="btnWelcomeGuest">Continue as a guest</button>
       </div>
       <p class="welcomeFine" id="welcomeAppleNote">New here? It creates your account. Been here before? It signs you back in.</p>
@@ -12816,7 +12865,7 @@ function renderYouCard(){
     // it does sign-in only, never sign-in-then-also-open-Admin.
     box.innerHTML=`<div class="youCardGuest" id="youCardTap" role="button" tabindex="0" aria-label="Open Admin settings">
         <div class="youNudge">Sign in to get on the leaderboard - your wins, points and knockouts, tracked across every phone.</div>
-        ${accountsAvailableHere()?'<button class="btn primary" id="youCardSignIn" type="button">Sign in with Apple</button>':''}
+        ${accountsAvailableHere()?`<button class="btn btnApple" id="youCardSignIn" type="button">${appleBtnInnerHtml('Sign in with Apple')}</button>`:''}
       </div>`;
     const tap=$('youCardTap');
     if(tap)tap.onclick=openAccountPanel;
@@ -13847,6 +13896,28 @@ $('btnAcctMenu').onclick=()=>{
      - PROTOCOL_VERSION is untouched. Every call below is plain HTTP that an older server answers
        with a 404, which this code treats exactly like "not available - stay a guest". */
 const ACCT_TOKEN_KEY='nasty-account';
+/* 2026-08-14: the compliant "Sign in with Apple" button markup, shared by all four spots that
+   show one (#btnWelcomeApple, #btnAcctSignIn when accountsAvailableHere() is true, #youCardSignIn,
+   #shopSignInBtn) - one implementation, so the button can never quietly drift out of sync between
+   them. See .btn.btnApple, § STYLE (end of the stylesheet), for the CSS half.
+   THE LOGO. This is Apple's own SIWA glyph, byte-for-byte, from Apple Design Resources
+   (https://developer.apple.com/design/resources/, "Sign in with Apple" section) -
+   "Sign in with Apple - Left Aligned/SVG/Logo - SIWA - Left-aligned - Black - Large.svg", the
+   BLACK variant (for our white button) sized for a 44pt-tall button (the "Large" size - which is
+   also this app's own tap-target floor, so no new number was invented). The only edit from the
+   downloaded file is dropping its flat white background rectangle - our own .btnApple background
+   already supplies that, so keeping the rect would just paint a second white square on top of it -
+   the path itself, and the 39x44 canvas it sits in, are untouched, which is what keeps Apple's own
+   built-in margin correct at any height (see .btnAppleLogo's CSS comment for why height is set and
+   nothing else is). Downloaded and mounted locally (not typed by hand) so the artwork is exactly
+   Apple's, not a redrawn approximation. */
+const APPLE_LOGO_PATH_D='M19.8196726,13.1384615 C20.902953,13.1384615 22.2608678,12.406103 23.0695137,11.4296249 C23.8018722,10.5446917 24.3358837,9.30883662 24.3358837,8.07298156 C24.3358837,7.9051494 24.3206262,7.73731723 24.2901113,7.6 C23.0847711,7.64577241 21.6353115,8.4086459 20.7656357,9.43089638 C20.0790496,10.2090273 19.4534933,11.4296249 19.4534933,12.6807374 C19.4534933,12.8638271 19.4840083,13.0469167 19.4992657,13.1079466 C19.5755531,13.1232041 19.6976128,13.1384615 19.8196726,13.1384615 Z M16.0053051,31.6 C17.4852797,31.6 18.1413509,30.6082645 19.9875048,30.6082645 C21.8641736,30.6082645 22.2761252,31.5694851 23.923932,31.5694851 C25.5412238,31.5694851 26.6245041,30.074253 27.6467546,28.6095359 C28.7910648,26.9312142 29.2640464,25.2834075 29.2945613,25.2071202 C29.1877591,25.1766052 26.0904927,23.9102352 26.0904927,20.3552448 C26.0904927,17.2732359 28.5316879,15.8848061 28.6690051,15.7780038 C27.0517133,13.4588684 24.5952606,13.3978385 23.923932,13.3978385 C22.1082931,13.3978385 20.6283185,14.4963764 19.6976128,14.4963764 C18.6906198,14.4963764 17.36322,13.4588684 15.7917006,13.4588684 C12.8012365,13.4588684 9.765,15.9305785 9.765,20.5993643 C9.765,23.4982835 10.8940528,26.565035 12.2824825,28.548506 C13.4725652,30.2268277 14.5100731,31.6 16.0053051,31.6 Z';
+// The button's inner markup: Apple's logo (fixed, never changes) plus the required title text.
+// aria-hidden/focusable=false on the svg so a screen reader only ever announces the title once,
+// via the button's own accessible name (its text content) - not a second, redundant "image" role.
+function appleBtnInnerHtml(label){
+  return `<svg class="btnAppleLogo" viewBox="0 0 39 44" aria-hidden="true" focusable="false"><path d="${APPLE_LOGO_PATH_D}" fill="#000000"></path></svg><span class="btnAppleTitle">${esc(label)}</span>`;
+}
 // The native plugin, or null. Deliberately NOT gated on IS_APP: "is the plugin there" is the
 // real question, and asking it this way keeps the whole flow drivable from a browser test.
 function appleSignInPlugin(){ return (CAP&&CAP.Plugins&&CAP.Plugins.AppleSignIn)||null; }
@@ -13889,8 +13960,16 @@ async function refreshAccount(){
    200. bindAccountName() itself now just decides WHICH of those two things happens and returns a
    promise that resolves once the account genuinely has a name either way - accountSignIn() awaits
    it, which is what makes "continue automatically into whatever the player was doing" (§ NET's
-   requireAccountThen()/ONLINE_PENDING) work for free: nothing downstream runs until a name exists. */
-async function bindAccountName(){
+   requireAccountThen()/ONLINE_PENDING) work for free: nothing downstream runs until a name exists.
+   2026-08-14 (App Store Guideline 4 fix #2): `givenName` is the first name Apple's own sign-in
+   sheet already collected, passed through from accountSignIn() (AppleSignInPlugin.swift's
+   `authorize` result). Apple's rule is that this only comes back on the account's first-ever
+   authorization - exactly the case where this function is about to open the gate - so it is never
+   available on a returning sign-in, which never sees the gate at all anyway. openNicknameGate()
+   uses it to PRE-FILL the one box the player would otherwise have to type into by hand; the gate
+   stays mandatory (the leaderboard needs a name either way), the player just taps Save instead of
+   typing when Apple already told us the name. */
+async function bindAccountName(givenName){
   if(!ACCT||!ACCT.token)return;
   if(ACCT.gameName){
     // A returning sign-in. The account's name is the one the board knows, so this phone adopts
@@ -13908,25 +13987,44 @@ async function bindAccountName(){
   }
   return new Promise(resolve=>{
     NICK_GATE_RESOLVE=resolve;
-    openNicknameGate();
+    openNicknameGate(givenName);
   });
 }
 // The account currently mid-gate, if any - see openNicknameGate()/submitNicknameGate(). A plain
 // module-level var (not a return value passed around) because the overlay's own Save button, not
 // a function argument, is what eventually resolves the promise bindAccountName() is holding open.
 let NICK_GATE_RESOLVE=null;
+/* Turns whatever Apple handed back (a raw PersonNameComponents.givenName string, or nothing) into
+   a safe prefill for #nickGateInput - the same NAME_MAX cap and isBadName() blocklist every other
+   name box in the app uses (§ NAMES), so a long or blocked Apple name can never end up sitting in
+   the box unfiltered. Returns '' (never null) when there is nothing safe to use, so callers can
+   always just fall back with `||`. */
+function sanitizeAppleGivenName(givenName){
+  const s=cleanName(givenName,'');
+  return (s&&!isBadName(s))?s:'';
+}
 /* The blocking nickname prompt itself. No Cancel/Close anywhere on #nicknameGateOverlay's markup
    (see its HTML comment) - this is a genuine gate, not a dismissable dialog, because the app has
-   no other way to know what to put on the leaderboard for a brand-new account. Prefilled with
-   whatever name this phone's SEAT already happens to be using (mySeatName() - a guest's current
-   stock seat name, almost always; see that function's header comment for why this deliberately
-   is not chosenName() - the player has just signed in, so "Guest" would be a strange suggestion
-   here) purely as a convenient starting point; the player still has to tap Save, and can change
-   it to anything before doing so. */
-function openNicknameGate(){
-  const inp=$('nickGateInput'), warn=$('nickGateWarn');
-  if(inp)inp.value=cleanName(mySeatName(),'');
+   no other way to know what to put on the leaderboard for a brand-new account.
+   2026-08-14 (App Store Guideline 4 fix #2 - "users are required to provide their name... even
+   though that information is already provided by the Authentication Services framework"):
+   PREFILL ORDER, first thing that has a usable value wins:
+     1. `appleGivenName` - the first name Apple's own sign-in sheet just collected (see
+        bindAccountName()'s header comment for why this is only ever present on a first-ever
+        authorization, which is exactly when this gate opens for a fresh sign-in).
+     2. mySeatName() - this phone's current stock seat name, exactly the v0.35 behaviour, for the
+        one path that still reaches this gate with no Apple name at all (the defensive "signed in
+        with no gameName yet" boot-time case, § ACCOUNT SIGN-IN's boot block - an old account from
+        before this name existed, not a fresh sign-in).
+   Either way this is ONLY a convenient starting point - the player still has to tap Save, and can
+   change it to anything before doing so, so the gate stays genuinely mandatory throughout. */
+function openNicknameGate(appleGivenName){
+  const inp=$('nickGateInput'), warn=$('nickGateWarn'), hint=$('nickGateHint');
+  const fromApple=sanitizeAppleGivenName(appleGivenName);
+  const prefill=fromApple||cleanName(mySeatName(),'');
+  if(inp)inp.value=prefill;
   if(warn)warn.textContent='';
+  if(hint)hint.textContent=fromApple?"We filled in the name from your Apple Account - edit it if you'd like, or just save.":'';
   openOverlay('nicknameGateOverlay');
   try{ inp.focus(); inp.select(); }catch(e){}
 }
@@ -14020,7 +14118,12 @@ async function accountSignIn(){
     // fetchOnlineStatus() call lands (ensureOnlineAccessKnown(), triggered by the renderYouCard()
     // call in `finally` below, § MENU).
     ONLINE_STATUS_CACHE=null;
-    await bindAccountName();
+    // 2026-08-14: `res.givenName` is the first name Apple's own sheet just collected (native
+    // AppleSignInPlugin.swift, `.fullName` scope) - present only on this Apple ID's first-ever
+    // authorization, i.e. only when bindAccountName() is about to open the nickname gate anyway.
+    // Passed straight through so the gate can prefill it instead of making the player type a name
+    // Apple already gave us - see bindAccountName()/openNicknameGate()'s own comments.
+    await bindAccountName(res.givenName);
   } finally {
     ACCT_BUSY=false;
     updateAccountButton();
@@ -14100,8 +14203,21 @@ function renderAccountRows(){
   const si=$('btnAcctSignIn'), so=$('btnAcctSignOut'), del=$('btnAcctDelete'), note=$('acctSoonNote');
   if(!si||!so||!del||!note)return;
   const here=accountsAvailableHere(), on=isSignedIn();
-  const siTxt=here?'Sign in with Apple':'Sign in';
-  if(si.textContent!==siTxt)si.textContent=siTxt;
+  // 2026-08-14: the compliant Apple button skin (.btn.btnApple, § STYLE) only ever applies HERE -
+  // where the real Sign in with Apple sheet is actually one tap away. On the website (here false)
+  // this stays the exact same plain "Sign in" ghost row it always was - a white Apple-branded
+  // button that does nothing on a browser would be its own kind of dead button.
+  if(here){
+    if(!si.classList.contains('btnApple')){
+      si.classList.remove('ghost');
+      si.classList.add('btnApple');
+      si.innerHTML=appleBtnInnerHtml('Sign in with Apple');
+    }
+  }else if(si.classList.contains('btnApple')){
+    si.classList.remove('btnApple');
+    si.classList.add('ghost');
+    si.textContent='Sign in';
+  }
   si.disabled=!here||on||ACCT_BUSY;
   so.disabled=!on||ACCT_BUSY;
   del.disabled=!on||ACCT_BUSY;
@@ -15514,7 +15630,7 @@ function paintShop(){
   }
   if(st.phase==='guest'){
     balBox.innerHTML=`<div class="shopGuestNote">Signing in is what earns and holds your credits - your spendable balance lives on your account, not this phone.</div>
-      ${accountsAvailableHere()?'<button class="btn primary" id="shopSignInBtn" style="margin-top:10px">Sign in with Apple</button>':''}`;
+      ${accountsAvailableHere()?`<button class="btn btnApple" id="shopSignInBtn" type="button" style="margin-top:10px">${appleBtnInnerHtml('Sign in with Apple')}</button>`:''}`;
     body.innerHTML='';
     const sb=$('shopSignInBtn');
     if(sb)sb.onclick=async()=>{ await accountSignIn(); if(isAccountReady())openShopOverlay(); };

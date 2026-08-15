@@ -28,10 +28,18 @@ import Capacitor
  minted it, so it already knows the value, and hashing here would simply make the two sides
  disagree and every sign-in fail with reason "nonce".
 
- SCOPES. None are requested, on purpose. Without the email scope Apple does not put an
- `email` claim in the identity token, so the server has nothing to store, and the App Store
- privacy questionnaire for this build stays free of Contact Info > Email Address. The player's
- leaderboard name comes from the name they already chose in the game, not from Apple.
+ SCOPES. 2026-08-14: `.fullName` is now requested, and ONLY `.fullName` - never `.email`.
+ Without the email scope Apple still puts no `email` claim in the identity token, so the
+ server still has nothing to store and the App Store privacy questionnaire stays free of
+ Contact Info > Email Address. `.fullName` fixes an App Store rejection (Guideline 4): the
+ app was requiring a brand-new account to TYPE a name Apple had already collected during its
+ own sign-in sheet. Apple's rule (ASAuthorizationAppleIDCredential.fullName) is that the name
+ comes back ONLY on the very first authorization for this app/Apple ID pair - every later
+ sign-in on any device gets nil here, which is exactly when the client already has a
+ gameName and never shows a name prompt at all. The web layer uses this only to PRE-FILL the
+ one-time nickname gate; the player still taps to confirm (or edits first), and a nil name
+ falls back to this phone's own current play name, so nothing about the gate being mandatory
+ changes.
  */
 @objc(AppleSignInPlugin)
 public class AppleSignInPlugin: CAPPlugin, CAPBridgedPlugin {
@@ -66,7 +74,8 @@ public class AppleSignInPlugin: CAPPlugin, CAPBridgedPlugin {
             }
             self.pendingCall = call
             let request = ASAuthorizationAppleIDProvider().createRequest()
-            // No requestedScopes - see the note at the top of this file.
+            // .fullName only - never .email. See the SCOPES note at the top of this file.
+            request.requestedScopes = [.fullName]
             request.nonce = nonce
             let controller = ASAuthorizationController(authorizationRequests: [request])
             controller.delegate = self
@@ -96,7 +105,19 @@ extension AppleSignInPlugin: ASAuthorizationControllerDelegate {
         // `user` is Apple's stable per-app identifier. It is returned for the client's own
         // bookkeeping only - the server never trusts it and re-derives the same value from the
         // signed token's `sub` claim.
-        finish { $0.resolve(["identityToken": token, "user": credential.user]) }
+        // `givenName`/`familyName` come from `credential.fullName` (PersonNameComponents) and
+        // are non-nil ONLY on this Apple ID's first-ever authorization for this app - see the
+        // SCOPES note at the top of this file. Sent as plain strings (or omitted/nil) purely so
+        // the web layer can pre-fill the one-time nickname gate; never persisted here, never
+        // sent anywhere but back to the JS layer that made this call.
+        var result: [String: Any] = ["identityToken": token, "user": credential.user]
+        if let given = credential.fullName?.givenName, !given.isEmpty {
+            result["givenName"] = given
+        }
+        if let family = credential.fullName?.familyName, !family.isEmpty {
+            result["familyName"] = family
+        }
+        finish { $0.resolve(result) }
     }
 
     public func authorizationController(controller: ASAuthorizationController,
