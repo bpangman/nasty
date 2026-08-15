@@ -31,7 +31,7 @@ APP_ID = '6790999186'
 
 # The one thing that must still be updated by hand for each new build (Apple mints it per
 # build; it cannot be derived from anything on this Mac).
-BUILD_SUBMISSION_ID = 'a926bb58-8f2d-4499-9f4b-f0a47edc6894'
+BUILD_SUBMISSION_ID = '58e1e24b-d3a3-4284-9de0-257bd116db62'
 
 
 def current_build():
@@ -97,17 +97,17 @@ try:
         sys.exit(0)
 
     body = '/tmp/nasty_beta_live.html'
-    # 2026-07-31 (v0.68 ship): "what is in this build" bullets rewritten for the free-month
-    # loophole + invite-link work - same pattern every build since 2 has followed (rewrite, do
-    # not accumulate old bullets from prior builds).
+    # 2026-08-14 (v0.69 ship): "what is in this build" bullets rewritten for the Sign in with
+    # Apple compliance fix - same pattern every build since 2 has followed (rewrite, do not
+    # accumulate old bullets from prior builds).
     open(body, 'w').write(f'''
 <div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#222;line-height:1.6">
 <h1 style="color:#1a5c38">Build {BUILD} is out there</h1>
 <p>Apple approved the beta - everyone can install the real app right now.</p>
 <p>What's in this build:</p>
 <ul>
-<li><b>The free-month loophole is closed.</b> Deleting an account and making a new one with the same Apple sign-in no longer hands out another free month of online play - the app keeps a scrambled, can't-be-traced-back record of "this sign-in already used its free month," and tells the person plainly at sign-in. Honest reinstalls inside the free window keep the rest of it.</li>
-<li><b>Invite links behave for signed-in players.</b> Tapping a game invite right after launching the app used to sometimes show a pointless sign-in screen to someone already signed in - now it waits for the account check and goes straight to the right place. Blocked players also see "credits" (not the old "points") in the explanation.</li>
+<li><b>The Sign in with Apple button now looks the way Apple requires.</b> It's a proper white button with Apple's own black logo, matching Apple's design rules instead of the app's old plain gold button.</li>
+<li><b>New accounts get their name filled in automatically.</b> Apple already collects a name when someone signs in for the first time, so the app now uses it to pre-fill the "what should we call you" box - you can still edit it before saving, but you no longer have to type it from scratch.</li>
 </ul>
 <h3>The link to text everyone:</h3>
 <p style="background:#f4f1e8;padding:12px 16px;border-radius:8px;font-size:17px">
