@@ -808,6 +808,19 @@
                         to call there. This retires the "rows never hide" rule for this one row
                         only; Sign out and Delete account still never hide, on either surface.
                         `#verTap` `v0.69` -> `v0.70`. Full writeup: HANDOFF.md "v0.70".
+                      - v0.71 (2026-08-20, App Store 1.0.1 build 86 - no game chatter after the
+                        win, no server changes). Blake's report: a screenshot of "GERI WINS THE
+                        WHOLE THING!" with an in-game "can't move" toast floating over the win
+                        popup. Root cause: gameplay toasts persist until replaced and #toasts
+                        sits at z-index 95, above the win overlay by v0.61 design, so the last
+                        hand's toast simply survived into the win screen. Fixed with a new
+                        gameToast() wrapper that refuses to show anything once G.over is true -
+                        every gameplay call site (offline and online twins) now goes through it
+                        instead of toast() directly - plus clearToasts() as the first thing
+                        showWin() does and the same G.over guard added to turnPrompt(). Zero
+                        server changes this release; this is Nasty's first App Store UPDATE
+                        (TestFlight retired). `#verTap` `v0.70` -> `v0.71`. Full writeup:
+                        HANDOFF.md "v0.71".
     § WELCOME ..... 2026-07-26 through v0.45: the first-run/every-version sign-in-or-greeting
                     screen. 2026-07-27 (v0.46): Blake asked for that entire flow to be deleted -
                     "just get rid of the first page... just say that I'm currently playing as a
@@ -3964,7 +3977,7 @@ button{font:inherit;cursor:pointer}
       <button class="btn ghost" id="btnMenuAdmin">Admin</button>
     </div>
   </div>
-  <div class="est"><span id="verTap">v0.70</span> &nbsp;·&nbsp; Est. 1993</div>
+  <div class="est"><span id="verTap">v0.71</span> &nbsp;·&nbsp; Est. 1993</div>
 </div>
 
 <!-- ================= COMING SOON (v0.43, 2026-07-27) =================
@@ -8720,6 +8733,38 @@ function toast(msg,ms=3000,force=false,alwaysFade=false){
     },dismissMs);
   }
 }
+// 2026-08-20 (Blake's report - a screenshot of "GERI WINS THE WHOLE THING!" with an in-game
+// "Ginny can't move - out for the rest of this hand" toast floating over it, hiding the Play
+// again button): Blake's rule is "in-game updates must never show after someone has won."
+// ROOT CAUSE, found by reading toast()/showWin() before changing anything (per this session's
+// own instruction): #toasts sits at z-index:95, deliberately ABOVE every overlay including the
+// win popup (see #toasts' own CSS comment, v0.61 item 6 - that was Blake's own ask, so a shop/
+// credits toast is never hidden BEHIND an open panel) - and a gameplay toast (deal/pass/kick/
+// bow-out) is DESIGNED to stay on screen "until replaced" (v0.11.2), never auto-dismissing
+// during live play. A plain move/enter/back never itself calls toast() (only a swap or a kick
+// does), so the moment a game ends on an ordinary move, whatever gameplay toast was showing
+// from EARLIER in that same hand (e.g. a seat bowing out) is simply still there - nothing ever
+// told it to leave - and now sits, unreplaced, floating above the freshly-opened win overlay.
+// Two-part fix, matching Blake's rule at both ends:
+//  1) THE SOURCE: every gameplay-event toast call site (deal announcements, bow-out/"can't
+//     move," throw-in, kick, swap, "caught up") now goes through gameToast() below instead of
+//     calling toast() directly - see each converted call site's own comment. This is the belt-
+//     and-braces sink too: gameToast() refuses to show ANYTHING once G.over is true, so even a
+//     late/queued gameplay notice (a stale online action, a delayed CPU-turn timeout) can never
+//     paint over the win screen, no matter what triggers it. Deliberately a SEPARATE wrapper,
+//     not a blanket check inside toast() itself - toast() is also how menu/account/shop
+//     messages reach the screen (e.g. "Online play needs an account...", reachable from the
+//     Admin panel even from the post-game results screen), and those must keep working after a
+//     game ends. Every call site was read and classified before deciding which ones move.
+//  2) THE LEFTOVER: showWin() (§ TURNS) now calls clearToasts() the instant the game is
+//     recorded as over, wiping whatever gameplay toast happened to already be showing before
+//     the win popup opens - the same "wipe #toasts at the screen transition" pattern
+//     leaveOnlineToMenu() already uses going the other way (game -> menu), just applied to the
+//     game -> game-over transition, which never got the same treatment.
+function gameToast(msg,ms=3000,force=false,alwaysFade=false){
+  if(typeof G!=='undefined'&&G&&G.over)return;   // a gameplay notice is never worth showing once someone's already won
+  toast(msg,ms,force,alwaysFade);
+}
 // v0.11.3 fix (Blake): since v0.11.2 a toast STAYS until replaced (see comment above) instead of
 // auto-fading - which means a toast left over from mid-game (e.g. "Geri took somebody out!") was
 // never cleared by leaving the game, and #toasts is a fixed-position element OUTSIDE #game/#menu
@@ -8754,6 +8799,11 @@ function clearToasts(){ $('toasts').replaceChildren(); }
 // matter which stale chain is asking.
 function turnPrompt(msg,mine){
   if($('game').classList.contains('hidden'))return;
+  // 2026-08-20: same #toasts channel/z-index the "can't move" bug used (see gameToast()'s
+  // header comment, § UTIL) - turnPrompt() itself is a standing "whose turn is it" HUD banner,
+  // so it deserves the exact same belt-and-braces backstop: never worth showing once the game
+  // is already over, even from a stale/superseded call this file's other G.over guards missed.
+  if(typeof G!=='undefined'&&G&&G.over)return;
   $('toasts').replaceChildren();
   const t=document.createElement('div'); t.className='toast turnPrompt'+(mine?' myTurn':'');
   t.textContent=msg;
@@ -8799,7 +8849,7 @@ function endSkip(){
       }
     }
     skipSnap=null;
-    if(moved)toast(`⏩ Caught up - the ${moved} tee${moved>1?'s':''} that moved are highlighted`,3200);
+    if(moved)gameToast(`⏩ Caught up - the ${moved} tee${moved>1?'s':''} that moved are highlighted`,3200);   // 2026-08-20: gameplay notice, see gameToast()'s header comment
   }
 }
 /* Fix, 2026-07-09: endSkip() above is called from TWO different intents that must NOT be
@@ -9144,7 +9194,7 @@ async function doDeal(){
     G.deck=deckArr; G.discard=[]; G.schedRound=0;
     G.dealer=newDealer; G.turn=(G.dealer+1)%G.n;
     positionDeck(G.dealer,true);                          // slide the deck over to the new dealer
-    toast(`Fresh shuffle! ${G.seats[G.dealer].name} deals`);
+    gameToast(`Fresh shuffle! ${G.seats[G.dealer].name} deals`);   // 2026-08-20: gameplay notice, see gameToast()'s header comment
     await wait(500);
   }
   const k=G.schedule[G.schedRound]; G.schedRound++;
@@ -9157,7 +9207,7 @@ async function doDeal(){
   // assignment above) and after the FIRST deal of a fresh game. Set unconditionally here so
   // every doDeal() call - every round, not just round 0 - lands on the same rule.
   G.turn=(G.dealer+1)%G.n;
-  toast(`${G.seats[G.dealer].name} deals ${k} cards`);
+  gameToast(`${G.seats[G.dealer].name} deals ${k} cards`);   // 2026-08-20: gameplay notice, see gameToast()'s header comment
   await animateDeal(k);
   if(myGen!==NETGEN)return;
   syncAll(); renderHandFor(visibleHandSeat());
@@ -9170,7 +9220,7 @@ async function passTurn(seat){
   if(G.passStreak>=seatsWithCards()&&seatsWithCards()>0){
     for(const h of G.hands){G.discard.push(...h);h.length=0;}
     G.passStreak=0;
-    toast('Nobody can play - throwing the hands in. New deal!');
+    gameToast('Nobody can play - throwing the hands in. New deal!');   // 2026-08-20: gameplay notice, see gameToast()'s header comment
     await wait(600);
   }
 }
@@ -9302,7 +9352,7 @@ async function performMoveInner(seat,m,cardEl){
     // v0.19: forced (bypasses SKIP's toast suppression, stays suppressed under INSTANT) and
     // wrapped in spotlightEvent so the swap itself plays at a watchable pace mid-skip too - see
     // spotlightEvent()/toast() comments above. No swap message existed before this change.
-    toast(`🔄 Jack swap! ${G.seats[owner].name} and ${G.seats[m.ts].name} swap tees`,2600,true);
+    gameToast(`🔄 Jack swap! ${G.seats[owner].name} and ${G.seats[m.ts].name} swap tees`,2600,true);   // 2026-08-20: gameplay notice, see gameToast()'s header comment
     // v0.24: skip-only glow on BOTH swapping tees, but ONLY when at least one of the two seats
     // actually swapping (owner or m.ts - the seats whose PEGS move, not necessarily whoever's
     // hand played the card) is a human (Blake: don't bother slowing down/glowing a pure
@@ -9342,9 +9392,9 @@ async function performMoveInner(seat,m,cardEl){
     // here now (partner-landing as the only possible play - see legalMoves()'s pk filter).
     // Give that its own gentler message so the table knows it wasn't by choice.
     if(sameTeam(kicked.seat,owner))
-      toast(`😬 Ouch! ${G.seats[seat].name} has no other play and sends partner ${G.seats[kicked.seat].name} back to base!`,2600,true);
+      gameToast(`😬 Ouch! ${G.seats[seat].name} has no other play and sends partner ${G.seats[kicked.seat].name} back to base!`,2600,true);   // 2026-08-20: gameplay notice, see gameToast()'s header comment
     else
-      toast(`💥 NASTY! ${G.seats[seat].name} sends ${G.seats[kicked.seat].name} back to base!`,2600,true);
+      gameToast(`💥 NASTY! ${G.seats[seat].name} sends ${G.seats[kicked.seat].name} back to base!`,2600,true);   // 2026-08-20: gameplay notice, see gameToast()'s header comment
     // v0.24: skip-only glow on the ATTACKER (elm - the piece that just landed and did the
     // kicking, already at its resting spot from the move/enter/back animation above) and the
     // VICTIM - but only when the attacker seat (owner) or the victim seat (kicked.seat) is
@@ -9469,7 +9519,7 @@ async function runTurnInner(){
     if(myGen!==NETGEN)return;
     if(moves.length===0){
       G.bowedOut[seat]=true;
-      sNo(); toast(`${seatCfg.name} can't move - out for the rest of this hand`);
+      sNo(); gameToast(`${seatCfg.name} can't move - out for the rest of this hand`);   // 2026-08-20: THE reported bug's own toast - see gameToast()'s header comment
       // CPU discards nothing; turn just passes
       await passTurn(seat); await wait(500);
       if(myGen!==NETGEN)return;
@@ -9485,7 +9535,7 @@ async function runTurnInner(){
     G.bowedOut[seat]=true;
     renderHandFor(visibleHandSeat());
     sNo();
-    toast(`${seatCfg.name} can't move - out for the rest of this hand`,2400);
+    gameToast(`${seatCfg.name} can't move - out for the rest of this hand`,2400);   // 2026-08-20: THE reported bug's own toast - see gameToast()'s header comment
     await wait(1400);
     await passTurn(seat);
     if(myGen!==NETGEN)return;
@@ -9566,7 +9616,7 @@ function enableSelection(seat,moves){
     // available was opacity:.45, which reads as "slightly dim", not as "this one is out". For a
     // family player that is "I tapped my 3 and the game ignored me", which is indistinguishable
     // from the app being broken. Now it answers, in one plain line, with the actual reason.
-    else c.onclick=()=>toast(deadCardReason(G.hands[seat]&&G.hands[seat][ci]),4000);
+    else c.onclick=()=>gameToast(deadCardReason(G.hands[seat]&&G.hands[seat][ci]),4000);   // 2026-08-20: gameplay notice, see gameToast()'s header comment
   });
 }
 /* 2026-07-25 item P: one plain-language sentence explaining why a card can't be played right
@@ -10981,7 +11031,7 @@ function bootGameFromNetwork(action){
   updateConnIndicator();
   clearAwayUI();   // v0.22 P3: a fresh game can never inherit a stale away-ladder line
   sendPushToken();   // v0.16 item 5: in case permission was already granted from an earlier game this session - see § PUSH
-  toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts us off!`,2600);
+  gameToast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts us off!`,2600);   // 2026-08-20: gameplay notice, see gameToast()'s header comment
   // v0.25 item 1: the one-time rules popup shows in the LOBBY now (before seat selection -
   // see maybeShowOnlineRules(), § LOBBY READY), so by the time this boot runs every human
   // has already dismissed it before they could even ready up. Announce that this screen is
@@ -11164,7 +11214,7 @@ async function applyServerAction(action,myGen){
     if(myGen===NETGEN&&G&&G.seats[action.seat]){
       G.seats[action.seat].type='cpu';
       G.seats[action.seat].diff=action.diff;
-      toast(`${action.name} left. A CPU plays their seat now.`,3400);
+      gameToast(`${action.name} left. A CPU plays their seat now.`,3400);   // 2026-08-20: gameplay notice, see gameToast()'s header comment
     }
   }
 }
@@ -11197,7 +11247,7 @@ async function applyDealAction(action){
     G.deck=new Array(Math.max(0,action.deckCount)); G.discard=[]; G.schedRound=0;
     G.dealer=action.dealer; G.turn=action.turn;   // v0.15: authoritative, not re-derived - see applyServerAction()'s comment
     positionDeck(G.dealer,true);
-    toast(`Fresh shuffle! ${G.seats[G.dealer].name} deals`);
+    gameToast(`Fresh shuffle! ${G.seats[G.dealer].name} deals`);   // 2026-08-20: gameplay notice, see gameToast()'s header comment
     await wait(500);
     if(myGen!==NETGEN)return;
   }
@@ -11205,7 +11255,7 @@ async function applyDealAction(action){
   for(let s=0;s<G.n;s++)G.hands[s].push(...(action.hands[s]||action.hands[String(s)]||[]));
   G.deck=new Array(Math.max(0,action.deckCount));
   G.turn=action.turn;   // v0.15: authoritative, not re-derived - see applyServerAction()'s comment
-  toast(`${G.seats[G.dealer].name} deals ${action.k} cards`);
+  gameToast(`${G.seats[G.dealer].name} deals ${action.k} cards`);   // 2026-08-20: gameplay notice, see gameToast()'s header comment
   await animateDeal(action.k);
   if(myGen!==NETGEN)return;
   syncAll(); renderHandFor(visibleHandSeat());
@@ -11230,14 +11280,14 @@ async function applyPassAction(action){
     G.bowedOut[seat]=true;
     renderHandFor(visibleHandSeat());
     sNo();
-    toast(`${G.seats[seat].name} can't move - out for the rest of this hand`,2400);
+    gameToast(`${G.seats[seat].name} can't move - out for the rest of this hand`,2400);   // 2026-08-20: THE reported bug's own toast (online path's twin) - see gameToast()'s header comment
     await wait(1400);
     if(myGen!==NETGEN)return;
   }
   G.passStreak=action.passStreak;
   if(action.threwIn){
     for(const h of G.hands){G.discard.push(...h);h.length=0;}
-    toast('Nobody can play - throwing the hands in. New deal!');
+    gameToast('Nobody can play - throwing the hands in. New deal!');   // 2026-08-20: gameplay notice, see gameToast()'s header comment
     await wait(600);
     if(myGen!==NETGEN)return;
   }
@@ -12407,7 +12457,7 @@ function clearPendingOfflineStart(){
 // startGame() so it can be held behind the speed picker (see gateOnSpeedPicker() call below).
 function beginFirstDeal(){
   clearPendingOfflineStart();
-  toast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts us off!`,2600);
+  gameToast(`${G.seats[G.dealer].name} deals first - ${G.seats[G.turn].name} starts us off!`,2600);   // 2026-08-20: gameplay notice, see gameToast()'s header comment
   runTurn();
 }
 // 2026-07-27 (v0.42): order of gates on Start is seat popup (openOfflineSeatPicker(), which
@@ -17301,6 +17351,14 @@ function renderWinPopupContent(){
 }
 function showWin(){
   recordWin();
+  // 2026-08-20 (Blake's report - see gameToast()'s big header comment, § UTIL, for the full
+  // root-cause writeup): whatever gameplay toast happened to be showing from earlier in this
+  // hand (most often the last seat to bow out - the exact "X can't move..." message Blake's
+  // screenshot caught) is never going to get replaced by a plain winning move (only a swap/kick
+  // ever calls toast() itself) - clear it explicitly, right here, the instant the game is
+  // recorded as over. Same "wipe #toasts at the screen transition" pattern leaveOnlineToMenu()
+  // already uses leaving TO the menu; this is the missing twin for arriving AT the win overlay.
+  clearToasts();
   // v0.8: finished games don't offer a resume. v0.17: offline finishes only - an ONLINE game
   // finishing must never clear an offline save spot that belongs to a different, still-alive
   // offline game (SAVE_SLOT could still be bound to one from earlier this session).
